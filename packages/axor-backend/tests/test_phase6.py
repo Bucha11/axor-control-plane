@@ -127,6 +127,30 @@ async def test_heat_crossing_fact_emits_heat_threshold(
     assert fired[0]["score"] == 0.9 and fired[0]["resource_id"] == "res_1"
 
 
+# ── evidence auto-pin ─────────────────────────────────────────────────────────
+
+async def test_set_evidence_auto_pins_deviation_to_must_block(
+    client: httpx.AsyncClient,
+) -> None:
+    store = client._app.state.store  # type: ignore[attr-defined]
+    await client.post("/v1/ingest/run_x", json={"node_id": "n1", "events": []})
+    # Evidence with a deviation → auto-pinned to the must_block corpus side.
+    await client.post("/v1/runs/run_x/evidence", json={
+        "node_id": "n1", "scenario": "prompt_injection",
+        "evidence": [{"case_id": "c1", "deviation": "exfil attempt"}],
+    })
+    pins = await store.pinned()
+    assert any(p["run_id"] == "run_x" and p["side"] == "must_block" for p in pins)
+
+    # Evidence with NO deviation → not pinned.
+    await client.post("/v1/ingest/run_y", json={"node_id": "n1", "events": []})
+    await client.post("/v1/runs/run_y/evidence", json={
+        "node_id": "n1", "evidence": [{"case_id": "c2"}],
+    })
+    pins = await store.pinned()
+    assert not any(p["run_id"] == "run_y" for p in pins)
+
+
 # ── node_stale sweep ──────────────────────────────────────────────────────────
 
 async def test_stale_sweep_fires_once_per_stale_episode() -> None:

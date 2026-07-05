@@ -44,6 +44,8 @@ def kernel_config_from_json(d: dict[str, Any]) -> KernelConfig:
             value_policies=value_policies,
             driving_args=driving_args,
             budget_cap_calls=d.get("budget_cap_calls"),
+            budget_cap_cost=d.get("budget_cap_cost"),
+            tool_weights=dict(d.get("tool_weights", {})),
             synthetic_taint_refs=frozenset(d.get("synthetic_taint_refs", ())),
         )
     return KernelConfig(
@@ -72,6 +74,8 @@ def kernel_config_from_json(d: dict[str, Any]) -> KernelConfig:
             for tool, name in d.get("consequence_overrides", {}).items()
         },
         budget_cap_calls=d.get("budget_cap_calls"),
+        budget_cap_cost=d.get("budget_cap_cost"),
+        tool_weights=dict(d.get("tool_weights", {})),
         synthetic_taint_refs=frozenset(d.get("synthetic_taint_refs", ())),
     )
 
@@ -98,6 +102,7 @@ def scrubber_payload(result: ReplayResult) -> dict[str, Any]:
                     "excised_refs": sorted(s.state.excised_refs),
                     "floor_active": s.state.floor_active,
                     "budget_spent_calls": s.state.budget_spent_calls,
+                    "budget_spent_cost": s.state.budget_spent_cost,
                     "facts": len(s.state.facts),
                 },
             }

@@ -146,11 +146,18 @@ def create_app(
 
     @app.post("/v1/runs/{run_id}/evidence")
     async def set_evidence(run_id: str, body: dict, request: Request) -> dict:
+        store: Store = request.app.state.store
         evidence = body.get("evidence", [])
-        await request.app.state.store.set_evidence(run_id, evidence)
+        await store.set_evidence(run_id, evidence)
         # Run completed with >=1 EvidenceCase → notify (spec section 16 trigger).
         deviations = [c for c in evidence if c.get("deviation")]
         if deviations:
+            # Auto-pin the must-block side here, at the system of record (decision
+            # 11): a trace carrying an EvidenceCase IS the regression corpus's
+            # block side, and pinning it should not depend on the uploading client
+            # remembering to POST /v1/pins. pin() is idempotent, so the proxy's own
+            # pin call stays a harmless no-op.
+            await store.pin(run_id, "must_block", body.get("scenario", ""))
             await request.app.state.notifier.emit(
                 "evidence_run", body.get("node_id", "proxy"),
                 {"run_id": run_id, "cases": len(deviations),
