@@ -167,6 +167,23 @@ async def append_fact(node_id: str, body: dict, request: Request) -> dict:
         {"type": "fact", "node_id": node_id, "fact": fact,
          "operator": operator, "timestamp": timestamp, "sig": sig},
     )
+    # Sentinel records a branch crossing its suspicion threshold as an appended
+    # heat_crossing fact (heat is Sentinel's, not the runtime's — it arrives here
+    # as evidence, signed like any other fact). That crossing is a spec §16
+    # trigger, so fire the notification when the fact says the threshold was met.
+    notifier = getattr(ctx, "notifier", None)
+    if (
+        notifier is not None
+        and fact.get("fact_type") == "heat_crossing"
+        and float(fact.get("score", 0.0)) >= float(fact.get("threshold", 1.0))
+    ):
+        await notifier.emit(
+            "heat_threshold", node_id,
+            {"score": float(fact["score"]),
+             "threshold": float(fact.get("threshold", 1.0)),
+             "resource_id": fact.get("resource_id", ""),
+             "permalink": f"/v1/plane/nodes#{node_id}"},
+        )
     return {"appended": True}
 
 

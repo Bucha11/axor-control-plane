@@ -28,6 +28,7 @@ from axor_backend.auth import (
     required_scope,
 )
 from axor_backend.broadcast import Broadcast
+from axor_backend.monitor import running_stale_monitor
 from axor_backend.notifications import Notifier
 from axor_backend.replay_api import (
     kernel_config_from_json,
@@ -53,7 +54,10 @@ def create_app(
     @contextlib.asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         await init_db(app.state.store.engine)
-        yield
+        # The node_stale trigger is edge-detected by a background sweep (spec
+        # §16): a silent node emits nothing, so its absence is what we watch.
+        async with running_stale_monitor(app):
+            yield
 
     app = FastAPI(title="axor-backend", lifespan=lifespan)
     url = database_url or os.environ.get(

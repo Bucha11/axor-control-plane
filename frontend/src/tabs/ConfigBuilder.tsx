@@ -289,7 +289,7 @@ export default function ConfigBuilder() {
                 style={{ width: 100, background: C.bg, border: `1px solid ${C.line}`, borderRadius: 4, color: C.text, fontFamily: MONO, fontSize: 11.5, padding: "5px 8px", outline: "none" }} />
               <span style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim }}>
                 {budgetCapCalls !== null
-                  ? "exhaustion becomes a typed fact — never a silent failure"
+                  ? "enforced at the loop boundary — exhaustion is a typed denial, never a silent overrun"
                   : "empty = unlimited — budgets are opt-in limits, not fail-closed defaults"}
               </span>
             </div>
@@ -314,7 +314,7 @@ export default function ConfigBuilder() {
     ...sinks.filter((s) => s.type === "EXEC").map((s) => <span key={`exec-${s.name}`}><b style={{ color: C.text }}>{s.name}</b> after an external read is denied.</span>),
     ...sinks.filter((s) => s.type === "WRITE").map((s) => <span key={`write-${s.name}`}><b style={{ color: C.text }}>{s.name}</b> writes are gated on value provenance.</span>),
     budgetCapCalls !== null
-      ? <span key="budget">Budget: at most <b style={{ color: C.text }}>{budgetCapCalls}</b> tool calls per run — exhaustion is a typed fact, not an exception.</span>
+      ? <span key="budget">Budget: at most <b style={{ color: C.text }}>{budgetCapCalls}</b> tool calls per run — the cap is enforced at the loop boundary, and the same ceiling the replay kernel checks, so a run and its counterfactual agree on exhaustion.</span>
       : <span key="budget">No budget declared — unlimited (budgets are opt-in limits, unlike sinks).</span>,
   ];
 

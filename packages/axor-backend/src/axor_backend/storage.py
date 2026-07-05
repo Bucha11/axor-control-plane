@@ -278,6 +278,21 @@ class Store:
             "budget_remaining": row.budget_remaining, "updated_ts": row.updated_ts,
         }
 
+    async def list_reported(self) -> list[dict[str, Any]]:
+        """Every node that has ever reported, with its last heartbeat ts — the
+        input the stale monitor scans (spec §16: node_stale after 3T silence)."""
+        async with self.engine.connect() as conn:
+            rows = (await conn.execute(
+                select(
+                    reported_state.c.node_id, reported_state.c.level,
+                    reported_state.c.updated_ts,
+                )
+            )).all()
+        return [
+            {"node_id": r.node_id, "level": r.level, "updated_ts": r.updated_ts}
+            for r in rows
+        ]
+
     async def list_nodes(self) -> list[str]:
         async with self.engine.connect() as conn:
             desired = (await conn.execute(select(desired_state.c.node_id))).all()

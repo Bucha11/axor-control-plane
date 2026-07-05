@@ -3,12 +3,22 @@
 // paid step, marked with a subtle steel border.
 import { C, MONO } from "../theme";
 
+// A feature is either shipping today or on the roadmap. We mark the difference
+// explicitly rather than listing aspirational capabilities as if they exist — a
+// pricing page that over-claims is the same dishonesty the product refuses
+// everywhere else. `plus` is the "everything in X, plus:" divider.
+interface Feature {
+  text: string;
+  roadmap?: boolean;  // planned, not yet shipped — rendered with a "planned" chip
+  plus?: boolean;     // section divider, not a feature
+}
+
 interface Tier {
   name: string;
   price: string;      // the "price shape", not an invoice
   priceNote?: string;
   who: string;        // one-line "for"
-  features: string[];
+  features: Feature[];
   free: boolean;      // whether the tier itself is free
   paidNote: string;   // free-vs-paid line
   highlight?: boolean;
@@ -21,16 +31,18 @@ const TIERS: Tier[] = [
     priceNote: "open source",
     who: "individuals · small teams · research/academic (incl. EE)",
     features: [
-      "proxy + fault injection + EvidenceCase receipts",
-      "replay + counterfactuals",
-      "Config Builder",
-      "plane service: pause/stop/replan/inject (single operator)",
-      "attestation (single-operator + reason)",
-      "regression corpus (local, unlimited)",
-      "notifications (webhook)",
-      "EvidenceCase export (PDF/link)",
-      "topology (per connection)",
-      "Vault mechanism + dev backend",
+      { text: "proxy + fault injection + EvidenceCase receipts" },
+      { text: "replay + counterfactuals" },
+      { text: "Config Builder" },
+      { text: "plane service: pause / stop (single operator)" },
+      { text: "attestation (single-operator + reason)" },
+      { text: "regression corpus (local, unlimited)" },
+      { text: "notifications (webhook)" },
+      { text: "EvidenceCase export (shareable link + HTML receipt)" },
+      { text: "topology (per connection)" },
+      { text: "self-hosted backend (Postgres or SQLite)" },
+      { text: "inject / excise / replan interventions", roadmap: true },
+      { text: "EvidenceCase PDF export", roadmap: true },
     ],
     free: true,
     paidNote: "free — safety is free forever",
@@ -41,10 +53,10 @@ const TIERS: Tier[] = [
     priceNote: "floor ~$500/mo · hosted or self-hosted, same price",
     who: "first company deployments · 5–30 nodes",
     features: [
-      "everything in Free, plus:",
-      "hosted convenience + license",
-      "scheduled corpus CI + history",
-      "notification routing rules / per-team channels",
+      { text: "everything in Free, plus:", plus: true },
+      { text: "hosted convenience + license", roadmap: true },
+      { text: "scheduled corpus CI + history", roadmap: true },
+      { text: "notification routing rules / per-team channels", roadmap: true },
     ],
     free: false,
     paidNote: "paid — the typical first paid step",
@@ -56,14 +68,13 @@ const TIERS: Tier[] = [
     priceNote: "node bands + support · from $20–50k/yr",
     who: "SSO/SAML/SCIM · RBAC · air-gapped fleets",
     features: [
-      "everything in Team, plus:",
-      "SSO/SAML/SCIM · RBAC",
-      "compliance report generator (audit-ready period reports:",
-      "  interventions, attestations w/ reasons, denial stats)",
-      "fleet view (all agents across teams, cross-connection search)",
-      "air-gapped deployment",
-      "managed retention / legal hold / audit log export",
-      "SLA + private channel",
+      { text: "everything in Team, plus:", plus: true },
+      { text: "SSO/SAML/SCIM · RBAC", roadmap: true },
+      { text: "compliance report generator (audit-ready period reports)", roadmap: true },
+      { text: "fleet view (all agents across teams, cross-connection search)", roadmap: true },
+      { text: "air-gapped deployment", roadmap: true },
+      { text: "managed retention / legal hold / audit log export", roadmap: true },
+      { text: "SLA + private channel", roadmap: true },
     ],
     free: false,
     paidNote: "paid — annual",
@@ -128,13 +139,26 @@ export default function Pricing() {
               {t.features.map((f, i) => (
                 <div
                   key={i}
-                  className="flex gap-2 mb-2"
+                  className="flex gap-2 mb-2 items-baseline"
                   style={{ fontFamily: MONO, fontSize: 11, color: C.mut, lineHeight: 1.4 }}
                 >
-                  {!f.startsWith(" ") && !f.endsWith("plus:") && (
-                    <span style={{ color: C.dim }}>·</span>
+                  {!f.plus && <span style={{ color: C.dim }}>·</span>}
+                  <span style={{ color: f.plus ? C.dim : C.mut, flex: 1 }}>{f.text}</span>
+                  {f.roadmap && (
+                    <span
+                      style={{
+                        fontFamily: MONO,
+                        fontSize: 8.5,
+                        color: C.dim,
+                        border: `1px solid ${C.line}`,
+                        borderRadius: 20,
+                        padding: "1px 6px",
+                        whiteSpace: "nowrap",
+                      }}
+                    >
+                      planned
+                    </span>
                   )}
-                  <span style={{ color: f.endsWith("plus:") ? C.dim : C.mut }}>{f.trim()}</span>
                 </div>
               ))}
             </div>
@@ -157,6 +181,8 @@ export default function Pricing() {
 
       <div style={{ fontFamily: MONO, fontSize: 11, color: C.dim, marginTop: 24, lineHeight: 1.6 }}>
         priced per governed node — ephemeral nodes count by concurrent peak, not by spawn.
+        <br />
+        items marked <span style={{ border: `1px solid ${C.line}`, borderRadius: 20, padding: "1px 6px", fontSize: 8.5 }}>planned</span> are on the roadmap, not yet shipped — everything else runs today.
       </div>
     </div>
   );

@@ -95,6 +95,88 @@ async def test_level_transition_up_emits_notification(
     assert fired[0]["to"] == "RESTRICTED" and fired[0]["from"] == "NORMAL"
 
 
+# ── heat_threshold over the fact path ─────────────────────────────────────────
+
+async def test_heat_crossing_fact_emits_heat_threshold(
+    client: httpx.AsyncClient,
+) -> None:
+    fired = []
+
+    async def capture(url: str, body: dict) -> int:
+        fired.append(body)
+        return 200
+
+    client._app.state.notifier._post = capture  # type: ignore[attr-defined]
+    await client.post("/v1/notifications/subscribe", json={
+        "url": "http://sink.test", "triggers": ["heat_threshold"],
+    })
+
+    def fact(fid: str, score: float) -> dict:
+        return {"fact": {
+            "fact_id": fid, "fact_type": "heat_crossing",
+            "score": score, "threshold": 0.8, "resource_id": "res_1",
+        }}
+
+    # Below threshold → no notification.
+    await client.post("/v1/plane/n1/facts", json=fact("f1", 0.5))
+    assert fired == []
+    # At/over threshold → fires once.
+    await client.post("/v1/plane/n1/facts", json=fact("f2", 0.9))
+    assert len(fired) == 1
+    assert fired[0]["trigger"] == "heat_threshold"
+    assert fired[0]["score"] == 0.9 and fired[0]["resource_id"] == "res_1"
+
+
+# ── node_stale sweep ──────────────────────────────────────────────────────────
+
+async def test_stale_sweep_fires_once_per_stale_episode() -> None:
+    from datetime import UTC, datetime, timedelta
+
+    from axor_backend.broadcast import Broadcast
+    from axor_backend.monitor import stale_sweep
+
+    fired = []
+
+    async def capture(url: str, body: dict) -> int:
+        fired.append(body)
+        return 200
+
+    class FakeStore:
+        def __init__(self) -> None:
+            self.rows: list[dict] = []
+
+        async def list_reported(self) -> list[dict]:
+            return list(self.rows)
+
+    store = FakeStore()
+    notifier = Notifier(post=capture)
+    notifier.subscribe("http://sink.test", ["node_stale"])
+    broadcast = Broadcast()
+    now = datetime(2026, 7, 5, 12, 0, 0, tzinfo=UTC)
+
+    # Fresh node → not stale.
+    store.rows = [{"node_id": "n1", "level": "NORMAL",
+                   "updated_ts": (now - timedelta(seconds=5)).isoformat()}]
+    seen: set[str] = set()
+    assert await stale_sweep(store, notifier, broadcast, 30.0, seen, now) == 0
+
+    # Silent past 3T → fires once, and stays quiet on the next sweep (edge).
+    store.rows = [{"node_id": "n1", "level": "NORMAL",
+                   "updated_ts": (now - timedelta(seconds=40)).isoformat()}]
+    assert await stale_sweep(store, notifier, broadcast, 30.0, seen, now) == 1
+    assert await stale_sweep(store, notifier, broadcast, 30.0, seen, now) == 0
+    assert len(fired) == 1 and fired[0]["trigger"] == "node_stale"
+
+    # Heartbeats again (fresh), then goes silent → re-arms and fires anew.
+    store.rows = [{"node_id": "n1", "level": "NORMAL",
+                   "updated_ts": (now - timedelta(seconds=1)).isoformat()}]
+    assert await stale_sweep(store, notifier, broadcast, 30.0, seen, now) == 0
+    store.rows = [{"node_id": "n1", "level": "NORMAL",
+                   "updated_ts": (now - timedelta(seconds=40)).isoformat()}]
+    assert await stale_sweep(store, notifier, broadcast, 30.0, seen, now) == 1
+    assert len(fired) == 2
+
+
 # ── share + export ────────────────────────────────────────────────────────────
 
 async def test_share_link_is_revocable_and_scrubs_bodies(
