@@ -1,0 +1,10 @@
+[project]
+name = "axor-kernel"
+version = "0.1.0"
+description = "Pure governance kernel: gates, taint, degradation, replay. Zero I/O."
+requires-python = ">=3.12"
+dependencies = ["pydantic>=2.7"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"

@@ -1,0 +1,29 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  python:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v4
+        with:
+          python-version: "3.12"
+      # axor-core / axor-eval are git-ref pinned (pyproject [tool.uv.sources]).
+      # For private ecosystem repos set AXOR_ECOSYSTEM_TOKEN (a PAT with read
+      # access); GITHUB_TOKEN only covers this repository.
+      - name: Authorize ecosystem git deps
+        run: |
+          git config --global url."https://x-access-token:${TOKEN}@github.com/".insteadOf "https://github.com/"
+        env:
+          TOKEN: ${{ secrets.AXOR_ECOSYSTEM_TOKEN || secrets.GITHUB_TOKEN }}
+      - name: Sync workspace
+        run: uv sync --all-packages
+      - name: Lint
+        run: uv run ruff check .
+      - name: Tests
+        run: uv run pytest -q

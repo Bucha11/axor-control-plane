@@ -1,0 +1,13 @@
+[project]
+name = "axor-proxy"
+version = "0.1.0"
+description = "Observe-only tool proxy: passthrough auth, fault injection, trace recording."
+requires-python = ">=3.12"
+dependencies = ["axor-kernel", "axor-core>=0.1", "axor-eval>=0.1", "httpx>=0.27", "anyio>=4.0", "starlette>=0.37", "uvicorn>=0.29"]
+
+[project.scripts]
+axor-proxy = "axor_proxy.main:cli"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"

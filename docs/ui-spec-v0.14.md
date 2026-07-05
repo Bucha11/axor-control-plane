@@ -1,4 +1,6 @@
-# Axor Eval — UI & Connectivity Specification (high-level, v0.13)
+# Axor Control Plane — UI & Connectivity Specification (high-level, v0.14)
+
+v0.14: title renamed "Axor Eval" -> "Axor Control Plane" to match the platform name (bundle loose end 3). "Axor Eval" below refers to the Eval surface/product line inside the platform, and to the core measurement spec, unchanged.
 
 Scope: how a user connects their agent and experiences the product. Companion to the Axor Eval core spec (which defines what is measured). This document is the *delivery surface* — UI, connection modes, onboarding funnel.
 

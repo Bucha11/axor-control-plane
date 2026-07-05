@@ -1,0 +1,24 @@
+# Self-hosted deployment: proxy + backend + Postgres. Kùzu is embedded — no container.
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: axor
+      POSTGRES_USER: axor
+      POSTGRES_PASSWORD: ${AXOR_PG_PASSWORD:?set in .env}
+    volumes: ["pgdata:/var/lib/postgresql/data"]
+  backend:
+    build: { context: ., dockerfile: packages/axor-backend/Dockerfile }
+    environment:
+      AXOR_DATABASE_URL: postgresql+asyncpg://axor:${AXOR_PG_PASSWORD}@postgres/axor
+      AXOR_GRAPH_DIR: /data/graph
+      AXOR_TRACE_DIR: /data/traces
+    volumes: ["axordata:/data"]
+    ports: ["8400:8400"]
+    depends_on: [postgres]
+  proxy:
+    build: { context: ., dockerfile: packages/axor-proxy/Dockerfile }
+    environment:
+      AXOR_BACKEND_URL: http://backend:8400
+    ports: ["8401:8401"]
+volumes: { pgdata: {}, axordata: {} }
