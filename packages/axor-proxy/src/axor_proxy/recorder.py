@@ -4,7 +4,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import anyio
-from axor_kernel.events import Event
+from axor_core.kernel.events import Event, event_to_json_line
 
 
 class TraceRecorder:
@@ -15,6 +15,6 @@ class TraceRecorder:
         self._path = anyio.Path(trace_dir / f"{run_id}.jsonl")
 
     async def record(self, event: Event) -> None:
-        line = event.model_dump_json() + "\n"
+        line = event_to_json_line(event) + "\n"
         async with await self._path.open("a", encoding="utf-8") as f:
             await f.write(line)

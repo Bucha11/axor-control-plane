@@ -7,13 +7,12 @@ requires-python = ">=3.12"
 members = ["packages/*"]
 
 [tool.uv.sources]
-axor-kernel = { workspace = true }
 axor-proxy = { workspace = true }
 axor-backend = { workspace = true }
 # Git-ref pins (plan decision 5.1): axor-eval is not on PyPI; axor-core is pinned
 # to a ref until the kernel merge ships in a release. CI/dev environments that
 # cannot reach github.com directly redirect via `git config url...insteadOf`.
-axor-core = { git = "https://github.com/Bucha11/axor-core", branch = "main" }
+axor-core = { git = "https://github.com/Bucha11/axor-core", branch = "claude/design-mockups-plan-jgqwup" }
 axor-eval = { git = "https://github.com/Bucha11/axor-eval", branch = "main" }
 
 [dependency-groups]

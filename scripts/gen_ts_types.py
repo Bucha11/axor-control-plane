@@ -1,7 +1,8 @@
-"""Generate frontend TS types from axor-kernel Pydantic models.
+"""Generate frontend TS types from the kernel event schema.
 
-Pipeline: Pydantic -> JSON Schema -> ts (arch open q resolved by whichever
-generator is picked; this script is the single entry point either way).
+Pipeline: axor_core.kernel dataclasses -> pydantic TypeAdapter -> JSON Schema
+-> ts (json-schema-to-typescript, invoked from pnpm). The kernel stays
+stdlib-only; validation and schema generation live here on the platform side.
 Run from repo root: uv run scripts/gen_ts_types.py
 """
 from __future__ import annotations
@@ -9,17 +10,21 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from axor_kernel.events import Event, Fact
+from pydantic import TypeAdapter
+
+from axor_core.kernel.events import Event, Fact
+from axor_core.kernel.state import DesiredState
 
 OUT = Path(__file__).parent.parent / "frontend" / "src" / "generated"
 
 
 def main() -> None:
     OUT.mkdir(parents=True, exist_ok=True)
-    for model in (Event, Fact):
-        schema = model.model_json_schema()
-        (OUT / f"{model.__name__}.schema.json").write_text(json.dumps(schema, indent=2))
-    # ts emission: json-schema-to-typescript invoked from pnpm side
+    for model in (Event, Fact, DesiredState):
+        schema = TypeAdapter(model).json_schema()
+        out = OUT / f"{model.__name__}.schema.json"
+        out.write_text(json.dumps(schema, indent=2) + "\n")
+        print(f"wrote {out}")
 
 
 if __name__ == "__main__":

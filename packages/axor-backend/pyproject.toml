@@ -4,7 +4,6 @@ version = "0.1.0"
 description = "FastAPI backend: trace ingest, control plane (SSE+POST), replay API, GraphStore."
 requires-python = ">=3.12"
 dependencies = [
-  "axor-kernel",  # staging; becomes axor-core (axor_core.kernel) after merge
   "axor-core>=0.1",
   "axor-eval>=0.1",
   "fastapi>=0.111", "sse-starlette>=2.1", "uvicorn>=0.29",

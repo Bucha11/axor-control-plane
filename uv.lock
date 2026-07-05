@@ -6,7 +6,6 @@ requires-python = ">=3.12"
 members = [
     "axor-backend",
     "axor-control-plane",
-    "axor-kernel",
     "axor-proxy",
 ]
 
@@ -89,7 +88,6 @@ dependencies = [
     { name = "asyncpg" },
     { name = "axor-core" },
     { name = "axor-eval" },
-    { name = "axor-kernel" },
     { name = "fastapi" },
     { name = "kuzu" },
     { name = "pynacl" },
@@ -101,9 +99,8 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "asyncpg", specifier = ">=0.29" },
-    { name = "axor-core", git = "https://github.com/Bucha11/axor-core?branch=main" },
+    { name = "axor-core", git = "https://github.com/Bucha11/axor-core?branch=claude%2Fdesign-mockups-plan-jgqwup" },
     { name = "axor-eval", git = "https://github.com/Bucha11/axor-eval?branch=main" },
-    { name = "axor-kernel", editable = "packages/axor-kernel" },
     { name = "fastapi", specifier = ">=0.111" },
     { name = "kuzu", specifier = ">=0.4" },
     { name = "pynacl", specifier = ">=1.5" },
@@ -136,7 +133,7 @@ dev = [
 [[package]]
 name = "axor-core"
 version = "0.8.0"
-source = { git = "https://github.com/Bucha11/axor-core?branch=main#f369ef33b9a82c2b3e46c1192a003a662401eab8" }
+source = { git = "https://github.com/Bucha11/axor-core?branch=claude%2Fdesign-mockups-plan-jgqwup#12421a814bfe3ac55d74893c34cb1ca6b9839058" }
 
 [[package]]
 name = "axor-eval"
@@ -147,17 +144,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "axor-kernel"
-version = "0.1.0"
-source = { editable = "packages/axor-kernel" }
-dependencies = [
-    { name = "pydantic" },
-]
-
-[package.metadata]
-requires-dist = [{ name = "pydantic", specifier = ">=2.7" }]
-
-[[package]]
 name = "axor-proxy"
 version = "0.1.0"
 source = { editable = "packages/axor-proxy" }
@@ -165,7 +151,6 @@ dependencies = [
     { name = "anyio" },
     { name = "axor-core" },
     { name = "axor-eval" },
-    { name = "axor-kernel" },
     { name = "httpx" },
     { name = "starlette" },
     { name = "uvicorn" },
@@ -174,9 +159,8 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "anyio", specifier = ">=4.0" },
-    { name = "axor-core", git = "https://github.com/Bucha11/axor-core?branch=main" },
+    { name = "axor-core", git = "https://github.com/Bucha11/axor-core?branch=claude%2Fdesign-mockups-plan-jgqwup" },
     { name = "axor-eval", git = "https://github.com/Bucha11/axor-eval?branch=main" },
-    { name = "axor-kernel", editable = "packages/axor-kernel" },
     { name = "httpx", specifier = ">=0.27" },
     { name = "starlette", specifier = ">=0.37" },
     { name = "uvicorn", specifier = ">=0.29" },
