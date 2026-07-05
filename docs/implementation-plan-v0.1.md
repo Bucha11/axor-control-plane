@@ -274,3 +274,21 @@ Former open questions. Format mirrors the spec's §10: decision → consequence 
 - Live fork (§13.3), continuous drift monitoring, team features/SSO/RBAC (monetization doc
   Line 2) — scaffolding only in Phase 6.
 - axor-daemon and axor-classifier-simple development (independent ecosystem packages).
+
+---
+
+## 7. Execution log (2026-07-05)
+
+Executed in one pass, all branches `claude/design-mockups-plan-jgqwup`:
+
+| Phase | Status | Proof |
+|---|---|---|
+| 0 Bootstrap | done | skeleton imported; kernel tests first-ever run; CI; spec v0.14 rename; protocol v0.2 (`pending_excision`, JCS, T=10s) |
+| 1 Kernel | done | `axor_core.kernel.{events,state,degradation,replay}` additive; golden-trace zero-divergence test; counterfactuals (no-capability, synthetic taint, excision, budget); purity contracts; axor-core suite 912 passed unmodified |
+| 2 Proxy | done | passthrough + axor-eval fault engine + mock tools + EvidenceCase; trace folds through kernel replay (rule 0 e2e test); 8 tests |
+| 3 Backend | done | plane service (signed commands, SSE, facts), replay/regression APIs, Kuzu GraphStore (loose end 4 resolved: per-tenant single writer behind a lock); 14 tests |
+| 4 Frontend | done | all seven mockups live over the real API; strict tsc + vite build green; E2E smoke with screenshots (eval receipt, replay fork, control round-trip, regression report) |
+| 5 Adapter | mostly done | axor-core PlaneSession/PlaneClient (sig-verify, lattice, narrowing, one-shots, provenance guard); axor-probe excision shapes + heal→re-probe unit; axor-sentinel attestation recompute. **Remaining:** wiring PlaneSession polling into GovernedSession/IntentLoop and emitting kernel events from TraceCollector (runtime adoption), Sentinel cycle reading `effective_score` |
+
+Deferred to Phase 6 (unchanged): notifications, EvidenceCase export/share, expert
+view, /ee scaffolding, hosted deploy.
