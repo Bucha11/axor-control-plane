@@ -1,0 +1,25 @@
+Axor Enterprise Edition — Commercial License
+=============================================
+
+The code in this `ee/` directory is the Enterprise Edition of the Axor Control
+Plane. Unlike the rest of this repository (Apache-2.0, see the repository-root
+LICENSE), it is licensed commercially.
+
+- **Source-visible, not free-to-use.** The source is published so security
+  buyers can audit everything they run — nothing about the license check or the
+  EE features is hidden. Publication is not a grant of the right to use these
+  features in production.
+
+- **Production use requires a valid Axor EE license** (an Ed25519-signed license
+  file — org, tier, node ceiling, expiry — verified offline; see
+  monetization-v0.1.md §4). The EE features check it at startup; an expired
+  license degrades gracefully to read-only EE and NEVER disables any safety
+  feature.
+
+- **Permitted without a commercial license:** reading, auditing, and modifying
+  this source for evaluation and security review. Running the EE features to
+  provide the enterprise capabilities they implement, in production, is not.
+
+For a commercial license, contact the Axor authors. Everything an individual
+needs is Apache-2.0 and free forever; you pay only for organizational features —
+never for safety, never for hosting per se.

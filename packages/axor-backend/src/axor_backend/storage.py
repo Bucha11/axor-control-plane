@@ -11,21 +11,28 @@ import json
 from typing import Any
 
 from sqlalchemy import (
+    JSON,
     Boolean,
     Column,
     Integer,
     MetaData,
     String,
     Table,
-    Text,
     UniqueConstraint,
     insert,
     select,
     update,
 )
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
 metadata = MetaData()
+
+# JSON payload columns: real JSONB on Postgres (indexable, queryable), portable
+# JSON (stored as TEXT, auto-(de)serialised) on SQLite for dev/tests. One column
+# type, both deploys — the backend stops treating governance payloads as opaque
+# blobs the moment it runs on Postgres.
+_JSON = JSON().with_variant(JSONB(), "postgresql")
 
 runs = Table(
     "runs", metadata,
@@ -34,7 +41,7 @@ runs = Table(
     Column("scenario", String(128), nullable=False, default="custom"),
     Column("intervened", Boolean, nullable=False, default=False),
     Column("completed", Boolean, nullable=False, default=False),
-    Column("evidence_json", Text, nullable=False, default="[]"),
+    Column("evidence_json", _JSON, nullable=False, default=list),
     Column("created_ts", String(40), nullable=False),
 )
 
@@ -45,7 +52,7 @@ events = Table(
     Column("node_id", String(128), nullable=False, index=True),
     Column("seq", Integer, nullable=False),
     Column("kind", String(40), nullable=False),
-    Column("line", Text, nullable=False),  # full kernel-schema JSON line
+    Column("line", _JSON, nullable=False),  # full kernel-schema JSON line
     UniqueConstraint("run_id", "seq", name="uq_events_run_seq"),
 )
 
@@ -58,7 +65,7 @@ desired_state = Table(
     "desired_state", metadata,
     Column("node_id", String(128), primary_key=True),
     Column("version", Integer, nullable=False),
-    Column("state_json", Text, nullable=False),
+    Column("state_json", _JSON, nullable=False),
 )
 
 reported_state = Table(
@@ -74,7 +81,7 @@ facts = Table(
     "facts", metadata,
     Column("fact_id", String(128), primary_key=True),
     Column("node_id", String(128), nullable=False, index=True),
-    Column("fact_json", Text, nullable=False),
+    Column("fact_json", _JSON, nullable=False),
     Column("created_ts", String(40), nullable=False),
 )
 
@@ -118,7 +125,7 @@ class Store:
             if existing is None:
                 await conn.execute(insert(runs).values(
                     run_id=run_id, node_id=node_id, scenario=scenario,
-                    intervened=False, completed=False, evidence_json="[]",
+                    intervened=False, completed=False, evidence_json=[],
                     created_ts=ts,
                 ))
 
@@ -150,7 +157,7 @@ class Store:
                     node_id=node_id,
                     seq=line["seq"],
                     kind=line["kind"],
-                    line=json.dumps(line, sort_keys=True),
+                    line=line,
                 ))
                 stored += 1
             return stored
@@ -162,7 +169,9 @@ class Store:
                 .where(events.c.run_id == run_id, events.c.seq > after_seq)
                 .order_by(events.c.seq)
             )).all()
-        return [r.line for r in rows]
+        # The column is native JSON; callers of this method still expect the raw
+        # kernel-schema line as a string, so re-serialise on the way out.
+        return [json.dumps(r.line) for r in rows]
 
     async def list_runs(self) -> list[dict[str, Any]]:
         async with self.engine.connect() as conn:
@@ -173,7 +182,7 @@ class Store:
             {
                 "run_id": r.run_id, "node_id": r.node_id, "scenario": r.scenario,
                 "intervened": r.intervened, "completed": r.completed,
-                "evidence": json.loads(r.evidence_json), "created_ts": r.created_ts,
+                "evidence": r.evidence_json, "created_ts": r.created_ts,
             }
             for r in rows
         ]
@@ -182,7 +191,7 @@ class Store:
         async with self.engine.begin() as conn:
             await conn.execute(
                 update(runs).where(runs.c.run_id == run_id).values(
-                    evidence_json=json.dumps(evidence), completed=True,
+                    evidence_json=evidence, completed=True,
                 )
             )
 
@@ -205,15 +214,15 @@ class Store:
             if row is None:
                 version, state = 1, dict(delta)
                 await conn.execute(insert(desired_state).values(
-                    node_id=node_id, version=version, state_json=json.dumps(state),
+                    node_id=node_id, version=version, state_json=state,
                 ))
             else:
                 version = row.version + 1
-                state = {**json.loads(row.state_json), **delta}
+                state = {**row.state_json, **delta}
                 await conn.execute(
                     update(desired_state)
                     .where(desired_state.c.node_id == node_id)
-                    .values(version=version, state_json=json.dumps(state))
+                    .values(version=version, state_json=state)
                 )
             return version, state
 
@@ -224,7 +233,7 @@ class Store:
             )).first()
         if row is None:
             return None
-        return row.version, json.loads(row.state_json)
+        return row.version, row.state_json
 
     async def clear_desired_key(self, node_id: str, key: str) -> None:
         """Consumption ack (injection/excision): clear the one-shot from state."""
@@ -234,13 +243,13 @@ class Store:
             )).first()
             if row is None:
                 return
-            state = json.loads(row.state_json)
+            state = dict(row.state_json)
             if key in state:
                 state.pop(key)
                 await conn.execute(
                     update(desired_state)
                     .where(desired_state.c.node_id == node_id)
-                    .values(version=row.version + 1, state_json=json.dumps(state))
+                    .values(version=row.version + 1, state_json=state)
                 )
 
     async def upsert_reported(
@@ -311,7 +320,7 @@ class Store:
                 return False
             await conn.execute(insert(facts).values(
                 fact_id=fact["fact_id"], node_id=node_id,
-                fact_json=json.dumps(fact, sort_keys=True), created_ts=ts,
+                fact_json=fact, created_ts=ts,
             ))
             return True
 
@@ -322,7 +331,7 @@ class Store:
                 .where(facts.c.node_id == node_id)
                 .order_by(facts.c.created_ts)
             )).all()
-        return [json.loads(r.fact_json) for r in rows]
+        return [r.fact_json for r in rows]
 
     # ── API keys (auth, architecture section 9) ───────────────────────────────
 

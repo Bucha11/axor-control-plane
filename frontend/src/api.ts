@@ -227,8 +227,8 @@ export const api = {
     ),
   revokeShare: (token: string) =>
     af(`/v1/share/${token}`, { method: "DELETE" }).then((r) => j<{ revoked: string }>(r)),
-  exportUrl: (runId: string, caseIndex: number) =>
-    withToken(`/v1/runs/${runId}/cases/${caseIndex}/export`),
+  exportUrl: (runId: string, caseIndex: number, format: "html" | "pdf" = "html") =>
+    withToken(`/v1/runs/${runId}/cases/${caseIndex}/export?format=${format}`),
 
   // ── notifications (spec 16) ────────────────────────────────────────────────
   subscribeNotifications: (url: string, triggers: string[], debounceSeconds = 0) =>

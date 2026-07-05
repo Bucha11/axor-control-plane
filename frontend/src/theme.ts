@@ -2,7 +2,8 @@
 export const C = {
   bg: "#12161A", panel: "#191F26", panel2: "#141920", line: "#262E37",
   text: "#D2DAE1", mut: "#78848F", dim: "#4C5760",
-  red: "#E5484D", amber: "#F2A33C", green: "#46A758", steel: "#7FA8CC",
+  red: "#E5484D", amber: "#F2A33C", yellow: "#D9BC3A", green: "#46A758",
+  steel: "#7FA8CC",
 } as const;
 
 export const MONO = "ui-monospace, SFMono-Regular, Menlo, monospace";
@@ -14,8 +15,14 @@ export const btn = (extra: React.CSSProperties = {}): React.CSSProperties => ({
   ...extra,
 });
 
+// The audit stream's four-colour taxonomy (spec §8):
+//   🔴 red    — fabricated / unrecorded (a denial, a claim with no backing)
+//   🟠 orange — policy / memory (a governance fact, a context excision)
+//   🟡 yellow — omission / substitution (a fault: a tool result altered or dropped)
+//   🟢 green  — consistent (everything that reconciles)
 export const sevColor = (verdict: string | null | undefined, kind?: string): string => {
-  if (verdict === "deny" || kind === "denial" || kind === "fault_injected") return C.red;
+  if (verdict === "deny" || kind === "denial") return C.red;
   if (kind === "fact" || kind === "context_excision") return C.amber;
+  if (kind === "fault_injected") return C.yellow;
   return C.green;
 };

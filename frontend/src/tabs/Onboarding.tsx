@@ -96,9 +96,11 @@ export default function Onboarding() {
           {tools.length === 0 ? (
             <div className="p-8 flex flex-col items-center gap-3" style={{ background: C.panel, border: `1px dashed ${C.line}`, borderRadius: 8 }}>
               <button onClick={() => setTools(TOOLS)} style={btn({ color: C.steel, borderColor: C.steel, fontSize: 12 })}>
-                <Plug size={13} /> Import MCP config
+                <Plug size={13} /> Load example tools
               </button>
-              <span style={{ fontFamily: MONO, fontSize: 11, color: C.dim }}>or add endpoints by hand · or use our mock tools (zero creds)</span>
+              <span style={{ fontFamily: MONO, fontSize: 11, color: C.dim }}>
+                loads a sample set — parsing a real MCP manifest is on the roadmap · or add endpoints by hand · or use our mock tools (zero creds)
+              </span>
               <div className="w-full">{addRow}</div>
             </div>
           ) : (
@@ -218,6 +220,13 @@ export default function Onboarding() {
               {depth === "adapter" ? "unlocks Control, taint graph, probe health" : "Eval core — Control is greyed until you wrap"}
             </span>
           </div>
+          {depth === "proxy" && (
+            <div style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim, marginTop: 8, lineHeight: 1.6, border: `1px solid ${C.line}`, borderRadius: 6, padding: "8px 10px" }}>
+              visibility: a hosted proxy sees your tool traffic (URLs, params, results) to observe it — that is how the audit works.
+              your credentials pass through byte-for-byte and are never stored. self-host the proxy to keep every byte on your own infrastructure;
+              stored artifacts are observations and labels only, never raw request/response bodies (spec §8.3).
+            </div>
+          )}
           {allGreen && (
             <div style={{ fontFamily: MONO, fontSize: 11, color: C.dim, marginTop: 12 }}>
               optional: run a baseline health check first (23 probes, ~1 min) — gives drift comparison later

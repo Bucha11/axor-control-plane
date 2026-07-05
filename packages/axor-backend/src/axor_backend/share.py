@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import html
 import secrets
+import textwrap
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -96,6 +97,90 @@ def _render(value: Any) -> str:  # noqa: ANN401
     if isinstance(value, str):
         return value
     return json.dumps(value, ensure_ascii=False, indent=2)
+
+
+# ── PDF export ────────────────────────────────────────────────────────────────
+# A self-contained, dependency-free PDF (spec §8.3 wants the primary artifact to
+# leave the product as a receipt, not only as HTML). Single page, the standard
+# Helvetica font (no embedding needed), observations only — the same scrubbed
+# content the HTML receipt carries.
+
+def _pdf_escape(text: str) -> str:
+    return text.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
+
+
+def _receipt_lines(run_id: str, case: dict[str, Any], scenario: str) -> list[str]:
+    c = _scrub(case)
+    deviation = str(c.get("deviation") or "no deviation").replace("_", " ").upper()
+    lines = [
+        "AXOR EVIDENCECASE",
+        f"{run_id}  ·  {scenario}",
+        "",
+        f"VERDICT: {deviation}",
+        f"source {c.get('verdict_source', '')}  ·  confidence {c.get('confidence', '')}",
+        "",
+        "WHAT HAPPENED (observed reality)",
+    ]
+    for raw in _render(c.get("observed_reality")).splitlines() or [""]:
+        lines += textwrap.wrap(raw, 92) or [""]
+    lines += ["", "WHAT THE AGENT SAID (claim)"]
+    for raw in _render(c.get("agent_claim")).splitlines() or [""]:
+        lines += textwrap.wrap(raw, 92) or [""]
+    lines += ["", "FAULT ATTRIBUTION"]
+    faults = c.get("fault_attribution", [])
+    if faults:
+        for f in faults:
+            lines += textwrap.wrap(
+                f"- {f.get('fault_mode')} on {f.get('tool_name')} — {f.get('influence')}",
+                92,
+            )
+    else:
+        lines.append("- —")
+    lines += [
+        "",
+        "observations only — no raw request/response bodies are exported (spec 8.3).",
+    ]
+    return lines
+
+
+def evidence_receipt_pdf(
+    run_id: str, case: dict[str, Any], scenario: str = ""
+) -> bytes:
+    """A minimal, valid, dependency-free PDF receipt for one EvidenceCase."""
+    lines = _receipt_lines(run_id, case, scenario)
+    # Build the text content stream: 11pt Helvetica, 14pt leading, from the top.
+    leading = 14
+    body = ["BT", "/F1 11 Tf", f"{leading} TL", "56 760 Td"]
+    for line in lines:
+        body.append(f"({_pdf_escape(line)}) Tj")
+        body.append("T*")  # next line
+    body.append("ET")
+    content = "\n".join(body).encode("latin-1", "replace")
+
+    objects: list[bytes] = [
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] "
+        b"/Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>",
+        b"<< /Length %d >>\nstream\n%s\nendstream" % (len(content), content),
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+    ]
+
+    out = bytearray(b"%PDF-1.4\n")
+    offsets = [0]
+    for i, obj in enumerate(objects, start=1):
+        offsets.append(len(out))
+        out += b"%d 0 obj\n" % i + obj + b"\nendobj\n"
+    xref_pos = len(out)
+    out += b"xref\n0 %d\n" % (len(objects) + 1)
+    out += b"0000000000 65535 f \n"
+    for off in offsets[1:]:
+        out += b"%010d 00000 n \n" % off
+    out += (
+        b"trailer\n<< /Size %d /Root 1 0 R >>\nstartxref\n%d\n%%%%EOF"
+        % (len(objects) + 1, xref_pos)
+    )
+    return bytes(out)
 
 
 _TEMPLATE = """<!doctype html>

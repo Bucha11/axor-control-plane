@@ -37,7 +37,11 @@ from axor_backend.replay_api import (
     regression_row,
     scrubber_payload,
 )
-from axor_backend.share import ShareRegistry, evidence_receipt_html
+from axor_backend.share import (
+    ShareRegistry,
+    evidence_receipt_html,
+    evidence_receipt_pdf,
+)
 from axor_backend.signing import OperatorKeyring
 from axor_backend.storage import Store, init_db, make_engine
 
@@ -318,19 +322,34 @@ def create_app(
         return await _receipt(request, link.run_id, link.case_index)
 
     @app.get("/v1/runs/{run_id}/cases/{case_index}/export")
-    async def export_case(run_id: str, case_index: int, request: Request) -> HTMLResponse:
-        return await _receipt(request, run_id, case_index)
+    async def export_case(
+        run_id: str, case_index: int, request: Request, format: str = "html"
+    ) -> Response:
+        run = await _case_run(request, run_id, case_index)
+        case = run["evidence"][case_index]
+        scenario = run.get("scenario", "")
+        if format == "pdf":
+            pdf = evidence_receipt_pdf(run_id, case, scenario)
+            return Response(
+                content=pdf, media_type="application/pdf",
+                headers={"Content-Disposition":
+                         f'attachment; filename="evidence-{run_id}-{case_index}.pdf"'},
+            )
+        return HTMLResponse(evidence_receipt_html(run_id, case, scenario))
 
-    async def _receipt(request: Request, run_id: str, case_index: int) -> HTMLResponse:
+    async def _case_run(request: Request, run_id: str, case_index: int) -> dict:
         store: Store = request.app.state.store
         runs = {r["run_id"]: r for r in await store.list_runs()}
         run = runs.get(run_id)
         if run is None or case_index >= len(run["evidence"]):
             raise HTTPException(404, "no such case")
-        html_body = evidence_receipt_html(
+        return run
+
+    async def _receipt(request: Request, run_id: str, case_index: int) -> HTMLResponse:
+        run = await _case_run(request, run_id, case_index)
+        return HTMLResponse(evidence_receipt_html(
             run_id, run["evidence"][case_index], run.get("scenario", "")
-        )
-        return HTMLResponse(html_body)
+        ))
 
     # ── EE license (monetization doc section 4) ───────────────────────────────
 

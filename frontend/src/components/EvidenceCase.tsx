@@ -88,6 +88,9 @@ export default function EvidenceCase({
           <a href={api.exportUrl(runId, caseIndex)} target="_blank" rel="noreferrer" style={{ ...action(C.mut), textDecoration: "none" }}>
             <ExternalLink size={11} /> Export
           </a>
+          <a href={api.exportUrl(runId, caseIndex, "pdf")} target="_blank" rel="noreferrer" style={{ ...action(C.mut), textDecoration: "none" }}>
+            <ExternalLink size={11} /> PDF
+          </a>
         </div>
       </div>
       {shareUrl && (
