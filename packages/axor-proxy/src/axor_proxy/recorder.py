@@ -12,7 +12,9 @@ class TraceRecorder:
     pass through here — the caller records observations, not dumps (spec, section 6)."""
 
     def __init__(self, trace_dir: Path, run_id: str) -> None:
-        self._path = anyio.Path(trace_dir / f"{run_id}.jsonl")
+        trace_dir.mkdir(parents=True, exist_ok=True)
+        self.path = trace_dir / f"{run_id}.jsonl"
+        self._path = anyio.Path(self.path)
 
     async def record(self, event: Event) -> None:
         line = event_to_json_line(event) + "\n"

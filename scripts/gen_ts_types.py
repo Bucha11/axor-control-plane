@@ -10,10 +10,9 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from pydantic import TypeAdapter
-
 from axor_core.kernel.events import Event, Fact
 from axor_core.kernel.state import DesiredState
+from pydantic import TypeAdapter
 
 OUT = Path(__file__).parent.parent / "frontend" / "src" / "generated"
 
