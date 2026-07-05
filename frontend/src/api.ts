@@ -240,6 +240,20 @@ export const api = {
   deadLetters: () =>
     af("/v1/notifications/dead-letters").then((r) => j<DeadLetter[]>(r)),
 
+  // ── operator interventions over the plane (spec §12) ───────────────────────
+  appendFact: (nodeId: string, fact: Record<string, unknown>) =>
+    af(`/v1/plane/${nodeId}/facts`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        fact, operator: "op_ui", timestamp: new Date().toISOString(), sig: "",
+      }),
+    }).then((r) => j<{ appended: boolean }>(r)),
+  cascadeStop: (nodeId: string) =>
+    af(`/v1/plane/${nodeId}/cascade-stop`, { method: "POST" }).then(
+      (r) => j<{ stopped: string[]; count: number }>(r),
+    ),
+
   // ── taint / provenance graph (spec decision 6) ─────────────────────────────
   graphKhop: (focus: string, k = 2, limit = 100) =>
     af(`/v1/graph/khop?focus=${encodeURIComponent(focus)}&k=${k}&limit=${limit}`).then(

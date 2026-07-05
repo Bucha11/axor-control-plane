@@ -2,7 +2,7 @@
 // Wired to /v1/plane/nodes; divergence between desired and reported is rendered, not hidden.
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Circle, GitBranch, Pause, Play, Shield, Square, Syringe } from "lucide-react";
+import { Circle, Gauge, GitBranch, Pause, Play, Shield, Square, Syringe } from "lucide-react";
 import { api, NodeInfo } from "../api";
 import { isAdapter, useApp } from "../store";
 import { C, MONO, btn } from "../theme";
@@ -54,6 +54,22 @@ function ControlBody({ focusNode, testBench }: { focusNode?: string; testBench: 
     mutationFn: ({ nodeId, version, state }: {
       nodeId: string; version: number; state: Record<string, unknown>;
     }) => api.command(nodeId, version, state),
+    onSuccess: () => {
+      setCmdError(null);
+      void qc.invalidateQueries({ queryKey: ["nodes"] });
+    },
+    onError: (err: Error) => setCmdError(err.message),
+  });
+
+  const attest = useMutation({
+    mutationFn: ({ nodeId, fact }: { nodeId: string; fact: Record<string, unknown> }) =>
+      api.appendFact(nodeId, fact),
+    onSuccess: () => setCmdError(null),
+    onError: (err: Error) => setCmdError(err.message),
+  });
+
+  const cascade = useMutation({
+    mutationFn: (nodeId: string) => api.cascadeStop(nodeId),
     onSuccess: () => {
       setCmdError(null);
       void qc.invalidateQueries({ queryKey: ["nodes"] });
@@ -203,25 +219,86 @@ function ControlBody({ focusNode, testBench }: { focusNode?: string; testBench: 
               >
                 <Square size={12} /> Stop
               </button>
-              {([
-                ["Replan", GitBranch, false],
-                ["Inject next turn", Syringe, true],
-                ["Attest branch", Shield, false],
-              ] as const).map(([label, Icon, needsBench]) => {
-                // Injection is available only on test-bench connections (spec
-                // decision 5); the run it lands in is marked `intervened`.
-                const gated = needsBench && !testBench;
-                return (
-                  <button
-                    key={label}
-                    disabled={gated}
-                    title={gated ? "available on a test-bench connection (Settings)" : "operator intervention — recorded, run marked intervened"}
-                    style={btn({ color: gated ? C.dim : C.mut, fontSize: 11, padding: "6px 10px", cursor: gated ? "default" : "pointer", opacity: gated ? 0.6 : 1 })}
-                  >
-                    <Icon size={12} /> {label}
-                  </button>
-                );
-              })}
+              <button
+                onClick={() => {
+                  if (!node) return;
+                  cascade.mutate(node.node_id);
+                }}
+                disabled={cascade.isPending}
+                title="stop this node and its whole subtree (cascade)"
+                style={btn({ color: C.mut, fontSize: 11, padding: "6px 10px" })}
+              >
+                <Square size={12} /> Cascade stop
+              </button>
+              <button
+                onClick={() => {
+                  const id = `rp_${Date.now()}`;
+                  const reason = window.prompt("Replan — reason for the operator record:");
+                  if (reason == null) return;
+                  send({ replan: { id, reason, operator: "op_ui" } });
+                }}
+                disabled={stopped || command.isPending}
+                title="ask the agent to drop its current plan and reconsider — recorded"
+                style={btn({ color: stopped ? C.dim : C.mut, fontSize: 11, padding: "6px 10px", opacity: stopped ? 0.6 : 1 })}
+              >
+                <GitBranch size={12} /> Replan
+              </button>
+              <button
+                onClick={() => {
+                  const cur = typeof desired?.state.budget_cap_calls === "number"
+                    ? (desired.state.budget_cap_calls as number) : null;
+                  const input = window.prompt(
+                    `Lower the budget call cap${cur != null ? ` (currently ${cur})` : ""} — decrease-only:`,
+                  );
+                  if (input == null) return;
+                  const n = parseInt(input, 10);
+                  if (Number.isNaN(n) || n < 0) { setCmdError("cap must be a non-negative integer"); return; }
+                  send({ budget_cap_calls: n });
+                }}
+                disabled={stopped || command.isPending}
+                title="lower the tool-call budget — the adapter rejects any widening"
+                style={btn({ color: stopped ? C.dim : C.mut, fontSize: 11, padding: "6px 10px", opacity: stopped ? 0.6 : 1 })}
+              >
+                <Gauge size={12} /> Lower budget
+              </button>
+              <button
+                onClick={() => {
+                  if (!node) return;
+                  const text = window.prompt("Injection text (test-bench only) — inserted next turn:");
+                  if (!text) return;
+                  const reason = window.prompt("Reason (recorded):") ?? "";
+                  send({
+                    pending_injection: {
+                      id: `inj_${Date.now()}`, text, reason, operator: "op_ui",
+                    },
+                  });
+                }}
+                disabled={!testBench || stopped || command.isPending}
+                title={!testBench ? "available on a test-bench connection (Settings)" : "insert an injection next turn — run is marked intervened"}
+                style={btn({ color: (!testBench || stopped) ? C.dim : C.mut, fontSize: 11, padding: "6px 10px", cursor: (!testBench || stopped) ? "default" : "pointer", opacity: (!testBench || stopped) ? 0.6 : 1 })}
+              >
+                <Syringe size={12} /> Inject next turn
+              </button>
+              <button
+                onClick={() => {
+                  if (!node) return;
+                  const reason = window.prompt("Attestation reason (required — recorded, append-only):");
+                  if (!reason) { if (reason === "") setCmdError("attestation requires a reason"); return; }
+                  attest.mutate({
+                    nodeId: node.node_id,
+                    fact: {
+                      fact_id: `att_${Date.now()}`,
+                      fact_type: "operator_attestation",
+                      reason, operator: "op_ui",
+                    },
+                  });
+                }}
+                disabled={attest.isPending}
+                title="attest this branch — an append-only reputation event with a required reason"
+                style={btn({ color: C.mut, fontSize: 11, padding: "6px 10px" })}
+              >
+                <Shield size={12} /> Attest branch
+              </button>
             </div>
           )}
 

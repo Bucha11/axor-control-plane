@@ -127,6 +127,39 @@ async def test_heat_crossing_fact_emits_heat_threshold(
     assert fired[0]["score"] == 0.9 and fired[0]["resource_id"] == "res_1"
 
 
+# ── cascade stop over parent/child topology (spec §12) ────────────────────────
+
+async def test_cascade_stop_stops_the_whole_subtree(
+    client: httpx.AsyncClient,
+) -> None:
+    # Build a small topology via desired-state `parent` fields: root → child →
+    # grandchild, plus an unrelated node that must NOT be stopped.
+    async def cmd(node: str, state: dict) -> None:
+        r = await client.post(f"/v1/plane/{node}/command", json={
+            "version": 1, "state": state, "operator": "op_ui",
+            "timestamp": "", "sig": "",
+        })
+        assert r.status_code == 202, r.text
+
+    await cmd("root", {"note": "root"})
+    await cmd("child", {"parent": "root"})
+    await cmd("grand", {"parent": "child"})
+    await cmd("other", {"note": "unrelated"})
+
+    r = await client.post("/v1/plane/root/cascade-stop")
+    assert r.status_code == 202
+    stopped = set(r.json()["stopped"])
+    assert stopped == {"root", "child", "grand"}
+
+    for node in ("root", "child", "grand"):
+        nodes = await client.get("/v1/plane/nodes")
+        info = next(n for n in nodes.json() if n["node_id"] == node)
+        assert info["desired"]["state"]["stopped"] is True
+    other = next(n for n in (await client.get("/v1/plane/nodes")).json()
+                 if n["node_id"] == "other")
+    assert other["desired"]["state"].get("stopped") is not True
+
+
 # ── evidence auto-pin ─────────────────────────────────────────────────────────
 
 async def test_set_evidence_auto_pins_deviation_to_must_block(

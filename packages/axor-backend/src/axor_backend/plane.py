@@ -72,6 +72,43 @@ async def command(node_id: str, body: dict, request: Request) -> dict:
     return {"node_id": node_id, "version": new_version, "state": state}
 
 
+@router.post("/{node_id}/cascade-stop", status_code=202)
+async def cascade_stop(node_id: str, request: Request) -> dict:
+    """Stop a node and its whole subtree (spec §12: cascade stop). Topology is
+    the `parent` field each node carries in its desired state; a stop is written
+    to the target and every descendant. Unsigned/open posture only — a signed
+    deployment would need a per-node operator signature we cannot mint here."""
+    ctx = _ctx(request)
+    if not ctx.keyring.empty:
+        raise HTTPException(
+            409, "cascade stop is unavailable with operator keys set — "
+            "each node needs its own signed stop command",
+        )
+    # Build the parent map from every node's stored desired state, then BFS down.
+    parents: dict[str, str] = {}
+    for nid in await ctx.store.list_nodes():
+        current = await ctx.store.get_desired(nid)
+        parent = (current[1].get("parent") if current else None)
+        if isinstance(parent, str) and parent:
+            parents[nid] = parent
+    subtree = [node_id]
+    frontier = {node_id}
+    while frontier:
+        children = {n for n, p in parents.items() if p in frontier and n not in subtree}
+        subtree.extend(sorted(children))
+        frontier = children
+    stopped = []
+    for nid in subtree:
+        new_version, state = await ctx.store.bump_desired(nid, {"stopped": True})
+        ctx.broadcast.publish(f"plane:{nid}", {
+            "type": "delta", "node_id": nid, "version": new_version,
+            "state": state, "delta": {"stopped": True},
+            "operator": "op_ui", "timestamp": "", "sig": "",
+        })
+        stopped.append(nid)
+    return {"stopped": stopped, "count": len(stopped)}
+
+
 @router.get("/{node_id}/desired")
 async def desired_stream(node_id: str, request: Request) -> EventSourceResponse:
     ctx = _ctx(request)
