@@ -22,6 +22,7 @@ import { navigate } from "../router";
 import { isConnected, useApp } from "../store";
 import { C, MONO, btn, sevColor } from "../theme";
 import EvidenceCase, { deviationHeadline } from "../components/EvidenceCase";
+import ScenarioDelta from "../components/ScenarioDelta";
 
 // The v1 scenario: Tool Deprivation. Fault modes map to the deprivation engine.
 const FAULT_MODES = [
@@ -52,6 +53,7 @@ export default function Experiment({ runId, autostart }: { runId?: string; autos
 
   const [tool, setTool] = useState("web_search");
   const [faultMode, setFaultMode] = useState("silent_fail");
+  const [showDelta, setShowDelta] = useState(true);
   const [liveEvents, setLiveEvents] = useState<KernelEvent[]>([]);
   const [activeRun, setActiveRun] = useState<string | null>(runId ?? null);
   const unsub = useRef<(() => void) | null>(null);
@@ -190,7 +192,14 @@ export default function Experiment({ runId, autostart }: { runId?: string; autos
                 : <>Run in progress.</>}
           </h1>
           {caught && (
-            <EvidenceCase runId={focusRun.run_id} caseIndex={caseIndex} c={caught} />
+            <>
+              <label className="flex items-center gap-2" style={{ fontFamily: MONO, fontSize: 11, color: C.mut, marginBottom: 10, cursor: "pointer" }}>
+                <input type="checkbox" checked={showDelta} onChange={(e) => setShowDelta(e.target.checked)} style={{ accentColor: C.steel }} />
+                governed vs ungoverned (scenario delta)
+              </label>
+              {showDelta && <ScenarioDelta c={caught} />}
+              <EvidenceCase runId={focusRun.run_id} caseIndex={caseIndex} c={caught} />
+            </>
           )}
         </>
       )}

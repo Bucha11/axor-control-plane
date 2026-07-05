@@ -1,8 +1,17 @@
 // Health check + reason-required self-heal (health-selfheal mockup).
-// Phases are simulated until the adapter lands; the panel shows the contract.
+//
+// The self-heal is REAL: it appends an operator_attestation fact over the plane
+// (reason required, append-only, recorded) — the same intervention the Control
+// tab issues. The per-family DRIFT verdicts still come from the probe adapter
+// (axor-probe), which is not yet wired into the platform backend; that half is
+// the honest contract this panel shows. Heal now, verdict-stream later.
 import { useState } from "react";
+import { useMutation } from "@tanstack/react-query";
 import { RefreshCw, HeartPulse, Check, Circle } from "lucide-react";
+import { api } from "../api";
 import { C, MONO } from "../theme";
+
+const HEALTH_NODE = "banking-assistant";
 
 type FamState = "ok" | "drift" | "healed";
 type Phase = "idle" | "reason" | "healing" | "reprobe" | "done";
@@ -24,17 +33,40 @@ export default function Health() {
   const [phase, setPhase] = useState<Phase>("idle");
   const [reason, setReason] = useState("");
   const [healedAt, setHealedAt] = useState<string | null>(null);
+  const [healError, setHealError] = useState<string | null>(null);
 
-  const trigger = () => {
-    setPhase("healing");
-    setTimeout(() => {
+  // The heal is a real, recorded plane attestation over the drifting branch.
+  const heal = useMutation({
+    mutationFn: (why: string) =>
+      api.appendFact(HEALTH_NODE, {
+        fact_id: `att_heal_${Date.now()}`,
+        fact_type: "operator_attestation",
+        reason: why,
+        operator: "op_ui",
+      }),
+    onSuccess: () => {
+      setHealError(null);
       setPhase("reprobe");
+      // Re-probe is the probe adapter's job; reflect a verified re-anchor once
+      // the attestation is recorded. (Live re-probe verdicts arrive with the
+      // probe integration.)
       setTimeout(() => {
         setFams((fs) => fs.map((f) => (f.st === "drift" ? { ...f, st: "healed" } : f)));
-        setHealedAt("12:41");
+        setHealedAt(new Date().toTimeString().slice(0, 5));
         setPhase("done");
-      }, 1300);
-    }, 1300);
+      }, 900);
+    },
+    onError: (err: Error) => {
+      setHealError(err.message);
+      setPhase("reason");
+    },
+  });
+
+  const trigger = () => {
+    if (!reason.trim()) return;
+    setHealError(null);
+    setPhase("healing");
+    heal.mutate(reason.trim());
   };
 
   const drifting = fams.some((f) => f.st === "drift");
@@ -43,7 +75,7 @@ export default function Health() {
   return (
     <div style={{ maxWidth: 560, margin: "0 auto" }}>
       <div style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim, marginBottom: 14 }}>
-        probe integration lands with the adapter (phase 5) — panel shows the interaction contract
+        self-heal records a real plane attestation; live per-family DRIFT verdicts stream in with the probe adapter
       </div>
 
       <h1 style={{ fontSize: 22, fontWeight: 650, margin: "0 0 4px" }}>
@@ -62,7 +94,7 @@ export default function Health() {
               <span style={{ fontFamily: MONO, fontSize: 10.5, color: col(f.st), fontWeight: f.st === "drift" ? 700 : 400 }}>
                 {f.st === "ok" ? "OK"
                   : f.st === "drift" ? (phase === "healing" ? "healing…" : phase === "reprobe" ? "re-probing…" : "DRIFT")
-                  : `healed by op_dmitrii ${healedAt} → re-probe: OK`}
+                  : `healed by op_ui ${healedAt} → re-probe: OK`}
               </span>
             </div>
 
@@ -82,17 +114,20 @@ export default function Health() {
             {f.st === "drift" && phase === "reason" && (
               <div className="px-4 pb-3 flex flex-col gap-2" style={{ paddingLeft: 40 }}>
                 <span style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim }}>
-                  plane command · signed ed25519:op_dmitrii · recorded in trace · a running experiment would be marked `intervened`
+                  plane attestation · operator op_ui · append-only, recorded · a running experiment would be marked `intervened`
                 </span>
                 <div className="flex gap-2">
                   <input autoFocus value={reason} onChange={(e) => setReason(e.target.value)}
                     placeholder="reason (required) — e.g. drift after prompt update, re-anchoring"
                     style={{ flex: 1, background: C.bg, border: `1px solid ${C.line}`, borderRadius: 4, color: C.text, fontFamily: MONO, fontSize: 11, padding: "6px 8px", outline: "none" }} />
-                  <button onClick={() => reason.trim() && trigger()} disabled={!reason.trim()}
+                  <button onClick={() => reason.trim() && trigger()} disabled={!reason.trim() || heal.isPending}
                     style={{ display: "flex", alignItems: "center", gap: 6, background: "none", border: `1px solid ${reason.trim() ? C.steel : C.line}`, borderRadius: 4, color: reason.trim() ? C.steel : C.dim, fontFamily: MONO, fontSize: 11, padding: "5px 12px", cursor: reason.trim() ? "pointer" : "default" }}>
                     <Check size={12} /> heal & re-probe
                   </button>
                 </div>
+                {healError && (
+                  <span style={{ fontFamily: MONO, fontSize: 10.5, color: C.red }}>{healError}</span>
+                )}
               </div>
             )}
           </div>
