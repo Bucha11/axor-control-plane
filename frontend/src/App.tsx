@@ -9,9 +9,10 @@ import Onboarding from "./tabs/Onboarding";
 import ConfigBuilder from "./tabs/ConfigBuilder";
 import Health from "./tabs/Health";
 import Regression from "./tabs/Regression";
+import ExpertView from "./tabs/ExpertView";
 
 const PRIMARY = ["eval", "control", "replay"] as const;
-const MORE = ["get started", "config builder", "health", "regression"] as const;
+const MORE = ["get started", "config builder", "health", "regression", "expert"] as const;
 type Tab = (typeof PRIMARY)[number] | (typeof MORE)[number];
 
 export default function App() {
@@ -63,6 +64,7 @@ export default function App() {
       {tab === "config builder" && <ConfigBuilder />}
       {tab === "health" && <Health />}
       {tab === "regression" && <Regression />}
+      {tab === "expert" && <ExpertView />}
     </div>
   );
 }

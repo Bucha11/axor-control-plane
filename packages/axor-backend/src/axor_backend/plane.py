@@ -106,9 +106,13 @@ async def telemetry(
     lines: list[dict[str, Any]] = body.get("events", [])
     await ctx.store.upsert_run(run_id, node_id, body.get("scenario", "live"), _now())
     stored = await ctx.store.ingest_events(run_id, node_id, lines, idempotency_key)
+    notifier = getattr(ctx, "notifier", None)
+    _LEVELS = {"NORMAL": 0, "CAUTIOUS": 1, "RESTRICTED": 2, "LOCKED": 3, "TERMINAL": 4}
     for line in lines:
-        if line.get("kind") == "heartbeat":
+        kind = line.get("kind")
+        if kind == "heartbeat":
             hb = line.get("payload", {})
+            prior = await ctx.store.get_reported(node_id)
             await ctx.store.upsert_reported(
                 node_id,
                 applied_version=int(hb.get("applied_version", 0)),
@@ -120,7 +124,16 @@ async def telemetry(
                 f"plane:{node_id}",
                 {"type": "reported", "node_id": node_id, "reported": hb},
             )
-        if line.get("kind") == "operator_intervention":
+            # Notify on an upward level transition (spec section 16 trigger).
+            new_level = str(hb.get("level", "NORMAL"))
+            old_level = prior["level"] if prior else "NORMAL"
+            if notifier is not None and _LEVELS.get(new_level, 0) > _LEVELS.get(old_level, 0):
+                await notifier.emit(
+                    "level_transition_up", node_id,
+                    {"from": old_level, "to": new_level,
+                     "permalink": f"/v1/plane/nodes#{node_id}"},
+                )
+        if kind == "operator_intervention":
             await ctx.store.mark_intervened(run_id)
         ctx.broadcast.publish(f"run:{run_id}", {"type": "event", "line": line})
     return {"stored": stored}

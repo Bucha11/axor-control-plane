@@ -15,16 +15,19 @@ from typing import Any
 
 from axor_core.kernel.replay import replay
 from fastapi import FastAPI, Header, HTTPException, Request
+from fastapi.responses import HTMLResponse
 from sse_starlette.sse import EventSourceResponse
 
 from axor_backend import plane
 from axor_backend.broadcast import Broadcast
+from axor_backend.notifications import Notifier
 from axor_backend.replay_api import (
     kernel_config_from_json,
     parse_trace,
     regression_row,
     scrubber_payload,
 )
+from axor_backend.share import ShareRegistry, evidence_receipt_html
 from axor_backend.signing import OperatorKeyring
 from axor_backend.storage import Store, init_db, make_engine
 
@@ -57,6 +60,8 @@ def create_app(
     app.state.broadcast = Broadcast()
     app.state.keyring = OperatorKeyring(keys)
     app.state.allow_unsigned = allow_unsigned
+    app.state.notifier = Notifier()
+    app.state.shares = ShareRegistry()
 
     app.include_router(plane.router)
 
@@ -83,8 +88,17 @@ def create_app(
 
     @app.post("/v1/runs/{run_id}/evidence")
     async def set_evidence(run_id: str, body: dict, request: Request) -> dict:
-        await request.app.state.store.set_evidence(run_id, body.get("evidence", []))
-        return {"ok": True}
+        evidence = body.get("evidence", [])
+        await request.app.state.store.set_evidence(run_id, evidence)
+        # Run completed with >=1 EvidenceCase → notify (spec section 16 trigger).
+        deviations = [c for c in evidence if c.get("deviation")]
+        if deviations:
+            await request.app.state.notifier.emit(
+                "evidence_run", body.get("node_id", "proxy"),
+                {"run_id": run_id, "cases": len(deviations),
+                 "permalink": f"/v1/runs/{run_id}"},
+            )
+        return {"ok": True, "notified": bool(deviations)}
 
     @app.get("/v1/runs")
     async def list_runs(request: Request) -> list[dict]:
@@ -166,6 +180,84 @@ def create_app(
             "regressed": regressed,
             "escaped": escaped,
             "safe_to_ship": regressed == 0 and escaped == 0,
+        }
+
+    # ── notifications (spec section 16) ───────────────────────────────────────
+
+    @app.post("/v1/notifications/subscribe")
+    async def notif_subscribe(body: dict, request: Request) -> dict:
+        url = body.get("url")
+        triggers = body.get("triggers", [])
+        if not url or not triggers:
+            raise HTTPException(400, "url and triggers required")
+        try:
+            request.app.state.notifier.subscribe(
+                url, triggers, float(body.get("debounce_seconds", 0.0))
+            )
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        return {"subscribed": url, "triggers": triggers}
+
+    @app.get("/v1/notifications/dead-letters")
+    async def notif_dead_letters(request: Request) -> list[dict]:
+        return [
+            {"url": d.url, "error": d.error, "attempts": d.attempts,
+             "trigger": d.payload.get("trigger")}
+            for d in request.app.state.notifier.dead_letters
+        ]
+
+    # ── EvidenceCase export & share (spec section 8.3) ────────────────────────
+
+    @app.post("/v1/runs/{run_id}/cases/{case_index}/share")
+    async def create_share(run_id: str, case_index: int, request: Request) -> dict:
+        link = request.app.state.shares.create(run_id, case_index)
+        return {"token": link.token, "url": f"/v1/share/{link.token}"}
+
+    @app.delete("/v1/share/{token}")
+    async def revoke_share(token: str, request: Request) -> dict:
+        ok = request.app.state.shares.revoke(token)
+        if not ok:
+            raise HTTPException(404, "unknown token")
+        return {"revoked": token}
+
+    @app.get("/v1/share/{token}")
+    async def resolve_share(token: str, request: Request) -> HTMLResponse:
+        link = request.app.state.shares.resolve(token)
+        if link is None:
+            raise HTTPException(404, "link revoked or unknown")
+        return await _receipt(request, link.run_id, link.case_index)
+
+    @app.get("/v1/runs/{run_id}/cases/{case_index}/export")
+    async def export_case(run_id: str, case_index: int, request: Request) -> HTMLResponse:
+        return await _receipt(request, run_id, case_index)
+
+    async def _receipt(request: Request, run_id: str, case_index: int) -> HTMLResponse:
+        store: Store = request.app.state.store
+        runs = {r["run_id"]: r for r in await store.list_runs()}
+        run = runs.get(run_id)
+        if run is None or case_index >= len(run["evidence"]):
+            raise HTTPException(404, "no such case")
+        html_body = evidence_receipt_html(
+            run_id, run["evidence"][case_index], run.get("scenario", "")
+        )
+        return HTMLResponse(html_body)
+
+    # ── EE license (monetization doc section 4) ───────────────────────────────
+
+    @app.post("/v1/license/verify")
+    async def license_verify(body: dict) -> dict:
+        from axor_backend.ee.license import LicenseError, verify_license
+
+        vendor_key = body.get("vendor_pubkey") or os.environ.get("AXOR_VENDOR_PUBKEY", "")
+        if not vendor_key:
+            raise HTTPException(400, "no vendor public key configured")
+        try:
+            lic = verify_license(body.get("license_json", ""), vendor_key)
+        except LicenseError as exc:
+            raise HTTPException(403, str(exc)) from exc
+        return {
+            "org": lic.org, "tier": lic.tier, "node_ceiling": lic.node_ceiling,
+            "expiry": lic.expiry, "features": list(lic.features),
         }
 
     @app.get("/v1/healthz")

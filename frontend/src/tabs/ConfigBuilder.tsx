@@ -123,6 +123,7 @@ export default function ConfigBuilder() {
   const [draft, setDraft] = useState<{ name: string; type: ToolType }>({ name: "", type: "READ" });
   const [sel, setSel] = useState<number | null>(null);
   const [emitted, setEmitted] = useState(false);
+  const [budgetCapCalls, setBudgetCapCalls] = useState<number | null>(null);
 
   const upload = () => {
     setStage("analyzing");
@@ -143,6 +144,7 @@ export default function ConfigBuilder() {
       ...(s.args.some((a) => a.set.length) ? { trusted_sets: Object.fromEntries(s.args.filter((a) => a.set.length).map((a) => [a.arg, a.set])) } : {}),
     }])),
     default: "DENY",
+    ...(budgetCapCalls !== null ? { budget_cap_calls: budgetCapCalls } : {}),
   };
 
   const download = () => {
@@ -275,6 +277,25 @@ export default function ConfigBuilder() {
           )}
         </div>
 
+        <div className="mt-2">
+          <Fold label="budgets (optional)">
+            <div className="flex items-center gap-2 flex-wrap">
+              <span style={{ fontFamily: MONO, fontSize: 11.5, color: C.text }}>max tool calls per run</span>
+              <input type="number" min={1} value={budgetCapCalls ?? ""} placeholder="unlimited"
+                onChange={(e) => {
+                  const n = parseInt(e.target.value, 10);
+                  setBudgetCapCalls(e.target.value === "" || Number.isNaN(n) || n < 1 ? null : n);
+                }}
+                style={{ width: 100, background: C.bg, border: `1px solid ${C.line}`, borderRadius: 4, color: C.text, fontFamily: MONO, fontSize: 11.5, padding: "5px 8px", outline: "none" }} />
+              <span style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim }}>
+                {budgetCapCalls !== null
+                  ? "exhaustion becomes a typed fact — never a silent failure"
+                  : "empty = unlimited — budgets are opt-in limits, not fail-closed defaults"}
+              </span>
+            </div>
+          </Fold>
+        </div>
+
         <div className="mt-4 flex items-center gap-3">
           <button onClick={() => unclassified === 0 && sinks.length > 0 && setStage("preview")} disabled={unclassified > 0 || sinks.length === 0}
             style={btn({ color: unclassified || !sinks.length ? C.dim : C.text, borderColor: unclassified || !sinks.length ? C.line : C.steel, padding: "9px 18px", fontSize: 12.5, opacity: unclassified || !sinks.length ? 0.6 : 1, cursor: unclassified || !sinks.length ? "default" : "pointer" })}>
@@ -292,6 +313,9 @@ export default function ConfigBuilder() {
     ...sinks.filter((s) => s.type === "EXPORT").map((s) => <span key={`exp-${s.name}`}>Exports through <b style={{ color: C.text }}>{s.name}</b> require untainted values{s.args.some((a) => a.set.length) ? <> or membership in {s.args.filter((a) => a.set.length).map((a) => a.arg).join(", ")}</> : null}.</span>),
     ...sinks.filter((s) => s.type === "EXEC").map((s) => <span key={`exec-${s.name}`}><b style={{ color: C.text }}>{s.name}</b> after an external read is denied.</span>),
     ...sinks.filter((s) => s.type === "WRITE").map((s) => <span key={`write-${s.name}`}><b style={{ color: C.text }}>{s.name}</b> writes are gated on value provenance.</span>),
+    budgetCapCalls !== null
+      ? <span key="budget">Budget: at most <b style={{ color: C.text }}>{budgetCapCalls}</b> tool calls per run — exhaustion is a typed fact, not an exception.</span>
+      : <span key="budget">No budget declared — unlimited (budgets are opt-in limits, unlike sinks).</span>,
   ];
 
   return (

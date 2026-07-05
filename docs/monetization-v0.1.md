@@ -66,3 +66,16 @@ Metric: **per governed node** — counted by the topology the plane already main
 - **Open-core resentment:** some community friction is inherent. Mitigation: Line 1's absolutism, EE source visibility, research carve-out.
 - **Solo enterprise sales:** the real bottleneck — cycles are long and meetings are many. Mitigation: design-partner motion first (they pre-commit), paper-driven inbound, and pricing that doesn't require procurement below Enterprise (Team tier is credit-card).
 - **Conflict with §7 neutrality:** the academic artifact must not read as an ad. Mitigation: research carve-out + the artifact ships from the Apache-2.0 ecosystem packages, not the platform.
+
+
+---
+
+## 8. Implementation status (2026-07-05)
+
+The license mechanics of section 4 are implemented in `packages/axor-backend/`:
+`axor_backend.ee.license` (Ed25519-signed license files, offline-verifiable via
+the same PyNaCl stack the plane commands use — no phone-home), and the `/ee`
+subtree marks the source-visible commercial boundary. Endpoint:
+`POST /v1/license/verify`. Line 1 is enforced structurally: nothing under `ee/`
+touches a gate, a taint decision, or a fail-closed default, and expiry degrades
+EE to read-only rather than disabling any safety feature.
