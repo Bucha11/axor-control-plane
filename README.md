@@ -14,14 +14,32 @@ subsystem is always called the **plane service** (`axor_backend.plane`);
 | `packages/axor-backend` | FastAPI: ingest, control plane (SSE+POST), replay API, GraphStore (Kùzu) | Backend persists and fans out; it never interprets governance — that's the kernel's |
 | `frontend/` | React + TS (Zustand, TanStack Query, Cytoscape) | quiet-until-wrong; TS types generated from kernel Pydantic models |
 
-## Dev
+## Run it (Docker Compose)
+
+The whole stack — postgres + backend + observe-only proxy + frontend — behind a
+single origin:
+
+```
+cp .env.example .env          # set AXOR_PG_PASSWORD; GITHUB_TOKEN to build private deps
+GITHUB_TOKEN=ghp_… docker compose up --build
+```
+
+Open **http://localhost:8080**. The frontend reverse-proxies `/v1` → backend and
+`/axor` → proxy, so the browser talks to one origin; the proxy starts in
+demo-mode (mock tools) and auto-uploads runs to the backend. Kùzu is embedded —
+no extra container. For a real deployment set `AXOR_OPERATOR_KEYS` and
+`AXOR_ALLOW_UNSIGNED=0` (see `.env.example`); the `GITHUB_TOKEN` is build-only
+(a BuildKit secret) and never lands in an image layer.
+
+## Dev (without containers)
 
 ```
 uv sync --all-packages                   # workspace install
-uv run pytest                            # kernel tests
+uv run pytest                            # kernel + platform tests
 uv run scripts/gen_ts_types.py           # schema -> frontend/src/generated
-cd frontend && pnpm i && pnpm dev
-docker compose up                        # self-hosted: proxy + backend + postgres
+AXOR_ALLOW_UNSIGNED=1 uv run uvicorn axor_backend.main:app --factory --port 8400 &
+uv run axor-proxy --demo --backend-url http://127.0.0.1:8400 &
+cd frontend && pnpm i && pnpm dev        # http://localhost:5173
 ```
 
 ## Ecosystem boundary
