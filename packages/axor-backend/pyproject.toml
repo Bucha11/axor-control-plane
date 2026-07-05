@@ -9,6 +9,7 @@ dependencies = [
   "fastapi>=0.111", "sse-starlette>=2.1", "uvicorn>=0.29",
   "sqlalchemy[asyncio]>=2.0", "asyncpg>=0.29",
   "kuzu>=0.4",
+  "aiosqlite>=0.20",
   "pynacl>=1.5",
 ]
 
