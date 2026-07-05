@@ -167,6 +167,11 @@ dependencies = [
     { name = "uvicorn" },
 ]
 
+[package.dev-dependencies]
+dev = [
+    { name = "axor-backend" },
+]
+
 [package.metadata]
 requires-dist = [
     { name = "anyio", specifier = ">=4.0" },
@@ -176,6 +181,9 @@ requires-dist = [
     { name = "starlette", specifier = ">=0.37" },
     { name = "uvicorn", specifier = ">=0.29" },
 ]
+
+[package.metadata.requires-dev]
+dev = [{ name = "axor-backend", editable = "packages/axor-backend" }]
 
 [[package]]
 name = "certifi"

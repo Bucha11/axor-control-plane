@@ -11,3 +11,9 @@ axor-proxy = "axor_proxy.main:cli"
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+[dependency-groups]
+dev = ["axor-backend"]
+
+[tool.uv.sources]
+axor-backend = { workspace = true }

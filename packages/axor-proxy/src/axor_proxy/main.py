@@ -22,6 +22,8 @@ def cli() -> None:
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8401)
     parser.add_argument("--trace-dir", type=Path, default=Path("./axor-traces"))
+    parser.add_argument("--backend-url",
+                        help="push trace + evidence to this backend on claim")
     args = parser.parse_args()
 
     tools: dict[str, str] = {}
@@ -37,7 +39,8 @@ def cli() -> None:
     from axor_proxy.app import ProxyState, create_app
 
     args.trace_dir.mkdir(parents=True, exist_ok=True)
-    app = create_app(ProxyState(tools=tools, trace_dir=args.trace_dir))
+    app = create_app(ProxyState(tools=tools, trace_dir=args.trace_dir,
+                                backend_url=args.backend_url))
     uvicorn.run(app, host=args.host, port=args.port)
 
 

@@ -27,6 +27,7 @@ from starlette.routing import Mount, Route
 
 from axor_proxy.mock_tools import mock_tools_app
 from axor_proxy.runs import RunManager, evidence_to_dict, sha256_hex
+from axor_proxy.upload import BackendUploader
 
 # Hop-by-hop headers never forwarded in either direction (RFC 9110 s7.6.1).
 _HOP_BY_HOP = frozenset({
@@ -48,10 +49,15 @@ class ProxyState:
         tools: dict[str, str],
         trace_dir: Path,
         client: httpx.AsyncClient | None = None,
+        backend_url: str | None = None,
+        uploader: BackendUploader | None = None,
     ) -> None:
         self.tools = tools  # tool name -> upstream base url
         self.runs = RunManager(trace_dir)
         self.client = client or httpx.AsyncClient(timeout=30.0)
+        self.uploader = uploader or (
+            BackendUploader(backend_url) if backend_url else None
+        )
 
 
 def create_app(state: ProxyState) -> Starlette:
@@ -176,10 +182,14 @@ def create_app(state: ProxyState) -> Starlette:
         cases = await state.runs.submit_claim(
             run, payload.get("text", ""), payload.get("claims")
         )
+        upload: dict[str, Any] | None = None
+        if state.uploader is not None:
+            upload = await state.uploader.upload(run, run.recorder.path)
         return JSONResponse({
             "run_id": run.run_id,
             "evidence": [evidence_to_dict(c) for c in cases],
             "deviations": sum(1 for c in cases if c.deviation is not None),
+            "upload": upload,
         })
 
     async def get_run(request: Request) -> Response:
