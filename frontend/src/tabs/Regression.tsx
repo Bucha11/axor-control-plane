@@ -3,9 +3,10 @@
 // no model calls.
 import { useState } from "react";
 import { useMutation } from "@tanstack/react-query";
-import { ChevronDown, ChevronRight, Circle, Loader2, Play } from "lucide-react";
+import { ChevronDown, ChevronRight, Circle, ExternalLink, Loader2, Play } from "lucide-react";
 import { api, RegressionReport, RegressionRow } from "../api";
 import { C, MONO, btn } from "../theme";
+import { navigate } from "../router";
 
 const DEFAULT_CONFIG = JSON.stringify(
   { allowed_tools: [], egress_sinks: [] },
@@ -46,8 +47,8 @@ function headline(report: RegressionReport): React.ReactNode {
   );
 }
 
-export default function Regression() {
-  const [raw, setRaw] = useState(DEFAULT_CONFIG);
+export default function Regression({ initialConfig }: { initialConfig?: string } = {}) {
+  const [raw, setRaw] = useState(initialConfig ?? DEFAULT_CONFIG);
   const [parseError, setParseError] = useState<string | null>(null);
   const [open, setOpen] = useState<string | null>(null);
 
@@ -114,7 +115,7 @@ export default function Regression() {
       {report && (
         report.rows.length === 0 ? (
           <div style={{ fontFamily: MONO, fontSize: 12.5, color: C.mut }}>
-            No pinned traces. Pin runs from the Eval tab to build the corpus.
+            No pinned traces. Run an experiment (Eval) — discrepancy-bearing traces auto-pin the must-block side; add legitimate flows as must-pass.
           </div>
         ) : (
           <>
@@ -164,6 +165,18 @@ export default function Regression() {
                             : <>first divergence at step {r.first_divergence}</>}
                           {" · "}{r.run_id}
                         </span>
+                        <div className="flex items-center gap-2">
+                          <button
+                            onClick={() =>
+                              navigate(`replay/${r.run_id}`, {
+                                cursor: r.new_denial?.seq ?? r.first_divergence ?? 0,
+                              })
+                            }
+                            style={btn({ color: C.steel, fontSize: 11, padding: "5px 10px" })}
+                          >
+                            <Play size={11} /> open in replay at divergence
+                          </button>
+                        </div>
                       </div>
                     )}
                   </div>

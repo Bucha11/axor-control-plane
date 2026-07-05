@@ -1,9 +1,10 @@
 // Replay: a timeline you can question (main-tabs mockup, ReplayTab).
 // Wired to /v1/replay/{run_id}; counterfactuals re-evaluate gates over the
 // recorded trace — no model call, fully deterministic.
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { api, ScrubberPayload, ScrubberStep } from "../api";
+import { navigate } from "../router";
 import { C, MONO, btn, sevColor } from "../theme";
 
 type Cf = "noexec" | "taint";
@@ -29,10 +30,10 @@ function taintRef(s: ScrubberStep | undefined): string | null {
   return null;
 }
 
-export default function ReplayTab() {
+export default function ReplayTab({ runId: runIdProp, cursor: cursorProp }: { runId?: string; cursor?: string }) {
   const runs = useQuery({ queryKey: ["runs"], queryFn: api.listRuns });
-  const [pickedRun, setPickedRun] = useState<string | null>(null);
-  const runId = pickedRun ?? runs.data?.[0]?.run_id ?? null;
+  const [pickedRun, setPickedRun] = useState<string | null>(runIdProp ?? null);
+  const runId = pickedRun ?? runIdProp ?? runs.data?.[0]?.run_id ?? null;
 
   const scrubber = useQuery({
     queryKey: ["scrubber", runId],
@@ -40,9 +41,14 @@ export default function ReplayTab() {
     enabled: !!runId,
   });
 
-  const [cursor, setCursor] = useState(0);
+  const [cursor, setCursor] = useState(cursorProp ? Number(cursorProp) : 0);
   const [fork, setFork] = useState(false);
   const [cf, setCf] = useState<Cf | null>(null);
+
+  useEffect(() => {
+    if (runIdProp) setPickedRun(runIdProp);
+    if (cursorProp) setCursor(Number(cursorProp));
+  }, [runIdProp, cursorProp]);
 
   const counterfactual = useMutation({
     mutationFn: (config: Record<string, unknown>) =>
@@ -76,6 +82,7 @@ export default function ReplayTab() {
   const divStep = firstDiv != null ? steps.find((s) => s.seq === firstDiv) : undefined;
 
   const pickRun = (id: string) => {
+    if (id !== runId) navigate(`replay/${id}`);
     setPickedRun(id);
     setCursor(0);
     setFork(false);

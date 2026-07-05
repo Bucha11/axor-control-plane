@@ -2,8 +2,10 @@
 // Step 3 is wired to the real proxy preflight endpoint via react-query.
 import { useState } from "react";
 import { useMutation } from "@tanstack/react-query";
-import { Check, Copy, Circle, RefreshCw, ArrowRight, Plug } from "lucide-react";
+import { ArrowRight, Check, Circle, Copy, Plug, RefreshCw, Zap } from "lucide-react";
 import { api } from "../api";
+import { navigate } from "../router";
+import { ConnectionMode, useApp } from "../store";
 import { C, MONO, btn } from "../theme";
 
 interface Tool {
@@ -25,8 +27,17 @@ export default function Onboarding() {
   const [copied, setCopied] = useState<string | null>(null);
   const [draftName, setDraftName] = useState("");
   const [draftUrl, setDraftUrl] = useState("");
+  // Adapter path is chosen up front (spec section 2, Axis A): it unlocks the
+  // Control plane, taint graph and probe health. Proxy is the default depth.
+  const [depth, setDepth] = useState<Extract<ConnectionMode, "proxy" | "adapter">>("proxy");
+  const connect = useApp((s) => s.connect);
 
   const preflight = useMutation({ mutationFn: api.proxyPreflight });
+
+  const finish = (): void => {
+    connect(depth, tools);
+    navigate("eval");
+  };
 
   const addTool = () => {
     const name = draftName.trim();
@@ -186,10 +197,26 @@ export default function Onboarding() {
               <RefreshCw size={13} /> {preflight.data || preflight.isError ? "Re-test all" : "Test connections"}
             </button>
             {allGreen && (
-              <button style={btn({ color: C.bg, background: C.green, borderColor: C.green, fontSize: 12.5, fontWeight: 700 })}>
-                Run first experiment <ArrowRight size={13} />
+              <button onClick={finish} style={btn({ color: C.bg, background: C.green, borderColor: C.green, fontSize: 12.5, fontWeight: 700 })}>
+                <Zap size={13} /> Run first experiment <ArrowRight size={13} />
               </button>
             )}
+          </div>
+          <div className="flex items-center gap-3 mt-4" style={{ fontFamily: MONO, fontSize: 11, color: C.mut }}>
+            connect as
+            {(["proxy", "adapter"] as const).map((d) => (
+              <button key={d} onClick={() => setDepth(d)}
+                style={btn({
+                  color: depth === d ? C.steel : C.dim,
+                  borderColor: depth === d ? C.steel : C.line,
+                  fontSize: 11, padding: "4px 10px",
+                })}>
+                {d}
+              </button>
+            ))}
+            <span style={{ color: C.dim }}>
+              {depth === "adapter" ? "unlocks Control, taint graph, probe health" : "Eval core — Control is greyed until you wrap"}
+            </span>
           </div>
           {allGreen && (
             <div style={{ fontFamily: MONO, fontSize: 11, color: C.dim, marginTop: 12 }}>

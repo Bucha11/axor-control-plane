@@ -1,10 +1,12 @@
 // Control: a tree that is quiet when healthy (main-tabs mockup, ControlTab).
 // Wired to /v1/plane/nodes; divergence between desired and reported is rendered, not hidden.
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Circle, GitBranch, Pause, Play, Shield, Square, Syringe } from "lucide-react";
 import { api, NodeInfo } from "../api";
+import { isAdapter, useApp } from "../store";
 import { C, MONO, btn } from "../theme";
+import Locked from "../components/Locked";
 
 const REFETCH_MS = 5000;
 
@@ -12,16 +14,41 @@ function isHot(n: NodeInfo): boolean {
   return (n.reported?.level ?? "NORMAL") !== "NORMAL";
 }
 
-export default function ControlTab() {
+export default function ControlTab({ focusNode }: { focusNode?: string }) {
+  const { mode, testBench } = useApp((s) => s.connection);
+
+  // Control is adapter-only by construction — the proxy has no handle on
+  // internal topology (spec section 12). Grey it with the honest upsell.
+  if (!isAdapter(mode)) {
+    return (
+      <div style={{ maxWidth: 640, margin: "0 auto" }}>
+        <h1 style={{ fontSize: 22, fontWeight: 650, margin: "0 0 4px" }}>Operate the governed topology.</h1>
+        <div style={{ fontFamily: MONO, fontSize: 11.5, color: C.mut, marginBottom: 20 }}>
+          a live topology map, per-node interventions, cascade stop — the strongest upsell in the product.
+        </div>
+        <Locked need="adapter" title="live topology of your governed agents" >
+          <div />
+        </Locked>
+      </div>
+    );
+  }
+  return <ControlBody focusNode={focusNode} testBench={testBench} />;
+}
+
+function ControlBody({ focusNode, testBench }: { focusNode?: string; testBench: boolean }) {
   const qc = useQueryClient();
   const nodes = useQuery({
     queryKey: ["nodes"],
     queryFn: api.nodes,
     refetchInterval: REFETCH_MS,
   });
-  const [sel, setSel] = useState<string | null>(null);
+  const [sel, setSel] = useState<string | null>(focusNode ?? null);
   const [more, setMore] = useState(false);
   const [cmdError, setCmdError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (focusNode) setSel(focusNode);
+  }, [focusNode]);
 
   const command = useMutation({
     mutationFn: ({ nodeId, version, state }: {
@@ -177,19 +204,24 @@ export default function ControlTab() {
                 <Square size={12} /> Stop
               </button>
               {([
-                ["Replan", GitBranch],
-                ["Inject next turn", Syringe],
-                ["Attest branch", Shield],
-              ] as const).map(([label, Icon]) => (
-                <button
-                  key={label}
-                  disabled
-                  title="adapter integration — phase 5"
-                  style={btn({ color: C.dim, fontSize: 11, padding: "6px 10px", cursor: "default", opacity: 0.6 })}
-                >
-                  <Icon size={12} /> {label}
-                </button>
-              ))}
+                ["Replan", GitBranch, false],
+                ["Inject next turn", Syringe, true],
+                ["Attest branch", Shield, false],
+              ] as const).map(([label, Icon, needsBench]) => {
+                // Injection is available only on test-bench connections (spec
+                // decision 5); the run it lands in is marked `intervened`.
+                const gated = needsBench && !testBench;
+                return (
+                  <button
+                    key={label}
+                    disabled={gated}
+                    title={gated ? "available on a test-bench connection (Settings)" : "operator intervention — recorded, run marked intervened"}
+                    style={btn({ color: gated ? C.dim : C.mut, fontSize: 11, padding: "6px 10px", cursor: gated ? "default" : "pointer", opacity: gated ? 0.6 : 1 })}
+                  >
+                    <Icon size={12} /> {label}
+                  </button>
+                );
+              })}
             </div>
           )}
 

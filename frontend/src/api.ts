@@ -85,6 +85,34 @@ export interface RegressionReport {
   safe_to_ship: boolean;
 }
 
+export interface SimulateResult {
+  run_id: string;
+  evidence: EvidenceCaseDto[];
+  deviations: number;
+  upload?: { uploaded: boolean; events?: number; evidence?: number } | null;
+}
+
+export interface StartRunResult {
+  run_id: string;
+  armed: boolean;
+  tools: Record<string, string>;
+}
+
+export interface DeadLetter {
+  url: string;
+  error: string;
+  attempts: number;
+  trigger: string;
+}
+
+export interface LicenseInfo {
+  org: string;
+  tier: string;
+  node_ceiling: number;
+  expiry: string;
+  features: string[];
+}
+
 async function j<T>(resp: Response): Promise<T> {
   if (!resp.ok) throw new Error(`${resp.status} ${await resp.text()}`);
   return resp.json() as Promise<T>;
@@ -131,4 +159,66 @@ export const api = {
     fetch("/axor/preflight").then((r) =>
       j<{ all_ok: boolean; tools: Record<string, { ok: boolean; status?: number; error?: string }> }>(r),
     ),
+  proxyHealth: () =>
+    fetch("/axor/healthz").then((r) => j<{ ok: boolean; armed: boolean }>(r)),
+
+  // ── experiment loop (proxy) ────────────────────────────────────────────────
+  startRun: (scenario: string, faults: { tool: string; mode: string }[], nodeId = "proxy") =>
+    fetch("/axor/runs", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ scenario, faults, node_id: nodeId }),
+    }).then((r) => j<StartRunResult>(r)),
+  simulate: (runId: string, body: Record<string, unknown> = {}) =>
+    fetch(`/axor/runs/${runId}/simulate`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    }).then((r) => j<SimulateResult>(r)),
+
+  // ── EvidenceCase share / export (spec 8.3) ─────────────────────────────────
+  shareCase: (runId: string, caseIndex: number) =>
+    fetch(`/v1/runs/${runId}/cases/${caseIndex}/share`, { method: "POST" }).then(
+      (r) => j<{ token: string; url: string }>(r),
+    ),
+  revokeShare: (token: string) =>
+    fetch(`/v1/share/${token}`, { method: "DELETE" }).then((r) => j<{ revoked: string }>(r)),
+  exportUrl: (runId: string, caseIndex: number) =>
+    `/v1/runs/${runId}/cases/${caseIndex}/export`,
+
+  // ── notifications (spec 16) ────────────────────────────────────────────────
+  subscribeNotifications: (url: string, triggers: string[], debounceSeconds = 0) =>
+    fetch("/v1/notifications/subscribe", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ url, triggers, debounce_seconds: debounceSeconds }),
+    }).then((r) => j<{ subscribed: string; triggers: string[] }>(r)),
+  deadLetters: () =>
+    fetch("/v1/notifications/dead-letters").then((r) => j<DeadLetter[]>(r)),
+
+  // ── EE license (monetization 4) ────────────────────────────────────────────
+  verifyLicense: (licenseJson: string, vendorPubkey: string) =>
+    fetch("/v1/license/verify", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ license_json: licenseJson, vendor_pubkey: vendorPubkey }),
+    }).then((r) => j<LicenseInfo>(r)),
 };
+
+// Live audit stream (spec 8): SSE of colour-coded events for a run. Returns an
+// unsubscribe fn. Uses fetch-based EventSource polyfill semantics via the
+// browser EventSource (backend serves text/event-stream at /v1/runs/{id}/stream).
+export function streamRun(
+  runId: string,
+  onEvent: (event: KernelEvent) => void,
+): () => void {
+  const source = new EventSource(`/v1/runs/${runId}/stream`);
+  source.addEventListener("event", (e) => {
+    try {
+      onEvent(JSON.parse((e as MessageEvent).data) as KernelEvent);
+    } catch {
+      /* ignore malformed frame */
+    }
+  });
+  return () => source.close();
+}
