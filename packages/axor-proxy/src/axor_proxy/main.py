@@ -53,7 +53,8 @@ def cli() -> None:
     self_base = f"http://{self_host}:{args.port}"
     app = create_app(ProxyState(tools=tools, trace_dir=args.trace_dir,
                                 backend_url=args.backend_url,
-                                self_base_url=self_base))
+                                self_base_url=self_base,
+                                ingest_key=os.environ.get("AXOR_INGEST_KEY")))
     uvicorn.run(app, host=args.host, port=args.port)
 
 

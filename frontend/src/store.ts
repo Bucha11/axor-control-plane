@@ -23,10 +23,14 @@ export interface ConnectionState {
 interface AppState {
   connection: ConnectionState;
   lastRunId: string | null;
+  // Backend API token (local token or an API key). Sent as the bearer on every
+  // request when the backend has auth enabled (architecture section 9).
+  apiToken: string;
   connect: (mode: ConnectionMode, tools?: { name: string; url: string }[]) => void;
   disconnect: () => void;
   setTestBench: (v: boolean) => void;
   setLastRun: (runId: string) => void;
+  setApiToken: (token: string) => void;
 }
 
 export const isAdapter = (mode: ConnectionMode): boolean => mode === "adapter";
@@ -44,6 +48,7 @@ export const useApp = create<AppState>()(
     (set) => ({
       connection: { mode: "none", tools: [], testBench: false },
       lastRunId: null,
+      apiToken: "",
       connect: (mode, tools) =>
         set((s) => ({
           connection: {
@@ -57,6 +62,7 @@ export const useApp = create<AppState>()(
         set({ connection: { mode: "none", tools: [], testBench: false }, lastRunId: null }),
       setTestBench: (v) => set((s) => ({ connection: { ...s.connection, testBench: v } })),
       setLastRun: (runId) => set({ lastRunId: runId }),
+      setApiToken: (token) => set({ apiToken: token }),
     }),
     { name: "axor-app" },
   ),

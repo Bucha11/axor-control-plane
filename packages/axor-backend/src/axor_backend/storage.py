@@ -85,6 +85,15 @@ pins = Table(
     Column("label", String(200), nullable=False, default=""),
 )
 
+api_keys = Table(
+    "api_keys", metadata,
+    Column("key_id", String(32), primary_key=True),
+    Column("hashed_secret", String(64), nullable=False),  # sha256 hex
+    Column("scopes", String(200), nullable=False),        # comma-separated
+    Column("label", String(200), nullable=False, default=""),
+    Column("created_ts", String(40), nullable=False),
+)
+
 
 def make_engine(url: str) -> AsyncEngine:
     return create_async_engine(url)
@@ -299,6 +308,48 @@ class Store:
                 .order_by(facts.c.created_ts)
             )).all()
         return [json.loads(r.fact_json) for r in rows]
+
+    # ── API keys (auth, architecture section 9) ───────────────────────────────
+
+    async def create_api_key(
+        self, key_id: str, hashed_secret: str, scopes: list[str],
+        label: str, ts: str,
+    ) -> None:
+        async with self.engine.begin() as conn:
+            await conn.execute(insert(api_keys).values(
+                key_id=key_id, hashed_secret=hashed_secret,
+                scopes=",".join(scopes), label=label, created_ts=ts,
+            ))
+
+    async def get_api_key(self, key_id: str) -> dict[str, Any] | None:
+        async with self.engine.connect() as conn:
+            row = (await conn.execute(
+                select(api_keys).where(api_keys.c.key_id == key_id)
+            )).first()
+        if row is None:
+            return None
+        return {
+            "key_id": row.key_id, "hashed_secret": row.hashed_secret,
+            "scopes": [s for s in row.scopes.split(",") if s],
+            "label": row.label, "created_ts": row.created_ts,
+        }
+
+    async def list_api_keys(self) -> list[dict[str, Any]]:
+        async with self.engine.connect() as conn:
+            rows = (await conn.execute(select(api_keys))).all()
+        return [
+            {"key_id": r.key_id, "scopes": [s for s in r.scopes.split(",") if s],
+             "label": r.label, "created_ts": r.created_ts}
+            for r in rows
+        ]
+
+    async def delete_api_key(self, key_id: str) -> bool:
+        from sqlalchemy import delete
+        async with self.engine.begin() as conn:
+            result = await conn.execute(
+                delete(api_keys).where(api_keys.c.key_id == key_id)
+            )
+        return bool(result.rowcount)
 
     # ── pins (regression corpus, decision 11) ─────────────────────────────────
 

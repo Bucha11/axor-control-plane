@@ -3,8 +3,8 @@
 // the dead-letter log surfaced honestly; a notification system that fails
 // silently is worse than none.
 import { useState } from "react";
-import { useMutation, useQuery } from "@tanstack/react-query";
-import { Check, Loader2 } from "lucide-react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Check, Copy, Loader2, Trash2 } from "lucide-react";
 import { api } from "../api";
 import { MODE_LABEL, useApp } from "../store";
 import { C, MONO, btn } from "../theme";
@@ -16,17 +16,44 @@ const TRIGGERS = [
   { id: "node_stale", label: "a node goes stale" },
 ];
 
+const KEY_SCOPES = ["read", "ingest", "operate", "admin"];
+
 export default function Settings() {
   const { mode, testBench } = useApp((s) => s.connection);
   const setTestBench = useApp((s) => s.setTestBench);
   const disconnect = useApp((s) => s.disconnect);
+  const apiToken = useApp((s) => s.apiToken);
+  const setApiToken = useApp((s) => s.setApiToken);
+  const qc = useQueryClient();
 
   const [url, setUrl] = useState("");
   const [selected, setSelected] = useState<string[]>(["level_transition_up", "evidence_run"]);
   const [licenseJson, setLicenseJson] = useState("");
   const [vendorKey, setVendorKey] = useState("");
+  const [keyScopes, setKeyScopes] = useState<string[]>(["ingest"]);
+  const [keyLabel, setKeyLabel] = useState("");
+  const [mintedSecret, setMintedSecret] = useState<string | null>(null);
 
   const deadLetters = useQuery({ queryKey: ["dead-letters"], queryFn: api.deadLetters });
+  const authStatus = useQuery({ queryKey: ["auth-status", apiToken], queryFn: api.authStatus });
+  const keys = useQuery({
+    queryKey: ["api-keys"],
+    queryFn: api.listKeys,
+    enabled: authStatus.data?.authenticated === true && (authStatus.data?.scopes ?? []).includes("admin"),
+    retry: false,
+  });
+
+  const mintKey = useMutation({
+    mutationFn: () => api.createKey(keyScopes, keyLabel),
+    onSuccess: (r) => {
+      setMintedSecret(r.secret);
+      void qc.invalidateQueries({ queryKey: ["api-keys"] });
+    },
+  });
+  const revokeKey = useMutation({
+    mutationFn: (keyId: string) => api.revokeKey(keyId),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ["api-keys"] }),
+  });
 
   const subscribe = useMutation({
     mutationFn: () => api.subscribeNotifications(url, selected),
@@ -41,6 +68,83 @@ export default function Settings() {
   return (
     <div style={{ maxWidth: 640, margin: "0 auto" }}>
       <h1 style={{ fontSize: 22, fontWeight: 650, margin: "0 0 20px" }}>Settings</h1>
+
+      {/* Authentication (architecture section 9) */}
+      <Section title="AUTHENTICATION">
+        {authStatus.data && !authStatus.data.auth_enabled ? (
+          <div style={{ fontFamily: MONO, fontSize: 11.5, color: C.mut }}>
+            Auth is off — this backend is open (dev / self-hosted without a token).
+            Set <span style={{ color: C.text }}>AXOR_API_TOKEN</span> on the backend to
+            require a token here.
+          </div>
+        ) : (
+          <>
+            <div style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim, marginBottom: 8 }}>
+              local token or an API key — sent as the bearer on every request
+              (SSE + export carry it as a query param).
+            </div>
+            <div className="flex items-center gap-2 mb-2">
+              <input
+                type="password"
+                value={apiToken}
+                onChange={(e) => setApiToken(e.target.value)}
+                placeholder="backend token"
+                className="w-full"
+                style={{ background: C.bg, border: `1px solid ${C.line}`, borderRadius: 5, color: C.text, fontFamily: MONO, fontSize: 12, padding: "7px 9px", outline: "none" }}
+              />
+              <span style={{ fontFamily: MONO, fontSize: 11, whiteSpace: "nowrap",
+                color: authStatus.data?.authenticated ? C.green : C.red }}>
+                {authStatus.data?.authenticated ? "● authenticated" : "○ locked"}
+              </span>
+            </div>
+            {authStatus.data?.authenticated && (
+              <div style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim }}>
+                scopes: {(authStatus.data.scopes ?? []).join(", ") || "none"}
+              </div>
+            )}
+
+            {/* API key management (admin) */}
+            {(authStatus.data?.scopes ?? []).includes("admin") && (
+              <div className="mt-4">
+                <div style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim, letterSpacing: "0.08em", marginBottom: 8 }}>
+                  API KEYS · scoped connections (e.g. an ingest key for the proxy)
+                </div>
+                <div className="flex items-center gap-2 flex-wrap mb-2">
+                  {KEY_SCOPES.map((s) => (
+                    <button key={s}
+                      onClick={() => setKeyScopes((cur) => cur.includes(s) ? cur.filter((x) => x !== s) : [...cur, s])}
+                      style={btn({ color: keyScopes.includes(s) ? C.steel : C.dim, borderColor: keyScopes.includes(s) ? C.steel : C.line, fontSize: 10.5, padding: "4px 10px" })}>
+                      {s}
+                    </button>
+                  ))}
+                  <input value={keyLabel} onChange={(e) => setKeyLabel(e.target.value)} placeholder="label"
+                    style={{ background: C.bg, border: `1px solid ${C.line}`, borderRadius: 4, color: C.text, fontFamily: MONO, fontSize: 11, padding: "4px 8px", width: 120, outline: "none" }} />
+                  <button onClick={() => mintKey.mutate()} disabled={keyScopes.length === 0 || mintKey.isPending}
+                    style={btn({ color: C.steel, fontSize: 11 })}>
+                    {mintKey.isPending ? <Loader2 size={12} className="animate-spin" /> : null} Mint key
+                  </button>
+                </div>
+                {mintedSecret && (
+                  <div className="flex items-center gap-2 mb-2 p-2" style={{ background: C.panel2, border: `1px solid ${C.line}`, borderRadius: 5 }}>
+                    <span style={{ fontFamily: MONO, fontSize: 10.5, color: C.green, wordBreak: "break-all", flex: 1 }}>{mintedSecret}</span>
+                    <Copy size={13} color={C.mut} style={{ cursor: "pointer" }}
+                      onClick={() => void navigator.clipboard?.writeText(mintedSecret)} />
+                    <span style={{ fontFamily: MONO, fontSize: 10, color: C.dim }}>shown once</span>
+                  </div>
+                )}
+                {(keys.data ?? []).map((k) => (
+                  <div key={k.key_id} className="flex items-center gap-2 py-1">
+                    <span style={{ fontFamily: MONO, fontSize: 11, color: C.text }}>{k.key_id}</span>
+                    <span style={{ fontFamily: MONO, fontSize: 10.5, color: C.mut }}>{k.scopes.join(",")}</span>
+                    <span style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim, flex: 1 }}>{k.label}</span>
+                    <Trash2 size={12} color={C.dim} style={{ cursor: "pointer" }} onClick={() => revokeKey.mutate(k.key_id)} />
+                  </div>
+                ))}
+              </div>
+            )}
+          </>
+        )}
+      </Section>
 
       {/* Connection */}
       <Section title="CONNECTION">

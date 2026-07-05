@@ -195,7 +195,40 @@ export default function DemoLanding() {
             proxy in front of your tools · auth passes through untouched · your agent, five minutes
           </div>
         )}
+
+        {/* pricing strip — marketing only, not the full page */}
+        <div style={{ marginTop: 40 }}>
+          <div style={{ fontFamily: MONO, fontSize: 11.5, color: C.mut, marginBottom: 12 }}>
+            Free forever for safety. Paid only for how your org runs it.
+          </div>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 12 }}>
+            {PRICING.map((p) => (
+              <div
+                key={p.name}
+                style={{
+                  flex: "1 1 180px",
+                  minWidth: 180,
+                  background: STAGE_BG,
+                  border: `1px solid ${p.name === "Team" ? C.steel : C.line}`,
+                  borderRadius: 8,
+                  padding: 14,
+                }}
+              >
+                <div style={{ fontFamily: MONO, fontSize: 13, fontWeight: 700, color: C.text }}>{p.name}</div>
+                <div style={{ fontFamily: MONO, fontSize: 12.5, color: C.steel, marginTop: 4 }}>{p.price}</div>
+                <div style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim, marginTop: 8, lineHeight: 1.5 }}>{p.who}</div>
+              </div>
+            ))}
+          </div>
+        </div>
       </div>
     </div>
   );
 }
+
+// compact pricing shapes for the landing strip (full detail lives on the Pricing tab)
+const PRICING = [
+  { name: "Free", price: "$0 · open source", who: "individuals · small teams · research/academic" },
+  { name: "Team", price: "$50–100 / node · mo", who: "first company deployments · 5–30 nodes" },
+  { name: "Enterprise", price: "annual contract", who: "SSO/RBAC · air-gapped fleets · compliance" },
+] as const;

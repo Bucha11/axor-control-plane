@@ -18,9 +18,10 @@ import Health from "./tabs/Health";
 import Regression from "./tabs/Regression";
 import ExpertView from "./tabs/ExpertView";
 import Settings from "./tabs/Settings";
+import Pricing from "./tabs/Pricing";
 
 const PRIMARY = ["eval", "control", "replay"] as const;
-const MORE = ["get started", "config builder", "health", "regression", "expert", "settings"] as const;
+const MORE = ["get started", "config builder", "health", "regression", "expert", "pricing", "settings"] as const;
 
 function NavLink({ id, active }: { id: string; active: boolean }) {
   return (
@@ -85,6 +86,7 @@ export default function App() {
       {key === "health" && <Health />}
       {key === "regression" && <Regression />}
       {key === "expert" && <ExpertView />}
+      {key === "pricing" && <Pricing />}
       {key === "settings" && <Settings />}
     </div>
   );

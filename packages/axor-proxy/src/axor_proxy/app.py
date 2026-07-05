@@ -54,12 +54,13 @@ class ProxyState:
         uploader: BackendUploader | None = None,
         self_base_url: str = "http://127.0.0.1:8401",
         agent_client: httpx.AsyncClient | None = None,
+        ingest_key: str | None = None,
     ) -> None:
         self.tools = tools  # tool name -> upstream base url
         self.runs = RunManager(trace_dir)
         self.client = client or httpx.AsyncClient(timeout=30.0)
         self.uploader = uploader or (
-            BackendUploader(backend_url) if backend_url else None
+            BackendUploader(backend_url, ingest_key=ingest_key) if backend_url else None
         )
         # Base URL the scripted agent (in-app experiment runner) dials to reach
         # this proxy's own tool routes; agent_client lets tests bind it to the

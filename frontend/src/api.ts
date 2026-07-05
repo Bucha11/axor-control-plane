@@ -1,3 +1,5 @@
+import { useApp } from "./store";
+
 // Backend client. Vite dev-proxies /v1 -> backend :8400 and /axor -> proxy :8401.
 
 export interface KernelEvent {
@@ -118,21 +120,43 @@ async function j<T>(resp: Response): Promise<T> {
   return resp.json() as Promise<T>;
 }
 
+// The backend API token (local token or API key) is read from the store at call
+// time and sent as the bearer. When auth is off it is empty and omitted.
+function apiToken(): string {
+  return useApp.getState().apiToken;
+}
+
+// Authed fetch: merges the Authorization header into any request.
+function af(path: string, init: RequestInit = {}): Promise<Response> {
+  const token = apiToken();
+  const headers = new Headers(init.headers);
+  if (token) headers.set("Authorization", `Bearer ${token}`);
+  return fetch(path, { ...init, headers });
+}
+
+// Append the token as a query param for URLs the browser opens directly (SSE
+// via EventSource, export links in <a>) — those cannot carry a header.
+function withToken(url: string): string {
+  const token = apiToken();
+  if (!token) return url;
+  return url + (url.includes("?") ? "&" : "?") + "token=" + encodeURIComponent(token);
+}
+
 export const api = {
-  listRuns: () => fetch("/v1/runs").then((r) => j<RunSummary[]>(r)),
+  listRuns: () => af("/v1/runs").then((r) => j<RunSummary[]>(r)),
   runEvents: (runId: string) =>
-    fetch(`/v1/runs/${runId}/events`).then((r) => j<KernelEvent[]>(r)),
+    af(`/v1/runs/${runId}/events`).then((r) => j<KernelEvent[]>(r)),
   scrubber: (runId: string) =>
-    fetch(`/v1/replay/${runId}`).then((r) => j<ScrubberPayload>(r)),
+    af(`/v1/replay/${runId}`).then((r) => j<ScrubberPayload>(r)),
   counterfactual: (runId: string, config: Record<string, unknown>) =>
-    fetch(`/v1/replay/${runId}`, {
+    af(`/v1/replay/${runId}`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ config }),
     }).then((r) => j<ScrubberPayload>(r)),
-  nodes: () => fetch("/v1/plane/nodes").then((r) => j<NodeInfo[]>(r)),
+  nodes: () => af("/v1/plane/nodes").then((r) => j<NodeInfo[]>(r)),
   command: (nodeId: string, version: number, state: Record<string, unknown>) =>
-    fetch(`/v1/plane/${nodeId}/command`, {
+    af(`/v1/plane/${nodeId}/command`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
@@ -144,33 +168,33 @@ export const api = {
       }),
     }).then((r) => j<{ node_id: string; version: number; state: Record<string, unknown> }>(r)),
   pin: (runId: string, side: "must_block" | "must_pass", label: string) =>
-    fetch(`/v1/pins/${runId}`, {
+    af(`/v1/pins/${runId}`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ side, label }),
     }).then((r) => j<{ pinned: string }>(r)),
   regression: (config: Record<string, unknown>) =>
-    fetch("/v1/regression", {
+    af("/v1/regression", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ config }),
     }).then((r) => j<RegressionReport>(r)),
   proxyPreflight: () =>
-    fetch("/axor/preflight").then((r) =>
+    af("/axor/preflight").then((r) =>
       j<{ all_ok: boolean; tools: Record<string, { ok: boolean; status?: number; error?: string }> }>(r),
     ),
   proxyHealth: () =>
-    fetch("/axor/healthz").then((r) => j<{ ok: boolean; armed: boolean }>(r)),
+    af("/axor/healthz").then((r) => j<{ ok: boolean; armed: boolean }>(r)),
 
   // ── experiment loop (proxy) ────────────────────────────────────────────────
   startRun: (scenario: string, faults: { tool: string; mode: string }[], nodeId = "proxy") =>
-    fetch("/axor/runs", {
+    af("/axor/runs", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ scenario, faults, node_id: nodeId }),
     }).then((r) => j<StartRunResult>(r)),
   simulate: (runId: string, body: Record<string, unknown> = {}) =>
-    fetch(`/axor/runs/${runId}/simulate`, {
+    af(`/axor/runs/${runId}/simulate`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(body),
@@ -178,31 +202,49 @@ export const api = {
 
   // ── EvidenceCase share / export (spec 8.3) ─────────────────────────────────
   shareCase: (runId: string, caseIndex: number) =>
-    fetch(`/v1/runs/${runId}/cases/${caseIndex}/share`, { method: "POST" }).then(
+    af(`/v1/runs/${runId}/cases/${caseIndex}/share`, { method: "POST" }).then(
       (r) => j<{ token: string; url: string }>(r),
     ),
   revokeShare: (token: string) =>
-    fetch(`/v1/share/${token}`, { method: "DELETE" }).then((r) => j<{ revoked: string }>(r)),
+    af(`/v1/share/${token}`, { method: "DELETE" }).then((r) => j<{ revoked: string }>(r)),
   exportUrl: (runId: string, caseIndex: number) =>
-    `/v1/runs/${runId}/cases/${caseIndex}/export`,
+    withToken(`/v1/runs/${runId}/cases/${caseIndex}/export`),
 
   // ── notifications (spec 16) ────────────────────────────────────────────────
   subscribeNotifications: (url: string, triggers: string[], debounceSeconds = 0) =>
-    fetch("/v1/notifications/subscribe", {
+    af("/v1/notifications/subscribe", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ url, triggers, debounce_seconds: debounceSeconds }),
     }).then((r) => j<{ subscribed: string; triggers: string[] }>(r)),
   deadLetters: () =>
-    fetch("/v1/notifications/dead-letters").then((r) => j<DeadLetter[]>(r)),
+    af("/v1/notifications/dead-letters").then((r) => j<DeadLetter[]>(r)),
 
   // ── EE license (monetization 4) ────────────────────────────────────────────
   verifyLicense: (licenseJson: string, vendorPubkey: string) =>
-    fetch("/v1/license/verify", {
+    af("/v1/license/verify", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ license_json: licenseJson, vendor_pubkey: vendorPubkey }),
     }).then((r) => j<LicenseInfo>(r)),
+
+  // ── auth: local token + scoped API keys (architecture section 9) ───────────
+  authStatus: () =>
+    af("/v1/auth/status").then((r) =>
+      j<{ auth_enabled: boolean; authenticated: boolean; scopes: string[] }>(r),
+    ),
+  listKeys: () =>
+    af("/v1/keys").then((r) =>
+      j<{ key_id: string; scopes: string[]; label: string; created_ts: string }[]>(r),
+    ),
+  createKey: (scopes: string[], label: string) =>
+    af("/v1/keys", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ scopes, label }),
+    }).then((r) => j<{ key_id: string; secret: string; scopes: string[] }>(r)),
+  revokeKey: (keyId: string) =>
+    af(`/v1/keys/${keyId}`, { method: "DELETE" }).then((r) => j<{ revoked: string }>(r)),
 };
 
 // Live audit stream (spec 8): SSE of colour-coded events for a run. Returns an
@@ -212,7 +254,7 @@ export function streamRun(
   runId: string,
   onEvent: (event: KernelEvent) => void,
 ): () => void {
-  const source = new EventSource(`/v1/runs/${runId}/stream`);
+  const source = new EventSource(withToken(`/v1/runs/${runId}/stream`));
   source.addEventListener("event", (e) => {
     try {
       onEvent(JSON.parse((e as MessageEvent).data) as KernelEvent);

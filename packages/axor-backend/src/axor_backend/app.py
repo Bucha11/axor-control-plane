@@ -9,16 +9,24 @@ from __future__ import annotations
 import contextlib
 import json
 import os
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from datetime import UTC, datetime
 from typing import Any
 
 from axor_core.kernel.replay import replay
-from fastapi import FastAPI, Header, HTTPException, Request
-from fastapi.responses import HTMLResponse
+from fastapi import FastAPI, Header, HTTPException, Request, Response
+from fastapi.responses import HTMLResponse, JSONResponse
 from sse_starlette.sse import EventSourceResponse
 
+from axor_backend import auth as auth_mod
 from axor_backend import plane
+from axor_backend.auth import (
+    Principal,
+    hash_secret,
+    is_open,
+    master_principal,
+    required_scope,
+)
 from axor_backend.broadcast import Broadcast
 from axor_backend.notifications import Notifier
 from axor_backend.replay_api import (
@@ -40,6 +48,7 @@ def create_app(
     database_url: str | None = None,
     operator_keys: dict[str, str] | None = None,
     allow_unsigned: bool | None = None,
+    api_token: str | None = None,
 ) -> FastAPI:
     @contextlib.asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -55,6 +64,10 @@ def create_app(
         keys = json.loads(os.environ.get("AXOR_OPERATOR_KEYS", "{}"))
     if allow_unsigned is None:
         allow_unsigned = os.environ.get("AXOR_ALLOW_UNSIGNED", "") == "1"
+    # Auth is enforced iff a master token is configured (env or arg). Unset =
+    # open, the same opt-in posture as allow_unsigned (architecture section 9).
+    if api_token is None:
+        api_token = os.environ.get("AXOR_API_TOKEN") or None
 
     app.state.store = Store(make_engine(url))
     app.state.broadcast = Broadcast()
@@ -62,6 +75,47 @@ def create_app(
     app.state.allow_unsigned = allow_unsigned
     app.state.notifier = Notifier()
     app.state.shares = ShareRegistry()
+    app.state.api_token = api_token
+
+    async def resolve_principal(request: Request) -> Principal | None:
+        """Bearer from the Authorization header, or ?token= for SSE (EventSource
+        cannot set headers). Returns the principal, or None if unauthenticated."""
+        token = None
+        header = request.headers.get("authorization", "")
+        if header.lower().startswith("bearer "):
+            token = header[7:].strip()
+        if token is None:
+            token = request.query_params.get("token")
+        if not token:
+            return None
+        if api_token and auth_mod.constant_time_eq(token, api_token):
+            return master_principal()
+        # API key: the key_id prefixes the secret (ak_xxx.yyy).
+        key_id = token.split(".", 1)[0]
+        record = await app.state.store.get_api_key(key_id)
+        if record and auth_mod.constant_time_eq(
+            record["hashed_secret"], hash_secret(token)
+        ):
+            return Principal(kind="key", key_id=key_id,
+                             scopes=frozenset(record["scopes"]))
+        return None
+
+    @app.middleware("http")
+    async def auth_gate(request: Request, call_next: Callable) -> Response:
+        if api_token is None or is_open(request.url.path):
+            return await call_next(request)
+        principal = await resolve_principal(request)
+        if principal is None:
+            return JSONResponse({"error": "unauthorized"}, status_code=401)
+        need = required_scope(request.method, request.url.path)
+        if not principal.may(need):
+            return JSONResponse(
+                {"error": "forbidden", "need": need,
+                 "have": sorted(principal.scopes)},
+                status_code=403,
+            )
+        request.state.principal = principal
+        return await call_next(request)
 
     app.include_router(plane.router)
 
@@ -259,6 +313,46 @@ def create_app(
             "org": lic.org, "tier": lic.tier, "node_ceiling": lic.node_ceiling,
             "expiry": lic.expiry, "features": list(lic.features),
         }
+
+    # ── auth: API key management (architecture section 9) ─────────────────────
+
+    @app.get("/v1/auth/status")
+    async def auth_status(request: Request) -> dict:
+        """Whether auth is on, and (if a token was sent) whether it's valid +
+        its scopes. Open so the UI can decide whether to prompt for a token."""
+        if api_token is None:
+            return {"auth_enabled": False, "authenticated": True,
+                    "scopes": sorted(auth_mod.SCOPES)}
+        principal = await resolve_principal(request)
+        return {
+            "auth_enabled": True,
+            "authenticated": principal is not None,
+            "scopes": sorted(principal.scopes) if principal else [],
+        }
+
+    @app.post("/v1/keys", status_code=201)
+    async def create_key(body: dict, request: Request) -> dict:
+        scopes = body.get("scopes", ["read"])
+        bad = set(scopes) - auth_mod.SCOPES
+        if bad:
+            raise HTTPException(400, f"unknown scopes: {sorted(bad)}")
+        key_id, secret = auth_mod.generate_key()
+        await request.app.state.store.create_api_key(
+            key_id, hash_secret(secret), scopes, body.get("label", ""), _now(),
+        )
+        # The full secret is returned exactly once; only its hash is stored.
+        return {"key_id": key_id, "secret": secret, "scopes": scopes}
+
+    @app.get("/v1/keys")
+    async def list_keys(request: Request) -> list[dict]:
+        return await request.app.state.store.list_api_keys()
+
+    @app.delete("/v1/keys/{key_id}")
+    async def delete_key(key_id: str, request: Request) -> dict:
+        ok = await request.app.state.store.delete_api_key(key_id)
+        if not ok:
+            raise HTTPException(404, "unknown key")
+        return {"revoked": key_id}
 
     @app.get("/v1/healthz")
     async def healthz() -> dict:

@@ -20,9 +20,17 @@ from axor_proxy.runs import Run, evidence_to_dict
 
 
 class BackendUploader:
-    def __init__(self, backend_url: str, client: httpx.AsyncClient | None = None) -> None:
+    def __init__(
+        self,
+        backend_url: str,
+        client: httpx.AsyncClient | None = None,
+        ingest_key: str | None = None,
+    ) -> None:
         self._base = backend_url.rstrip("/")
         self._client = client
+        # A scoped `ingest` API key (architecture section 9). Required when the
+        # backend has auth enabled; ignored when it is open.
+        self._headers = {"Authorization": f"Bearer {ingest_key}"} if ingest_key else {}
 
     async def upload(self, run: Run, trace_path: Path) -> dict[str, Any]:
         text = await anyio.Path(trace_path).read_text()
@@ -31,18 +39,19 @@ class BackendUploader:
         evidence = [evidence_to_dict(c) for c in run.evidence]
         client = self._client or httpx.AsyncClient(timeout=15.0)
         owns = self._client is None
+        h = self._headers
         try:
-            await client.post(f"{self._base}/v1/ingest/{run.run_id}", json=payload)
+            await client.post(f"{self._base}/v1/ingest/{run.run_id}", json=payload, headers=h)
             await client.post(
                 f"{self._base}/v1/runs/{run.run_id}/evidence",
-                json={"node_id": run.node_id, "evidence": evidence},
+                json={"node_id": run.node_id, "evidence": evidence}, headers=h,
             )
             if any(c.deviation is not None for c in run.evidence):
                 # Auto-pin the must-block side (decision 11): traces carrying an
                 # EvidenceCase are the regression corpus's block side.
                 await client.post(
                     f"{self._base}/v1/pins/{run.run_id}",
-                    json={"side": "must_block", "label": run.scenario},
+                    json={"side": "must_block", "label": run.scenario}, headers=h,
                 )
             return {"uploaded": True, "events": len(events),
                     "evidence": len(evidence)}

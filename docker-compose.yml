@@ -39,6 +39,8 @@ services:
       AXOR_ALLOW_UNSIGNED: ${AXOR_ALLOW_UNSIGNED:-1}
       AXOR_OPERATOR_KEYS: ${AXOR_OPERATOR_KEYS:-{}}
       AXOR_VENDOR_PUBKEY: ${AXOR_VENDOR_PUBKEY:-}
+      # Auth (architecture section 9): empty = open (dev). Set to require a token.
+      AXOR_API_TOKEN: ${AXOR_API_TOKEN:-}
     volumes: ["axordata:/data"]
     ports: ["8400:8400"]
     depends_on:
@@ -62,6 +64,7 @@ services:
       AXOR_PROXY_DEMO: ${AXOR_PROXY_DEMO:-1}   # demo mock tools by default
       AXOR_TRACE_DIR: /data/traces
       AXOR_BACKEND_URL: http://backend:8400    # auto-upload runs on claim
+      AXOR_INGEST_KEY: ${AXOR_INGEST_KEY:-}    # scoped key for upload when auth is on
     volumes: ["axordata:/data"]
     ports: ["8401:8401"]
     depends_on:
