@@ -12,9 +12,9 @@ to forge commands.
 """
 from __future__ import annotations
 
-import json
 from typing import Any
 
+from axor_core.kernel import CanonicalizationError, canonicalize
 from nacl.exceptions import BadSignatureError
 from nacl.signing import VerifyKey
 
@@ -22,24 +22,16 @@ from axor_backend.errors import CommandRejected
 
 
 def jcs_canonical(value: Any) -> bytes:  # noqa: ANN401 - arbitrary JSON input
-    """RFC 8785 canonical form of a float-free JSON value."""
-    _reject_floats(value)
-    return json.dumps(
-        value, sort_keys=True, separators=(",", ":"), ensure_ascii=False
-    ).encode("utf-8")
+    """RFC 8785 canonical form of a float-free JSON value.
 
-
-def _reject_floats(value: object) -> None:
-    if isinstance(value, float):
-        raise CommandRejected("signed payloads must not contain floats (JCS subset)")
-    if isinstance(value, dict):
-        for k, v in value.items():
-            if not isinstance(k, str):
-                raise CommandRejected("signed payload keys must be strings")
-            _reject_floats(v)
-    elif isinstance(value, list):
-        for v in value:
-            _reject_floats(v)
+    Delegates to the pure kernel canonicalizer (axor_core.kernel.jcs) — the one
+    implementation the adapter also verifies against, so the two sides agree
+    byte for byte (protocol §6). Float/non-string-key rejection is enforced
+    there; we translate it to the backend's CommandRejected."""
+    try:
+        return canonicalize(value)
+    except CanonicalizationError as exc:
+        raise CommandRejected(str(exc)) from exc
 
 
 def signed_payload(node_id: str, version: int, body: dict, timestamp: str) -> bytes:
