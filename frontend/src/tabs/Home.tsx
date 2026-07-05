@@ -18,6 +18,11 @@ export default function Home() {
 
   return (
     <div style={{ maxWidth: 640, margin: "0 auto" }}>
+      <div style={{ fontFamily: MONO, fontSize: 12, fontWeight: 700, letterSpacing: "0.14em", marginBottom: 12 }}>
+        <span style={{ color: C.steel }}>Eval.</span>{" "}
+        <span style={{ color: C.amber }}>Control.</span>{" "}
+        <span style={{ color: C.green }}>Protect.</span>
+      </div>
       <h1 style={{ fontSize: 26, fontWeight: 700, lineHeight: 1.25, margin: "0 0 8px" }}>
         Your agent lies when its tools fail.
         <br />
