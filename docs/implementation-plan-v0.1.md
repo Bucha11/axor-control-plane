@@ -292,3 +292,34 @@ Executed in one pass, all branches `claude/design-mockups-plan-jgqwup`:
 
 Deferred to Phase 6 (unchanged): notifications, EvidenceCase export/share, expert
 view, /ee scaffolding, hosted deploy.
+
+### 7.1 Follow-through pass (2026-07-05, same session)
+
+Everything the execution log flagged as remaining that does not require a token
+was completed:
+
+- **axor-core runtime adoption.** AdmissionController wired into the IntentLoop
+  boundary (opt-in, threaded through GovernedNode's node loop + child cascade +
+  GovernedSession); PlaneAdmission drives it from a PlaneSession. Trace->kernel
+  bridge so one recorded trace feeds both plane telemetry and replay. End-to-end
+  test proves a plane stop halts remaining intents (in-flight intent completes)
+  and pause holds then resumes. axor-core suite 925 passed, contracts kept.
+- **axor-sentinel.** SentinelCycle.attest() + run_once folds effective_score over
+  read-back scores; attested branches export their residue, revocation restores.
+  152 passed.
+- **Backend Phase 6.** Notifications webhook (retries + dead-letter, debounce,
+  wired to level-transition + evidence-run triggers); EvidenceCase share
+  (revocable permalink) + HTML export with a raw-body scrubber; /ee subtree +
+  offline Ed25519 license verification. 21 backend tests.
+- **Proxy Phase 6.** --backend-url auto-uploads trace + evidence on claim and
+  auto-pins the must-block corpus side; cross-package test through to replay +
+  regression.
+- **Frontend Phase 6.** Expert view as an explicit opt-in tab; Config Builder
+  budget caps (step 1b). Strict tsc + vite build green.
+
+Full-stack E2E re-run (proxy --backend-url + backend + scripted agent): claim
+auto-uploaded 4 events + 1 EvidenceCase with no manual ingest; share receipt
+rendered then 404'd after revoke.
+
+Still requiring a token / genuinely out of scope: CI on the private ecosystem
+repos (needs AXOR_ECOSYSTEM_TOKEN), hosted deploy, A2A/Key Vault (§14).
