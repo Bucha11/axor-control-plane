@@ -28,6 +28,7 @@ from axor_backend.auth import (
     required_scope,
 )
 from axor_backend.broadcast import Broadcast
+from axor_backend.graph import InMemoryGraphStore, register_trace_derivations
 from axor_backend.monitor import running_stale_monitor
 from axor_backend.notifications import Notifier
 from axor_backend.replay_api import (
@@ -80,6 +81,11 @@ def create_app(
     app.state.notifier = Notifier()
     app.state.shares = ShareRegistry()
     app.state.api_token = api_token
+    # Taint/provenance graph (spec decision 6). In-memory by default — the same
+    # dev posture as SQLite; a hosted deployment swaps in KuzuGraphStore (per-tenant
+    # DB) behind the GraphStore Protocol. Ingested traces fold their arg_refs →
+    # value_ref derivations into it, so the graph is real data, not a mock.
+    app.state.graph = InMemoryGraphStore()
 
     async def resolve_principal(request: Request) -> Principal | None:
         """Bearer from the Authorization header, or ?token= for SSE (EventSource
@@ -135,10 +141,13 @@ def create_app(
         store: Store = request.app.state.store
         node_id = body.get("node_id", "proxy")
         await store.upsert_run(run_id, node_id, body.get("scenario", "custom"), _now())
+        events = body.get("events", [])
         stored = await store.ingest_events(
-            run_id, node_id, body.get("events", []), idempotency_key
+            run_id, node_id, events, idempotency_key
         )
-        for line in body.get("events", []):
+        # Fold the trace's value provenance into the taint graph (spec decision 6).
+        await register_trace_derivations(request.app.state.graph, run_id, events)
+        for line in events:
             request.app.state.broadcast.publish(
                 f"run:{run_id}", {"type": "event", "line": line}
             )
@@ -246,6 +255,22 @@ def create_app(
             "escaped": escaped,
             "safe_to_ship": regressed == 0 and escaped == 0,
         }
+
+    # ── taint / provenance graph (spec decision 6) ────────────────────────────
+
+    @app.get("/v1/graph/khop")
+    async def graph_khop(
+        request: Request, focus: str, k: int = 2, limit: int = 100
+    ) -> dict:
+        """k-hop neighbourhood around a value ref, expand-on-click. Each edge
+        carries the run_id it was derived in — the UI links an edge back to that
+        run's EvidenceCase."""
+        return await request.app.state.graph.khop(focus, k, limit)
+
+    @app.get("/v1/graph/attestations")
+    async def graph_attestations(request: Request, ref: str) -> list[dict]:
+        """Attestations covering a value branch (spec 8.1.1)."""
+        return await request.app.state.graph.branch_attestations(ref)
 
     # ── notifications (spec section 16) ───────────────────────────────────────
 

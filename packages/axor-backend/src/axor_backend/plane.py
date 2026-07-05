@@ -162,6 +162,13 @@ async def append_fact(node_id: str, body: dict, request: Request) -> dict:
     appended = await ctx.store.append_fact(node_id, fact, _now())
     if not appended:
         raise HTTPException(409, "fact_id already exists (append-only)")
+    # An operator attestation is an append-only node over the branch it covers
+    # (spec 8.1.1) — mirror it into the taint graph so the graph's attestation
+    # surface and the fact log stay one story.
+    graph = getattr(ctx, "graph", None)
+    if graph is not None and fact.get("fact_type") == "operator_attestation":
+        import json as _json
+        await graph.append_attestation(_json.dumps(fact))
     ctx.broadcast.publish(
         f"plane:{node_id}",
         {"type": "fact", "node_id": node_id, "fact": fact,

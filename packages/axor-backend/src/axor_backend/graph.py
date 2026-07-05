@@ -16,7 +16,33 @@ from __future__ import annotations
 import asyncio
 import json
 from pathlib import Path
-from typing import Protocol
+from typing import Any, Protocol
+
+
+async def register_trace_derivations(
+    graph: GraphStore, run_id: str, events: list[dict[str, Any]]
+) -> int:
+    """Fold an ingested trace into the taint graph: a TOOL_RESULT's produced
+    value derives from the input refs of the TOOL_CALL it answers. This is the
+    same arg_refs → value_ref provenance the replay kernel folds (see
+    replay._derive_driving_root), so the graph and the counterfactual agree on
+    what flows where. Returns the number of edges registered."""
+    pending_inputs: list[str] = []
+    registered = 0
+    for line in events:
+        kind = line.get("kind")
+        payload = line.get("payload", line)
+        if kind == "tool_call":
+            arg_refs = payload.get("arg_refs") or {}
+            pending_inputs = [r for r in arg_refs.values() if r]
+        elif kind == "tool_result":
+            dst = payload.get("value_ref") or line.get("causal_root")
+            if dst:
+                for src in pending_inputs:
+                    await graph.register_derivation(src, dst, run_id)
+                    registered += 1
+            pending_inputs = []
+    return registered
 
 
 class GraphStore(Protocol):
@@ -27,6 +53,73 @@ class GraphStore(Protocol):
     ) -> None: ...
     async def append_attestation(self, fact_json: str) -> None: ...
     async def branch_attestations(self, ref: str) -> list[dict]: ...
+
+
+class InMemoryGraphStore:
+    """Pure-Python GraphStore — the dev/test default, exactly as SQLite is for the
+    relational store. No kuzu dependency, so the taint-graph feature works out of
+    the box; a hosted deployment swaps in KuzuGraphStore (per-tenant DB file) via
+    the same Protocol. State is process-local and not persisted."""
+
+    def __init__(self) -> None:
+        # dst_ref → list of (src_ref, run_id) derivations INTO it, and the reverse
+        # so k-hop can walk both directions (a taint graph is explored up and down).
+        self._edges: list[dict[str, str]] = []
+        self._attestations: list[dict] = []
+        self._lock = asyncio.Lock()
+
+    async def register_derivation(self, src_ref: str, dst_ref: str, run_id: str) -> None:
+        async with self._lock:
+            edge = {"src": src_ref, "dst": dst_ref, "run_id": run_id}
+            if edge not in self._edges:
+                self._edges.append(edge)
+
+    async def khop(self, focus: str, k: int, limit: int) -> dict[str, object]:
+        """Undirected k-hop neighbourhood of `focus` (spec decision 6). Explores
+        both directions — a value's provenance (upstream) and what it tainted
+        (downstream) — expand-on-click, capped at `limit` nodes."""
+        k = int(k)
+        limit = int(limit)
+        adj: dict[str, set[str]] = {}
+        for e in self._edges:
+            adj.setdefault(e["src"], set()).add(e["dst"])
+            adj.setdefault(e["dst"], set()).add(e["src"])
+        seen = {focus}
+        frontier = {focus}
+        for _ in range(max(k, 0)):
+            nxt: set[str] = set()
+            for node in frontier:
+                nxt |= adj.get(node, set())
+            nxt -= seen
+            if not nxt:
+                break
+            for node in sorted(nxt):
+                if len(seen) >= limit:
+                    break
+                seen.add(node)
+            frontier = nxt & seen
+        edges = [
+            e for e in self._edges if e["src"] in seen and e["dst"] in seen
+        ]
+        return {"focus": focus, "nodes": sorted(seen), "edges": edges}
+
+    async def append_attestation(self, fact_json: str) -> None:
+        async with self._lock:
+            fact = json.loads(fact_json)
+            self._attestations.append({
+                "fact_id": fact["fact_id"],
+                "operator": fact.get("operator") or "",
+                "reason": fact.get("reason") or "",
+                "revokes": fact.get("revokes") or None,
+                "covers": list(fact.get("covers", ())),
+            })
+
+    async def branch_attestations(self, ref: str) -> list[dict]:
+        return [
+            {"fact_id": a["fact_id"], "operator": a["operator"],
+             "reason": a["reason"], "revokes": a["revokes"]}
+            for a in self._attestations if ref in a["covers"]
+        ]
 
 
 class KuzuGraphStore:

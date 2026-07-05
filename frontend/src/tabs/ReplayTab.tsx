@@ -6,6 +6,7 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import { api, ScrubberPayload, ScrubberStep } from "../api";
 import { navigate } from "../router";
 import { C, MONO, btn, sevColor } from "../theme";
+import TaintGraph from "./TaintGraph";
 
 type Cf = "noexec" | "taint";
 
@@ -79,6 +80,7 @@ export default function ReplayTab({ runId: runIdProp, cursor: cursorProp }: { ru
 
   const cur = steps[Math.min(cursor, Math.max(steps.length - 1, 0))];
   const cursorTool = typeof cur?.payload.tool === "string" ? cur.payload.tool : null;
+  const curRef = taintRef(cur);
   const divStep = firstDiv != null ? steps.find((s) => s.seq === firstDiv) : undefined;
 
   const pickRun = (id: string) => {
@@ -172,9 +174,14 @@ export default function ReplayTab({ runId: runIdProp, cursor: cursorProp }: { ru
               <div style={{ fontFamily: MONO, fontSize: 11, color: C.mut, marginTop: 6 }}>
                 level {cur.state.level} · {cur.state.tainted_refs.length} tainted ·{" "}
                 {cur.state.budget_spent_calls} calls spent
+                {typeof cur.state.budget_spent_cost === "number" &&
+                  cur.state.budget_spent_cost !== cur.state.budget_spent_calls &&
+                  ` · cost ${cur.state.budget_spent_cost}`}
               </div>
             </div>
           )}
+
+          {curRef && <TaintGraph key={curRef} focus={curRef} />}
 
           {!fork ? (
             <button

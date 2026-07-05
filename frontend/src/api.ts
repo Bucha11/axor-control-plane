@@ -50,8 +50,28 @@ export interface ScrubberStep {
     excised_refs: string[];
     floor_active: boolean;
     budget_spent_calls: number;
+    budget_spent_cost?: number;
     facts: number;
   };
+}
+
+export interface GraphEdge {
+  src: string;
+  dst: string;
+  run_id: string;
+}
+
+export interface GraphKhop {
+  focus: string;
+  nodes: string[];
+  edges: GraphEdge[];
+}
+
+export interface BranchAttestation {
+  fact_id: string;
+  operator: string;
+  reason: string;
+  revokes: string | null;
 }
 
 export interface ScrubberPayload {
@@ -219,6 +239,16 @@ export const api = {
     }).then((r) => j<{ subscribed: string; triggers: string[] }>(r)),
   deadLetters: () =>
     af("/v1/notifications/dead-letters").then((r) => j<DeadLetter[]>(r)),
+
+  // ── taint / provenance graph (spec decision 6) ─────────────────────────────
+  graphKhop: (focus: string, k = 2, limit = 100) =>
+    af(`/v1/graph/khop?focus=${encodeURIComponent(focus)}&k=${k}&limit=${limit}`).then(
+      (r) => j<GraphKhop>(r),
+    ),
+  graphAttestations: (ref: string) =>
+    af(`/v1/graph/attestations?ref=${encodeURIComponent(ref)}`).then(
+      (r) => j<BranchAttestation[]>(r),
+    ),
 
   // ── EE license (monetization 4) ────────────────────────────────────────────
   verifyLicense: (licenseJson: string, vendorPubkey: string) =>
