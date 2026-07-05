@@ -25,6 +25,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 from starlette.routing import Mount, Route
 
+from axor_proxy.agent import ScriptedAgent, default_claim, default_script
 from axor_proxy.mock_tools import mock_tools_app
 from axor_proxy.runs import RunManager, evidence_to_dict, sha256_hex
 from axor_proxy.upload import BackendUploader
@@ -51,6 +52,8 @@ class ProxyState:
         client: httpx.AsyncClient | None = None,
         backend_url: str | None = None,
         uploader: BackendUploader | None = None,
+        self_base_url: str = "http://127.0.0.1:8401",
+        agent_client: httpx.AsyncClient | None = None,
     ) -> None:
         self.tools = tools  # tool name -> upstream base url
         self.runs = RunManager(trace_dir)
@@ -58,6 +61,11 @@ class ProxyState:
         self.uploader = uploader or (
             BackendUploader(backend_url) if backend_url else None
         )
+        # Base URL the scripted agent (in-app experiment runner) dials to reach
+        # this proxy's own tool routes; agent_client lets tests bind it to the
+        # ASGI app in-process. Defaults to a real loopback client in production.
+        self.self_base_url = self_base_url
+        self.agent_client = agent_client
 
 
 def create_app(state: ProxyState) -> Starlette:
@@ -174,6 +182,34 @@ def create_app(state: ProxyState) -> Starlette:
             status_code=201,
         )
 
+    async def simulate(request: Request) -> Response:
+        """Run our scripted agent against an armed run — the in-app experiment
+        loop (demo-mode / try-it). Drives real tool calls + a claim through the
+        same pipeline an external agent would, then returns the receipt."""
+        run = state.runs.get(request.path_params["run_id"])
+        if run is None:
+            return JSONResponse({"error": "unknown_run"}, status_code=404)
+        if state.runs.active is not run:
+            return JSONResponse(
+                {"error": "run_not_armed",
+                 "detail": "simulate needs the run armed; it disarms on claim"},
+                status_code=409,
+            )
+        payload = await request.json() if await request.body() else {}
+        faults = [{"tool": s.tool, "mode": s.mode} for s in run.faults]
+        script = payload.get("script") or default_script(faults, list(state.tools))
+        claim = payload.get("claim") or default_claim(faults)
+
+        owns = state.agent_client is None
+        client = state.agent_client or httpx.AsyncClient(timeout=30.0)
+        try:
+            agent = ScriptedAgent(state.self_base_url, client)
+            result = await agent.run(run.run_id, script, claim)
+        finally:
+            if owns:
+                await client.aclose()
+        return JSONResponse(result)
+
     async def submit_claim(request: Request) -> Response:
         run = state.runs.get(request.path_params["run_id"])
         if run is None:
@@ -228,6 +264,7 @@ def create_app(state: ProxyState) -> Starlette:
         Route("/axor/healthz", healthz),
         Route("/axor/preflight", preflight),
         Route("/axor/runs", start_run, methods=["POST"]),
+        Route("/axor/runs/{run_id}/simulate", simulate, methods=["POST"]),
         Route("/axor/runs/{run_id}/claim", submit_claim, methods=["POST"]),
         Route("/axor/runs/{run_id}", get_run),
         Mount("/mock", app=mock_tools_app()),

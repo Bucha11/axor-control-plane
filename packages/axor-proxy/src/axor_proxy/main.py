@@ -39,8 +39,10 @@ def cli() -> None:
     from axor_proxy.app import ProxyState, create_app
 
     args.trace_dir.mkdir(parents=True, exist_ok=True)
+    self_base = f"http://{args.host}:{args.port}"
     app = create_app(ProxyState(tools=tools, trace_dir=args.trace_dir,
-                                backend_url=args.backend_url))
+                                backend_url=args.backend_url,
+                                self_base_url=self_base))
     uvicorn.run(app, host=args.host, port=args.port)
 
 
