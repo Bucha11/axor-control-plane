@@ -1,8 +1,12 @@
-# Axor Control Plane — Implementation Plan (v0.1, 2026-07-05)
+# Axor Control Plane — Implementation Plan (v0.2, 2026-07-05)
 
 Derived from: `ui-spec-v0.13.md` · `architecture-v0.1.md` · `control-plane-protocol-v0.1.md` ·
 `monetization-v0.1.md` · the 7 mockups in `mockups/` · the bundle repo skeleton · the current
 state of the seven GitHub repositories.
+
+v0.2: the §5 open questions are resolved (operator decisions, 2026-07-05) — §5 is now a
+decisions log; Phase 1 rewritten for a **minimally invasive** kernel merge; **any-custom-agent
+connectivity** promoted to a launch requirement (Phases 2/4 patched).
 
 Everything below is sequenced for a solo developer. Phases are ordered by the funnel
 (spec §3): value must be demonstrable at the end of each phase, not only at the end.
@@ -55,9 +59,9 @@ Import the bundle skeleton into `axor-control-plane` and make it honest:
 - CI: ruff + pytest + purity contract test; frontend typecheck job.
 - Docs pass: rename spec title ("Axor Eval" → platform name, loose end 3); bump protocol
   note to v0.2 adding `context_excision` (event shape: causal_root refs + hashes of removed
-  values, per spec §8.2.1) and the §9 open items you already know the answers to
-  (recommend: **JCS RFC 8785** for signature canonicalization + a committed test-vector file;
-  static heartbeat T=10s, stale=3T).
+  values, per spec §8.2.1) and the §9 open items: **JCS RFC 8785** for signature
+  canonicalization + a committed test-vector file (decided, §5.3); static heartbeat
+  T=10s, stale=3T.
 
 Exit: `docker compose up` gives a healthy empty backend; CI green; docs internally consistent.
 
@@ -68,12 +72,19 @@ The load-bearing engineering of the whole platform. Two kernels currently exist:
 `packages/axor-kernel` (events, desired-state lattice, degradation recompute, replay fold).
 They must become one pure submodule inside axor-core.
 
-1. **Decide the module layout first** (collision risk): proposal —
-   `axor_core.kernel.{events, state, degradation, replay, adjudicator, decidability, registration}`.
-   Staging modules move in beside the existing three; no renames of the existing three.
-2. **Port the gate pipeline** out of `governor.py`/`taint/`/`capability/` runtime code into
-   pure functions over the event sequence (zero I/O, zero framework imports). The runtime
-   keeps thin wrappers that call the kernel; the replay engine calls the same functions.
+**Decision (§5.1): minimally invasive.** The merge is strictly additive — no renames, no API
+breaks, no restructuring of existing axor-core modules. Concretely:
+
+1. **Module layout**: staging modules land *beside* the existing three —
+   `axor_core.kernel.{events, state, degradation, replay}` added; `adjudicator`,
+   `decidability`, `registration` untouched, byte-for-byte.
+2. **Gate pipeline via extraction + delegation shims, not rewrite.** Pure functions over the
+   event sequence are extracted from `governor.py`/`taint/`/`capability/`; the original
+   call sites become one-line delegations to the kernel functions. Public APIs, signatures,
+   and behavior of the runtime stay identical — the existing axor-core test suite must pass
+   **unmodified** after the port (that is the invasiveness gauge). If a gate resists clean
+   extraction, it stays in the runtime for now and is listed as not-yet-replayable rather
+   than force-restructured.
 3. **Event schema** (versioned JSONL, Pydantic) becomes the single contract: runtime trace
    writer, proxy recorder, backend storage, replay all import it. Schema-version field on
    every line; replay refuses unknown majors.
@@ -82,8 +93,10 @@ They must become one pure submodule inside axor-core.
    in the kernel (operator-config segments are not excisable) so runtime and replay agree.
 5. **Purity contract**: extend axor-core's `.importlinter` to forbid I/O/framework imports
    inside `axor_core.kernel`; port `test_purity_contract.py`.
-6. Merge into axor-core (its own PR there), release, then **delete `packages/axor-kernel`**
-   from the platform and switch imports to `axor_core.kernel`.
+6. Merge into axor-core (its own PR there), then **delete `packages/axor-kernel`** from the
+   platform and switch imports to `axor_core.kernel`. **No PyPI release required mid-plan**:
+   the platform pins a git ref (`axor-core @ git+…@<sha>`) until the next natural axor-core
+   release; uv workspaces handle this cleanly.
 7. `scripts/gen_ts_types.py`: pick generator (recommend `json-schema-to-typescript` from the
    pnpm side — arch open item), wire `pnpm gen:types`.
 
@@ -96,6 +109,11 @@ Exit criteria (this is the phase's definition of done):
 ### Phase 2 — Proxy path: first external value (~2 weeks)
 
 The funnel entry. Ships independently of the plane service.
+
+**Decision (§5.2): any custom agent must be connectable — launch requirement, not tail.**
+The proxy path is inherently framework-agnostic (any agent that calls HTTP tool endpoints
+connects by swapping base URLs — no SDK, no imports); keep it that way: nothing in the proxy
+may assume a framework, an SDK, or even that the agent is Python.
 
 - `axor-proxy`: httpx+asyncio passthrough; auth forwarded byte-for-byte; exactly two
   intervention points (fault injection, observation recording to JSONL). No raw bodies
@@ -159,7 +177,13 @@ stays an explicit later opt-in, never default:
    test-bench gating for injection, greyed-with-label availability ladder (§12.4).
 6. **Config Builder** (`config-builder.jsx`): manual sinks + criticality + per-arg allowlists,
    plain-language preview, "anything not listed is denied" confirmation, config emit.
-   Code-in/wrapped-out (§11.3) can trail by a milestone — detection service + `axor wrap` CLI.
+   Per decision §5.2, the **generic wrapper scaffold ships first** (any hand-rolled agent:
+   wrap the entry point in `Invokable`, tools declared as sinks) — framework-specific
+   codegen (axor-langchain) is the optimization on top, not the prerequisite. Manual sink
+   declaration is always available, so no agent is ever blocked on detection support.
+   Code-in/wrapped-out (§11.3) can trail by a milestone — detection service + `axor wrap` CLI;
+   detection v1 covers LangChain `@tool` + MCP manifests, everything else falls back to the
+   generic scaffold + instructions (never guessing, per §11.3 hard rules).
 7. **Health / self-heal panel** (`health-selfheal.jsx`): one-shot verdict, explicit-only heal
    with reason, heal→re-probe rendered as one unit, failure honesty.
 8. **Regression report** (`regression-report.jsx`): corpus vs config v2, regressed rows open
@@ -230,20 +254,17 @@ fabrication, one timeline — the strongest demo in the product.
 
 ---
 
-## 5. Open questions (answers change the plan)
+## 5. Decisions log (resolved 2026-07-05, operator)
 
-1. **axor-core release cadence.** Phase 1 merges the kernel into `axor-core` and the platform
-   then depends on a released version. Is releasing axor-core (PyPI) mid-plan acceptable, or
-   should the platform temporarily pin a git ref?
-2. **Demo landing hosting.** Static site — separate repo/subdomain (`demo.…`) or a route in
-   `frontend/`? Arch says "static, zero infra"; a separate deploy target keeps that honest.
-3. **Config Builder detection scope for v1.** LangChain `@tool` + MCP manifests only
-   (decision #3 implies yes), with `subprocess`/raw-signature detection deferred?
-4. **Protocol canonicalization.** Plan assumes **JCS (RFC 8785)** + committed test vectors.
-   Confirm, or veto for sorted-key JSON.
-5. **axor-daemon / axor-classifier-simple** are treated as out-of-scope external ecosystem
-   packages (no platform work items). Confirm — or should daemon-executed tools get a
-   first-class story in the topology/trace views?
+Former open questions. Format mirrors the spec's §10: decision → consequence in the plan.
+
+| # | Question | Decision |
+|---|---|---|
+| 1 | axor-core merge & release cadence | **Minimally invasive.** Additive-only merge (no renames, no API breaks, existing axor-core tests pass unmodified); gate pipeline extracted via delegation shims, gates that resist clean extraction stay in the runtime and are listed as not-yet-replayable instead of being force-restructured. No mid-plan PyPI release — platform pins a git ref until the next natural release. (Phase 1) |
+| 2 | Custom-agent connectivity | **Any custom agent must be connectable — launch requirement.** Proxy path stays fully framework-agnostic (URL swap, no SDK, agent need not be Python). Adapter path: generic `Invokable` wrapper scaffold ships first; framework codegen is an optimization on top; manual sink declaration always available. (Phases 2, 4) |
+| 3 | Protocol canonicalization | **Keep as planned: JCS (RFC 8785)** + committed test-vector file. (Phases 0, 3c) |
+| 4 | axor-daemon / axor-classifier-simple | **Out of scope for now.** External ecosystem packages; no platform work items; daemon-executed tools get no special story in topology/trace views in v1. (§6) |
+| 5 | Demo landing hosting | Undecided by operator → plan default stands: **separate static deploy target**, per architecture §7 ("static, zero infra"). Cheap to revisit. (Phase 4) |
 
 ---
 
