@@ -61,6 +61,13 @@ export default function ReplayTab({ runId: runIdProp, cursor: cursorProp }: { ru
     cf && counterfactual.data ? counterfactual.data : base;
   const steps = active?.steps ?? [];
   const firstDiv = active?.first_divergence ?? null;
+  // A counterfactual can only DIVERGE from something that was recorded. A
+  // proxy-depth trace records no gate verdicts (it observes; it does not gate),
+  // so first_divergence can never fire — reporting "behaves identically" there
+  // would be a false reassurance. Detect the fidelity and say so honestly.
+  const hasRecordedVerdicts = (base?.steps ?? []).some(
+    (s) => s.recorded_verdict != null,
+  );
 
   const toolsSeen = useMemo(() => {
     const seen: string[] = [];
@@ -220,6 +227,14 @@ export default function ReplayTab({ runId: runIdProp, cursor: cursorProp }: { ru
               ) : counterfactual.isError ? (
                 <div style={{ fontFamily: MONO, fontSize: 11, color: C.red }}>
                   {(counterfactual.error as Error).message}
+                </div>
+              ) : firstDiv == null && !hasRecordedVerdicts ? (
+                <div style={{ fontFamily: MONO, fontSize: 12, color: C.amber }}>
+                  This trace carries no recorded gate verdicts (proxy-depth — the proxy observes, it does not gate),
+                  so there is nothing to diverge from.
+                  <div style={{ color: C.dim, fontSize: 11, marginTop: 4 }}>
+                    Counterfactual divergence needs an adapter-depth trace (recorded verdicts + value provenance).
+                  </div>
                 </div>
               ) : firstDiv == null ? (
                 <div style={{ fontFamily: MONO, fontSize: 12, color: C.mut }}>
