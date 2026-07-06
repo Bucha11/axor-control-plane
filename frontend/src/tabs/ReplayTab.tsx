@@ -65,9 +65,25 @@ export default function ReplayTab({ runId: runIdProp, cursor: cursorProp }: { ru
     if (cursorProp) setCursor(Number(cursorProp));
   }, [runIdProp, cursorProp]);
 
+  // Pin state is per-run — clear the ✓ when the inspected run changes (including
+  // deep-link navigation that does not go through pickRun).
+  useEffect(() => {
+    setPinned(null);
+  }, [runId]);
+
   const counterfactual = useMutation({
     mutationFn: (config: Record<string, unknown>) =>
       api.counterfactual(runId!, config),
+  });
+
+  // Pin the run under inspection to either corpus side. must_block auto-pins on
+  // evidence upload, but a legitimate flow that PASSED has no evidence — this is
+  // the only way to add the must_pass side the corpus needs to be two-sided.
+  const [pinned, setPinned] = useState<string | null>(null);
+  const pin = useMutation({
+    mutationFn: (side: "must_block" | "must_pass") =>
+      api.pin(runId!, side, "manual"),
+    onSuccess: (_r, side) => setPinned(side),
   });
 
   const base: ScrubberPayload | undefined = scrubber.data;
@@ -156,6 +172,31 @@ export default function ReplayTab({ runId: runIdProp, cursor: cursorProp }: { ru
           ))}
         </select>
         <SeedButton label="load example adapter run" compact />
+      </div>
+
+      <div className="flex items-center gap-2 mb-3">
+        <span style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim }}>pin to corpus:</span>
+        {(["must_pass", "must_block"] as const).map((side) => (
+          <button
+            key={side}
+            onClick={() => pin.mutate(side)}
+            disabled={pin.isPending}
+            title={side === "must_pass"
+              ? "add this run as a legitimate flow that must keep passing"
+              : "add this run as an attack that must stay blocked"}
+            style={btn({
+              color: pinned === side ? C.green : C.mut, borderColor: C.line,
+              fontSize: 10.5, padding: "3px 9px",
+            })}
+          >
+            {pinned === side ? "✓ " : ""}{side.replace("_", "-")}
+          </button>
+        ))}
+        {pinned && (
+          <span style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim }}>
+            pinned → <span style={{ color: C.steel, cursor: "pointer" }} onClick={() => navigate("regression")}>run regression →</span>
+          </span>
+        )}
       </div>
 
       <h1 style={{ fontSize: 22, fontWeight: 650, margin: "0 0 20px" }}>

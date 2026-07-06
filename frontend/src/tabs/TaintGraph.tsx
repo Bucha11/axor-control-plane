@@ -3,7 +3,7 @@
 // run; clicking an edge jumps to that run's replay (edge → EvidenceCase). Nodes
 // re-focus the graph on click. Attestations covering the focus are listed below —
 // the same append-only surface the fact log shows.
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { api, GraphKhop } from "../api";
 import { navigate } from "../router";
@@ -40,6 +40,21 @@ export default function TaintGraph({ focus }: { focus: string }) {
     queryFn: () => api.graphAttestations(current),
   });
 
+  // Attest THIS branch: an append-only operator_attestation fact whose covers[]
+  // names the focus value ref, so it lands on this exact branch's surface (the
+  // fact append feeds the graph when fact_type is operator_attestation).
+  const attest = useMutation({
+    mutationFn: (reason: string) =>
+      api.appendFact("operator", {
+        fact_id: `att_${current}_${Date.now()}`,
+        fact_type: "operator_attestation",
+        reason,
+        operator: "op_ui",
+        covers: [current],
+      }),
+    onSuccess: () => void atts.refetch(),
+  });
+
   const short = (ref: string) => (ref.length > 14 ? ref.slice(0, 12) + "…" : ref);
 
   return (
@@ -54,6 +69,17 @@ export default function TaintGraph({ focus }: { focus: string }) {
             reset
           </button>
         )}
+        <button
+          onClick={() => {
+            const reason = window.prompt(`Attest branch ${short(current)} — reason (required, append-only):`);
+            if (reason && reason.trim()) attest.mutate(reason.trim());
+          }}
+          disabled={attest.isPending}
+          title="attest this value branch — an append-only reputation event; lowers heat, never resets it"
+          style={{ marginLeft: 10, fontFamily: MONO, fontSize: 10.5, color: C.steel, background: "none", border: `1px solid ${C.line}`, borderRadius: 5, padding: "1px 7px", cursor: "pointer" }}
+        >
+          {attest.isPending ? "attesting…" : "attest branch"}
+        </button>
       </div>
 
       {khop.isPending ? (
