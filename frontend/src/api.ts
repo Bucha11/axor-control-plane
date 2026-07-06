@@ -254,6 +254,12 @@ export const api = {
       (r) => j<{ stopped: string[]; count: number }>(r),
     ),
 
+  // ── governed node: a real axor-core IntentLoop wired to the plane ──────────
+  spawnGoverned: () =>
+    af("/axor/governed/spawn", { method: "POST" }).then(
+      (r) => j<{ node_id: string; run_id: string; events: number; denials: number; ttl_seconds: number }>(r),
+    ),
+
   // ── demo: seed adapter-fidelity runs (recorded verdicts + provenance) ──────
   seedAdapterRuns: () =>
     af("/v1/demo/seed-adapter-runs", { method: "POST" }).then(

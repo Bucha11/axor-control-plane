@@ -14,6 +14,46 @@ function isHot(n: NodeInfo): boolean {
   return (n.reported?.level ?? "NORMAL") !== "NORMAL";
 }
 
+// Spawn a REAL governed node (axor-core IntentLoop) on the proxy: it runs a
+// governed session, uploads its trace, and stays live on the plane. Optionally
+// switches the connection to adapter mode so Control shows the live node.
+function SpawnGoverned({ switchToAdapter }: { switchToAdapter?: boolean }) {
+  const qc = useQueryClient();
+  const connect = useApp((s) => s.connect);
+  const [err, setErr] = useState<string | null>(null);
+  const spawn = useMutation({
+    mutationFn: () => api.spawnGoverned(),
+    onSuccess: async () => {
+      setErr(null);
+      if (switchToAdapter) connect("adapter");
+      await qc.invalidateQueries({ queryKey: ["nodes"] });
+    },
+    onError: (e: Error) => setErr(e.message),
+  });
+  return (
+    <div className="mt-3">
+      <button
+        onClick={() => spawn.mutate()}
+        disabled={spawn.isPending}
+        title="runs a real axor-core governed node (IntentLoop) and connects it to the plane"
+        style={btn({ color: C.bg, background: C.green, border: `1px solid ${C.green}`, fontSize: 12, fontWeight: 700, padding: "8px 14px" })}
+      >
+        {spawn.isPending ? "spawning…" : "Spawn a governed demo node"}
+      </button>
+      {err && (
+        <div style={{ fontFamily: MONO, fontSize: 11, color: C.red, marginTop: 8 }}>
+          {err} — is the proxy running with a backend URL?
+        </div>
+      )}
+      {spawn.isSuccess && (
+        <div style={{ fontFamily: MONO, fontSize: 11, color: C.dim, marginTop: 8 }}>
+          governed node live — it heartbeats to the plane; pause / stop / inject below reach it.
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function ControlTab({ focusNode }: { focusNode?: string }) {
   const { mode, testBench } = useApp((s) => s.connection);
 
@@ -29,6 +69,10 @@ export default function ControlTab({ focusNode }: { focusNode?: string }) {
         <Locked need="adapter" title="live topology of your governed agents" >
           <div />
         </Locked>
+        <div style={{ fontFamily: MONO, fontSize: 11, color: C.mut, marginTop: 16 }}>
+          try it now — spawn a real governed node (axor-core) and watch it appear here live:
+        </div>
+        <SpawnGoverned switchToAdapter />
       </div>
     );
   }
@@ -88,8 +132,12 @@ function ControlBody({ focusNode, testBench }: { focusNode?: string; testBench: 
   const list = nodes.data ?? [];
   if (list.length === 0) {
     return (
-      <div style={{ maxWidth: 640, margin: "0 auto", fontFamily: MONO, fontSize: 12.5, color: C.mut }}>
-        No governed nodes connected. Control unlocks with the adapter.
+      <div style={{ maxWidth: 640, margin: "0 auto" }}>
+        <div style={{ fontFamily: MONO, fontSize: 12.5, color: C.mut }}>
+          No governed nodes connected yet. Point your axor-core adapter at the plane —
+          or spawn a real governed demo node right now:
+        </div>
+        <SpawnGoverned />
       </div>
     );
   }
