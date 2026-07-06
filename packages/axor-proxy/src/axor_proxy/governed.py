@@ -16,8 +16,6 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import json
-import re
 import secrets
 from typing import Any
 
@@ -32,23 +30,34 @@ from axor_core.contracts.envelope import (
 )
 from axor_core.contracts.policy import ExecutionPolicy, ExportMode, ToolPolicy
 from axor_core.contracts.result import ExecutorEvent, ExecutorEventKind
-from axor_core.kernel.events import event_to_json_line
+from axor_core.contracts.trace import TraceEventKind
 from axor_core.node.intent_loop import IntentLoop
 from axor_core.plane.admission import PlaneAdmission
-from axor_core.plane.bridge import trace_to_kernel
 from axor_core.plane.client import PlaneClient
 from axor_core.plane.session import PlaneSession
 from axor_core.taint.engine import TaintEngine
 
-# The mock web read returns untrusted external content; pushing THIS value at the
-# egress sink is the exfil the per-value taint gate denies.
+# The governed flow, single source of truth: (tool, {arg: value}, output|None).
+# web_search reads external (untrusted) content; summarize derives a value FROM
+# it (the taint-graph edge); slack_post pushes the untrusted value at the egress
+# sink — the step the per-value taint gate denies.
+QUERY = "quarterly rates"
 WEB_OUT = "EXTERNAL: quarterly rates rose 4% (unverified web content)"
+SUMMARY = "SUMMARY: rates rose ~4% this quarter (derived from the web result)"
 
-TOOLS: dict[str, str] = {
-    "web_search": WEB_OUT,        # untrusted source
-    "notes_write": "written",     # benign internal write
-    "slack_post": "posted",       # egress sink
+_FLOW: list[tuple[str, dict[str, str], str | None]] = [
+    ("web_search", {"q": QUERY}, WEB_OUT),
+    ("summarize", {"text": WEB_OUT}, SUMMARY),
+    ("slack_post", {"text": WEB_OUT}, None),  # tainted value → egress → DENY
+]
+_TOOL_OUTPUT: dict[str, str] = {
+    "web_search": WEB_OUT, "summarize": SUMMARY, "slack_post": "posted",
 }
+# Readable provenance refs (keyed by content) for the taint graph, so a value a
+# later call carries resolves to the SAME node as the call that produced it.
+_REF: dict[str, str] = {QUERY: "v_query", WEB_OUT: "v_web_result", SUMMARY: "v_summary"}
+_UNTRUSTED = frozenset({"web_search"})
+_EGRESS = frozenset({"slack_post"})
 
 
 class _Tool(ToolHandler):
@@ -65,7 +74,7 @@ class _Tool(ToolHandler):
 
 def _executor() -> CapabilityExecutor:
     ex = CapabilityExecutor()
-    for name, out in TOOLS.items():
+    for name, out in _TOOL_OUTPUT.items():
         ex.register(_Tool(name, out))
     return ex
 
@@ -84,7 +93,7 @@ def _envelope(node_id: str) -> ExecutionEnvelope:
         active_constraints=[], lineage=lineage, token_count=0, compression_ratio=1.0,
     )
     caps = Capabilities(
-        allowed_tools=frozenset(TOOLS), allow_children=False,
+        allowed_tools=frozenset(_TOOL_OUTPUT), allow_children=False,
         allow_nested_children=False, allow_context_expansion=False,
         allow_export=True, allow_mutation=True, max_child_depth=0,
     )
@@ -100,14 +109,9 @@ def _envelope(node_id: str) -> ExecutionEnvelope:
 
 
 def _scripted_stream(node_id: str):  # noqa: ANN202
-    """A governed agent's tool calls: a web read, a benign note, then an exfil —
-    pushing the untrusted web value at the egress sink (the denied step)."""
+    """Emit the flow's tool calls as executor events for the IntentLoop."""
     async def stream():  # noqa: ANN202
-        for i, (tool, args) in enumerate([
-            ("web_search", {"q": "quarterly rates"}),
-            ("notes_write", {"text": "checked the rates"}),
-            ("slack_post", {"text": WEB_OUT}),  # tainted value → egress → DENY
-        ]):
+        for i, (tool, args, _out) in enumerate(_FLOW):
             yield ExecutorEvent(
                 kind=ExecutorEventKind.TOOL_USE,
                 payload={"tool": tool, "args": args, "tool_use_id": f"{node_id}-{i}"},
@@ -119,39 +123,79 @@ def _scripted_stream(node_id: str):  # noqa: ANN202
     return stream()
 
 
+def _ordered_verdicts(trace_events: list) -> list[tuple[bool, str]]:
+    """One (approved, reason) per tool call, in call order — read from the REAL
+    IntentLoop trace, so the verdicts are authentic governance decisions."""
+    out: list[tuple[bool, str]] = []
+    for event in trace_events:
+        kind = getattr(event, "kind", None)
+        if kind in (TraceEventKind.INTENT_APPROVED, TraceEventKind.INTENT_TRANSFORMED):
+            out.append((True, ""))
+        elif kind is TraceEventKind.INTENT_DENIED:
+            out.append((False, getattr(event, "reason", "")))
+    return out
+
+
+def _ev(seq: int, node_id: str, kind: str, verdict: str | None, **payload: Any) -> dict:  # noqa: ANN401
+    return {
+        "schema_version": "1.0", "seq": seq, "node_id": node_id, "kind": kind,
+        "ts": f"seq:{seq}", "causal_root": None,
+        "gate": payload.pop("gate", None), "verdict": verdict, "payload": payload,
+    }
+
+
+def _build_lines(node_id: str, verdicts: list[tuple[bool, str]]) -> list[dict]:
+    """Serialise the flow into kernel-schema events, enriched with provenance:
+    each call carries arg_refs (the value refs it reads) and, when it produces a
+    value, a following tool_result with that value_ref — so the taint graph folds
+    the real derivation (v_query → v_web_result → v_summary). The verdicts are the
+    IntentLoop's own; only the value refs are annotated here."""
+    lines: list[dict] = []
+    seq = 0
+    for (tool, args, output), (approved, reason) in zip(_FLOW, verdicts):
+        arg_refs = {a: _REF[v] for a, v in args.items() if v in _REF}
+        normalized = (
+            {"destination_kind": "external_domain"} if tool in _EGRESS else {}
+        )
+        lines.append(_ev(
+            seq, node_id, "tool_call", "pass" if approved else "deny",
+            tool=tool, args=args, arg_refs=arg_refs, normalized=normalized,
+            gate=(None if approved else "taint_enforcement"),
+            **({"reason": reason} if reason else {}),
+        ))
+        seq += 1
+        if approved and output is not None and output in _REF:
+            lines.append(_ev(
+                seq, node_id, "tool_result", None, tool=tool,
+                value_ref=_REF[output],
+                root={"sources": ["web"] if tool in _UNTRUSTED else [],
+                      "sensitive": False},
+            ))
+            seq += 1
+    return lines
+
+
 async def run_governed_session(
     node_id: str, session: PlaneSession,
 ) -> tuple[list[dict], int]:
-    """Run one governed session through the real IntentLoop. Returns the
-    kernel-schema event lines and the number of recorded denials."""
+    """Run the flow through the REAL IntentLoop for authentic verdicts, then
+    serialise adapter-fidelity events (recorded verdicts + value provenance).
+    Returns the kernel-schema event lines and the number of recorded denials."""
     trace_events: list = []
     loop = IntentLoop(
         capability_executor=_executor(),
         trace_events=trace_events,
         taint_engine=TaintEngine(),
         admission=PlaneAdmission(session),
-        egress_sinks=frozenset({"slack_post"}),
-        untrusted_sources=frozenset({"web_search"}),
+        egress_sinks=_EGRESS,
+        untrusted_sources=_UNTRUSTED,
     )
     async for _ in loop.run(_scripted_stream(node_id), _envelope(node_id)):
         pass
-    kernel_events = trace_to_kernel(trace_events, node_id)
-    lines = [json.loads(event_to_json_line(e)) for e in kernel_events]
-    for line in lines:
-        _label_denial(line)
+    verdicts = _ordered_verdicts(trace_events)
+    lines = _build_lines(node_id, verdicts)
     denials = sum(1 for line in lines if line.get("verdict") == "deny")
     return lines, denials
-
-
-def _label_denial(line: dict) -> None:
-    """The bridge's denial event names the tool inside the reason string, not as
-    a payload column — lift it out so the timeline box can read the tool name."""
-    payload = line.get("payload") or {}
-    if line.get("kind") == "denial" and "tool" not in payload:
-        match = re.search(r"'([\w.-]+)'", str(payload.get("reason", "")))
-        if match:
-            payload["tool"] = match.group(1)
-            line["payload"] = payload
 
 
 async def spawn_governed_node(
