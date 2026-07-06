@@ -9,10 +9,21 @@ subsystem is always called the **plane service** (`axor_backend.plane`);
 
 | Package | What | Rule that shapes it |
 |---|---|---|
-| `packages/axor-kernel` | **Staging for `axor_core.kernel`**: events schema, desired-state lattice, degradation recompute, replay | Rule 0 = shared code, not a shared package: this merges into axor-core as its pure submodule, then this dir is deleted and imports switch |
-| `packages/axor-proxy` | Observe-only tool proxy | Auth passthrough byte-for-byte; two intervention points only (fault, observation) |
-| `packages/axor-backend` | FastAPI: ingest, control plane (SSE+POST), replay API, GraphStore (Kùzu) | Backend persists and fans out; it never interprets governance — that's the kernel's |
-| `frontend/` | React + TS (Zustand, TanStack Query, Cytoscape) | quiet-until-wrong; TS types generated from kernel Pydantic models |
+| `packages/axor-proxy` | Observe-only tool proxy + a demo governed node (real `axor_core` IntentLoop) | Auth passthrough byte-for-byte; two intervention points only (fault, observation) |
+| `packages/axor-backend` | FastAPI: ingest, plane service (SSE+POST), replay/regression, taint graph, notifications, share/export, auth, EE license | Backend persists and fans out; it never interprets governance — that's the kernel's |
+| `frontend/` | React + TS (Zustand, TanStack Query, hash router; SVG taint graph) | quiet-until-wrong; TS types generated from the kernel event schema |
+
+## What it does
+
+- **Eval** — run a fault scenario through the proxy (or one click with the built-in scripted agent). The caught discrepancy is an **EvidenceCase** (observed reality vs the agent's claim), auto-uploaded, shareable and exportable (revocable link · HTML · PDF).
+- **Replay** — scrub any run; fork counterfactuals ("no exec capability", "this value arrives tainted", "budget cap = N") that re-gate the recorded trace deterministically and show the first divergence. A provenance graph draws each value's derivation; an edge links to the run it came from.
+- **Control** (adapter depth) — live topology of governed nodes: per-node pause / stop / replan / inject / attest / budget-cap and cascade-stop over a subtree. **Spawn a real governed node** (`axor_core` IntentLoop) from the UI to see it heartbeat and obey interventions.
+- **Regression** — pin runs (must-block auto-pins on evidence, must-pass by hand) and replay the corpus under a candidate config: two-sided, deterministic CI.
+- **Config Builder** — declare sinks/policies → a replayable config. Budgets are call/cost caps (per-tool weights) enforced at the loop boundary, in replay parity (§15).
+- **Notifications** — webhook on level-up / heat-threshold / evidence-run / node-stale, with retries + dead-letter.
+- **Auth** (opt-in) — master token + scoped API keys (`read < ingest < operate < admin`). **EE license** — offline Ed25519 verification.
+
+Depth ladder: **demo** (mock tools) → **proxy** (your tools, observe-only) → **adapter** (`axor_core`-governed, unlocks Control). In-app shortcuts light up the deep surfaces without wiring an agent: `load example adapter run` (Replay), `load example corpus` (Regression), `Spawn a governed demo node` (Control).
 
 ## Run it (Docker Compose)
 
@@ -26,7 +37,8 @@ GITHUB_TOKEN=ghp_… docker compose up --build
 
 Open **http://localhost:8080**. The frontend reverse-proxies `/v1` → backend and
 `/axor` → proxy, so the browser talks to one origin; the proxy starts in
-demo-mode (mock tools) and auto-uploads runs to the backend. Kùzu is embedded —
+demo-mode (mock tools) and auto-uploads runs to the backend. The taint graph is
+in-memory by default (a per-tenant embedded Kùzu store is available for hosted) —
 no extra container. For a real deployment set `AXOR_OPERATOR_KEYS` and
 `AXOR_ALLOW_UNSIGNED=0` (see `.env.example`); the `GITHUB_TOKEN` is build-only
 (a BuildKit secret) and never lands in an image layer.
@@ -55,4 +67,6 @@ Existing PyPI packages are **external dependencies**, never workspace members:
 
 Dependency direction is one-way: ecosystem -> never depends on -> platform. Cost accepted: the backend image carries axor-core's full dependency tree.
 
-Specs: `docs/` — UI v0.14 · architecture v0.1 · control-plane protocol v0.2 · monetization v0.1 · implementation plan v0.2. Mockups: `mockups/`.
+Licensing: Apache-2.0, except `packages/axor-backend/src/axor_backend/ee/` (source-visible, commercial — see its `LICENSE`).
+
+Specs: `docs/` — UI v0.14 · architecture v0.1 · control-plane protocol v0.2 · monetization v0.1 · implementation plan v0.1. Mockups: `mockups/`.
