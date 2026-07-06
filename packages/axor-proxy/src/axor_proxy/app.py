@@ -67,6 +67,13 @@ class ProxyState:
         # ASGI app in-process. Defaults to a real loopback client in production.
         self.self_base_url = self_base_url
         self.agent_client = agent_client
+        # Where a spawned governed node uploads its trace and connects its
+        # PlaneClient (heartbeats + desired-state). Kept so the governed-spawn
+        # route can reach the backend directly, not only via the uploader.
+        self.backend_url = backend_url
+        self.ingest_key = ingest_key
+        # Live governed nodes (node_id -> keepalive task) so they are not GC'd.
+        self.governed: dict[str, Any] = {}
 
 
 def create_app(state: ProxyState) -> Starlette:
@@ -258,12 +265,31 @@ def create_app(state: ProxyState) -> Starlette:
             "tools": results,
         })
 
+    async def spawn_governed(request: Request) -> Response:
+        """Spawn a REAL governed node (axor-core IntentLoop): it runs a governed
+        session (recorded taint denial), uploads the adapter-fidelity trace, and
+        stays live on the plane (heartbeats + desired-state) so Control shows it
+        and interventions reach it. Requires --backend-url."""
+        if state.backend_url is None:
+            return JSONResponse(
+                {"error": "no_backend",
+                 "detail": "governed spawn needs the proxy started with --backend-url"},
+                status_code=409,
+            )
+        from axor_proxy.governed import spawn_governed_node
+
+        result = await spawn_governed_node(state.backend_url, state.ingest_key)
+        task = result.pop("_task")
+        state.governed[result["node_id"]] = task
+        return JSONResponse(result)
+
     async def healthz(request: Request) -> Response:
         return JSONResponse({"ok": True, "armed": state.runs.active is not None})
 
     app = Starlette(routes=[
         Route("/axor/healthz", healthz),
         Route("/axor/preflight", preflight),
+        Route("/axor/governed/spawn", spawn_governed, methods=["POST"]),
         Route("/axor/runs", start_run, methods=["POST"]),
         Route("/axor/runs/{run_id}/simulate", simulate, methods=["POST"]),
         Route("/axor/runs/{run_id}/claim", submit_claim, methods=["POST"]),
