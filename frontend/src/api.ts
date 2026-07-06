@@ -254,6 +254,12 @@ export const api = {
       (r) => j<{ stopped: string[]; count: number }>(r),
     ),
 
+  // ── demo: seed adapter-fidelity runs (recorded verdicts + provenance) ──────
+  seedAdapterRuns: () =>
+    af("/v1/demo/seed-adapter-runs", { method: "POST" }).then(
+      (r) => j<{ seeded: string[]; config: Record<string, unknown> }>(r),
+    ),
+
   // ── taint / provenance graph (spec decision 6) ─────────────────────────────
   graphKhop: (focus: string, k = 2, limit = 100) =>
     af(`/v1/graph/khop?focus=${encodeURIComponent(focus)}&k=${k}&limit=${limit}`).then(

@@ -82,6 +82,45 @@ async def test_ingest_folds_graph_and_khop_route(client: httpx.AsyncClient) -> N
     assert edge["run_id"] == "run_g"  # edge → EvidenceCase link
 
 
+async def test_seed_adapter_runs_lights_up_deep_surfaces(
+    client: httpx.AsyncClient,
+) -> None:
+    """The seed makes counterfactual divergence, the taint graph, and two-sided
+    regression all demonstrable in-app with real adapter-fidelity data."""
+    r = await client.post("/v1/demo/seed-adapter-runs")
+    body = r.json()
+    assert set(body["seeded"]) == {"ex_block", "ex_pass"}
+    cfg = body["config"]
+
+    # 1. Golden replay reproduces the recorded taint deny (0 divergence).
+    rep = (await client.post("/v1/replay/ex_block", json={"config": cfg})).json()
+    assert rep["first_divergence"] is None
+    slack = next(s for s in rep["steps"] if s["payload"].get("tool") == "slack_post")
+    assert slack["reevaluated_verdict"] == "deny"
+
+    # 2. Counterfactual (drop bash from the capability table) → divergence.
+    noexec = dict(cfg, allowed_tools=[t for t in cfg["allowed_tools"] if t != "bash"])
+    cf = (await client.post("/v1/replay/ex_block", json={"config": noexec})).json()
+    assert cf["first_divergence"] == 2
+
+    # 3. Taint graph folded the provenance edge.
+    g = (await client.get("/v1/graph/khop", params={"focus": "v_mail", "k": 3})).json()
+    assert {"src": "v_mail", "dst": "v_sum", "run_id": "ex_block"} in g["edges"]
+
+    # 4. Two-sided regression: block held + pass passes → safe.
+    reg = (await client.post("/v1/regression", json={"config": cfg})).json()
+    sides = {row["run_id"]: (row["side"], row["result"]) for row in reg["rows"]}
+    assert sides["ex_block"] == ("must_block", "held")
+    assert sides["ex_pass"] == ("must_pass", "passed")
+    assert reg["safe_to_ship"] is True
+
+    # A config that breaks the legit flow → the must_pass side regresses (teeth).
+    broken = dict(cfg, allowed_tools=[t for t in cfg["allowed_tools"]
+                                      if t != "notes_write"])
+    reg2 = (await client.post("/v1/regression", json={"config": broken})).json()
+    assert reg2["safe_to_ship"] is False
+
+
 async def test_attestation_surface_route(client: httpx.AsyncClient) -> None:
     fact = {
         "fact_id": "att1", "fact_type": "operator_attestation",

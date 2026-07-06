@@ -56,6 +56,14 @@ export default function Regression({ initialConfig }: { initialConfig?: string }
     mutationFn: (config: Record<string, unknown>) => api.regression(config),
   });
 
+  // Seed a two-sided corpus (must-block attack + must-pass legit flow) and drop
+  // its matching config into the editor, so a fresh install can demonstrate the
+  // regression CI with real data instead of an empty corpus.
+  const seed = useMutation({
+    mutationFn: () => api.seedAdapterRuns(),
+    onSuccess: (r) => setRaw(JSON.stringify(r.config, null, 2)),
+  });
+
   const run = () => {
     setParseError(null);
     setOpen(null);
@@ -104,6 +112,14 @@ export default function Regression({ initialConfig }: { initialConfig?: string }
       <div className="flex items-center gap-3 mt-2 mb-8">
         <button onClick={run} disabled={regression.isPending} style={btn({ color: C.steel, fontSize: 12, padding: "8px 14px" })}>
           {regression.isPending ? <Loader2 size={13} className="animate-spin" /> : <Play size={13} />} Run regression
+        </button>
+        <button
+          onClick={() => seed.mutate()}
+          disabled={seed.isPending}
+          title="pins a must-block attack and a must-pass legit flow (adapter-fidelity) so the corpus has both sides"
+          style={btn({ color: C.mut, fontSize: 11, padding: "7px 12px" })}
+        >
+          {seed.isPending ? "seeding…" : "load example corpus"}
         </button>
         {regression.isError && (
           <span style={{ fontFamily: MONO, fontSize: 11, color: C.red }}>

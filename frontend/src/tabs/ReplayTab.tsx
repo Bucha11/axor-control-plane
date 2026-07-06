@@ -2,11 +2,25 @@
 // Wired to /v1/replay/{run_id}; counterfactuals re-evaluate gates over the
 // recorded trace — no model call, fully deterministic.
 import { useEffect, useMemo, useState } from "react";
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, ScrubberPayload, ScrubberStep } from "../api";
 import { navigate } from "../router";
 import { C, MONO, btn, sevColor } from "../theme";
 import TaintGraph from "./TaintGraph";
+
+// A one-click seed of adapter-fidelity runs (recorded verdicts + value
+// provenance) — the trace depth the proxy can't produce, so the counterfactual,
+// the taint graph and two-sided regression can be shown with real data.
+function useSeedExample(onDone?: (blockRunId: string) => void) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () => api.seedAdapterRuns(),
+    onSuccess: async () => {
+      await qc.invalidateQueries({ queryKey: ["runs"] });
+      onDone?.("ex_block");
+    },
+  });
+}
 
 type Cf = "noexec" | "taint";
 
@@ -82,7 +96,14 @@ export default function ReplayTab({ runId: runIdProp, cursor: cursorProp }: { ru
     return <Center msg="loading runs…" />;
   }
   if (!runId) {
-    return <Center msg="No runs yet. Run an experiment from the Eval tab first." />;
+    return (
+      <div style={{ maxWidth: 640, margin: "0 auto" }}>
+        <div style={{ fontFamily: MONO, fontSize: 12.5, color: C.mut, marginBottom: 12 }}>
+          No runs yet. Run an experiment from the Eval tab —
+        </div>
+        <SeedButton label="or load an example adapter run →" />
+      </div>
+    );
   }
 
   const cur = steps[Math.min(cursor, Math.max(steps.length - 1, 0))];
@@ -134,6 +155,7 @@ export default function ReplayTab({ runId: runIdProp, cursor: cursorProp }: { ru
             </option>
           ))}
         </select>
+        <SeedButton label="load example adapter run" compact />
       </div>
 
       <h1 style={{ fontSize: 22, fontWeight: 650, margin: "0 0 20px" }}>
@@ -262,5 +284,22 @@ function Center({ msg }: { msg: string }) {
     <div style={{ maxWidth: 640, margin: "0 auto", fontFamily: MONO, fontSize: 12.5, color: C.mut }}>
       {msg}
     </div>
+  );
+}
+
+function SeedButton({ label, compact }: { label: string; compact?: boolean }) {
+  const seed = useSeedExample((blockRunId) => navigate(`replay/${blockRunId}`));
+  return (
+    <button
+      onClick={() => seed.mutate()}
+      disabled={seed.isPending}
+      title="ingests two adapter-fidelity runs so counterfactual, taint graph and two-sided regression work with real data"
+      style={btn({
+        color: C.steel, borderColor: C.line,
+        fontSize: compact ? 10.5 : 12, padding: compact ? "4px 9px" : "7px 14px",
+      })}
+    >
+      {seed.isPending ? "seeding…" : label}
+    </button>
   );
 }

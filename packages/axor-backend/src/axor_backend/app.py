@@ -178,6 +178,31 @@ def create_app(
             )
         return {"ok": True, "notified": bool(deviations)}
 
+    @app.post("/v1/demo/seed-adapter-runs")
+    async def seed_adapter_runs(request: Request) -> dict:
+        """Ingest two canned adapter-fidelity runs (recorded verdicts + value
+        provenance) so counterfactual divergence, the taint graph, and two-sided
+        regression can be demonstrated in-app — the proxy cannot produce this
+        trace depth. Idempotent: re-seeding overwrites the same run ids."""
+        from axor_backend import demo
+
+        store: Store = request.app.state.store
+        graph = request.app.state.graph
+        for run_id, node, events, evidence, pin_side in (
+            ("ex_block", demo.EX_BLOCK_NODE, demo.EX_BLOCK_EVENTS,
+             demo.EX_BLOCK_EVIDENCE, "must_block"),
+            ("ex_pass", demo.EX_PASS_NODE, demo.EX_PASS_EVENTS, [], "must_pass"),
+        ):
+            await store.upsert_run(run_id, node, "adapter-demo", _now())
+            await store.ingest_events(run_id, node, events, f"seed-{run_id}")
+            await register_trace_derivations(graph, run_id, events)
+            if evidence:
+                await store.set_evidence(run_id, evidence)
+            # Pin both corpus sides explicitly (idempotent) — set_evidence's
+            # auto-pin lives in the HTTP route, which this seed bypasses.
+            await store.pin(run_id, pin_side, "adapter-demo")
+        return {"seeded": ["ex_block", "ex_pass"], "config": demo.EX_CONFIG}
+
     @app.get("/v1/runs")
     async def list_runs(request: Request) -> list[dict]:
         return await request.app.state.store.list_runs()
