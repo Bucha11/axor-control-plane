@@ -89,6 +89,7 @@ function ControlBody({ focusNode, testBench }: { focusNode?: string; testBench: 
   const [sel, setSel] = useState<string | null>(focusNode ?? null);
   const [more, setMore] = useState(false);
   const [cmdError, setCmdError] = useState<string | null>(null);
+  const [budgetInput, setBudgetInput] = useState("");
 
   useEffect(() => {
     if (focusNode) setSel(focusNode);
@@ -235,6 +236,42 @@ function ControlBody({ focusNode, testBench }: { focusNode?: string; testBench: 
             </span>
           </div>
 
+          {/* Budget cap — a first-class control (spec §15). Decrease-only over
+              the plane: the adapter refuses any widening, so this can set an
+              initial cap or tighten it, never raise it past the current one. */}
+          <div className="flex items-center gap-2 mb-3" style={{ fontFamily: MONO, fontSize: 11, color: C.mut }}>
+            <span>budget cap</span>
+            <span style={{ color: C.text }}>
+              {typeof desired?.state.budget_cap_calls === "number"
+                ? `${desired.state.budget_cap_calls} calls`
+                : "unlimited"}
+            </span>
+            <input
+              type="number"
+              min={0}
+              value={budgetInput}
+              onChange={(e) => setBudgetInput(e.target.value)}
+              placeholder="set / lower"
+              disabled={stopped || command.isPending}
+              style={{ width: 92, background: C.bg, border: `1px solid ${C.line}`, borderRadius: 4, color: C.text, fontFamily: MONO, fontSize: 11, padding: "4px 7px", outline: "none" }}
+            />
+            <button
+              onClick={() => {
+                const n = parseInt(budgetInput, 10);
+                if (Number.isNaN(n) || n < 0) { setCmdError("cap must be a non-negative integer"); return; }
+                const cur = typeof desired?.state.budget_cap_calls === "number" ? desired.state.budget_cap_calls : null;
+                if (cur != null && n > cur) { setCmdError(`can only lower the cap — ${n} > current ${cur} (the adapter refuses widening)`); return; }
+                send({ budget_cap_calls: n });
+                setBudgetInput("");
+              }}
+              disabled={stopped || command.isPending || budgetInput === ""}
+              title="set an initial cap, or tighten it — raising past the current cap is refused by the adapter"
+              style={btn({ color: (stopped || budgetInput === "") ? C.dim : C.steel, borderColor: C.line, fontSize: 11, padding: "4px 10px" })}
+            >
+              <Gauge size={12} /> apply
+            </button>
+          </div>
+
           <div className="flex gap-2">
             <button
               onClick={() => send({ paused: !paused })}
@@ -290,24 +327,6 @@ function ControlBody({ focusNode, testBench }: { focusNode?: string; testBench: 
                 style={btn({ color: stopped ? C.dim : C.mut, fontSize: 11, padding: "6px 10px", opacity: stopped ? 0.6 : 1 })}
               >
                 <GitBranch size={12} /> Replan
-              </button>
-              <button
-                onClick={() => {
-                  const cur = typeof desired?.state.budget_cap_calls === "number"
-                    ? (desired.state.budget_cap_calls as number) : null;
-                  const input = window.prompt(
-                    `Lower the budget call cap${cur != null ? ` (currently ${cur})` : ""} — decrease-only:`,
-                  );
-                  if (input == null) return;
-                  const n = parseInt(input, 10);
-                  if (Number.isNaN(n) || n < 0) { setCmdError("cap must be a non-negative integer"); return; }
-                  send({ budget_cap_calls: n });
-                }}
-                disabled={stopped || command.isPending}
-                title="lower the tool-call budget — the adapter rejects any widening"
-                style={btn({ color: stopped ? C.dim : C.mut, fontSize: 11, padding: "6px 10px", opacity: stopped ? 0.6 : 1 })}
-              >
-                <Gauge size={12} /> Lower budget
               </button>
               <button
                 onClick={() => {
