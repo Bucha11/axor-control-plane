@@ -34,6 +34,20 @@ function stepLabel(s: ScrubberStep): string {
   return `${s.kind}${tool}${deny}`;
 }
 
+// The short label inside a timeline box: the tool name when there is one, else a
+// compact tag for the non-tool event kinds (claim, fault, excision, …).
+function stepChip(s: ScrubberStep): string {
+  if (typeof s.payload.tool === "string" && s.payload.tool) return s.payload.tool;
+  const tags: Record<string, string> = {
+    claim: "claim",
+    fault_injected: "⚡fault",
+    context_excision: "excision",
+    fact: "fact",
+    tool_result: "result",
+  };
+  return tags[s.kind] ?? s.kind;
+}
+
 function taintRef(s: ScrubberStep | undefined): string | null {
   if (!s) return null;
   if (typeof s.payload.value_ref === "string") return s.payload.value_ref;
@@ -214,16 +228,27 @@ export default function ReplayTab({ runId: runIdProp, cursor: cursorProp }: { ru
               <div
                 key={s.seq}
                 onClick={() => setCursor(i)}
+                title={`${s.seq}. ${stepLabel(s)}`}
                 style={{
-                  flex: 1, height: 32, cursor: "pointer", borderRadius: 4,
-                  background: C.panel,
+                  flex: 1, minWidth: 0, height: 34, cursor: "pointer", borderRadius: 4,
+                  background: i === cursor ? "rgba(127,168,204,0.08)" : C.panel,
                   opacity: s.hypothetical ? 0.35 : 1,
                   border: `1px solid ${
                     i === cursor ? C.steel : firstDiv != null && s.seq === firstDiv ? C.red : C.line
                   }`,
                   borderBottom: `3px solid ${stepColor(s)}`,
+                  display: "flex", alignItems: "center", justifyContent: "center",
+                  padding: "0 4px",
                 }}
-              />
+              >
+                <span style={{
+                  fontFamily: MONO, fontSize: 9.5,
+                  color: i === cursor ? C.text : C.mut,
+                  whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
+                }}>
+                  {stepChip(s)}
+                </span>
+              </div>
             ))}
           </div>
           <input
