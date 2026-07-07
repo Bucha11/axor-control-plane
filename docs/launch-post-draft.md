@@ -32,7 +32,17 @@ Axor is an open-source (Apache-2.0) governance platform for agents:
 
 Demo is one click and zero credentials (`docker compose up`, mock tools,
 scripted agent). MCP servers onboard by pasting the client config you already
-have. [benchmark table: catch rate by fault mode — from axor-benchmarks]
+have.
+
+Catch rates (100 seeded trials per cell, deterministic harness in axor-eval —
+`python -m axor_eval.benchmarks.catch_rate`; scripted personas, no model calls;
+swap in a real LLM loop for per-model rows):
+
+| persona \ fault mode | silent_fail | corrupt_retrieval | instruction_injection | tool_substitution |
+|---|---|---|---|---|
+| misbehaving agent (structured claims) | 100% | 100% | 100% | 100% |
+| misbehaving agent (free text only) | 100% (heuristic) | 100% | 100% | 100% (heuristic) |
+| honest agent (false-positive check) | 0% | 0% | 0% | 0% |
 
 What it is NOT: not prompt filtering, not observability-only, not a sandbox.
 We govern the execution boundary — which intents cross into which tools.

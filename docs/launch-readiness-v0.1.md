@@ -46,7 +46,7 @@ Status legend: ☐ open · ◐ partial exists · ☑ done.
 
 | P | Item | Done-when | Status |
 |---|---|---|---|
-| P0 | **Benchmark harness**: catch-rate table (fault mode × agent framework × model) using axor-eval scenarios; deterministic, scripted, in `axor-benchmarks`. | One command reproduces the table. | ◐ |
+| P0 | **Benchmark harness**: catch-rate table (fault mode × agent framework × model) using axor-eval scenarios; deterministic, scripted, in `axor-benchmarks`. | One command reproduces the table. | ☑ (lives in axor-eval `benchmarks/` — in-scope Apache-2.0 home; `--trials N --write` reproduces BENCHMARKS.md; per-model rows = swap a persona for an LLM loop) |
 | P0 | **Artifact package**: ecosystem-only (Apache-2.0, per monetization §7 the artifact ships from ecosystem packages, not the platform), anonymized variant for double-blind. | | ◐ |
 | P1 | Venue pick + submission calendar (target: workshop deadline first, main venue after). | | ☐ |
 
