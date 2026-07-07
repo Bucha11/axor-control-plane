@@ -26,6 +26,7 @@ from starlette.responses import JSONResponse, Response
 from starlette.routing import Mount, Route
 
 from axor_proxy.agent import ScriptedAgent, default_claim, default_script
+from axor_proxy.mcp import McpError, discover, sniff_rpc_call
 from axor_proxy.mock_tools import mock_tools_app
 from axor_proxy.runs import RunManager, evidence_to_dict, sha256_hex
 from axor_proxy.upload import BackendUploader
@@ -94,17 +95,21 @@ def create_app(state: ProxyState) -> Starlette:
             )
 
         body = await request.body()
-        await state.runs.record(
-            run,
-            EventKind.TOOL_CALL,
-            {
-                "tool": tool,
-                "path": path,
-                "method": request.method,
-                "request_bytes": len(body),
-                "request_sha256": sha256_hex(body) if body else None,
-            },
-        )
+        call_payload: dict[str, Any] = {
+            "tool": tool,
+            "path": path,
+            "method": request.method,
+            "request_bytes": len(body),
+            "request_sha256": sha256_hex(body) if body else None,
+        }
+        # MCP granularity: a JSON-RPC tools/call body names the inner tool —
+        # record `server:tool` instead of one opaque endpoint. Observation-only.
+        rpc = sniff_rpc_call(body)
+        if rpc is not None:
+            call_payload["rpc"] = rpc
+            if rpc.get("tool"):
+                call_payload["tool"] = f"{tool}:{rpc['tool']}"
+        await state.runs.record(run, EventKind.TOOL_CALL, call_payload)
 
         spec = state.runs.fault_for_call(run, tool)
         upstream_result: Any | None = None
@@ -300,12 +305,50 @@ def create_app(state: ProxyState) -> Starlette:
         task.add_done_callback(lambda _t: state.governed.pop(node_id, None))
         return JSONResponse(result)
 
+    async def mcp_discover(request: Request) -> Response:
+        """Onboarding: point us at an HTTP MCP server → we handshake, list its
+        tools, and register the server as a proxied tool endpoint, so
+        /t/{name}/ fronts it immediately (auth passthrough, faults,
+        observation — like any other tool). stdio servers are out of scope
+        here and rejected honestly."""
+        try:
+            payload = await request.json()
+        except json.JSONDecodeError:
+            return JSONResponse({"error": "malformed_json"}, status_code=400)
+        url = payload.get("url")
+        if not isinstance(url, str) or not url:
+            return JSONResponse(
+                {"error": "url_required",
+                 "detail": "POST {url, name?} — url of an HTTP MCP server. "
+                           "stdio servers need a local gateway (roadmap)."},
+                status_code=400,
+            )
+        try:
+            info = await discover(url, state.client)
+        except McpError as exc:
+            return JSONResponse(
+                {"error": "mcp_discovery_failed", "detail": str(exc)},
+                status_code=502,
+            )
+        name = payload.get("name") or info["server"]
+        # Registering under an existing name repoints it — explicit, visible in
+        # the response; the tool table is dev-scoped runtime state.
+        state.tools[name] = url
+        return JSONResponse({
+            "registered": name,
+            "proxied_base": f"/t/{name}/",
+            "server": info["server"],
+            "protocol_version": info["protocol_version"],
+            "tools": info["tools"],
+        })
+
     async def healthz(request: Request) -> Response:
         return JSONResponse({"ok": True, "armed": state.runs.active is not None})
 
     app = Starlette(routes=[
         Route("/axor/healthz", healthz),
         Route("/axor/preflight", preflight),
+        Route("/axor/mcp/discover", mcp_discover, methods=["POST"]),
         Route("/axor/governed/spawn", spawn_governed, methods=["POST"]),
         Route("/axor/runs", start_run, methods=["POST"]),
         Route("/axor/runs/{run_id}/simulate", simulate, methods=["POST"]),

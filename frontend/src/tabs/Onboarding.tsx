@@ -23,12 +23,74 @@ const TOOLS: Tool[] = [
 
 type RowState = "idle" | "testing" | "ok" | "fail";
 
+// Parse either a full client config ({"mcpServers": {name: {url}}}) — the shape
+// Claude Desktop / Cursor use — or a bare server URL. stdio servers (command:)
+// are reported honestly as unsupported here.
+function parseMcpConfig(raw: string): { servers: { name?: string; url: string }[]; stdio: string[] } {
+  const trimmed = raw.trim();
+  if (/^https?:\/\//.test(trimmed)) return { servers: [{ url: trimmed }], stdio: [] };
+  const parsed = JSON.parse(trimmed) as Record<string, unknown>;
+  const entries = (parsed.mcpServers ?? parsed) as Record<string, Record<string, unknown>>;
+  const servers: { name?: string; url: string }[] = [];
+  const stdio: string[] = [];
+  for (const [name, spec] of Object.entries(entries)) {
+    if (typeof spec !== "object" || spec === null) continue;
+    const url = (spec.url ?? spec.serverUrl) as string | undefined;
+    if (typeof url === "string" && url) servers.push({ name, url });
+    else if ("command" in spec) stdio.push(name);
+  }
+  return { servers, stdio };
+}
+
 export default function Onboarding() {
   const [step, setStep] = useState(1);
   const [tools, setTools] = useState<Tool[]>([]);
   const [copied, setCopied] = useState<string | null>(null);
   const [draftName, setDraftName] = useState("");
   const [draftUrl, setDraftUrl] = useState("");
+  const [mcpRaw, setMcpRaw] = useState("");
+  const [mcpBusy, setMcpBusy] = useState(false);
+  const [mcpNote, setMcpNote] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
+  const [mcpTools, setMcpTools] = useState<Record<string, string[]>>({});
+
+  const discoverMcp = async (): Promise<void> => {
+    setMcpBusy(true);
+    setMcpNote(null);
+    try {
+      const { servers, stdio } = parseMcpConfig(mcpRaw);
+      if (servers.length === 0) {
+        setMcpNote({
+          kind: "err",
+          text: stdio.length
+            ? `only stdio servers found (${stdio.join(", ")}) — stdio needs a local gateway (roadmap); paste an HTTP MCP url`
+            : "no MCP servers found — paste {\"mcpServers\": {…}} or an http(s) url",
+        });
+        return;
+      }
+      const added: Tool[] = [];
+      const found: Record<string, string[]> = {};
+      for (const s of servers) {
+        const info = await api.mcpDiscover(s.url, s.name);
+        added.push({ name: info.registered, url: s.url });
+        found[info.registered] = info.tools.map((t) => t.name);
+      }
+      setTools((prev) => [
+        ...prev.filter((t) => !added.some((a) => a.name === t.name)),
+        ...added,
+      ]);
+      setMcpTools((prev) => ({ ...prev, ...found }));
+      const total = Object.values(found).reduce((n, ts) => n + ts.length, 0);
+      setMcpNote({
+        kind: "ok",
+        text: `registered ${added.length} MCP server${added.length === 1 ? "" : "s"} · ${total} tools discovered${stdio.length ? ` · skipped stdio: ${stdio.join(", ")}` : ""}`,
+      });
+      setMcpRaw("");
+    } catch (e) {
+      setMcpNote({ kind: "err", text: e instanceof Error ? e.message : String(e) });
+    } finally {
+      setMcpBusy(false);
+    }
+  };
   // Adapter path is chosen up front (spec section 2, Axis A): it unlocks the
   // Control plane, taint graph and probe health. Proxy is the default depth.
   const [depth, setDepth] = useState<Extract<ConnectionMode, "proxy" | "adapter">>("proxy");
@@ -102,7 +164,39 @@ export default function Onboarding() {
       {step === 1 && (
         <>
           <h1 style={{ fontSize: 22, fontWeight: 650, margin: "0 0 4px" }}>What tools does your agent use?</h1>
-          <div style={{ fontFamily: MONO, fontSize: 11.5, color: C.mut, marginBottom: 20 }}>The proxy will sit in front of these. Auth passes through untouched.</div>
+          <div style={{ fontFamily: MONO, fontSize: 11.5, color: C.mut, marginBottom: 14 }}>The proxy will sit in front of these. Auth passes through untouched.</div>
+
+          {/* MCP-first path: paste the client config you already have. */}
+          <div className="p-3 mb-4" style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 8 }}>
+            <div style={{ fontSize: 10, fontFamily: MONO, color: C.dim, letterSpacing: "0.1em", marginBottom: 8 }}>
+              MCP · PASTE YOUR CLIENT CONFIG
+            </div>
+            <textarea
+              value={mcpRaw}
+              onChange={(e) => setMcpRaw(e.target.value)}
+              rows={3}
+              spellCheck={false}
+              placeholder={'{"mcpServers": {"docs": {"url": "https://mcp.example/sse"}}}  ·  or a bare http(s) url'}
+              className="w-full mb-2"
+              style={{ background: C.bg, border: `1px solid ${C.line}`, borderRadius: 5, color: C.text, fontFamily: MONO, fontSize: 11, padding: 8, resize: "vertical", outline: "none" }}
+            />
+            <div className="flex items-center gap-3">
+              <Tooltip content="We handshake with each HTTP MCP server (initialize → tools/list), list its tools, and register it as a proxied endpoint — your agent then points at /t/{server}/ instead.">
+                <button
+                  onClick={() => void discoverMcp()}
+                  disabled={mcpBusy || !mcpRaw.trim()}
+                  style={btn({ color: mcpRaw.trim() ? C.steel : C.dim, borderColor: mcpRaw.trim() ? C.steel : C.line, fontSize: 12 })}
+                >
+                  <Plug size={13} /> {mcpBusy ? "discovering…" : "Discover MCP tools"}
+                </button>
+              </Tooltip>
+              {mcpNote && (
+                <span style={{ fontFamily: MONO, fontSize: 11, color: mcpNote.kind === "ok" ? C.green : C.red }}>
+                  {mcpNote.text}
+                </span>
+              )}
+            </div>
+          </div>
           {tools.length === 0 ? (
             <div className="p-8 flex flex-col items-center gap-3" style={{ background: C.panel, border: `1px dashed ${C.line}`, borderRadius: 8 }}>
               <Tooltip content="Fills in a realistic 3-tool sample (search / report / query) so you can walk the flow without typing endpoints.">
@@ -119,9 +213,19 @@ export default function Onboarding() {
             <>
               <div style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 8 }}>
                 {tools.map((t, i) => (
-                  <div key={t.name} className="flex items-center gap-3 px-4 py-3" style={{ borderTop: i ? `1px solid ${C.line}` : "none" }}>
-                    <span style={{ fontFamily: MONO, fontSize: 13, color: C.text, width: 130 }}>{t.name}</span>
-                    <span style={{ fontFamily: MONO, fontSize: 11, color: C.dim, flex: 1 }}>{t.url}</span>
+                  <div key={t.name} className="px-4 py-3" style={{ borderTop: i ? `1px solid ${C.line}` : "none" }}>
+                    <div className="flex items-center gap-3">
+                      <span style={{ fontFamily: MONO, fontSize: 13, color: C.text, width: 130 }}>{t.name}</span>
+                      <span style={{ fontFamily: MONO, fontSize: 11, color: C.dim, flex: 1 }}>{t.url}</span>
+                      {mcpTools[t.name] && (
+                        <span style={{ fontFamily: MONO, fontSize: 10, color: C.steel }}>MCP</span>
+                      )}
+                    </div>
+                    {mcpTools[t.name] && (
+                      <div style={{ fontFamily: MONO, fontSize: 10.5, color: C.mut, marginTop: 4, paddingLeft: 0 }}>
+                        tools: {mcpTools[t.name].join(" · ")}
+                      </div>
+                    )}
                   </div>
                 ))}
                 <div className="px-4 py-3" style={{ borderTop: `1px solid ${C.line}` }}>{addRow}</div>

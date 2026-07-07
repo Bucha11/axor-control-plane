@@ -5,6 +5,23 @@ import { expect, test } from "@playwright/test";
 import { goHash } from "./helpers";
 
 test.describe("onboarding", () => {
+  test("pasting an MCP config discovers and registers the server's tools", async ({ page }) => {
+    await goHash(page, "get-started");
+    // The built-in mock MCP server — a real handshake end-to-end, zero creds.
+    await page
+      .getByPlaceholder(/mcpServers/)
+      .fill('{"mcpServers": {"demo_mcp": {"url": "http://127.0.0.1:8401/mock/mcp"}}}');
+    await page.getByRole("button", { name: /Discover MCP tools/ }).click();
+    await expect(page.getByText(/registered 1 MCP server · 2 tools discovered/)).toBeVisible();
+    // The server lands in the declared-tools list with its tool inventory.
+    await expect(page.getByText("demo_mcp", { exact: true })).toBeVisible();
+    await expect(page.getByText(/tools: web_search · get_weather/)).toBeVisible();
+    // stdio-only config is refused honestly.
+    await page.getByPlaceholder(/mcpServers/).fill('{"mcpServers": {"local": {"command": "npx"}}}');
+    await page.getByRole("button", { name: /Discover MCP tools/ }).click();
+    await expect(page.getByText(/stdio needs a local gateway/)).toBeVisible();
+  });
+
   test("walks tools → point agent → connection check", async ({ page }) => {
     await goHash(page, "get-started");
     await expect(page.getByRole("heading", { name: "What tools does your agent use?" })).toBeVisible();

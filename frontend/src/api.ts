@@ -199,6 +199,17 @@ export const api = {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ config }),
     }).then((r) => j<RegressionReport>(r)),
+  // ── MCP onboarding: discover an HTTP MCP server's tools + register it ──────
+  mcpDiscover: (url: string, name?: string) =>
+    af("/axor/mcp/discover", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ url, ...(name ? { name } : {}) }),
+    }).then((r) =>
+      j<{ registered: string; proxied_base: string; server: string;
+          protocol_version: string;
+          tools: { name: string; description: string }[] }>(r),
+    ),
   proxyPreflight: () =>
     af("/axor/preflight").then((r) =>
       j<{ all_ok: boolean; tools: Record<string, { ok: boolean; status?: number; error?: string }> }>(r),
