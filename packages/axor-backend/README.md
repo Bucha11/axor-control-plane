@@ -24,4 +24,8 @@ Modules:
 Env: `AXOR_DATABASE_URL`, `AXOR_API_TOKEN`, `AXOR_OPERATOR_KEYS` (JSON op→hex),
 `AXOR_ALLOW_UNSIGNED`, `AXOR_VENDOR_PUBKEY`, `AXOR_STALE_AFTER`.
 
-Tests: `uv run pytest packages/axor-backend`.
+Tests: `uv run pytest packages/axor-backend`. In-process suites use httpx
+ASGITransport; `tests/e2e/` (marker `e2e`) boots the real backend + proxy as
+subprocesses and drives them over HTTP/SSE — cross-service upload, live audit &
+desired streams, webhook delivery, auth enforcement, and process-restart
+durability. Run only those with `-m e2e`, or skip them with `-m 'not e2e'`.

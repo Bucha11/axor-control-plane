@@ -28,3 +28,6 @@ select = ["E", "F", "I", "UP", "ASYNC", "ANN"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["packages"]
+markers = [
+  "e2e: end-to-end tests that boot the real backend/proxy as subprocesses and drive them over HTTP (slower; deselect with -m 'not e2e')",
+]
