@@ -4,10 +4,11 @@
 // are addressable. Quiet-until-wrong holds: three primary tabs, everything else
 // behind "more", and adapter-only surfaces greyed with the honest upsell.
 import { useEffect } from "react";
-import { Circle, Settings as SettingsIcon } from "lucide-react";
+import { Circle, GraduationCap, Settings as SettingsIcon } from "lucide-react";
 import { C, MONO } from "./theme";
 import { navigate, useRoute } from "./router";
 import { MODE_LABEL, isConnected, useApp } from "./store";
+import Tooltip from "./components/Tooltip";
 import Home from "./tabs/Home";
 import Experiment from "./tabs/Experiment";
 import ControlTab from "./tabs/ControlTab";
@@ -74,7 +75,10 @@ export default function App() {
             <MoreMenu activeKey={key} />
           </div>
         </div>
-        <ConnectionBadge />
+        <div className="flex items-center gap-3">
+          <LearnToggle />
+          <ConnectionBadge />
+        </div>
       </div>
 
       {key === "home" && <Home />}
@@ -123,6 +127,36 @@ function MoreMenu({ activeKey }: { activeKey: string }) {
         </div>
       </details>
     </div>
+  );
+}
+
+function LearnToggle() {
+  const learn = useApp((s) => s.learnMode);
+  const setLearn = useApp((s) => s.setLearnMode);
+  return (
+    <Tooltip
+      content={
+        learn
+          ? "Learn mode is on — coach notes explain each surface. Click to turn off."
+          : "Turn on Learn mode: concise coach notes appear on each screen to explain what it does."
+      }
+      side="bottom"
+    >
+      <button
+        onClick={() => setLearn(!learn)}
+        aria-pressed={learn}
+        aria-label="toggle learn mode"
+        style={{
+          display: "flex", alignItems: "center", gap: 5,
+          background: learn ? "rgba(127,168,204,0.12)" : "none",
+          border: `1px solid ${learn ? C.steel : C.line}`, borderRadius: 20,
+          padding: "4px 10px", cursor: "pointer",
+          color: learn ? C.steel : C.mut, fontFamily: MONO, fontSize: 10.5,
+        }}
+      >
+        <GraduationCap size={12} /> learn
+      </button>
+    </Tooltip>
   );
 }
 

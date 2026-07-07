@@ -7,6 +7,8 @@ import { api, NodeInfo } from "../api";
 import { isAdapter, useApp } from "../store";
 import { C, MONO, btn } from "../theme";
 import Locked from "../components/Locked";
+import Coach from "../components/Coach";
+import Tooltip from "../components/Tooltip";
 
 const REFETCH_MS = 5000;
 
@@ -32,14 +34,15 @@ function SpawnGoverned({ switchToAdapter }: { switchToAdapter?: boolean }) {
   });
   return (
     <div className="mt-3">
-      <button
-        onClick={() => spawn.mutate()}
-        disabled={spawn.isPending}
-        title="runs a real axor-core governed node (IntentLoop) and connects it to the plane"
-        style={btn({ color: C.bg, background: C.green, border: `1px solid ${C.green}`, fontSize: 12, fontWeight: 700, padding: "8px 14px" })}
-      >
-        {spawn.isPending ? "spawning…" : "Spawn a governed demo node"}
-      </button>
+      <Tooltip content="Starts a real axor-core governed agent (an IntentLoop) on the proxy and connects it to the plane — so you can watch a live node heartbeat and obey your interventions without wiring your own.">
+        <button
+          onClick={() => spawn.mutate()}
+          disabled={spawn.isPending}
+          style={btn({ color: C.bg, background: C.green, border: `1px solid ${C.green}`, fontSize: 12, fontWeight: 700, padding: "8px 14px" })}
+        >
+          {spawn.isPending ? "spawning…" : "Spawn a governed demo node"}
+        </button>
+      </Tooltip>
       {err && (
         <div style={{ fontFamily: MONO, fontSize: 11, color: C.red, marginTop: 8 }}>
           {err} — is the proxy running with a backend URL?
@@ -165,6 +168,13 @@ function ControlBody({ focusNode, testBench }: { focusNode?: string; testBench: 
 
   return (
     <div style={{ maxWidth: 640, margin: "0 auto" }}>
+      <Coach id="control" title="Control — operate governed agents live">
+        Each row is a live governed agent (a node). Click one to open its panel:{" "}
+        <span style={{ color: C.text }}>desired</span> is what you've commanded,{" "}
+        <span style={{ color: C.text }}>reported</span> is what the node has applied —
+        a gap means a command is still in flight. Pause, cap its budget, or stop it;
+        interventions travel over the plane and the node obeys on its next turn.
+      </Coach>
       <h1 style={{ fontSize: 22, fontWeight: 650, margin: "0 0 4px" }}>
         {anyHot ? <>One agent needs attention.</> : <>All agents healthy.</>}
       </h1>
@@ -255,38 +265,43 @@ function ControlBody({ focusNode, testBench }: { focusNode?: string; testBench: 
               disabled={stopped || command.isPending}
               style={{ width: 92, background: C.bg, border: `1px solid ${C.line}`, borderRadius: 4, color: C.text, fontFamily: MONO, fontSize: 11, padding: "4px 7px", outline: "none" }}
             />
-            <button
-              onClick={() => {
-                const n = parseInt(budgetInput, 10);
-                if (Number.isNaN(n) || n < 0) { setCmdError("cap must be a non-negative integer"); return; }
-                const cur = typeof desired?.state.budget_cap_calls === "number" ? desired.state.budget_cap_calls : null;
-                if (cur != null && n > cur) { setCmdError(`can only lower the cap — ${n} > current ${cur} (the adapter refuses widening)`); return; }
-                send({ budget_cap_calls: n });
-                setBudgetInput("");
-              }}
-              disabled={stopped || command.isPending || budgetInput === ""}
-              title="set an initial cap, or tighten it — raising past the current cap is refused by the adapter"
-              style={btn({ color: (stopped || budgetInput === "") ? C.dim : C.steel, borderColor: C.line, fontSize: 11, padding: "4px 10px" })}
-            >
-              <Gauge size={12} /> apply
-            </button>
+            <Tooltip content="Cap how many tool calls this agent may still make. You can set a cap or tighten it — raising it past the current cap is refused by the adapter (decrease-only).">
+              <button
+                onClick={() => {
+                  const n = parseInt(budgetInput, 10);
+                  if (Number.isNaN(n) || n < 0) { setCmdError("cap must be a non-negative integer"); return; }
+                  const cur = typeof desired?.state.budget_cap_calls === "number" ? desired.state.budget_cap_calls : null;
+                  if (cur != null && n > cur) { setCmdError(`can only lower the cap — ${n} > current ${cur} (the adapter refuses widening)`); return; }
+                  send({ budget_cap_calls: n });
+                  setBudgetInput("");
+                }}
+                disabled={stopped || command.isPending || budgetInput === ""}
+                style={btn({ color: (stopped || budgetInput === "") ? C.dim : C.steel, borderColor: C.line, fontSize: 11, padding: "4px 10px" })}
+              >
+                <Gauge size={12} /> apply
+              </button>
+            </Tooltip>
           </div>
 
           <div className="flex gap-2">
-            <button
-              onClick={() => send({ paused: !paused })}
-              disabled={stopped || command.isPending}
-              style={btn({
-                background: C.bg,
-                color: stopped ? C.dim : C.text,
-                fontSize: 12,
-                padding: "7px 14px",
-                cursor: stopped ? "default" : "pointer",
-                opacity: stopped ? 0.5 : 1,
-              })}
-            >
-              {paused ? <Play size={13} /> : <Pause size={13} />} {paused ? "Resume" : "Pause"}
-            </button>
+            <Tooltip content={paused
+              ? "Let the agent resume acting from where it paused."
+              : "Hold the agent before its next turn — no work is lost; Resume continues it."}>
+              <button
+                onClick={() => send({ paused: !paused })}
+                disabled={stopped || command.isPending}
+                style={btn({
+                  background: C.bg,
+                  color: stopped ? C.dim : C.text,
+                  fontSize: 12,
+                  padding: "7px 14px",
+                  cursor: stopped ? "default" : "pointer",
+                  opacity: stopped ? 0.5 : 1,
+                })}
+              >
+                {paused ? <Play size={13} /> : <Pause size={13} />} {paused ? "Resume" : "Pause"}
+              </button>
+            </Tooltip>
             <button
               onClick={() => setMore(!more)}
               style={{ background: "none", border: "none", color: C.mut, fontFamily: MONO, fontSize: 12, cursor: "pointer" }}
@@ -297,75 +312,83 @@ function ControlBody({ focusNode, testBench }: { focusNode?: string; testBench: 
 
           {more && (
             <div className="flex gap-2 mt-2 flex-wrap">
-              <button
-                onClick={() => send({ stopped: true })}
-                disabled={stopped || command.isPending}
-                style={btn({ color: stopped ? C.dim : C.mut, fontSize: 11, padding: "6px 10px" })}
-              >
-                <Square size={12} /> Stop
-              </button>
-              <button
-                onClick={() => {
-                  if (!node) return;
-                  cascade.mutate(node.node_id);
-                }}
-                disabled={cascade.isPending}
-                title="stop this node and its whole subtree (cascade)"
-                style={btn({ color: C.mut, fontSize: 11, padding: "6px 10px" })}
-              >
-                <Square size={12} /> Cascade stop
-              </button>
-              <button
-                onClick={() => {
-                  const id = `rp_${Date.now()}`;
-                  const reason = window.prompt("Replan — reason for the operator record:");
-                  if (reason == null) return;
-                  send({ replan: { id, reason, operator: "op_ui" } });
-                }}
-                disabled={stopped || command.isPending}
-                title="ask the agent to drop its current plan and reconsider — recorded"
-                style={btn({ color: stopped ? C.dim : C.mut, fontSize: 11, padding: "6px 10px", opacity: stopped ? 0.6 : 1 })}
-              >
-                <GitBranch size={12} /> Replan
-              </button>
-              <button
-                onClick={() => {
-                  if (!node) return;
-                  const text = window.prompt("Injection text (test-bench only) — inserted next turn:");
-                  if (!text) return;
-                  const reason = window.prompt("Reason (recorded):") ?? "";
-                  send({
-                    pending_injection: {
-                      id: `inj_${Date.now()}`, text, reason, operator: "op_ui",
-                    },
-                  });
-                }}
-                disabled={!testBench || stopped || command.isPending}
-                title={!testBench ? "available on a test-bench connection (Settings)" : "insert an injection next turn — run is marked intervened"}
-                style={btn({ color: (!testBench || stopped) ? C.dim : C.mut, fontSize: 11, padding: "6px 10px", cursor: (!testBench || stopped) ? "default" : "pointer", opacity: (!testBench || stopped) ? 0.6 : 1 })}
-              >
-                <Syringe size={12} /> Inject next turn
-              </button>
-              <button
-                onClick={() => {
-                  if (!node) return;
-                  const reason = window.prompt("Attestation reason (required — recorded, append-only):");
-                  if (!reason) { if (reason === "") setCmdError("attestation requires a reason"); return; }
-                  attest.mutate({
-                    nodeId: node.node_id,
-                    fact: {
-                      fact_id: `att_${Date.now()}`,
-                      fact_type: "operator_attestation",
-                      reason, operator: "op_ui",
-                    },
-                  });
-                }}
-                disabled={attest.isPending}
-                title="attest this branch — an append-only reputation event with a required reason"
-                style={btn({ color: C.mut, fontSize: 11, padding: "6px 10px" })}
-              >
-                <Shield size={12} /> Attest branch
-              </button>
+              <Tooltip content="Stop this one agent for good — it finishes no further turns.">
+                <button
+                  onClick={() => send({ stopped: true })}
+                  disabled={stopped || command.isPending}
+                  style={btn({ color: stopped ? C.dim : C.mut, fontSize: 11, padding: "6px 10px" })}
+                >
+                  <Square size={12} /> Stop
+                </button>
+              </Tooltip>
+              <Tooltip content="Stop this node AND every agent it spawned (its whole subtree) — the blast-radius kill switch.">
+                <button
+                  onClick={() => {
+                    if (!node) return;
+                    cascade.mutate(node.node_id);
+                  }}
+                  disabled={cascade.isPending}
+                  style={btn({ color: C.mut, fontSize: 11, padding: "6px 10px" })}
+                >
+                  <Square size={12} /> Cascade stop
+                </button>
+              </Tooltip>
+              <Tooltip content="Ask the agent to drop its current plan and reconsider next turn. Your reason is recorded on the run.">
+                <button
+                  onClick={() => {
+                    const id = `rp_${Date.now()}`;
+                    const reason = window.prompt("Replan — reason for the operator record:");
+                    if (reason == null) return;
+                    send({ replan: { id, reason, operator: "op_ui" } });
+                  }}
+                  disabled={stopped || command.isPending}
+                  style={btn({ color: stopped ? C.dim : C.mut, fontSize: 11, padding: "6px 10px", opacity: stopped ? 0.6 : 1 })}
+                >
+                  <GitBranch size={12} /> Replan
+                </button>
+              </Tooltip>
+              <Tooltip content={!testBench
+                ? "Test-bench only (enable in Settings). Injects text into the agent's next turn to probe recovery — so the run is marked intervened and excluded from scores."
+                : "Insert text into the agent's next turn to probe how it recovers. The run is marked intervened and excluded from scores."}>
+                <button
+                  onClick={() => {
+                    if (!node) return;
+                    const text = window.prompt("Injection text (test-bench only) — inserted next turn:");
+                    if (!text) return;
+                    const reason = window.prompt("Reason (recorded):") ?? "";
+                    send({
+                      pending_injection: {
+                        id: `inj_${Date.now()}`, text, reason, operator: "op_ui",
+                      },
+                    });
+                  }}
+                  disabled={!testBench || stopped || command.isPending}
+                  style={btn({ color: (!testBench || stopped) ? C.dim : C.mut, fontSize: 11, padding: "6px 10px", cursor: (!testBench || stopped) ? "default" : "pointer", opacity: (!testBench || stopped) ? 0.6 : 1 })}
+                >
+                  <Syringe size={12} /> Inject next turn
+                </button>
+              </Tooltip>
+              <Tooltip content="Vouch for this value's branch — an append-only reputation event that lowers its suspicion. A reason is required and recorded.">
+                <button
+                  onClick={() => {
+                    if (!node) return;
+                    const reason = window.prompt("Attestation reason (required — recorded, append-only):");
+                    if (!reason) { if (reason === "") setCmdError("attestation requires a reason"); return; }
+                    attest.mutate({
+                      nodeId: node.node_id,
+                      fact: {
+                        fact_id: `att_${Date.now()}`,
+                        fact_type: "operator_attestation",
+                        reason, operator: "op_ui",
+                      },
+                    });
+                  }}
+                  disabled={attest.isPending}
+                  style={btn({ color: C.mut, fontSize: 11, padding: "6px 10px" })}
+                >
+                  <Shield size={12} /> Attest branch
+                </button>
+              </Tooltip>
             </div>
           )}
 

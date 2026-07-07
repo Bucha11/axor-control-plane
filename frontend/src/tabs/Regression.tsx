@@ -7,6 +7,8 @@ import { ChevronDown, ChevronRight, Circle, ExternalLink, Loader2, Play } from "
 import { api, RegressionReport, RegressionRow } from "../api";
 import { C, MONO, btn } from "../theme";
 import { navigate } from "../router";
+import Coach from "../components/Coach";
+import Tooltip from "../components/Tooltip";
 
 const DEFAULT_CONFIG = JSON.stringify(
   { allowed_tools: [], egress_sinks: [] },
@@ -87,6 +89,13 @@ export default function Regression({ initialConfig }: { initialConfig?: string }
 
   return (
     <div style={{ maxWidth: 640, margin: "0 auto" }}>
+      <Coach id="regression" title="Regression — is this config safe to ship?">
+        Replay a candidate config against your pinned corpus. It's two-sided:
+        every <span style={{ color: C.text }}>must-block</span> attack should stay
+        blocked and every <span style={{ color: C.text }}>must-pass</span> flow should
+        keep passing. A config that blocks everything would pass a one-sided check —
+        this catches that. Load the example corpus to see it work.
+      </Coach>
       <div style={{ fontFamily: MONO, fontSize: 11, color: C.mut, marginBottom: 6 }}>
         axor.config <span style={{ color: C.text }}>candidate</span> vs pinned corpus · deterministic replay, no model calls
       </div>
@@ -110,17 +119,20 @@ export default function Regression({ initialConfig }: { initialConfig?: string }
       )}
 
       <div className="flex items-center gap-3 mt-2 mb-8">
-        <button onClick={run} disabled={regression.isPending} style={btn({ color: C.steel, fontSize: 12, padding: "8px 14px" })}>
-          {regression.isPending ? <Loader2 size={13} className="animate-spin" /> : <Play size={13} />} Run regression
-        </button>
-        <button
-          onClick={() => seed.mutate()}
-          disabled={seed.isPending}
-          title="pins a must-block attack and a must-pass legit flow (adapter-fidelity) so the corpus has both sides"
-          style={btn({ color: C.mut, fontSize: 11, padding: "7px 12px" })}
-        >
-          {seed.isPending ? "seeding…" : "load example corpus"}
-        </button>
+        <Tooltip content="Replay every pinned run under the config above and report which attacks stayed blocked and which legit flows still pass.">
+          <button onClick={run} disabled={regression.isPending} style={btn({ color: C.steel, fontSize: 12, padding: "8px 14px" })}>
+            {regression.isPending ? <Loader2 size={13} className="animate-spin" /> : <Play size={13} />} Run regression
+          </button>
+        </Tooltip>
+        <Tooltip content="Pins a must-block attack and a must-pass legit flow (adapter-fidelity) so the corpus has both sides to check against.">
+          <button
+            onClick={() => seed.mutate()}
+            disabled={seed.isPending}
+            style={btn({ color: C.mut, fontSize: 11, padding: "7px 12px" })}
+          >
+            {seed.isPending ? "seeding…" : "load example corpus"}
+          </button>
+        </Tooltip>
         {regression.isError && (
           <span style={{ fontFamily: MONO, fontSize: 11, color: C.red }}>
             {(regression.error as Error).message}

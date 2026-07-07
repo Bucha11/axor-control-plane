@@ -7,6 +7,8 @@ import { api, ScrubberPayload, ScrubberStep } from "../api";
 import { navigate } from "../router";
 import { C, MONO, btn, sevColor } from "../theme";
 import TaintGraph from "./TaintGraph";
+import Coach from "../components/Coach";
+import Tooltip from "../components/Tooltip";
 
 // A one-click seed of adapter-fidelity runs (recorded verdicts + value
 // provenance) — the trace depth the proxy can't produce, so the counterfactual,
@@ -170,6 +172,13 @@ export default function ReplayTab({ runId: runIdProp, cursor: cursorProp }: { ru
 
   return (
     <div style={{ maxWidth: 640, margin: "0 auto" }}>
+      <Coach id="replay" title="Replay — question a run, moment by moment">
+        Scrub the timeline; each box is one step, coloured by verdict.{" "}
+        <span style={{ color: C.text }}>What if…</span> forks a counterfactual —
+        it re-runs the recorded trace under an edited policy (no model call) and
+        shows the first step that would change. The provenance graph traces where a
+        value came from. Pin a run to build the regression corpus.
+      </Coach>
       <div className="flex items-center gap-3 mb-3">
         <select
           value={runId}
@@ -279,13 +288,15 @@ export default function ReplayTab({ runId: runIdProp, cursor: cursorProp }: { ru
           {curRef && <TaintGraph key={curRef} focus={curRef} />}
 
           {!fork ? (
-            <button
-              onClick={() => setFork(true)}
-              className="mt-4"
-              style={btn({ color: C.steel, fontSize: 12, padding: "8px 14px" })}
-            >
-              What if… (fork here)
-            </button>
+            <Tooltip content="Fork a counterfactual from this run: change one policy and see how the recorded trace would re-gate — deterministic, no model call.">
+              <button
+                onClick={() => setFork(true)}
+                className="mt-4"
+                style={btn({ color: C.steel, fontSize: 12, padding: "8px 14px" })}
+              >
+                What if… (fork here)
+              </button>
+            </Tooltip>
           ) : (
             <div className="mt-4 p-4" style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 8 }}>
               <div className="flex gap-2 mb-3">

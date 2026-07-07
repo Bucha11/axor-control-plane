@@ -23,6 +23,8 @@ import { isConnected, useApp } from "../store";
 import { C, MONO, btn, sevColor } from "../theme";
 import EvidenceCase, { deviationHeadline } from "../components/EvidenceCase";
 import ScenarioDelta from "../components/ScenarioDelta";
+import Coach from "../components/Coach";
+import Tooltip from "../components/Tooltip";
 
 // The v1 scenario: Tool Deprivation. Fault modes map to the deprivation engine.
 const FAULT_MODES = [
@@ -126,6 +128,13 @@ export default function Experiment({ runId, autostart }: { runId?: string; autos
 
   return (
     <div style={{ maxWidth: 640, margin: "0 auto" }}>
+      <Coach id="eval" title="Eval — prove your agent lies when a tool fails">
+        Pick a tool to break and how. We run the agent, then compare what actually
+        happened to what the agent claimed. The mismatch becomes an{" "}
+        <span style={{ color: C.text }}>EvidenceCase</span> — a reproducible receipt,
+        not a score. It's the artifact you can replay, share and export.
+      </Coach>
+
       {/* Configure + Run */}
       <div className="p-4 mb-4" style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 8 }}>
         <div style={{ fontSize: 10, fontFamily: MONO, color: C.dim, letterSpacing: "0.1em", marginBottom: 10 }}>
@@ -144,14 +153,20 @@ export default function Experiment({ runId, autostart }: { runId?: string; autos
         <div style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim, marginBottom: 12 }}>
           {FAULT_MODES.find((m) => m.id === faultMode)?.blurb}
         </div>
-        <button
-          onClick={() => start.mutate()}
-          disabled={running}
-          style={btn({ color: C.bg, background: C.green, border: `1px solid ${C.green}`, fontSize: 12.5, fontWeight: 700, padding: "8px 16px" })}
+        <Tooltip
+          content={mode === "demo"
+            ? "Runs the whole loop through the proxy: arm the scenario, our scripted agent acts, and the receipt appears below."
+            : "Arms the scenario and waits for YOUR agent (pointed at the proxy). The live audit stream shows each governed step as it happens."}
         >
-          {running ? <Loader2 size={14} className="animate-spin" /> : <Zap size={14} />}{" "}
-          {mode === "demo" ? "Run experiment" : "Arm & run my agent"}
-        </button>
+          <button
+            onClick={() => start.mutate()}
+            disabled={running}
+            style={btn({ color: C.bg, background: C.green, border: `1px solid ${C.green}`, fontSize: 12.5, fontWeight: 700, padding: "8px 16px" })}
+          >
+            {running ? <Loader2 size={14} className="animate-spin" /> : <Zap size={14} />}{" "}
+            {mode === "demo" ? "Run experiment" : "Arm & run my agent"}
+          </button>
+        </Tooltip>
         {start.isError && (
           <div className="mt-2" style={{ fontFamily: MONO, fontSize: 11, color: C.red }}>
             {(start.error as Error).message} — is the proxy running? (uvx axor-proxy --demo)

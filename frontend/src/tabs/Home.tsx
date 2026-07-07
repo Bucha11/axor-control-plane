@@ -1,10 +1,11 @@
 // Home — the funnel entry (spec section 3). Two intents, kept separate: "what
 // does this even do?" (the Demo, a standalone recorded showcase) and "how does
 // MY agent behave?" (Get Started). Depth opens on demand; nothing is pushed.
-import { ArrowRight, Play, Zap } from "lucide-react";
+import { ArrowRight, GraduationCap, Play, X, Zap } from "lucide-react";
 import { C, MONO } from "../theme";
 import { navigate } from "../router";
 import { ConnectionMode, MODE_LABEL, isConnected, useApp } from "../store";
+import Tooltip from "../components/Tooltip";
 
 const LADDER: { mode: ConnectionMode; blurb: string }[] = [
   { mode: "demo", blurb: "our mock broken tools · zero creds · one click" },
@@ -15,6 +16,10 @@ const LADDER: { mode: ConnectionMode; blurb: string }[] = [
 export default function Home() {
   const { mode } = useApp((s) => s.connection);
   const connect = useApp((s) => s.connect);
+  const learnMode = useApp((s) => s.learnMode);
+  const learnSeen = useApp((s) => s.learnSeen);
+  const setLearnMode = useApp((s) => s.setLearnMode);
+  const markLearnSeen = useApp((s) => s.markLearnSeen);
 
   return (
     <div style={{ maxWidth: 640, margin: "0 auto" }}>
@@ -23,6 +28,28 @@ export default function Home() {
         <span style={{ color: C.amber }}>Control.</span>{" "}
         <span style={{ color: C.green }}>Protect.</span>
       </div>
+
+      {/* First-visit nudge — offered once, never nagged. Turning it on reveals
+          coach notes across the app; dismissing just marks it seen. */}
+      {!learnMode && !learnSeen && (
+        <div
+          className="flex items-center justify-between p-3 mb-4"
+          style={{ background: "rgba(127,168,204,0.06)", border: `1px solid ${C.steel}`, borderRadius: 8 }}
+        >
+          <div className="flex items-center gap-2" style={{ fontFamily: MONO, fontSize: 11.5, color: C.mut }}>
+            <GraduationCap size={14} color={C.steel} />
+            New here? Turn on <span style={{ color: C.steel }}>Learn mode</span> for a guided note on each screen.
+          </div>
+          <div className="flex items-center gap-2">
+            <button onClick={() => setLearnMode(true)} style={{ background: "none", border: `1px solid ${C.steel}`, borderRadius: 5, color: C.steel, fontFamily: MONO, fontSize: 11, padding: "4px 10px", cursor: "pointer" }}>
+              Turn on
+            </button>
+            <button onClick={markLearnSeen} aria-label="dismiss" style={{ background: "none", border: "none", color: C.dim, cursor: "pointer", padding: 0 }}>
+              <X size={13} />
+            </button>
+          </div>
+        </div>
+      )}
       <h1 style={{ fontSize: 26, fontWeight: 700, lineHeight: 1.25, margin: "0 0 8px" }}>
         Your agent lies when its tools fail.
         <br />
@@ -68,19 +95,28 @@ export default function Home() {
               <div style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim }}>{rung.blurb}</div>
             </div>
             {rung.mode === "demo" ? (
-              <button
-                onClick={() => {
-                  connect("demo");
-                  navigate("eval", { auto: "1" });
-                }}
-                style={cta(C.green)}
-              >
-                <Zap size={13} /> Run demo-mode
-              </button>
+              <Tooltip content="Runs our scripted agent against mock broken tools through the real proxy — one click, no credentials. You'll see a fabrication get caught as an EvidenceCase." side="bottom">
+                <button
+                  onClick={() => {
+                    connect("demo");
+                    navigate("eval", { auto: "1" });
+                  }}
+                  style={cta(C.green)}
+                >
+                  <Zap size={13} /> Run demo-mode
+                </button>
+              </Tooltip>
             ) : (
-              <button onClick={() => navigate("get-started")} style={cta(C.steel)}>
-                Get started <ArrowRight size={13} />
-              </button>
+              <Tooltip
+                content={rung.mode === "proxy"
+                  ? "Put the proxy in front of YOUR tools (observe-only, ~5 min, no code change) to run the Eval loop on your own agent."
+                  : "Wrap your agent as an axor-core Invokable for full governance — this unlocks the Control plane."}
+                side="bottom"
+              >
+                <button onClick={() => navigate("get-started")} style={cta(C.steel)}>
+                  Get started <ArrowRight size={13} />
+                </button>
+              </Tooltip>
             )}
           </div>
         ))}

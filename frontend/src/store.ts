@@ -26,11 +26,20 @@ interface AppState {
   // Backend API token (local token or an API key). Sent as the bearer on every
   // request when the backend has auth enabled (architecture section 9).
   apiToken: string;
+  // Adoption (spec: quiet-until-wrong, so learning is opt-in). Learn mode reveals
+  // per-surface coach notes; `learnSeen` gates the one-time first-visit nudge;
+  // `coachDismissed` remembers which notes the user closed.
+  learnMode: boolean;
+  learnSeen: boolean;
+  coachDismissed: string[];
   connect: (mode: ConnectionMode, tools?: { name: string; url: string }[]) => void;
   disconnect: () => void;
   setTestBench: (v: boolean) => void;
   setLastRun: (runId: string) => void;
   setApiToken: (token: string) => void;
+  setLearnMode: (v: boolean) => void;
+  markLearnSeen: () => void;
+  dismissCoach: (id: string) => void;
 }
 
 export const isAdapter = (mode: ConnectionMode): boolean => mode === "adapter";
@@ -49,6 +58,9 @@ export const useApp = create<AppState>()(
       connection: { mode: "none", tools: [], testBench: false },
       lastRunId: null,
       apiToken: "",
+      learnMode: false,
+      learnSeen: false,
+      coachDismissed: [],
       connect: (mode, tools) =>
         set((s) => ({
           connection: {
@@ -63,6 +75,14 @@ export const useApp = create<AppState>()(
       setTestBench: (v) => set((s) => ({ connection: { ...s.connection, testBench: v } })),
       setLastRun: (runId) => set({ lastRunId: runId }),
       setApiToken: (token) => set({ apiToken: token }),
+      setLearnMode: (v) => set({ learnMode: v, learnSeen: true }),
+      markLearnSeen: () => set({ learnSeen: true }),
+      dismissCoach: (id) =>
+        set((s) => ({
+          coachDismissed: s.coachDismissed.includes(id)
+            ? s.coachDismissed
+            : [...s.coachDismissed, id],
+        })),
     }),
     { name: "axor-app" },
   ),
