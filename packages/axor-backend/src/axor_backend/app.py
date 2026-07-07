@@ -28,7 +28,11 @@ from axor_backend.auth import (
     required_scope,
 )
 from axor_backend.broadcast import Broadcast
-from axor_backend.graph import InMemoryGraphStore, register_trace_derivations
+from axor_backend.graph import (
+    InMemoryGraphStore,
+    register_trace_derivations,
+    rehydrate_graph,
+)
 from axor_backend.monitor import running_stale_monitor
 from axor_backend.notifications import Notifier
 from axor_backend.replay_api import (
@@ -59,6 +63,10 @@ def create_app(
     @contextlib.asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         await init_db(app.state.store.engine)
+        # The taint graph is a derived index over the persisted event log —
+        # rebuild it from the DB at boot so it survives restarts (and a fresh
+        # instance catches up) without a graph database.
+        await rehydrate_graph(app.state.store, app.state.graph)
         # The node_stale trigger is edge-detected by a background sweep (spec
         # §16): a silent node emits nothing, so its absence is what we watch.
         async with running_stale_monitor(app):

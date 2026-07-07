@@ -45,6 +45,22 @@ async def register_trace_derivations(
     return registered
 
 
+async def rehydrate_graph(store: Any, graph: GraphStore) -> None:  # noqa: ANN401
+    """Rebuild the taint graph from the persisted event log on startup.
+
+    The graph is a DERIVED index, not a source of truth — every derivation is
+    already in the events table (arg_refs/value_ref) and every attestation in the
+    facts table. Folding them back in at boot makes the in-memory store durable
+    across restarts (and lets a fresh instance catch up) without a graph DB.
+    """
+    for run in await store.list_runs():
+        lines = [json.loads(raw) for raw in await store.run_events(run["run_id"])]
+        await register_trace_derivations(graph, run["run_id"], lines)
+    for fact in await store.all_facts():
+        if fact.get("fact_type") == "operator_attestation":
+            await graph.append_attestation(json.dumps(fact))
+
+
 class GraphStore(Protocol):
     # object: nodes+edges payload for UI
     async def khop(self, focus: str, k: int, limit: int) -> dict[str, object]: ...

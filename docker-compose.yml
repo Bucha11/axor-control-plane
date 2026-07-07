@@ -32,7 +32,9 @@ services:
     command: ["uvicorn", "axor_backend.main:app", "--factory", "--host", "0.0.0.0", "--port", "8400"]
     environment:
       AXOR_DATABASE_URL: postgresql+asyncpg://axor:${AXOR_PG_PASSWORD}@postgres/axor
-      AXOR_GRAPH_DIR: /data/graph
+      # The taint graph is a derived index over the persisted event log — the
+      # backend rebuilds it from Postgres at boot (no graph DB). A per-tenant
+      # embedded Kùzu store is available for hosted; it is not wired by default.
       AXOR_TRACE_DIR: /data/traces
       # Dev convenience: the UI sends unsigned plane commands. For a real
       # deployment set AXOR_OPERATOR_KEYS (JSON op->pubkey) and drop this.

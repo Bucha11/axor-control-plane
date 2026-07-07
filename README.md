@@ -37,9 +37,10 @@ GITHUB_TOKEN=ghp_… docker compose up --build
 
 Open **http://localhost:8080**. The frontend reverse-proxies `/v1` → backend and
 `/axor` → proxy, so the browser talks to one origin; the proxy starts in
-demo-mode (mock tools) and auto-uploads runs to the backend. The taint graph is
-in-memory by default (a per-tenant embedded Kùzu store is available for hosted) —
-no extra container. For a real deployment set `AXOR_OPERATOR_KEYS` and
+demo-mode (mock tools) and auto-uploads runs to the backend. The taint graph is a
+derived index rebuilt from the persisted event log at boot (durable across
+restarts, no graph DB; embedded Kùzu is available per-tenant for hosted). For a
+real deployment set `AXOR_OPERATOR_KEYS` and
 `AXOR_ALLOW_UNSIGNED=0` (see `.env.example`); the `GITHUB_TOKEN` is build-only
 (a BuildKit secret) and never lands in an image layer.
 

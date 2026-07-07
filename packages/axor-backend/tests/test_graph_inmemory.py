@@ -121,6 +121,34 @@ async def test_seed_adapter_runs_lights_up_deep_surfaces(
     assert reg2["safe_to_ship"] is False
 
 
+async def test_graph_rehydrates_from_the_event_log(client: httpx.AsyncClient) -> None:
+    """The graph is a derived index — after a 'restart' (fresh store + rehydrate)
+    it rebuilds the same derivations and attestations from the persisted DB."""
+    from axor_backend.graph import InMemoryGraphStore, rehydrate_graph
+
+    events = [
+        {"seq": 0, "kind": "tool_call", "payload": {"tool": "r", "arg_refs": {}}},
+        {"seq": 1, "kind": "tool_result", "payload": {"value_ref": "v_a"}},
+        {"seq": 2, "kind": "tool_call", "payload": {"tool": "x", "arg_refs": {"a": "v_a"}}},
+        {"seq": 3, "kind": "tool_result", "payload": {"value_ref": "v_b"}},
+    ]
+    await client.post("/v1/ingest/run_re", json={"node_id": "n1", "events": events})
+    await client.post("/v1/plane/n1/facts", json={"fact": {
+        "fact_id": "att_re", "fact_type": "operator_attestation",
+        "covers": ["v_a"], "operator": "op", "reason": "checked",
+    }})
+
+    # Simulate a restart: a brand-new empty graph, rebuilt from the same store.
+    store = client._app.state.store  # type: ignore[attr-defined]
+    fresh = InMemoryGraphStore()
+    await rehydrate_graph(store, fresh)
+
+    kh = await fresh.khop("v_a", 2, 50)
+    assert {"src": "v_a", "dst": "v_b", "run_id": "run_re"} in kh["edges"]
+    atts = await fresh.branch_attestations("v_a")
+    assert len(atts) == 1 and atts[0]["fact_id"] == "att_re"
+
+
 async def test_attestation_surface_route(client: httpx.AsyncClient) -> None:
     fact = {
         "fact_id": "att1", "fact_type": "operator_attestation",

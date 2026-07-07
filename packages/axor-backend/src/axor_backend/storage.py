@@ -333,6 +333,15 @@ class Store:
             )).all()
         return [r.fact_json for r in rows]
 
+    async def all_facts(self) -> list[dict[str, Any]]:
+        """Every fact across all nodes, oldest first — the graph rehydrator folds
+        attestations from here (a fact can exist for a node with no plane state)."""
+        async with self.engine.connect() as conn:
+            rows = (await conn.execute(
+                select(facts.c.fact_json).order_by(facts.c.created_ts)
+            )).all()
+        return [r.fact_json for r in rows]
+
     # ── API keys (auth, architecture section 9) ───────────────────────────────
 
     async def create_api_key(

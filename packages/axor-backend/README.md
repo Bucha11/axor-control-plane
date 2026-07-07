@@ -14,7 +14,7 @@ Modules:
 | `plane.py` | plane service (protocol v0.2): `/command`, `/desired` (SSE), `/telemetry`, `/facts`, `/cascade-stop` |
 | `storage.py` | append-only events + runs/desired/reported/facts/pins/keys; JSON→JSONB on Postgres |
 | `replay_api.py` | config→`KernelConfig`, scrubber/counterfactual payloads |
-| `graph.py` | `GraphStore` protocol; `InMemoryGraphStore` (default) + `KuzuGraphStore`; trace→derivation folding |
+| `graph.py` | taint graph — a derived index over the event log; `InMemoryGraphStore` (default, rebuilt from the DB at boot) + `KuzuGraphStore`; trace→derivation folding |
 | `signing.py` | operator command signing — delegates JCS to `axor_core.kernel.canonicalize` |
 | `notifications.py` / `monitor.py` | webhook triggers (retries + dead-letter); node-stale sweep |
 | `share.py` | EvidenceCase HTML + dependency-free PDF receipt, revocable links |
