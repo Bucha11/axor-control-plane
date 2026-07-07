@@ -7,6 +7,8 @@ import { api } from "../api";
 import { navigate } from "../router";
 import { ConnectionMode, useApp } from "../store";
 import { C, MONO, btn } from "../theme";
+import Coach from "../components/Coach";
+import Tooltip from "../components/Tooltip";
 
 interface Tool {
   name: string;
@@ -85,6 +87,14 @@ export default function Onboarding() {
 
   return (
     <div style={{ maxWidth: 640, margin: "0 auto" }}>
+      <Coach id="onboarding" title="Get started — put the proxy in front of your agent">
+        Three steps: declare the tools your agent calls, repoint its base URLs at
+        the proxy (auth passes through byte-for-byte, nothing else changes), and
+        test each connection. Green lights mean you can run the same Eval loop on
+        your own agent — pick <span style={{ color: C.text }}>proxy</span> for
+        observe-only or <span style={{ color: C.text }}>adapter</span> for full
+        governance + Control.
+      </Coach>
       <div className="flex gap-6 mb-8">
         <StepDot n={1} label="tools" /><StepDot n={2} label="point agent" /><StepDot n={3} label="connection check" />
       </div>
@@ -95,9 +105,11 @@ export default function Onboarding() {
           <div style={{ fontFamily: MONO, fontSize: 11.5, color: C.mut, marginBottom: 20 }}>The proxy will sit in front of these. Auth passes through untouched.</div>
           {tools.length === 0 ? (
             <div className="p-8 flex flex-col items-center gap-3" style={{ background: C.panel, border: `1px dashed ${C.line}`, borderRadius: 8 }}>
-              <button onClick={() => setTools(TOOLS)} style={btn({ color: C.steel, borderColor: C.steel, fontSize: 12 })}>
-                <Plug size={13} /> Load example tools
-              </button>
+              <Tooltip content="Fills in a realistic 3-tool sample (search / report / query) so you can walk the flow without typing endpoints.">
+                <button onClick={() => setTools(TOOLS)} style={btn({ color: C.steel, borderColor: C.steel, fontSize: 12 })}>
+                  <Plug size={13} /> Load example tools
+                </button>
+              </Tooltip>
               <span style={{ fontFamily: MONO, fontSize: 11, color: C.dim }}>
                 loads a sample set — parsing a real MCP manifest is on the roadmap · or add endpoints by hand · or use our mock tools (zero creds)
               </span>
@@ -195,9 +207,11 @@ export default function Onboarding() {
             </div>
           )}
           <div className="flex items-center gap-3 mt-4">
-            <button onClick={() => preflight.mutate()} style={btn({ color: C.text, borderColor: C.steel, fontSize: 12.5 })}>
-              <RefreshCw size={13} /> {preflight.data || preflight.isError ? "Re-test all" : "Test connections"}
-            </button>
+            <Tooltip content="Pings every declared tool through the proxy right now — a red light here is routine; a red light mid-experiment ruins the run.">
+              <button onClick={() => preflight.mutate()} style={btn({ color: C.text, borderColor: C.steel, fontSize: 12.5 })}>
+                <RefreshCw size={13} /> {preflight.data || preflight.isError ? "Re-test all" : "Test connections"}
+              </button>
+            </Tooltip>
             {allGreen && (
               <button onClick={finish} style={btn({ color: C.bg, background: C.green, borderColor: C.green, fontSize: 12.5, fontWeight: 700 })}>
                 <Zap size={13} /> Run first experiment <ArrowRight size={13} />
@@ -207,14 +221,21 @@ export default function Onboarding() {
           <div className="flex items-center gap-3 mt-4" style={{ fontFamily: MONO, fontSize: 11, color: C.mut }}>
             connect as
             {(["proxy", "adapter"] as const).map((d) => (
-              <button key={d} onClick={() => setDepth(d)}
-                style={btn({
-                  color: depth === d ? C.steel : C.dim,
-                  borderColor: depth === d ? C.steel : C.line,
-                  fontSize: 11, padding: "4px 10px",
-                })}>
-                {d}
-              </button>
+              <Tooltip
+                key={d}
+                content={d === "proxy"
+                  ? "Observe-only: the proxy watches tool traffic and catches discrepancies. No code change in your agent."
+                  : "Full governance: wrap your agent in an axor-core Invokable — per-value taint, budgets, and the live Control plane."}
+              >
+                <button onClick={() => setDepth(d)}
+                  style={btn({
+                    color: depth === d ? C.steel : C.dim,
+                    borderColor: depth === d ? C.steel : C.line,
+                    fontSize: 11, padding: "4px 10px",
+                  })}>
+                  {d}
+                </button>
+              </Tooltip>
             ))}
             <span style={{ color: C.dim }}>
               {depth === "adapter" ? "unlocks Control, taint graph, probe health" : "Eval core — Control is greyed until you wrap"}

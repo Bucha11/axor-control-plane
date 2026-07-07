@@ -2,6 +2,7 @@
 // ORG runs the plane. Three tiers, static — no backend. Team is the typical first
 // paid step, marked with a subtle steel border.
 import { C, MONO } from "../theme";
+import Coach from "../components/Coach";
 
 // A feature is either shipping today or on the roadmap. We mark the difference
 // explicitly rather than listing aspirational capabilities as if they exist — a
@@ -83,6 +84,12 @@ const TIERS: Tier[] = [
 export default function Pricing() {
   return (
     <div style={{ maxWidth: 860, margin: "0 auto" }}>
+      <Coach id="pricing" title="Pricing — the two-line rule">
+        If a feature answers "is MY agent safe", it's free forever. If it answers
+        "how does OUR ORG run this" (multiple operators, fleets, audit proof,
+        SSO), it's paid. Features marked <span style={{ color: C.text }}>planned</span>{" "}
+        don't exist yet — the page refuses to over-claim.
+      </Coach>
       <h1 style={{ fontSize: 26, fontWeight: 700, lineHeight: 1.25, margin: "0 0 8px" }}>
         Pricing
       </h1>

@@ -10,6 +10,8 @@ import { useMutation } from "@tanstack/react-query";
 import { RefreshCw, HeartPulse, Check, Circle } from "lucide-react";
 import { api } from "../api";
 import { C, MONO } from "../theme";
+import Coach from "../components/Coach";
+import Tooltip from "../components/Tooltip";
 
 const HEALTH_NODE = "banking-assistant";
 
@@ -74,6 +76,14 @@ export default function Health() {
 
   return (
     <div style={{ maxWidth: 560, margin: "0 auto" }}>
+      <Coach id="health" title="Health — is the agent still the agent you baselined?">
+        Probe families (tool honesty, context recall, refusal drift, format
+        stability) compare today's behaviour to the baseline.{" "}
+        <span style={{ color: C.text }}>DRIFT</span> means a family diverged;
+        self-heal re-anchors it — with a required reason, recorded as a plane
+        attestation. It never fires automatically: the verdict recommends, you
+        trigger.
+      </Coach>
       <div style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim, marginBottom: 14 }}>
         self-heal records a real plane attestation; live per-family DRIFT verdicts stream in with the probe adapter
       </div>
@@ -104,10 +114,12 @@ export default function Health() {
                 <span style={{ fontFamily: MONO, fontSize: 11, color: C.mut }}>
                   Refusal patterns diverge from baseline (Δ 0.31). Self-heal can re-anchor them.
                 </span>
-                <button onClick={() => setPhase("reason")}
-                  style={{ display: "flex", alignItems: "center", gap: 6, background: "none", border: `1px solid ${C.steel}`, borderRadius: 5, color: C.steel, fontFamily: MONO, fontSize: 11, padding: "5px 12px", cursor: "pointer", whiteSpace: "nowrap" }}>
-                  <HeartPulse size={12} /> Self-heal
-                </button>
+                <Tooltip content="Re-anchor this drifting family to baseline. You'll give a reason; it's recorded as an append-only plane attestation, then re-probed to verify.">
+                  <button onClick={() => setPhase("reason")}
+                    style={{ display: "flex", alignItems: "center", gap: 6, background: "none", border: `1px solid ${C.steel}`, borderRadius: 5, color: C.steel, fontFamily: MONO, fontSize: 11, padding: "5px 12px", cursor: "pointer", whiteSpace: "nowrap" }}>
+                    <HeartPulse size={12} /> Self-heal
+                  </button>
+                </Tooltip>
               </div>
             )}
 
@@ -140,9 +152,11 @@ export default function Health() {
             ? "verdict: PASS — heal verified by re-probe; both events in trace"
             : drifting ? "verdict: PASS · 1 drift" : "verdict: PASS"}
         </span>
-        <button style={{ display: "flex", alignItems: "center", gap: 6, background: "none", border: `1px solid ${C.line}`, borderRadius: 5, color: C.mut, fontFamily: MONO, fontSize: 11, padding: "5px 12px", cursor: "pointer" }}>
-          <RefreshCw size={12} /> Run health check
-        </button>
+        <Tooltip content="Re-run the full probe battery (23 probes, ~1 min) and compare every family against the baseline.">
+          <button style={{ display: "flex", alignItems: "center", gap: 6, background: "none", border: `1px solid ${C.line}`, borderRadius: 5, color: C.mut, fontFamily: MONO, fontSize: 11, padding: "5px 12px", cursor: "pointer" }}>
+            <RefreshCw size={12} /> Run health check
+          </button>
+        </Tooltip>
       </div>
 
       <div style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim, marginTop: 14, lineHeight: 1.7 }}>

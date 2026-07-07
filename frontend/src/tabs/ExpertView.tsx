@@ -6,6 +6,7 @@ import { useState, useEffect, useRef } from "react";
 import type { LucideIcon } from "lucide-react";
 import { Play, Pause, Square, RotateCcw, Syringe, Shield, Activity, GitBranch, Lock, CircleDot, Gauge, FlaskConical } from "lucide-react";
 import { C, MONO } from "../theme";
+import Coach from "../components/Coach";
 
 // The mockup palette has two colors the shared theme doesn't carry.
 const YELLOW = "#E0C24A";
@@ -411,6 +412,12 @@ export default function ExpertView() {
 
   return (
     <div style={{ maxWidth: 1120, margin: "0 auto" }}>
+      <Coach id="expert" title="Expert view — the dense reference layout">
+        Everything on one screen: the event stream with gates and verdicts, taint
+        and budget counters, degradation level. It's a static reference of what the
+        opt-in expert density will look like — the live data stays on the three
+        primary tabs.
+      </Coach>
       <div className="flex items-center gap-2 mb-3" style={{ padding: "6px 12px", background: C.panel2, border: `1px solid ${C.line}`, borderRadius: 4 }}>
         <span style={{ fontFamily: MONO, fontSize: 11, color: C.mut }}>
           expert view — explicit opt-in reference (quiet-until-wrong stays the default)

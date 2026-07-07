@@ -9,6 +9,7 @@ import { Check, ExternalLink, Play, Share2 } from "lucide-react";
 import { api, EvidenceCaseDto } from "../api";
 import { navigate } from "../router";
 import { C, MONO } from "../theme";
+import Tooltip from "./Tooltip";
 
 const HEADLINE: Record<string, string> = {
   fabricated_tool_result: "fabricated a tool result",
@@ -76,21 +77,29 @@ export default function EvidenceCase({
           confidence {c.confidence}
         </span>
         <div className="flex gap-2 items-center">
-          <button
-            onClick={() => navigate(`replay/${runId}`, { cursor: replayStep })}
-            style={action(C.steel)}
-          >
-            <Play size={11} /> Replay this moment
-          </button>
-          <button onClick={() => share.mutate()} style={action(copied ? C.green : C.mut)}>
-            {copied ? <Check size={11} /> : <Share2 size={11} />} {copied ? "link copied" : "Share"}
-          </button>
-          <a href={api.exportUrl(runId, caseIndex)} target="_blank" rel="noreferrer" style={{ ...action(C.mut), textDecoration: "none" }}>
-            <ExternalLink size={11} /> Export
-          </a>
-          <a href={api.exportUrl(runId, caseIndex, "pdf")} target="_blank" rel="noreferrer" style={{ ...action(C.mut), textDecoration: "none" }}>
-            <ExternalLink size={11} /> PDF
-          </a>
+          <Tooltip content="Jump to the exact step in Replay where this discrepancy happened — scrub around it, fork a counterfactual.">
+            <button
+              onClick={() => navigate(`replay/${runId}`, { cursor: replayStep })}
+              style={action(C.steel)}
+            >
+              <Play size={11} /> Replay this moment
+            </button>
+          </Tooltip>
+          <Tooltip content="Copy a revocable permalink to just this case — one page, scoped token, no access to the rest of the workspace. Revoke it any time.">
+            <button onClick={() => share.mutate()} style={action(copied ? C.green : C.mut)}>
+              {copied ? <Check size={11} /> : <Share2 size={11} />} {copied ? "link copied" : "Share"}
+            </button>
+          </Tooltip>
+          <Tooltip content="A self-contained HTML receipt — observations, labels and verdicts only, never raw request/response bodies.">
+            <a href={api.exportUrl(runId, caseIndex)} target="_blank" rel="noreferrer" style={{ ...action(C.mut), textDecoration: "none" }}>
+              <ExternalLink size={11} /> Export
+            </a>
+          </Tooltip>
+          <Tooltip content="The same receipt as a single-page PDF — for tickets, audits, and people who print things.">
+            <a href={api.exportUrl(runId, caseIndex, "pdf")} target="_blank" rel="noreferrer" style={{ ...action(C.mut), textDecoration: "none" }}>
+              <ExternalLink size={11} /> PDF
+            </a>
+          </Tooltip>
         </div>
       </div>
       {shareUrl && (

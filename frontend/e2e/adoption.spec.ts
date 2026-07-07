@@ -37,6 +37,42 @@ test.describe("adoption", () => {
     await expect(page.getByRole("note")).toContainText("safe to ship", { ignoreCase: true });
   });
 
+  test("every secondary surface carries its coach note in Learn mode", async ({ page }) => {
+    await setConnection(page, { mode: "adapter" });
+    await page.addInitScript(() => {
+      const raw = localStorage.getItem("axor-app");
+      const data = raw ? JSON.parse(raw) : { state: {}, version: 0 };
+      data.state.learnMode = true;
+      data.state.learnSeen = true;
+      data.state.coachDismissed = [];
+      localStorage.setItem("axor-app", JSON.stringify(data));
+    });
+    const cases: [string, string | RegExp][] = [
+      ["config-builder", "consequence class"],
+      ["get-started", "byte-for-byte"],
+      ["health", "re-anchors"],
+      ["settings", "dead-letter"],
+      ["expert", "one screen"],
+      ["pricing", "free forever"],
+    ];
+    for (const [hash, expected] of cases) {
+      await goHash(page, hash);
+      await expect(page.getByRole("note").first()).toContainText(expected as string, { ignoreCase: true });
+    }
+  });
+
+  test("reset tips brings back dismissed coach notes", async ({ page }) => {
+    await setConnection(page, { mode: "adapter" });
+    await goHash(page, "settings");
+    // Turn learn on, dismiss the settings note, then reset it from the section.
+    await page.getByRole("button", { name: /toggle learn mode/ }).click();
+    await expect(page.getByRole("note")).toBeVisible();
+    await page.getByRole("note").getByRole("button", { name: /dismiss tip/ }).click();
+    await expect(page.getByRole("note")).toHaveCount(0);
+    await page.getByRole("button", { name: /reset tips/ }).click();
+    await expect(page.getByRole("note")).toBeVisible();
+  });
+
   test("the header toggle controls Learn mode and a note can be dismissed", async ({ page, request }) => {
     const node = uniqueNode("gov-coach");
     await seedNode(request, node);

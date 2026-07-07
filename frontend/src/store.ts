@@ -40,6 +40,7 @@ interface AppState {
   setLearnMode: (v: boolean) => void;
   markLearnSeen: () => void;
   dismissCoach: (id: string) => void;
+  resetCoach: () => void;
 }
 
 export const isAdapter = (mode: ConnectionMode): boolean => mode === "adapter";
@@ -83,6 +84,7 @@ export const useApp = create<AppState>()(
             ? s.coachDismissed
             : [...s.coachDismissed, id],
         })),
+      resetCoach: () => set({ coachDismissed: [] }),
     }),
     { name: "axor-app" },
   ),

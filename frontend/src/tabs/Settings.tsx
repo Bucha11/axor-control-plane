@@ -8,6 +8,7 @@ import { Check, Copy, Loader2, Trash2 } from "lucide-react";
 import { api } from "../api";
 import { MODE_LABEL, useApp } from "../store";
 import { C, MONO, btn } from "../theme";
+import Coach from "../components/Coach";
 
 const TRIGGERS = [
   { id: "level_transition_up", label: "degradation level rises" },
@@ -65,9 +66,45 @@ export default function Settings() {
   const toggle = (id: string) =>
     setSelected((s) => (s.includes(id) ? s.filter((x) => x !== id) : [...s, id]));
 
+  const learnMode = useApp((s) => s.learnMode);
+  const setLearnMode = useApp((s) => s.setLearnMode);
+  const coachDismissed = useApp((s) => s.coachDismissed);
+  const resetCoach = useApp((s) => s.resetCoach);
+
   return (
     <div style={{ maxWidth: 640, margin: "0 auto" }}>
+      <Coach id="settings" title="Settings — auth, alerts, license">
+        Auth is opt-in (empty token = open dev backend). Notifications are the
+        loud half of quiet-until-wrong: the UI stays calm, the webhook fires when
+        something is actually wrong — and failed deliveries land in the
+        dead-letter log instead of vanishing.
+      </Coach>
       <h1 style={{ fontSize: 22, fontWeight: 650, margin: "0 0 20px" }}>Settings</h1>
+
+      {/* Learn mode — the adoption layer's own controls */}
+      <Section title="LEARN MODE">
+        <div className="flex items-center justify-between flex-wrap gap-2">
+          <span style={{ fontFamily: MONO, fontSize: 11.5, color: C.mut }}>
+            coach notes on each screen — off by default, this stays quiet-until-wrong
+          </span>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setLearnMode(!learnMode)}
+              style={btn({ color: learnMode ? C.steel : C.mut, borderColor: learnMode ? C.steel : C.line, fontSize: 11, padding: "4px 12px" })}
+            >
+              {learnMode ? "on" : "off"}
+            </button>
+            <button
+              onClick={resetCoach}
+              disabled={coachDismissed.length === 0}
+              title="bring back every dismissed coach note"
+              style={btn({ color: coachDismissed.length ? C.mut : C.dim, fontSize: 11, padding: "4px 12px" })}
+            >
+              reset tips{coachDismissed.length ? ` (${coachDismissed.length})` : ""}
+            </button>
+          </div>
+        </div>
+      </Section>
 
       {/* Authentication (architecture section 9) */}
       <Section title="AUTHENTICATION">

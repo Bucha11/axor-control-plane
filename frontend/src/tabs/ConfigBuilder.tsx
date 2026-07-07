@@ -3,6 +3,8 @@
 import { useState } from "react";
 import { Plus, ChevronDown, ChevronRight, Download, Check, X, ArrowRight, Upload, FileCode, Terminal, AlertTriangle } from "lucide-react";
 import { C, MONO, btn } from "../theme";
+import Coach from "../components/Coach";
+import Tooltip from "../components/Tooltip";
 
 const TYPES = ["READ", "WRITE", "EXPORT", "EXEC"] as const;
 type ToolType = (typeof TYPES)[number];
@@ -163,6 +165,14 @@ export default function ConfigBuilder() {
   if (stage === "entry" || stage === "analyzing") {
     return (
       <Container>
+        <Coach id="config-builder" title="Config Builder — declare what your agent may touch">
+          Governance starts from a config: every tool is a{" "}
+          <span style={{ color: C.text }}>sink</span> with a consequence class
+          (READ / WRITE / EXPORT / EXEC); anything undeclared is denied. Drop your
+          agent's code to auto-detect its tools, classify each, and download a
+          replayable <span style={{ color: C.text }}>axor.config.json</span> — the
+          same file Replay and Regression evaluate against.
+        </Coach>
         <h1 style={{ fontSize: 22, fontWeight: 650, margin: "0 0 4px" }}>Bring your agent. Leave governed.</h1>
         <div style={{ fontFamily: MONO, fontSize: 11.5, color: C.mut, marginBottom: 24 }}>
           Drop the code — we find its tools, you tell us what they can do, you download the wrapped package.
@@ -181,9 +191,11 @@ export default function ConfigBuilder() {
         </div>
         {stage === "entry" && (
           <>
-            <button onClick={() => { setSinks([]); setStage("build"); }} className="mt-4" style={{ background: "none", border: "none", color: C.mut, fontFamily: MONO, fontSize: 11.5, cursor: "pointer", padding: 0 }}>
-              declare sinks by hand instead
-            </button>
+            <Tooltip content="Skip detection: start from an empty sink list and add each tool by name yourself.">
+              <button onClick={() => { setSinks([]); setStage("build"); }} className="mt-4" style={{ background: "none", border: "none", color: C.mut, fontFamily: MONO, fontSize: 11.5, cursor: "pointer", padding: 0 }}>
+                declare sinks by hand instead
+              </button>
+            </Tooltip>
             <div className="flex items-start gap-2 mt-6 p-3" style={{ background: C.panel2, border: `1px solid ${C.line}`, borderRadius: 6 }}>
               <Terminal size={13} color={C.dim} style={{ marginTop: 1 }} />
               <div style={{ fontFamily: MONO, fontSize: 11, color: C.dim, lineHeight: 1.6 }}>
@@ -297,10 +309,14 @@ export default function ConfigBuilder() {
         </div>
 
         <div className="mt-4 flex items-center gap-3">
-          <button onClick={() => unclassified === 0 && sinks.length > 0 && setStage("preview")} disabled={unclassified > 0 || sinks.length === 0}
-            style={btn({ color: unclassified || !sinks.length ? C.dim : C.text, borderColor: unclassified || !sinks.length ? C.line : C.steel, padding: "9px 18px", fontSize: 12.5, opacity: unclassified || !sinks.length ? 0.6 : 1, cursor: unclassified || !sinks.length ? "default" : "pointer" })}>
-            Preview config <ArrowRight size={13} />
-          </button>
+          <Tooltip content={unclassified > 0
+            ? "Assign a consequence class to every tool first — unclassified tools stay denied, so the config isn't ready."
+            : "See the config in plain words (what's allowed, what's denied, what's capped) before you download it."}>
+            <button onClick={() => unclassified === 0 && sinks.length > 0 && setStage("preview")} disabled={unclassified > 0 || sinks.length === 0}
+              style={btn({ color: unclassified || !sinks.length ? C.dim : C.text, borderColor: unclassified || !sinks.length ? C.line : C.steel, padding: "9px 18px", fontSize: 12.5, opacity: unclassified || !sinks.length ? 0.6 : 1, cursor: unclassified || !sinks.length ? "default" : "pointer" })}>
+              Preview config <ArrowRight size={13} />
+            </button>
+          </Tooltip>
           {unclassified > 0 && <span style={{ fontFamily: MONO, fontSize: 11.5, color: C.amber }}>{unclassified} unclassified — still denied</span>}
         </div>
       </Container>
@@ -343,9 +359,11 @@ export default function ConfigBuilder() {
         <pre style={{ background: C.panel2, border: `1px solid ${C.line}`, borderRadius: 6, padding: 12, fontFamily: MONO, fontSize: 11, color: C.mut, overflow: "auto", margin: 0 }}>{JSON.stringify(config, null, 2)}</pre>
       </Fold>
       <div className="flex items-center gap-3 mt-5">
-        <button onClick={download} style={btn({ color: C.text, borderColor: C.steel, padding: "9px 18px", fontSize: 12.5 })}>
-          <Download size={14} /> {fromCode ? "Download wrapped package" : "Download config + scaffold"}
-        </button>
+        <Tooltip content="Downloads axor.config.json — drop it next to your agent and run it governed. The same file drives Replay counterfactuals and Regression.">
+          <button onClick={download} style={btn({ color: C.text, borderColor: C.steel, padding: "9px 18px", fontSize: 12.5 })}>
+            <Download size={14} /> {fromCode ? "Download wrapped package" : "Download config + scaffold"}
+          </button>
+        </Tooltip>
         {emitted && (
           <span style={{ fontFamily: MONO, fontSize: 12, color: C.green, display: "flex", alignItems: "center", gap: 6 }}>
             <Check size={13} /> saved · <span style={{ color: C.steel, cursor: "pointer" }}>run first governed experiment →</span>

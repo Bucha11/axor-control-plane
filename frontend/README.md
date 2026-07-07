@@ -26,9 +26,11 @@ what unlocks it. The demo landing (`src/demo/`) is a standalone second bundle at
 Adoption layer (opt-in, so the default stays quiet-until-wrong):
 `components/Tooltip.tsx` is a themed hover/focus tooltip on the non-obvious
 actions; `components/Coach.tsx` renders a per-surface explainer note that appears
-only when **Learn mode** is on (the graduation-cap toggle in the header). Learn
-state lives in the store (`learnMode` / `learnSeen` / `coachDismissed`, persisted);
-a one-time Home nudge offers to turn it on.
+only when **Learn mode** is on (the graduation-cap toggle in the header). Every
+tab carries one — Eval, Control, Replay, Regression, Config Builder, Onboarding,
+Health, Settings, Expert, Pricing. Learn state lives in the store
+(`learnMode` / `learnSeen` / `coachDismissed`, persisted); a one-time Home nudge
+offers to turn it on, and Settings → LEARN MODE has the toggle + "reset tips".
 
 ## E2E (Playwright)
 

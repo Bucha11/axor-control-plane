@@ -8,6 +8,7 @@ import { useState } from "react";
 import { api, GraphKhop } from "../api";
 import { navigate } from "../router";
 import { C, MONO } from "../theme";
+import Tooltip from "../components/Tooltip";
 
 // Deterministic circular layout: focus at centre, neighbours evenly on a ring.
 // No physics sim — a taint neighbourhood is small (k-hop, capped) and a stable
@@ -69,17 +70,18 @@ export default function TaintGraph({ focus }: { focus: string }) {
             reset
           </button>
         )}
-        <button
-          onClick={() => {
-            const reason = window.prompt(`Attest branch ${short(current)} — reason (required, append-only):`);
-            if (reason && reason.trim()) attest.mutate(reason.trim());
-          }}
-          disabled={attest.isPending}
-          title="attest this value branch — an append-only reputation event; lowers heat, never resets it"
-          style={{ marginLeft: 10, fontFamily: MONO, fontSize: 10.5, color: C.steel, background: "none", border: `1px solid ${C.line}`, borderRadius: 5, padding: "1px 7px", cursor: "pointer" }}
-        >
-          {attest.isPending ? "attesting…" : "attest branch"}
-        </button>
+        <Tooltip content="Vouch for this value's branch after you've checked it — an append-only reputation event with a required reason. It lowers the branch's suspicion; it never resets or erases history.">
+          <button
+            onClick={() => {
+              const reason = window.prompt(`Attest branch ${short(current)} — reason (required, append-only):`);
+              if (reason && reason.trim()) attest.mutate(reason.trim());
+            }}
+            disabled={attest.isPending}
+            style={{ marginLeft: 10, fontFamily: MONO, fontSize: 10.5, color: C.steel, background: "none", border: `1px solid ${C.line}`, borderRadius: 5, padding: "1px 7px", cursor: "pointer" }}
+          >
+            {attest.isPending ? "attesting…" : "attest branch"}
+          </button>
+        </Tooltip>
       </div>
 
       {khop.isPending ? (
