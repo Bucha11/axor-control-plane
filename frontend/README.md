@@ -22,3 +22,20 @@ Layout:
 Tabs gate by connection depth: Control needs `adapter`; each locked surface shows
 what unlocks it. The demo landing (`src/demo/`) is a standalone second bundle at
 `/demo.html`.
+
+## E2E (Playwright)
+
+`pnpm e2e` — drives the real app against a real backend + observe-only proxy.
+The config (`playwright.config.ts`) boots all three servers itself (backend,
+proxy, Vite) and reuses them if already running, so with a live stack the suite
+starts instantly. Chromium is the image's pre-installed build (override the path
+with `AXOR_CHROMIUM`). `pnpm e2e:report` opens the last HTML report.
+
+`e2e/` covers every surface as a user story: shell/deep-links, Home funnel,
+onboarding, an Eval run that catches the fabrication as an EvidenceCase, Replay
+(tool-chip timeline, counterfactual first-divergence, provenance graph, corpus
+pinning), Control (locked upsell → live node → pause / decrease-only budget cap /
+intervention menu, plus a real end-to-end governed-node spawn), two-sided
+Regression, the Config Builder, and Settings. Helpers seed the store's connection
+mode via `localStorage` and seed backend/plane state over HTTP, so deep surfaces
+are reached deterministically.

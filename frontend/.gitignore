@@ -2,3 +2,8 @@ node_modules
 dist
 
 *.tsbuildinfo
+
+# Playwright E2E
+test-results
+playwright-report
+.playwright
