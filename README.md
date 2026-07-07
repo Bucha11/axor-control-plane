@@ -2,6 +2,10 @@
 
 Runtime governance and evaluation platform for LLM agents. Monorepo.
 
+![Axor: run a fault scenario, catch the fabrication as an EvidenceCase, replay its taint graph, then spawn a live governed node](docs/demo.gif)
+
+*One demo run: the agent fabricates a tool result under a deprived `web_search`; governed Axor catches the discrepancy as an EvidenceCase, and Control shows a real `axor_core`-governed node live.*
+
 Naming note: "control plane" is both this platform and one of its subsystems
 (spec section 12 — the SSE+POST advisory channel). In code and docs the
 subsystem is always called the **plane service** (`axor_backend.plane`);
