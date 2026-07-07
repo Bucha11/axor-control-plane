@@ -270,7 +270,7 @@ async def test_share_links_and_subscriptions_survive_a_restart(
     app instances over one DB file stand in for the restart."""
     db = f"sqlite+aiosqlite:///{tmp_path}/axor.db"
 
-    def app():  # a fresh instance, same DB — i.e. a restart
+    def app() -> object:  # a fresh instance, same DB — i.e. a restart
         return create_app(database_url=db, operator_keys={}, allow_unsigned=True)
 
     a = app()

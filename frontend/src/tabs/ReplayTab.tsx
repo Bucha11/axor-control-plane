@@ -230,6 +230,10 @@ export default function ReplayTab({ runId: runIdProp, cursor: cursorProp }: { ru
 
       {scrubber.isLoading ? (
         <Center msg="loading trace…" />
+      ) : scrubber.isError ? (
+        // e.g. a heartbeat-only live run: the backend answers 422 with the
+        // reason — show it instead of a false "no steps recorded".
+        <Center msg={(scrubber.error as Error).message} />
       ) : steps.length === 0 ? (
         <Center msg="No steps recorded for this run." />
       ) : (

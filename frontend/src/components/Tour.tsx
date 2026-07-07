@@ -78,9 +78,14 @@ export default function Tour() {
   const active = stepIdx != null;
   const [rect, setRect] = useState<DOMRect | null>(null);
 
-  // Walk the router to the step's surface.
+  // Walk the router to the step's surface. A persisted index beyond the tour
+  // (an older, longer tour definition) ends cleanly instead of running off.
   useEffect(() => {
     if (!active) return;
+    if (stepIdx != null && stepIdx >= TOUR.length) {
+      setTourStep(null);
+      return;
+    }
     const want = `#/${step.route}`;
     if (window.location.hash !== want) navigate(step.route);
   }, [active, stepIdx]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -119,7 +124,7 @@ export default function Tour() {
     };
   }, [active, stepIdx]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  if (!active || stepIdx == null) return null;
+  if (!active || stepIdx == null || stepIdx >= TOUR.length) return null;
 
   const last = stepIdx === TOUR.length - 1;
   const end = () => setTourStep(null);

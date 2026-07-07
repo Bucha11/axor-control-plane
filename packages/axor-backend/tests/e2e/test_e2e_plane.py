@@ -22,7 +22,9 @@ pytestmark = pytest.mark.e2e
 OP = "op_e2e"
 
 
-def _heartbeat(node: str, *, level: str = "NORMAL", applied: int = 0, run: str | None = None) -> dict:
+def _heartbeat(
+    node: str, *, level: str = "NORMAL", applied: int = 0, run: str | None = None,
+) -> dict:
     return {
         "run_id": run or f"{node}-hb",
         "events": [{
@@ -73,7 +75,7 @@ async def test_desired_sse_delivers_the_command_delta_live(
             assert r.status_code == 202
 
     task = asyncio.create_task(push())
-    delta = await read_sse(http, f"/v1/plane/{node}/desired", want_event="delta", timeout=10.0)
+    delta = await read_sse(http, f"/v1/plane/{node}/desired", want_event="delta", read_timeout=10.0)
     await task
     assert delta["version"] == 1
     assert delta["state"]["budget_cap_calls"] == 7

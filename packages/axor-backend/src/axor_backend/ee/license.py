@@ -80,13 +80,16 @@ def verify_license(license_json: str, vendor_pubkey_hex: str) -> License:
     except (BadSignatureError, ValueError) as exc:
         raise LicenseError("license signature invalid (not signed by the vendor)") from exc
 
-    return License(
-        org=str(lic["org"]),
-        tier=str(lic["tier"]),
-        node_ceiling=int(lic["node_ceiling"]),
-        expiry=str(lic["expiry"]),
-        features=tuple(lic.get("features", ())),
-    )
+    try:
+        return License(
+            org=str(lic["org"]),
+            tier=str(lic["tier"]),
+            node_ceiling=int(lic["node_ceiling"]),
+            expiry=str(lic["expiry"]),
+            features=tuple(lic.get("features", ())),
+        )
+    except (KeyError, TypeError, ValueError) as exc:
+        raise LicenseError(f"malformed license fields: {exc}") from exc
 
 
 def sign_license(lic: dict, vendor_privkey_hex: str) -> str:

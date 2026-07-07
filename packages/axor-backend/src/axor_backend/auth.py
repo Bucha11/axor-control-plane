@@ -54,8 +54,12 @@ _OPEN_PREFIXES: tuple[str, ...] = (
 
 def required_scope(method: str, path: str) -> str:
     if method in ("GET", "HEAD", "OPTIONS"):
-        # A plane telemetry POST is ingest; a GET desired-stream is operate-read.
         return "read"
+    # Adapter-side plane posts (the node reporting in / acking a one-shot) are
+    # ingest — the proxy's key must be able to heartbeat. Operator actions on
+    # the plane (command / facts / cascade-stop) stay operate.
+    if path.startswith("/v1/plane/") and path.endswith(("/telemetry", "/consumed")):
+        return "ingest"
     for prefix, scope in _WRITE_POLICY:
         if path.startswith(prefix):
             return scope

@@ -54,7 +54,9 @@ class Backend:
     the env the `main:app` factory reads, so auth / signing / DB are all
     controllable. Restartable on the same DB (for durability tests)."""
 
-    def __init__(self, db_path: Path, log_path: Path, env_extra: dict[str, str] | None = None) -> None:
+    def __init__(
+        self, db_path: Path, log_path: Path, env_extra: dict[str, str] | None = None,
+    ) -> None:
         self.db_path = db_path
         self.log_path = log_path
         self.env_extra = env_extra or {}
@@ -62,7 +64,7 @@ class Backend:
         self.url = f"http://127.0.0.1:{self.port}"
         self._proc: subprocess.Popen[bytes] | None = None
 
-    def start(self) -> "Backend":
+    def start(self) -> Backend:
         env = os.environ.copy()
         env.update(
             {
@@ -101,7 +103,7 @@ class Proxy:
         self.url = f"http://127.0.0.1:{self.port}"
         self._proc: subprocess.Popen[bytes] | None = None
 
-    def start(self) -> "Proxy":
+    def start(self) -> Proxy:
         env = os.environ.copy()
         env.update(
             {
@@ -149,13 +151,13 @@ class WebhookSink:
                 self.send_response(200)
                 self.end_headers()
 
-            def log_message(self, *_args: Any) -> None:  # silence
+            def log_message(self, *_args: object) -> None:  # silence
                 return
 
         self._server = HTTPServer(("127.0.0.1", port), Handler)
         self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)
 
-    def start(self) -> "WebhookSink":
+    def start(self) -> WebhookSink:
         self._thread.start()
         return self
 
@@ -212,12 +214,12 @@ def webhook() -> Iterator[WebhookSink]:
 
 
 async def read_sse(
-    client: httpx.AsyncClient, path: str, want_event: str, timeout: float = 10.0,
+    client: httpx.AsyncClient, path: str, want_event: str, read_timeout: float = 10.0,
 ) -> dict[str, Any]:
     """Read the real text/event-stream until an `event:` of `want_event` with a
     JSON `data:` arrives; return the parsed data. Used for the audit and desired
     streams (which a browser reads with EventSource)."""
-    async with client.stream("GET", path, timeout=timeout) as resp:
+    async with client.stream("GET", path, timeout=read_timeout) as resp:
         assert resp.status_code == 200, f"stream {path} -> {resp.status_code}"
         event: str | None = None
         async for line in resp.aiter_lines():

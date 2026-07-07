@@ -203,6 +203,35 @@ async def test_counterfactual_endpoint_finds_divergence(
     assert data["steps"][2]["reevaluated_verdict"] == "pass"
 
 
+async def test_replay_of_telemetry_only_run_is_422_not_500(
+    client: httpx.AsyncClient,
+) -> None:
+    """A governed node's keepalive run stores only heartbeats (no kernel
+    schema_version) — replay must answer honestly, not crash in the kernel."""
+    await client.post("/v1/plane/nX/telemetry", json={
+        "run_id": "nX-live",
+        "events": [{"seq": 0, "kind": "heartbeat",
+                    "payload": {"applied_version": 0, "level": "NORMAL",
+                                "budget_remaining": None}}],
+    })
+    resp = await client.get("/v1/replay/nX-live")
+    assert resp.status_code == 422
+    assert "no kernel-schema events" in resp.json()["detail"]
+
+
+async def test_telemetry_requires_only_ingest_scope() -> None:
+    """The adapter reports in with an ingest key; heartbeats must not demand
+    the operator's `operate` scope (auth matrix, architecture §9)."""
+    from axor_backend.auth import required_scope
+
+    assert required_scope("POST", "/v1/plane/n1/telemetry") == "ingest"
+    assert required_scope("POST", "/v1/plane/n1/consumed") == "ingest"
+    # Operator actions stay operate.
+    assert required_scope("POST", "/v1/plane/n1/command") == "operate"
+    assert required_scope("POST", "/v1/plane/n1/facts") == "operate"
+    assert required_scope("POST", "/v1/plane/n1/cascade-stop") == "operate"
+
+
 async def test_regression_report_both_sides(client: httpx.AsyncClient) -> None:
     await _ingest_demo(client, "run_attack")
     # a legitimate trace: export of an untainted value

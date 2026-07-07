@@ -35,7 +35,6 @@ services:
       # The taint graph is a derived index over the persisted event log — the
       # backend rebuilds it from Postgres at boot (no graph DB). A per-tenant
       # embedded Kùzu store is available for hosted; it is not wired by default.
-      AXOR_TRACE_DIR: /data/traces
       # Dev convenience: the UI sends unsigned plane commands. For a real
       # deployment set AXOR_OPERATOR_KEYS (JSON op->pubkey) and drop this.
       AXOR_ALLOW_UNSIGNED: ${AXOR_ALLOW_UNSIGNED:-1}
@@ -43,7 +42,6 @@ services:
       AXOR_VENDOR_PUBKEY: ${AXOR_VENDOR_PUBKEY:-}
       # Auth (architecture section 9): empty = open (dev). Set to require a token.
       AXOR_API_TOKEN: ${AXOR_API_TOKEN:-}
-    volumes: ["axordata:/data"]
     ports: ["8400:8400"]
     depends_on:
       postgres:

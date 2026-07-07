@@ -25,6 +25,6 @@ async def test_audit_stream_replays_recorded_events(http: httpx.AsyncClient) -> 
     assert r.status_code == 202
 
     # The stream replays the recorded trace as colour-coded `event:` frames.
-    first = await read_sse(http, f"/v1/runs/{run}/stream", want_event="event", timeout=10.0)
+    first = await read_sse(http, f"/v1/runs/{run}/stream", want_event="event", read_timeout=10.0)
     assert first["seq"] == 0
     assert first["kind"] == "tool_call"

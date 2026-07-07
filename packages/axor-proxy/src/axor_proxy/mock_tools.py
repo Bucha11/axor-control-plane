@@ -28,14 +28,20 @@ _SEARCH_RESULTS = [
 async def web_search(request: Request) -> Response:
     q = request.query_params.get("q", "")
     if request.method == "POST":
-        body = await request.json()
+        try:
+            body = await request.json()
+        except Exception:  # malformed body: fall back to the query param
+            body = {}
         q = body.get("q", body.get("query", q))
     return JSONResponse({"query": q, "results": _SEARCH_RESULTS})
 
 
 async def mcp_tool(request: Request) -> Response:
     """Generic MCP-shaped tool: echoes a tools/call result envelope."""
-    payload = await request.json() if request.method == "POST" else {}
+    try:
+        payload = await request.json() if request.method == "POST" else {}
+    except Exception:
+        payload = {}
     return JSONResponse({
         "jsonrpc": "2.0",
         "id": payload.get("id", 1),

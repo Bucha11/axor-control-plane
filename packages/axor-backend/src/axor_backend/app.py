@@ -245,7 +245,11 @@ def create_app(
 
         async def stream() -> AsyncIterator[dict]:
             try:
-                after = int(last_event_id) if last_event_id else -1
+                # A malformed Last-Event-ID must not kill the stream — replay all.
+                try:
+                    after = int(last_event_id) if last_event_id else -1
+                except ValueError:
+                    after = -1
                 for line in await store.run_events(run_id, after_seq=after):
                     parsed = json.loads(line)
                     yield {"event": "event", "id": str(parsed["seq"]), "data": line}
@@ -290,8 +294,15 @@ def create_app(
         store: Store = request.app.state.store
         config = kernel_config_from_json(body.get("config", {}))
         rows: list[dict[str, Any]] = []
+        skipped: list[str] = []
         for pin in await store.pinned():
-            events = await _events_for(store, pin["run_id"])
+            # A pin whose run has no replayable kernel trace (deleted events,
+            # telemetry-only) must not 4xx the whole report — skip it and say so.
+            try:
+                events = await _events_for(store, pin["run_id"])
+            except HTTPException:
+                skipped.append(pin["run_id"])
+                continue
             rows.append(regression_row(
                 pin["run_id"], pin["side"], pin["label"], events, config
             ))
@@ -301,6 +312,7 @@ def create_app(
             "rows": rows,
             "regressed": regressed,
             "escaped": escaped,
+            "skipped": skipped,
             "safe_to_ship": regressed == 0 and escaped == 0,
         }
 
@@ -328,7 +340,10 @@ def create_app(
         triggers = body.get("triggers", [])
         if not url or not triggers:
             raise HTTPException(400, "url and triggers required")
-        debounce = float(body.get("debounce_seconds", 0.0))
+        try:
+            debounce = float(body.get("debounce_seconds", 0.0))
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(400, "debounce_seconds must be a number") from exc
         try:
             request.app.state.notifier.subscribe(url, triggers, debounce)
         except ValueError as exc:
@@ -350,6 +365,7 @@ def create_app(
 
     @app.post("/v1/runs/{run_id}/cases/{case_index}/share")
     async def create_share(run_id: str, case_index: int, request: Request) -> dict:
+        await _case_run(request, run_id, case_index)  # 404 before minting a dead token
         link = request.app.state.shares.create(run_id, case_index)
         await request.app.state.store.create_share_link(
             link.token, run_id, case_index, _now()
@@ -438,6 +454,8 @@ def create_app(
     @app.post("/v1/keys", status_code=201)
     async def create_key(body: dict, request: Request) -> dict:
         scopes = body.get("scopes", ["read"])
+        if not scopes:
+            raise HTTPException(400, "scopes must be non-empty")
         bad = set(scopes) - auth_mod.SCOPES
         if bad:
             raise HTTPException(400, f"unknown scopes: {sorted(bad)}")
@@ -470,4 +488,18 @@ async def _events_for(store: Store, run_id: str) -> list:
     lines = await store.run_events(run_id)
     if not lines:
         raise HTTPException(404, f"no events for run {run_id}")
-    return parse_trace(lines)
+    # A run's stored lines can mix kernel-schema trace events with plane
+    # telemetry (heartbeats carry no schema_version) — a governed node's
+    # keepalive run is even heartbeat-only. Replay is defined over the kernel
+    # trace, so drop the telemetry lines and be honest when nothing remains,
+    # instead of letting the kernel's SchemaVersionError surface as a 500.
+    kernel_lines = [ln for ln in lines if json.loads(ln).get("schema_version")]
+    if not kernel_lines:
+        raise HTTPException(
+            422, f"run {run_id} has no kernel-schema events to replay "
+            "(plane telemetry only — e.g. heartbeats)",
+        )
+    try:
+        return parse_trace(kernel_lines)
+    except Exception as exc:  # kernel parse errors are client data errors here
+        raise HTTPException(422, f"run {run_id} is not a replayable kernel trace: {exc}") from exc

@@ -41,18 +41,22 @@ class BackendUploader:
         owns = self._client is None
         h = self._headers
         try:
-            await client.post(f"{self._base}/v1/ingest/{run.run_id}", json=payload, headers=h)
-            await client.post(
+            # raise_for_status so a backend 4xx (auth off-key, bad payload) is an
+            # honest {"uploaded": false}, not a silent success.
+            (await client.post(
+                f"{self._base}/v1/ingest/{run.run_id}", json=payload, headers=h,
+            )).raise_for_status()
+            (await client.post(
                 f"{self._base}/v1/runs/{run.run_id}/evidence",
                 json={"node_id": run.node_id, "evidence": evidence}, headers=h,
-            )
+            )).raise_for_status()
             if any(c.deviation is not None for c in run.evidence):
                 # Auto-pin the must-block side (decision 11): traces carrying an
                 # EvidenceCase are the regression corpus's block side.
-                await client.post(
+                (await client.post(
                     f"{self._base}/v1/pins/{run.run_id}",
                     json={"side": "must_block", "label": run.scenario}, headers=h,
-                )
+                )).raise_for_status()
             return {"uploaded": True, "events": len(events),
                     "evidence": len(evidence)}
         except httpx.HTTPError as exc:

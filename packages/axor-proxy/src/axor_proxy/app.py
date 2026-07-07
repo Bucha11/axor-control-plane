@@ -178,7 +178,10 @@ def create_app(state: ProxyState) -> Starlette:
         return response
 
     async def start_run(request: Request) -> Response:
-        payload = await request.json()
+        try:
+            payload = await request.json()
+        except json.JSONDecodeError:
+            return JSONResponse({"error": "malformed_json"}, status_code=400)
         run = state.runs.start(
             scenario=payload.get("scenario", "custom"),
             faults=payload.get("faults", []),
@@ -222,7 +225,10 @@ def create_app(state: ProxyState) -> Starlette:
         run = state.runs.get(request.path_params["run_id"])
         if run is None:
             return JSONResponse({"error": "unknown_run"}, status_code=404)
-        payload = await request.json()
+        try:
+            payload = await request.json()
+        except json.JSONDecodeError:
+            return JSONResponse({"error": "malformed_json"}, status_code=400)
         cases = await state.runs.submit_claim(
             run, payload.get("text", ""), payload.get("claims")
         )
@@ -278,9 +284,20 @@ def create_app(state: ProxyState) -> Starlette:
             )
         from axor_proxy.governed import spawn_governed_node
 
-        result = await spawn_governed_node(state.backend_url, state.ingest_key)
+        try:
+            result = await spawn_governed_node(state.backend_url, state.ingest_key)
+        except httpx.HTTPError as exc:
+            # The trace upload failed — say so instead of reporting a live node.
+            return JSONResponse(
+                {"error": "backend_upload_failed", "detail": str(exc)},
+                status_code=502,
+            )
         task = result.pop("_task")
-        state.governed[result["node_id"]] = task
+        node_id = result["node_id"]
+        state.governed[node_id] = task
+        # The keepalive ends after its TTL — drop the handle so repeated spawns
+        # don't accumulate finished tasks.
+        task.add_done_callback(lambda _t: state.governed.pop(node_id, None))
         return JSONResponse(result)
 
     async def healthz(request: Request) -> Response:

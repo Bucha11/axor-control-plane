@@ -214,11 +214,13 @@ async def spawn_governed_node(
     base = backend_url.rstrip("/")
     headers = {"Authorization": f"Bearer {ingest_key}"} if ingest_key else {}
     async with httpx.AsyncClient(timeout=15.0) as client:
-        await client.post(
+        # Surface a failed upload (auth, backend down) instead of reporting a
+        # governed node whose trace never landed — the route turns this into 502.
+        (await client.post(
             f"{base}/v1/ingest/{run_id}",
             json={"node_id": node_id, "scenario": "governed", "events": lines},
             headers=headers,
-        )
+        )).raise_for_status()
         if denials:
             evidence = [{
                 "scenario": "governed",
@@ -230,11 +232,11 @@ async def spawn_governed_node(
                 "fault_attribution": [{"fault_mode": "instruction_injection",
                                        "tool_name": "web_search", "influence": "strong"}],
             }]
-            await client.post(
+            (await client.post(
                 f"{base}/v1/runs/{run_id}/evidence",
                 json={"node_id": node_id, "scenario": "governed", "evidence": evidence},
                 headers=headers,
-            )
+            )).raise_for_status()
 
     # Keep the node live on the plane for the TTL. The heartbeat telemetry goes
     # to a SEPARATE run id (keyed by node) so it never pollutes the governed
