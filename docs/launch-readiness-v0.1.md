@@ -13,9 +13,9 @@ Status legend: ☐ open · ◐ partial exists · ☑ done.
 
 | P | Item | Why / done-when | Status |
 |---|---|---|---|
-| P0 | **MCP-native onboarding** | Onboarding says "parsing a real MCP manifest is on the roadmap" — for the 2026 agent stack MCP *is* the tool layer. Done when: paste/upload an MCP manifest → tools declared, proxied MCP endpoint works against a real client. | ☐ |
-| P0 | **Streaming passthrough in the proxy** | `tool_route` buffers the full upstream body; SSE/chunked tool responses (LLM-backed tools) stall. Done when: pass-through streams, observation records size/hash without buffering. | ☐ |
-| P0 | **DB migrations** | `create_all` only; first schema change after launch strands early adopters. Done when: alembic baseline + upgrade path tested SQLite+Postgres. | ☐ |
+| P0 | **MCP-native onboarding** | Onboarding says "parsing a real MCP manifest is on the roadmap" — for the 2026 agent stack MCP *is* the tool layer. Done when: paste/upload an MCP manifest → tools declared, proxied MCP endpoint works against a real client. | ☑ |
+| P0 | **Streaming passthrough in the proxy** | `tool_route` buffers the full upstream body; SSE/chunked tool responses (LLM-backed tools) stall. Done when: pass-through streams, observation records size/hash without buffering. | ☑ |
+| P0 | **DB migrations** | `create_all` only; first schema change after launch strands early adopters. Done when: alembic baseline + upgrade path tested SQLite+Postgres. | ☑ |
 | P1 | **Concurrent runs per proxy** | One active run at a time (v1) breaks the first team that shares a proxy. Done when: N armed runs keyed by header/route, docs updated. | ☐ |
 | P1 | **OpenAI Agents SDK + CrewAI adapters** | The Invokable wrap is axor-core-native; the two biggest agent frameworks need a 20-line published recipe each (full middleware later). Done when: `examples/` runs green in CI against both. | ☐ |
 | P1 | **Retention/rotation** | Unbounded events table + trace dir. Done when: `AXOR_RETENTION_DAYS` prunes runs + traces, documented. | ☐ |
@@ -25,8 +25,8 @@ Status legend: ☐ open · ◐ partial exists · ☑ done.
 
 | P | Item | Done-when | Status |
 |---|---|---|---|
-| P0 | **SECURITY.md + threat model page** | Disclosure address, supported versions, and a one-page threat model: what the proxy sees, what is never stored (raw bodies), advisory-overlay failure mode ("Axor down ⇒ agent unaffected"). This is the #1 pre-sales objection — answer it in the repo. | ☐ |
-| P0 | **Default-secure compose** | `.env.example` ships auth ON commented with one-liner to disable, not the reverse; CORS explicit; share-token entropy documented. | ◐ |
+| P0 | **SECURITY.md + threat model page** | Disclosure address, supported versions, and a one-page threat model: what the proxy sees, what is never stored (raw bodies), advisory-overlay failure mode ("Axor down ⇒ agent unaffected"). This is the #1 pre-sales objection — answer it in the repo. | ☑ |
+| P0 | **Default-secure compose** | `.env.example` ships auth ON commented with one-liner to disable, not the reverse; CORS explicit; share-token entropy documented. | ☑ |
 | P1 | **Dependency/SBOM + pip-audit in CI** | `pip-audit`/`npm audit` gate + published SBOM artifact. | ☐ |
 | P2 | SOC2-lite page (controls narrative, no cert claim), DPA template for design partners. | | ☐ |
 
