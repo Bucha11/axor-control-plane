@@ -25,7 +25,7 @@ test.describe("adoption", () => {
     await setConnection(page, { mode: "adapter" });
     await goHash(page, "home");
     await expect(page.getByText("New here?", { exact: false })).toBeVisible();
-    await page.getByRole("button", { name: "Turn on", exact: true }).click();
+    await page.getByRole("button", { name: "Learn mode", exact: true }).click();
 
     // Now every primary surface carries its coach note (hash nav keeps the
     // in-memory store, so learn stays on).

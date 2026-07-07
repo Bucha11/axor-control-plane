@@ -31,6 +31,13 @@ tab carries one — Eval, Control, Replay, Regression, Config Builder, Onboardin
 Health, Settings, Expert, Pricing. Learn state lives in the store
 (`learnMode` / `learnSeen` / `coachDismissed`, persisted); a one-time Home nudge
 offers to turn it on, and Settings → LEARN MODE has the toggle + "reset tips".
+`components/Tour.tsx` is the guided tour — a 7-stop spotlight walkthrough
+(Home ladder → Eval → Replay → Control → Regression → learn toggle) that
+navigates the hash router itself, spotlights each target by its `data-tour`
+attribute (dimmed backdrop + cut-out), and falls back to a centered card when a
+target isn't on screen. Starting it connects demo-mode and seeds the example
+runs so every stop shows real data; `tourStep` is persisted so a reload resumes.
+Launch from the Home nudge ("Take the tour") or Settings → LEARN MODE.
 
 ## E2E (Playwright)
 

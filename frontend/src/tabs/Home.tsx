@@ -6,6 +6,7 @@ import { C, MONO } from "../theme";
 import { navigate } from "../router";
 import { ConnectionMode, MODE_LABEL, isConnected, useApp } from "../store";
 import Tooltip from "../components/Tooltip";
+import { useStartTour } from "../components/Tour";
 
 const LADDER: { mode: ConnectionMode; blurb: string }[] = [
   { mode: "demo", blurb: "our mock broken tools · zero creds · one click" },
@@ -20,6 +21,7 @@ export default function Home() {
   const learnSeen = useApp((s) => s.learnSeen);
   const setLearnMode = useApp((s) => s.setLearnMode);
   const markLearnSeen = useApp((s) => s.markLearnSeen);
+  const startTour = useStartTour();
 
   return (
     <div style={{ maxWidth: 640, margin: "0 auto" }}>
@@ -38,11 +40,14 @@ export default function Home() {
         >
           <div className="flex items-center gap-2" style={{ fontFamily: MONO, fontSize: 11.5, color: C.mut }}>
             <GraduationCap size={14} color={C.steel} />
-            New here? Turn on <span style={{ color: C.steel }}>Learn mode</span> for a guided note on each screen.
+            New here? Take the 60-second tour, or turn on <span style={{ color: C.steel }}>Learn mode</span> for a note on each screen.
           </div>
           <div className="flex items-center gap-2">
-            <button onClick={() => setLearnMode(true)} style={{ background: "none", border: `1px solid ${C.steel}`, borderRadius: 5, color: C.steel, fontFamily: MONO, fontSize: 11, padding: "4px 10px", cursor: "pointer" }}>
-              Turn on
+            <button onClick={startTour} style={{ background: C.steel, border: `1px solid ${C.steel}`, borderRadius: 5, color: C.bg, fontFamily: MONO, fontSize: 11, fontWeight: 700, padding: "4px 10px", cursor: "pointer", whiteSpace: "nowrap" }}>
+              Take the tour
+            </button>
+            <button onClick={() => setLearnMode(true)} style={{ background: "none", border: `1px solid ${C.steel}`, borderRadius: 5, color: C.steel, fontFamily: MONO, fontSize: 11, padding: "4px 10px", cursor: "pointer", whiteSpace: "nowrap" }}>
+              Learn mode
             </button>
             <button onClick={markLearnSeen} aria-label="dismiss" style={{ background: "none", border: "none", color: C.dim, cursor: "pointer", padding: 0 }}>
               <X size={13} />
@@ -81,7 +86,7 @@ export default function Home() {
       <div style={{ fontFamily: MONO, fontSize: 11, color: C.mut, margin: "20px 0 10px" }}>
         or run it on an agent — pick a depth, each sold by value already seen
       </div>
-      <div style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 10 }}>
+      <div data-tour="ladder" style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 10 }}>
         {LADDER.map((rung, i) => (
           <div
             key={rung.mode}

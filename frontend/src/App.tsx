@@ -9,6 +9,7 @@ import { C, MONO } from "./theme";
 import { navigate, useRoute } from "./router";
 import { MODE_LABEL, isConnected, useApp } from "./store";
 import Tooltip from "./components/Tooltip";
+import Tour from "./components/Tour";
 import Home from "./tabs/Home";
 import Experiment from "./tabs/Experiment";
 import ControlTab from "./tabs/ControlTab";
@@ -92,6 +93,7 @@ export default function App() {
       {key === "expert" && <ExpertView />}
       {key === "pricing" && <Pricing />}
       {key === "settings" && <Settings />}
+      <Tour />
     </div>
   );
 }
@@ -146,6 +148,7 @@ function LearnToggle() {
         onClick={() => setLearn(!learn)}
         aria-pressed={learn}
         aria-label="toggle learn mode"
+        data-tour="learn"
         style={{
           display: "flex", alignItems: "center", gap: 5,
           background: learn ? "rgba(127,168,204,0.12)" : "none",

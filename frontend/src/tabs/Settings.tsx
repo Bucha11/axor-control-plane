@@ -9,6 +9,7 @@ import { api } from "../api";
 import { MODE_LABEL, useApp } from "../store";
 import { C, MONO, btn } from "../theme";
 import Coach from "../components/Coach";
+import { useStartTour } from "../components/Tour";
 
 const TRIGGERS = [
   { id: "level_transition_up", label: "degradation level rises" },
@@ -70,6 +71,7 @@ export default function Settings() {
   const setLearnMode = useApp((s) => s.setLearnMode);
   const coachDismissed = useApp((s) => s.coachDismissed);
   const resetCoach = useApp((s) => s.resetCoach);
+  const startTour = useStartTour();
 
   return (
     <div style={{ maxWidth: 640, margin: "0 auto" }}>
@@ -88,6 +90,13 @@ export default function Settings() {
             coach notes on each screen — off by default, this stays quiet-until-wrong
           </span>
           <div className="flex items-center gap-2">
+            <button
+              onClick={startTour}
+              title="a 7-stop spotlight walkthrough of the whole funnel"
+              style={btn({ color: C.steel, borderColor: C.steel, fontSize: 11, padding: "4px 12px" })}
+            >
+              start tour
+            </button>
             <button
               onClick={() => setLearnMode(!learnMode)}
               style={btn({ color: learnMode ? C.steel : C.mut, borderColor: learnMode ? C.steel : C.line, fontSize: 11, padding: "4px 12px" })}

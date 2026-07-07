@@ -136,7 +136,7 @@ export default function Experiment({ runId, autostart }: { runId?: string; autos
       </Coach>
 
       {/* Configure + Run */}
-      <div className="p-4 mb-4" style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 8 }}>
+      <div data-tour="eval-config" className="p-4 mb-4" style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 8 }}>
         <div style={{ fontSize: 10, fontFamily: MONO, color: C.dim, letterSpacing: "0.1em", marginBottom: 10 }}>
           CONFIGURE · TOOL DEPRIVATION
         </div>

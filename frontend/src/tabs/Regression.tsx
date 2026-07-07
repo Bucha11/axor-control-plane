@@ -118,7 +118,7 @@ export default function Regression({ initialConfig }: { initialConfig?: string }
         </div>
       )}
 
-      <div className="flex items-center gap-3 mt-2 mb-8">
+      <div data-tour="regression-run" className="flex items-center gap-3 mt-2 mb-8">
         <Tooltip content="Replay every pinned run under the config above and report which attacks stayed blocked and which legit flows still pass.">
           <button onClick={run} disabled={regression.isPending} style={btn({ color: C.steel, fontSize: 12, padding: "8px 14px" })}>
             {regression.isPending ? <Loader2 size={13} className="animate-spin" /> : <Play size={13} />} Run regression

@@ -130,10 +130,12 @@ export default function ReplayTab({ runId: runIdProp, cursor: cursorProp }: { ru
   if (!runId) {
     return (
       <div style={{ maxWidth: 640, margin: "0 auto" }}>
-        <div style={{ fontFamily: MONO, fontSize: 12.5, color: C.mut, marginBottom: 12 }}>
-          No runs yet. Run an experiment from the Eval tab —
+        <div data-tour="replay-picker">
+          <div style={{ fontFamily: MONO, fontSize: 12.5, color: C.mut, marginBottom: 12 }}>
+            No runs yet. Run an experiment from the Eval tab —
+          </div>
+          <SeedButton label="or load an example adapter run →" />
         </div>
-        <SeedButton label="or load an example adapter run →" />
       </div>
     );
   }
@@ -179,7 +181,7 @@ export default function ReplayTab({ runId: runIdProp, cursor: cursorProp }: { ru
         shows the first step that would change. The provenance graph traces where a
         value came from. Pin a run to build the regression corpus.
       </Coach>
-      <div className="flex items-center gap-3 mb-3">
+      <div data-tour="replay-picker" className="flex items-center gap-3 mb-3">
         <select
           value={runId}
           onChange={(e) => pickRun(e.target.value)}

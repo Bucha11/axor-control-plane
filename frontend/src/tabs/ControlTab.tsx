@@ -33,7 +33,7 @@ function SpawnGoverned({ switchToAdapter }: { switchToAdapter?: boolean }) {
     onError: (e: Error) => setErr(e.message),
   });
   return (
-    <div className="mt-3">
+    <div className="mt-3" data-tour="spawn">
       <Tooltip content="Starts a real axor-core governed agent (an IntentLoop) on the proxy and connects it to the plane — so you can watch a live node heartbeat and obey your interventions without wiring your own.">
         <button
           onClick={() => spawn.mutate()}
@@ -182,7 +182,9 @@ function ControlBody({ focusNode, testBench }: { focusNode?: string; testBench: 
         {list.length} node{list.length === 1 ? "" : "s"} · live
       </div>
 
-      <div style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 8 }}>
+      {/* Same tour anchor as SpawnGoverned: when nodes exist the tour spotlights
+          the live topology instead of the (absent) spawn button. */}
+      <div data-tour="spawn" style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 8 }}>
         {list.map((n, i) => {
           const hot = isHot(n);
           return (
