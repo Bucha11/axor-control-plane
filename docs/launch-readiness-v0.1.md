@@ -16,9 +16,9 @@ Status legend: ☐ open · ◐ partial exists · ☑ done.
 | P0 | **MCP-native onboarding** | Onboarding says "parsing a real MCP manifest is on the roadmap" — for the 2026 agent stack MCP *is* the tool layer. Done when: paste/upload an MCP manifest → tools declared, proxied MCP endpoint works against a real client. | ☑ |
 | P0 | **Streaming passthrough in the proxy** | `tool_route` buffers the full upstream body; SSE/chunked tool responses (LLM-backed tools) stall. Done when: pass-through streams, observation records size/hash without buffering. | ☑ |
 | P0 | **DB migrations** | `create_all` only; first schema change after launch strands early adopters. Done when: alembic baseline + upgrade path tested SQLite+Postgres. | ☑ |
-| P1 | **Concurrent runs per proxy** | One active run at a time (v1) breaks the first team that shares a proxy. Done when: N armed runs keyed by header/route, docs updated. | ☐ |
+| P1 | **Concurrent runs per proxy** | One active run at a time (v1) breaks the first team that shares a proxy. Done when: N armed runs keyed by header/route, docs updated. | ☑ |
 | P1 | **OpenAI Agents SDK + CrewAI adapters** | The Invokable wrap is axor-core-native; the two biggest agent frameworks need a 20-line published recipe each (full middleware later). Done when: `examples/` runs green in CI against both. | ☐ |
-| P1 | **Retention/rotation** | Unbounded events table + trace dir. Done when: `AXOR_RETENTION_DAYS` prunes runs + traces, documented. | ☐ |
+| P1 | **Retention/rotation** | Unbounded events table + trace dir. Done when: `AXOR_RETENTION_DAYS` prunes runs + traces, documented. | ☑ |
 | P2 | Hosted multi-tenancy (per-tenant Kùzu is stubbed) — explicitly **not** for launch; self-host only. | | ◐ |
 
 ## 2. Security & trust posture — the first thing a security buyer greps
@@ -27,18 +27,18 @@ Status legend: ☐ open · ◐ partial exists · ☑ done.
 |---|---|---|---|
 | P0 | **SECURITY.md + threat model page** | Disclosure address, supported versions, and a one-page threat model: what the proxy sees, what is never stored (raw bodies), advisory-overlay failure mode ("Axor down ⇒ agent unaffected"). This is the #1 pre-sales objection — answer it in the repo. | ☑ |
 | P0 | **Default-secure compose** | `.env.example` ships auth ON commented with one-liner to disable, not the reverse; CORS explicit; share-token entropy documented. | ☑ |
-| P1 | **Dependency/SBOM + pip-audit in CI** | `pip-audit`/`npm audit` gate + published SBOM artifact. | ☐ |
+| P1 | **Dependency/SBOM + pip-audit in CI** | `pip-audit`/`npm audit` gate + published SBOM artifact. | ☑ |
 | P2 | SOC2-lite page (controls narrative, no cert claim), DPA template for design partners. | | ☐ |
 
 ## 3. Distribution & DevRel — the launch itself
 
 | P | Item | Done-when | Status |
 |---|---|---|---|
-| P0 | **Publish to PyPI**: `axor-proxy` (uvx path is quoted all over the UI/docs and currently 404s), `axor-backend`. Compose images to GHCR. | `uvx axor-proxy --demo` works on a clean machine. | ☐ |
+| P0 | **Publish to PyPI**: `axor-proxy` (uvx path is quoted all over the UI/docs and currently 404s), `axor-backend`. Compose images to GHCR. | `uvx axor-proxy --demo` works on a clean machine. | ◐ (release.yml + metadata ready; needs PyPI trusted-publisher config + axor-eval on PyPI) |
 | P0 | **Public landing + docs site** | The in-app Home is not a website. Static site: hero = demo GIF (have) + "Run demo-mode" → hosted sandbox or 2-command local start; docs = quickstart, depth ladder, protocol, FAQ. | ☐ |
 | P0 | **Launch post** | "Your agent lies when its tools fail — here's the receipt": narrative + GIF + benchmark table (catch rates by fault mode). HN + r/LocalLLaMA + X thread. | ☐ |
-| P1 | **EvidenceCase link unfurl** | Share permalink gets OG tags + "Caught by Axor" footer — every shared receipt is an ad. (Revocability already done.) | ☐ |
-| P1 | **Community surface**: CONTRIBUTING.md, issue templates, GH Discussions on, public ROADMAP.md (honest: hosted=later, SSO=Enterprise-later). | | ☐ |
+| P1 | **EvidenceCase link unfurl** | Share permalink gets OG tags + "Caught by Axor" footer — every shared receipt is an ad. (Revocability already done.) | ☑ |
+| P1 | **Community surface**: CONTRIBUTING.md, issue templates, GH Discussions on, public ROADMAP.md (honest: hosted=later, SSO=Enterprise-later). | | ☑ (Discussions toggle needs repo admin) |
 | P1 | **5-minute video**: demo → proxy on your tools → caught lie → replay. | | ☐ |
 | P2 | Comparison page ("vs observability, vs guardrails") — honest table, no FUD. | | ☐ |
 
@@ -55,8 +55,8 @@ Status legend: ☐ open · ◐ partial exists · ☑ done.
 | P | Item | Done-when | Status |
 |---|---|---|---|
 | P0 | **Pricing page CTA → capture**: "Get Team" = email/checkout link (Stripe payment link is enough; invoicing by hand). Today the page is display-only. | A stranger can pay without talking to us. | ☐ |
-| P0 | **License issuance CLI**: vendor keypair management + `sign_license` wrapped as a script; issue/renew/revoke runbook. Verification exists; issuance is manual code today. | | ◐ |
-| P1 | **Node-count telemetry for license ceiling**: EE check compares live node count vs `node_ceiling` and warns (never blocks safety — Line 1). | | ☐ |
+| P0 | **License issuance CLI**: vendor keypair management + `sign_license` wrapped as a script; issue/renew/revoke runbook. Verification exists; issuance is manual code today. | | ☑ |
+| P1 | **Node-count telemetry for license ceiling**: EE check compares live node count vs `node_ceiling` and warns (never blocks safety — Line 1). | | ☑ |
 | P1 | **Design-partner kit**: 2-pager (what they get: fixed price, roadmap influence, case study), 3 slots, success criteria per partner. | | ☐ |
 | P2 | EU AI Act mapping one-pager (receipt/audit-trail ↔ articles) — cheapest compliance-inbound asset. | | ☐ |
 

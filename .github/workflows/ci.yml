@@ -83,6 +83,37 @@ jobs:
           path: frontend/playwright-report
           retention-days: 7
 
+  # ── Supply chain: dependency audit + SBOM (launch-readiness §2) ──────────────
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v4
+        with:
+          python-version: "3.12"
+      - name: Authorize ecosystem git deps
+        run: |
+          git config --global url."https://x-access-token:${TOKEN}@github.com/".insteadOf "https://github.com/"
+        env:
+          TOKEN: ${{ secrets.AXOR_ECOSYSTEM_TOKEN || secrets.GITHUB_TOKEN }}
+      - name: Export locked requirements (SBOM input)
+        run: |
+          uv sync --all-packages
+          uv export --all-packages --no-emit-workspace --no-hashes > requirements-sbom.txt
+      - name: pip-audit
+        run: uvx pip-audit -r requirements-sbom.txt --skip-editable
+      - name: Upload SBOM (requirements export)
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom-requirements
+          path: requirements-sbom.txt
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.33.0
+      - name: pnpm audit (prod deps)
+        working-directory: frontend
+        run: pnpm audit --prod
+
   # ── Deploy gate: build the real images, bring the stack up, smoke the origin ─
   # Runs on the deploy path (push to main) and on demand — not on every PR, since
   # a full image build (private ecosystem deps + the axor-core tree) is heavy.

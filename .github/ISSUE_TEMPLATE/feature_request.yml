@@ -1,0 +1,18 @@
+name: Feature request
+description: Propose an improvement
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What are you trying to do that you can't? (The use case, not the solution.)
+    validations: { required: true }
+  - type: textarea
+    id: proposal
+    attributes: { label: Proposed shape (optional) }
+  - type: dropdown
+    id: depth
+    attributes:
+      label: Your connection depth
+      options: [demo, proxy, adapter, not using yet]
