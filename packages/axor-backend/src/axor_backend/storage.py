@@ -14,6 +14,7 @@ from sqlalchemy import (
     JSON,
     Boolean,
     Column,
+    Float,
     Integer,
     MetaData,
     String,
@@ -90,6 +91,29 @@ pins = Table(
     Column("run_id", String(64), primary_key=True),
     Column("side", String(16), nullable=False),  # must_block | must_pass
     Column("label", String(200), nullable=False, default=""),
+)
+
+# Share links & notification subscriptions are PRIMARY user data (a revocable
+# permalink; a webhook the on-call registered), not a derived index like the
+# taint graph — so they persist here and rehydrate into their in-memory holders
+# at boot. Without this a restart 404s every shared EvidenceCase and silently
+# stops every notification.
+share_links = Table(
+    "share_links", metadata,
+    Column("token", String(64), primary_key=True),
+    Column("run_id", String(64), nullable=False),
+    Column("case_index", Integer, nullable=False),
+    Column("revoked", Boolean, nullable=False, default=False),
+    Column("created_ts", String(40), nullable=False),
+)
+
+notification_subs = Table(
+    "notification_subs", metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("url", String(500), nullable=False),
+    Column("triggers", String(300), nullable=False),  # comma-separated, sorted
+    Column("debounce_seconds", Float, nullable=False, default=0.0),
+    UniqueConstraint("url", "triggers", name="uq_sub_url_triggers"),
 )
 
 api_keys = Table(
@@ -406,4 +430,68 @@ class Store:
             rows = (await conn.execute(select(pins))).all()
         return [
             {"run_id": r.run_id, "side": r.side, "label": r.label} for r in rows
+        ]
+
+    # ── share links (EvidenceCase permalinks, spec §8.3) ──────────────────────
+
+    async def create_share_link(
+        self, token: str, run_id: str, case_index: int, ts: str,
+    ) -> None:
+        async with self.engine.begin() as conn:
+            await conn.execute(insert(share_links).values(
+                token=token, run_id=run_id, case_index=case_index,
+                revoked=False, created_ts=ts,
+            ))
+
+    async def revoke_share_link(self, token: str) -> bool:
+        async with self.engine.begin() as conn:
+            result = await conn.execute(
+                update(share_links).where(share_links.c.token == token)
+                .values(revoked=True)
+            )
+        return bool(result.rowcount)
+
+    async def list_share_links(self) -> list[dict[str, Any]]:
+        async with self.engine.connect() as conn:
+            rows = (await conn.execute(select(share_links))).all()
+        return [
+            {"token": r.token, "run_id": r.run_id, "case_index": r.case_index,
+             "revoked": r.revoked}
+            for r in rows
+        ]
+
+    # ── notification subscriptions (spec §16) ─────────────────────────────────
+
+    async def add_subscription(
+        self, url: str, triggers: list[str], debounce_seconds: float,
+    ) -> None:
+        """Persist a subscription; idempotent on (url, trigger-set) so a repeated
+        subscribe or a boot rehydrate never multiplies deliveries."""
+        joined = ",".join(sorted(triggers))
+        async with self.engine.begin() as conn:
+            dup = (await conn.execute(
+                select(notification_subs.c.id).where(
+                    notification_subs.c.url == url,
+                    notification_subs.c.triggers == joined,
+                )
+            )).first()
+            if dup is not None:
+                await conn.execute(
+                    update(notification_subs)
+                    .where(notification_subs.c.id == dup.id)
+                    .values(debounce_seconds=debounce_seconds)
+                )
+                return
+            await conn.execute(insert(notification_subs).values(
+                url=url, triggers=joined, debounce_seconds=debounce_seconds,
+            ))
+
+    async def list_subscriptions(self) -> list[dict[str, Any]]:
+        async with self.engine.connect() as conn:
+            rows = (await conn.execute(select(notification_subs))).all()
+        return [
+            {"url": r.url,
+             "triggers": [t for t in r.triggers.split(",") if t],
+             "debounce_seconds": r.debounce_seconds}
+            for r in rows
         ]

@@ -67,6 +67,17 @@ def create_app(
         # rebuild it from the DB at boot so it survives restarts (and a fresh
         # instance catches up) without a graph database.
         await rehydrate_graph(app.state.store, app.state.graph)
+        # Share links and notification subscriptions are primary data: rebuild
+        # their in-memory holders from the DB so a restart keeps permalinks live
+        # and keeps notifications firing (see storage.share_links / _subs).
+        for link in await app.state.store.list_share_links():
+            app.state.shares.load(
+                link["token"], link["run_id"], link["case_index"], link["revoked"],
+            )
+        for sub in await app.state.store.list_subscriptions():
+            app.state.notifier.subscribe(
+                sub["url"], sub["triggers"], sub["debounce_seconds"],
+            )
         # The node_stale trigger is edge-detected by a background sweep (spec
         # §16): a silent node emits nothing, so its absence is what we watch.
         async with running_stale_monitor(app):
@@ -317,12 +328,14 @@ def create_app(
         triggers = body.get("triggers", [])
         if not url or not triggers:
             raise HTTPException(400, "url and triggers required")
+        debounce = float(body.get("debounce_seconds", 0.0))
         try:
-            request.app.state.notifier.subscribe(
-                url, triggers, float(body.get("debounce_seconds", 0.0))
-            )
+            request.app.state.notifier.subscribe(url, triggers, debounce)
         except ValueError as exc:
             raise HTTPException(400, str(exc)) from exc
+        # Persist so the subscription survives a restart (idempotent on
+        # url+triggers, so the boot rehydrate never double-registers).
+        await request.app.state.store.add_subscription(url, triggers, debounce)
         return {"subscribed": url, "triggers": triggers}
 
     @app.get("/v1/notifications/dead-letters")
@@ -338,6 +351,9 @@ def create_app(
     @app.post("/v1/runs/{run_id}/cases/{case_index}/share")
     async def create_share(run_id: str, case_index: int, request: Request) -> dict:
         link = request.app.state.shares.create(run_id, case_index)
+        await request.app.state.store.create_share_link(
+            link.token, run_id, case_index, _now()
+        )
         return {"token": link.token, "url": f"/v1/share/{link.token}"}
 
     @app.delete("/v1/share/{token}")
@@ -345,6 +361,7 @@ def create_app(
         ok = request.app.state.shares.revoke(token)
         if not ok:
             raise HTTPException(404, "unknown token")
+        await request.app.state.store.revoke_share_link(token)
         return {"revoked": token}
 
     @app.get("/v1/share/{token}")

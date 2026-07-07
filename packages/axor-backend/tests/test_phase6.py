@@ -262,6 +262,59 @@ async def test_share_link_is_revocable_and_scrubs_bodies(
     assert (await client.get(f"/v1/share/{token}")).status_code == 404
 
 
+async def test_share_links_and_subscriptions_survive_a_restart(
+    tmp_path: pathlib.Path,
+) -> None:
+    """Share links and notification subscriptions are primary data — a backend
+    restart must not 404 a live permalink or silently stop notifications. Two
+    app instances over one DB file stand in for the restart."""
+    db = f"sqlite+aiosqlite:///{tmp_path}/axor.db"
+
+    def app():  # a fresh instance, same DB — i.e. a restart
+        return create_app(database_url=db, operator_keys={}, allow_unsigned=True)
+
+    a = app()
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=a), base_url="http://backend.test"
+    ) as c, a.router.lifespan_context(a):
+        await c.post("/v1/ingest/run_s", json={"node_id": "n1", "events": [
+            {"schema_version": "1.0", "seq": 0, "node_id": "n1", "kind": "claim",
+             "ts": "t", "causal_root": None, "gate": None, "verdict": None,
+             "payload": {}},
+        ]})
+        await c.post("/v1/runs/run_s/evidence", json={"evidence": [{
+            "scenario": "demo", "deviation": "fabricated_tool_result",
+            "verdict_source": "deterministic", "confidence": 1.0,
+            "observed_reality": {"tool": "web_search"},
+            "agent_claim": "ok", "fault_attribution": [],
+        }]})
+        token = (await c.post("/v1/runs/run_s/cases/0/share")).json()["token"]
+        await c.post("/v1/notifications/subscribe", json={
+            "url": "http://sink.test/hook", "triggers": ["evidence_run"],
+        })
+
+    # Restart: brand-new app, same DB. The link still resolves and the
+    # subscription is back in the notifier (not just a dead DB row).
+    b = app()
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=b), base_url="http://backend.test"
+    ) as c, b.router.lifespan_context(b):
+        assert (await c.get(f"/v1/share/{token}")).status_code == 200
+        subs = b.state.notifier._subs  # type: ignore[attr-defined]
+        assert [s.url for s in subs] == ["http://sink.test/hook"]
+
+        # A revoke also persists across the next restart.
+        assert (await c.delete(f"/v1/share/{token}")).status_code == 200
+
+    d = app()
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=d), base_url="http://backend.test"
+    ) as c, d.router.lifespan_context(d):
+        assert (await c.get(f"/v1/share/{token}")).status_code == 404
+        # Rehydrate is idempotent: the one subscription is not duplicated.
+        assert len(d.state.notifier._subs) == 1  # type: ignore[attr-defined]
+
+
 async def test_export_endpoint_renders_receipt(client: httpx.AsyncClient) -> None:
     await client.post("/v1/ingest/run_x2", json={"node_id": "n1", "events": [
         {"schema_version": "1.0", "seq": 0, "node_id": "n1", "kind": "claim",

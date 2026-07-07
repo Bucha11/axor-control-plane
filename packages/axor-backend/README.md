@@ -12,7 +12,7 @@ Modules:
 |---|---|
 | `app.py` | app factory: routes, auth middleware, lifespan (stale monitor) |
 | `plane.py` | plane service (protocol v0.2): `/command`, `/desired` (SSE), `/telemetry`, `/facts`, `/cascade-stop` |
-| `storage.py` | append-only events + runs/desired/reported/facts/pins/keys; JSON→JSONB on Postgres |
+| `storage.py` | append-only events + runs/desired/reported/facts/pins/keys/share-links/notification-subs; JSON→JSONB on Postgres |
 | `replay_api.py` | config→`KernelConfig`, scrubber/counterfactual payloads |
 | `graph.py` | taint graph — a derived index over the event log; `InMemoryGraphStore` (default, rebuilt from the DB at boot) + `KuzuGraphStore`; trace→derivation folding |
 | `signing.py` | operator command signing — delegates JCS to `axor_core.kernel.canonicalize` |

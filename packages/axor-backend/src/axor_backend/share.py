@@ -36,6 +36,13 @@ class ShareRegistry:
         self._links[token] = link
         return link
 
+    def load(self, token: str, run_id: str, case_index: int, revoked: bool) -> None:
+        """Rehydrate one persisted link at boot (the store is the source of
+        truth; this in-memory index is rebuilt from it, like the taint graph)."""
+        self._links[token] = ShareLink(
+            token=token, run_id=run_id, case_index=case_index, revoked=revoked,
+        )
+
     def resolve(self, token: str) -> ShareLink | None:
         link = self._links.get(token)
         if link is None or link.revoked:
