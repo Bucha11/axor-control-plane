@@ -4,8 +4,10 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
 
 jobs:
+  # ── Python: lint + unit + backend E2E (real backend/proxy subprocesses) ──────
   python:
     runs-on: ubuntu-latest
     steps:
@@ -25,5 +27,111 @@ jobs:
         run: uv sync --all-packages
       - name: Lint
         run: uv run ruff check .
+      # `pytest` collects the backend E2E suite too — it boots the real backend
+      # and proxy as subprocesses (marker `e2e`). Run it explicitly first so a
+      # failure there is legible, then the whole suite.
+      - name: Backend E2E
+        run: uv run pytest -q -m e2e
       - name: Tests
         run: uv run pytest -q
+
+  # ── Frontend: typecheck + build + Playwright E2E (boots the whole stack) ─────
+  frontend-e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v4
+        with:
+          python-version: "3.12"
+      - name: Authorize ecosystem git deps
+        run: |
+          git config --global url."https://x-access-token:${TOKEN}@github.com/".insteadOf "https://github.com/"
+        env:
+          TOKEN: ${{ secrets.AXOR_ECOSYSTEM_TOKEN || secrets.GITHUB_TOKEN }}
+      # The Playwright webServer boots the real backend + proxy (`uv run`), so
+      # the Python workspace must be installed.
+      - name: Sync workspace
+        run: uv sync --all-packages
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.33.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+      - name: Install frontend deps
+        working-directory: frontend
+        run: pnpm install --frozen-lockfile
+      - name: Install Chromium
+        working-directory: frontend
+        run: pnpm exec playwright install --with-deps chromium
+      # `pnpm build` runs `tsc -b` first, so a type error fails the job here.
+      - name: Typecheck + build
+        working-directory: frontend
+        run: pnpm build
+      - name: Playwright E2E
+        working-directory: frontend
+        run: pnpm e2e
+        env:
+          CI: "1"
+      - name: Upload report on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: frontend/playwright-report
+          retention-days: 7
+
+  # ── Deploy gate: build the real images, bring the stack up, smoke the origin ─
+  # Runs on the deploy path (push to main) and on demand — not on every PR, since
+  # a full image build (private ecosystem deps + the axor-core tree) is heavy.
+  deploy:
+    runs-on: ubuntu-latest
+    needs: [python, frontend-e2e]
+    if: github.event_name != 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+      - name: Write .env
+        run: echo "AXOR_PG_PASSWORD=ci-postgres-pass" > .env
+      - name: Build images
+        run: docker compose build
+        env:
+          # BuildKit secret the Dockerfile mounts to fetch private ecosystem deps.
+          GITHUB_TOKEN: ${{ secrets.AXOR_ECOSYSTEM_TOKEN || secrets.GITHUB_TOKEN }}
+      - name: Start the stack
+        run: docker compose up -d
+      - name: Wait for health
+        run: |
+          set -e
+          for svc in \
+            "http://localhost:8400/v1/healthz" \
+            "http://localhost:8401/axor/healthz" \
+            "http://localhost:8080/"; do
+            echo "waiting for $svc"
+            for i in $(seq 1 60); do
+              if curl -fsS "$svc" >/dev/null 2>&1; then echo "  up"; break; fi
+              if [ "$i" = "60" ]; then echo "  TIMEOUT"; exit 1; fi
+              sleep 2
+            done
+          done
+      - name: Smoke the deployed single origin (:8080 proxies /v1 and /axor)
+        run: |
+          set -e
+          # The SPA is served…
+          curl -fsS http://localhost:8080/ | grep -qi "<!doctype html" || { echo "SPA not served"; exit 1; }
+          # …and the API answers through the nginx reverse proxy, on Postgres.
+          curl -fsS http://localhost:8080/axor/healthz | grep -q '"ok":true'
+          seeded=$(curl -fsS -X POST http://localhost:8080/v1/demo/seed-adapter-runs)
+          echo "$seeded" | grep -q "ex_block"
+          # A deterministic replay reproduces the recorded deny (0 divergence) —
+          # the deployed backend really replays through the kernel, on Postgres.
+          rep=$(curl -fsS http://localhost:8080/v1/replay/ex_block)
+          echo "$rep" | grep -q '"first_divergence":null'
+          echo "deploy smoke OK"
+      - name: Dump logs on failure
+        if: failure()
+        run: docker compose logs --no-color --tail=200
+      - name: Tear down
+        if: always()
+        run: docker compose down -v

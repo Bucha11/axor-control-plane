@@ -1,4 +1,14 @@
+import { existsSync } from "node:fs";
 import { defineConfig, devices } from "@playwright/test";
+
+// This image pre-installs a fixed Chromium build under PLAYWRIGHT_BROWSERS_PATH
+// that may not match the runner's expected revision, so point straight at it
+// when it exists (override with AXOR_CHROMIUM). On a plain CI runner it is
+// absent — fall back to Playwright's own managed browser (`playwright install
+// chromium`), i.e. leave executablePath unset.
+const PREINSTALLED = "/opt/pw-browsers/chromium-1194/chrome-linux/chrome";
+const chromiumPath =
+  process.env.AXOR_CHROMIUM || (existsSync(PREINSTALLED) ? PREINSTALLED : undefined);
 
 // End-to-end tests for the whole control plane: they drive the real React app
 // against a real backend + observe-only proxy, exactly as a browser would.
@@ -24,15 +34,7 @@ export default defineConfig({
       name: "chromium",
       use: {
         ...devices["Desktop Chrome"],
-        // The image pre-installs a fixed Chromium build under
-        // PLAYWRIGHT_BROWSERS_PATH that may not match the runner's expected
-        // revision; point straight at it (override with AXOR_CHROMIUM if needed)
-        // so we never try to download a browser.
-        launchOptions: {
-          executablePath:
-            process.env.AXOR_CHROMIUM ||
-            "/opt/pw-browsers/chromium-1194/chrome-linux/chrome",
-        },
+        launchOptions: chromiumPath ? { executablePath: chromiumPath } : {},
       },
     },
   ],
