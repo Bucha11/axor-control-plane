@@ -36,7 +36,7 @@ Status legend: ☐ open · ◐ partial exists · ☑ done.
 |---|---|---|---|
 | P0 | **Publish to PyPI**: `axor-proxy` (uvx path is quoted all over the UI/docs and currently 404s), `axor-backend`. Compose images to GHCR. | `uvx axor-proxy --demo` works on a clean machine. | ◐ (release.yml + metadata ready; needs PyPI trusted-publisher config + axor-eval on PyPI) |
 | P0 | **Public landing + docs site** | The in-app Home is not a website. Static site: hero = demo GIF (have) + "Run demo-mode" → hosted sandbox or 2-command local start; docs = quickstart, depth ladder, protocol, FAQ. | ☐ |
-| P0 | **Launch post** | "Your agent lies when its tools fail — here's the receipt": narrative + GIF + benchmark table (catch rates by fault mode). HN + r/LocalLLaMA + X thread. | ☐ |
+| P0 | **Launch post** | "Your agent lies when its tools fail — here's the receipt": narrative + GIF + benchmark table (catch rates by fault mode). HN + r/LocalLLaMA + X thread. | ◐ (draft in docs/launch-post-draft.md; needs benchmark table) |
 | P1 | **EvidenceCase link unfurl** | Share permalink gets OG tags + "Caught by Axor" footer — every shared receipt is an ad. (Revocability already done.) | ☑ |
 | P1 | **Community surface**: CONTRIBUTING.md, issue templates, GH Discussions on, public ROADMAP.md (honest: hosted=later, SSO=Enterprise-later). | | ☑ (Discussions toggle needs repo admin) |
 | P1 | **5-minute video**: demo → proxy on your tools → caught lie → replay. | | ☐ |
@@ -54,18 +54,18 @@ Status legend: ☐ open · ◐ partial exists · ☑ done.
 
 | P | Item | Done-when | Status |
 |---|---|---|---|
-| P0 | **Pricing page CTA → capture**: "Get Team" = email/checkout link (Stripe payment link is enough; invoicing by hand). Today the page is display-only. | A stranger can pay without talking to us. | ☐ |
+| P0 | **Pricing page CTA → capture**: "Get Team" = email/checkout link (Stripe payment link is enough; invoicing by hand). Today the page is display-only. | A stranger can pay without talking to us. | ◐ (mailto capture live; VITE_CHECKOUT_URL swaps in Stripe without code change) |
 | P0 | **License issuance CLI**: vendor keypair management + `sign_license` wrapped as a script; issue/renew/revoke runbook. Verification exists; issuance is manual code today. | | ☑ |
 | P1 | **Node-count telemetry for license ceiling**: EE check compares live node count vs `node_ceiling` and warns (never blocks safety — Line 1). | | ☑ |
-| P1 | **Design-partner kit**: 2-pager (what they get: fixed price, roadmap influence, case study), 3 slots, success criteria per partner. | | ☐ |
-| P2 | EU AI Act mapping one-pager (receipt/audit-trail ↔ articles) — cheapest compliance-inbound asset. | | ☐ |
+| P1 | **Design-partner kit**: 2-pager (what they get: fixed price, roadmap influence, case study), 3 slots, success criteria per partner. | | ☑ (docs/design-partner-kit.md) |
+| P2 | EU AI Act mapping one-pager (receipt/audit-trail ↔ articles) — cheapest compliance-inbound asset. | | ☑ (docs/eu-ai-act-mapping.md) |
 
 ## 6. Ops & quality gates — don't fall over on launch day
 
 | P | Item | Done-when | Status |
 |---|---|---|---|
 | P0 | **CI fully green on main** including the deploy smoke job (compose build vs private deps — verify `AXOR_ECOSYSTEM_TOKEN` path in a real Actions run). | ☑ suites / ☐ Actions run | ◐ |
-| P1 | **Load smoke**: 50 concurrent SSE subscribers + 100 rps ingest on compose stack; find the first ceiling, write it down honestly in docs. | | ☐ |
+| P1 | **Load smoke**: 50 concurrent SSE subscribers + 100 rps ingest on compose stack; find the first ceiling, write it down honestly in docs. | | ☑ (SQLite numbers in docs/ops-limits.md; re-run on Postgres before quoting) |
 | P1 | **Error tracking**: Sentry (or logs-only + structured logging) on backend/proxy so launch-day bugs are visible. | | ☐ |
 | P2 | Backup/restore runbook (pg_dump + trace dir), upgrade runbook. | | ☐ |
 

@@ -81,6 +81,22 @@ const TIERS: Tier[] = [
   },
 ];
 
+// Checkout capture (launch-readiness §5): until a real checkout exists, the CTA
+// is a mailto that opens a pre-filled order email; VITE_CHECKOUT_URL swaps in a
+// Stripe payment link at build time without a code change.
+const CHECKOUT_URL: string | undefined =
+  (import.meta as unknown as { env?: Record<string, string> }).env?.VITE_CHECKOUT_URL;
+
+function ctaHref(tier: string): string {
+  if (tier === "Free") return "https://github.com/Bucha11/axor-control-plane#run-it-docker-compose";
+  if (CHECKOUT_URL) return CHECKOUT_URL;
+  const subject = encodeURIComponent(`Axor ${tier} — get started`);
+  const body = encodeURIComponent(
+    "Org:\nNodes (approx):\nSelf-hosted or hosted preference:\nAnything else:",
+  );
+  return `mailto:sales@axor.dev?subject=${subject}&body=${body}`;
+}
+
 export default function Pricing() {
   return (
     <div style={{ maxWidth: 860, margin: "0 auto" }}>
@@ -181,6 +197,20 @@ export default function Pricing() {
             >
               {t.paidNote}
             </div>
+            <a
+              href={ctaHref(t.name)}
+              target={t.name === "Free" ? "_blank" : undefined}
+              rel="noreferrer"
+              style={{
+                marginTop: "auto", textAlign: "center", textDecoration: "none",
+                border: `1px solid ${t.highlight ? C.steel : C.line}`,
+                borderRadius: 6, padding: "8px 12px", fontFamily: MONO,
+                fontSize: 12, fontWeight: 700,
+                color: t.free ? C.green : C.steel,
+              }}
+            >
+              {t.free ? "Run it now — compose up" : `Get ${t.name}`}
+            </a>
           </div>
         ))}
       </div>
