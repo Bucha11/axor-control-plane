@@ -130,9 +130,39 @@ def make_engine(url: str) -> AsyncEngine:
     return create_async_engine(url)
 
 
+# Baseline revision (migrations/versions/0001_baseline.py). A database created
+# by a pre-migration build has the tables but no alembic_version — stamp it as
+# the baseline, then upgrade, so early adopters cross over without data loss.
+_BASELINE_REV = "0001"
+
+
+def _run_migrations(sync_conn: Any) -> None:  # noqa: ANN401 - sync Connection
+    from pathlib import Path
+
+    from alembic import command
+    from alembic.config import Config
+    from sqlalchemy import inspect
+
+    cfg = Config()
+    cfg.set_main_option(
+        "script_location", str(Path(__file__).parent / "migrations")
+    )
+    cfg.attributes["connection"] = sync_conn
+
+    inspector = inspect(sync_conn)
+    tables = set(inspector.get_table_names())
+    if "runs" in tables and "alembic_version" not in tables:
+        command.stamp(cfg, _BASELINE_REV)
+    command.upgrade(cfg, "head")
+
+
 async def init_db(engine: AsyncEngine) -> None:
+    """Bring the schema to head via alembic (launch-readiness §1): fresh DBs
+    get the full baseline, legacy pre-migration DBs are stamped then upgraded,
+    and future schema changes ship as new revisions instead of stranding
+    early adopters on create_all."""
     async with engine.begin() as conn:
-        await conn.run_sync(metadata.create_all)
+        await conn.run_sync(_run_migrations)
 
 
 class Store:
