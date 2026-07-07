@@ -1,0 +1,142 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Axor — your agent lies when its tools fail. Catch it, then govern it.</title>
+<meta name="description" content="Open-source runtime governance for LLM agents: catch fabrications as reproducible EvidenceCases, replay any run deterministically, govern live fleets.">
+<meta property="og:title" content="Axor Control Plane — catch the lie, replay it, govern the fleet">
+<meta property="og:description" content="Break a tool on purpose. Watch the agent claim success. Get the receipt. Apache-2.0.">
+<meta property="og:type" content="website">
+<style>
+  :root { --bg:#12161A; --panel:#191F26; --panel2:#141920; --line:#262E37;
+          --text:#D2DAE1; --mut:#78848F; --dim:#4C5760; --red:#E5484D;
+          --amber:#F2A33C; --green:#46A758; --steel:#7FA8CC; }
+  * { box-sizing:border-box; margin:0; }
+  body { background:var(--bg); color:var(--text);
+         font family:Inter,system-ui,sans-serif; font-family:Inter,system-ui,sans-serif; line-height:1.6; }
+  .mono { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; }
+  .wrap { max-width:840px; margin:0 auto; padding:0 20px; }
+  header { padding:22px 0; border-bottom:1px solid var(--line); }
+  header .wrap { display:flex; justify-content:space-between; align-items:center; }
+  .brand { font-weight:700; font-size:14px; letter-spacing:.04em; }
+  .brand span { color:var(--steel); }
+  nav a { color:var(--mut); text-decoration:none; font-size:12.5px; margin-left:18px; }
+  nav a:hover { color:var(--text); }
+  .hero { padding:64px 0 40px; }
+  .eyebrow { font-size:12px; font-weight:700; letter-spacing:.14em; margin-bottom:14px; }
+  h1 { font-size:34px; line-height:1.22; font-weight:700; margin-bottom:10px; }
+  h1 .mut { color:var(--mut); }
+  .sub { color:var(--dim); font-size:12.5px; margin-bottom:28px; }
+  .gif { width:100%; border:1px solid var(--line); border-radius:10px; display:block; }
+  .quick { background:var(--panel2); border:1px solid var(--line); border-radius:8px;
+           padding:14px 16px; font-size:12.5px; color:var(--mut); overflow-x:auto;
+           margin:22px 0 8px; white-space:pre; }
+  .quick b { color:var(--green); font-weight:400; }
+  .note { color:var(--dim); font-size:11px; }
+  section { padding:36px 0; border-top:1px solid var(--line); }
+  h2 { font-size:20px; margin-bottom:18px; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(240px,1fr)); gap:14px; }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:16px; }
+  .card h3 { font-size:13px; margin-bottom:8px; }
+  .card p { color:var(--mut); font-size:12.5px; }
+  .card .tag { font-size:10px; letter-spacing:.1em; color:var(--dim); display:block; margin-bottom:6px; }
+  table { border-collapse:collapse; width:100%; font-size:12px; }
+  th,td { border:1px solid var(--line); padding:8px 10px; text-align:left; color:var(--mut); }
+  th { color:var(--text); background:var(--panel); font-weight:600; }
+  td.ok { color:var(--green); } td.warn { color:var(--amber); }
+  .ladder { display:flex; flex-wrap:wrap; gap:12px; }
+  .rung { flex:1 1 220px; background:var(--panel); border:1px solid var(--line);
+          border-radius:10px; padding:14px; }
+  .rung b { display:block; font-size:13px; margin-bottom:4px; }
+  .rung small { color:var(--dim); font-size:11px; }
+  .rung.unlock { border-color:var(--steel); }
+  footer { border-top:1px solid var(--line); padding:28px 0 48px; color:var(--dim); font-size:12px; }
+  footer a { color:var(--mut); }
+  a.btn { display:inline-block; background:var(--green); color:var(--bg); font-weight:700;
+          font-size:13px; padding:10px 18px; border-radius:6px; text-decoration:none; margin-right:10px; }
+  a.btn.ghost { background:none; border:1px solid var(--steel); color:var(--steel); }
+</style>
+</head>
+<body>
+<header><div class="wrap">
+  <div class="brand mono">AXOR <span>CONTROL PLANE</span></div>
+  <nav class="mono">
+    <a href="#how">how it works</a>
+    <a href="#numbers">numbers</a>
+    <a href="#security">security</a>
+    <a href="https://github.com/Bucha11/axor-control-plane">github</a>
+  </nav>
+</div></header>
+
+<div class="wrap hero">
+  <div class="eyebrow mono"><span style="color:var(--steel)">Eval.</span>
+    <span style="color:var(--amber)">Control.</span>
+    <span style="color:var(--green)">Protect.</span></div>
+  <h1>Your agent lies when its tools fail.<br><span class="mut">Catch it, then govern it.</span></h1>
+  <div class="sub mono">the EvidenceCase is the artifact — a reproducible caught discrepancy, not a score · Apache-2.0</div>
+  <img class="gif" src="demo.gif" alt="One demo run: a fabrication is caught as an EvidenceCase, replayed, and a live governed node obeys interventions">
+  <div class="quick mono"><b>git clone</b> https://github.com/Bucha11/axor-control-plane && cd axor-control-plane
+<b>cp</b> .env.example .env   <b>&&</b>   <b>docker compose</b> up --build
+<b>open</b> http://localhost:8080   →   Run demo-mode (mock tools, zero credentials)</div>
+  <div class="note mono">a stranger reaches a caught lie in under 10 minutes — that's the whole point</div>
+  <p style="margin-top:22px">
+    <a class="btn mono" href="https://github.com/Bucha11/axor-control-plane">Get the code →</a>
+    <a class="btn ghost mono" href="https://github.com/Bucha11/axor-control-plane/blob/main/SECURITY.md">Read the threat model</a>
+  </p>
+</div>
+
+<section id="how"><div class="wrap">
+  <h2>How it works</h2>
+  <div class="grid">
+    <div class="card"><span class="tag mono">1 · CATCH</span><h3>Break a tool. Read the receipt.</h3>
+      <p>An observe-only proxy fronts your tools (auth passes byte-for-byte, raw bodies never stored). Inject a fault; the audit compares what happened against what the agent claimed. The mismatch is an <b>EvidenceCase</b> — shareable, exportable, revocable.</p></div>
+    <div class="card"><span class="tag mono">2 · REPLAY</span><h3>Question any run, deterministically.</h3>
+      <p>Scrub the recorded trace; fork counterfactuals ("no exec capability", "this value arrives tainted", "budget = N") and see the first step that diverges. No model call. A provenance graph traces every value.</p></div>
+    <div class="card"><span class="tag mono">3 · GOVERN</span><h3>Live fleet, real interventions.</h3>
+      <p>Wrap the agent in axor-core and it's a live node: pause, budget-cap (decrease-only), cascade-stop the subtree. Commands are Ed25519-signed; the adapter verifies with its own keys. Axor down ⇒ agent unaffected.</p></div>
+    <div class="card"><span class="tag mono">4 · REGRESS</span><h3>CI for governance configs.</h3>
+      <p>Pin caught attacks (must-block) and legit flows (must-pass); replay the corpus under a candidate policy. Two-sided, so a config that blocks everything fails honestly.</p></div>
+  </div>
+</div></section>
+
+<section id="numbers"><div class="wrap">
+  <h2>Numbers we'll defend</h2>
+  <p style="color:var(--mut);font-size:13px;margin-bottom:14px">Catch rates — 100 seeded trials per cell, deterministic harness (<span class="mono">python -m axor_eval.benchmarks.catch_rate</span>), scripted personas, no model calls:</p>
+  <table class="mono">
+    <tr><th>persona \ fault mode</th><th>silent_fail</th><th>corrupt_retrieval</th><th>instruction_injection</th><th>tool_substitution</th></tr>
+    <tr><td>misbehaving agent (structured claims)</td><td class="ok">100%</td><td class="ok">100%</td><td class="ok">100%</td><td class="ok">100%</td></tr>
+    <tr><td>misbehaving agent (free text only)</td><td class="warn">100% (heuristic)</td><td class="ok">100%</td><td class="ok">100%</td><td class="warn">100% (heuristic)</td></tr>
+    <tr><td>honest agent (false-positive check)</td><td class="ok">0%</td><td class="ok">0%</td><td class="ok">0%</td><td class="ok">0%</td></tr>
+  </table>
+  <p class="note mono" style="margin-top:10px">also measured: 50 concurrent SSE subscribers, zero drops, perfect fan-out; ingest ceiling ~70 rps on the dev database (SQLite) — see docs/ops-limits.md. We publish limits, not adjectives.</p>
+</div></section>
+
+<section><div class="wrap">
+  <h2>Three ways in</h2>
+  <div class="ladder mono">
+    <div class="rung"><b>demo-mode</b>our mock broken tools<br><small>zero creds · one click · the caught lie in ~10s</small></div>
+    <div class="rung"><b>proxy</b>your tools, observe-only<br><small>~5 min · no code change · MCP config paste-in</small></div>
+    <div class="rung unlock"><b>adapter</b>full governance<br><small>wrap in axor-core · unlocks live Control</small></div>
+  </div>
+</div></section>
+
+<section id="security"><div class="wrap">
+  <h2>What the security reviewer asks first</h2>
+  <div class="grid">
+    <div class="card"><h3>What does the proxy see?</h3><p>Observations only: tool, status, sizes, SHA-256 hashes. Raw request/response bodies are never persisted. Authorization passes through byte-for-byte — never parsed, never stored.</p></div>
+    <div class="card"><h3>What if Axor goes down?</h3><p>Nothing happens to your agent. The plane is an advisory overlay: enforcement lives in the adapter with its own config and keys. A compromised backend cannot forge operator commands.</p></div>
+    <div class="card"><h3>Is safety paywalled?</h3><p>No, structurally: anything that answers "is my agent safe" is Apache-2.0, forever. Orgs pay for fleet features (SSO, compliance reports, hosted). The EE license check itself is offline Ed25519 — it never phones home.</p></div>
+  </div>
+  <p style="margin-top:14px" class="note mono">full threat model: <a href="https://github.com/Bucha11/axor-control-plane/blob/main/SECURITY.md">SECURITY.md</a> · limits: docs/ops-limits.md · EU AI Act mapping: docs/eu-ai-act-mapping.md</p>
+</div></section>
+
+<footer><div class="wrap mono">
+  Apache-2.0 (EE directory: source-visible commercial) ·
+  <a href="https://github.com/Bucha11/axor-control-plane">github</a> ·
+  <a href="https://github.com/Bucha11/axor-control-plane/blob/main/ROADMAP.md">roadmap</a> ·
+  <a href="https://github.com/Bucha11/axor-control-plane/blob/main/CONTRIBUTING.md">contributing</a> ·
+  security@axor.dev
+</div></footer>
+</body>
+</html>

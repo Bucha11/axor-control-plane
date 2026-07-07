@@ -17,7 +17,7 @@ Status legend: ☐ open · ◐ partial exists · ☑ done.
 | P0 | **Streaming passthrough in the proxy** | `tool_route` buffers the full upstream body; SSE/chunked tool responses (LLM-backed tools) stall. Done when: pass-through streams, observation records size/hash without buffering. | ☑ |
 | P0 | **DB migrations** | `create_all` only; first schema change after launch strands early adopters. Done when: alembic baseline + upgrade path tested SQLite+Postgres. | ☑ |
 | P1 | **Concurrent runs per proxy** | One active run at a time (v1) breaks the first team that shares a proxy. Done when: N armed runs keyed by header/route, docs updated. | ☑ |
-| P1 | **OpenAI Agents SDK + CrewAI adapters** | The Invokable wrap is axor-core-native; the two biggest agent frameworks need a 20-line published recipe each (full middleware later). Done when: `examples/` runs green in CI against both. | ☐ |
+| P1 | **OpenAI Agents SDK + CrewAI adapters** | The Invokable wrap is axor-core-native; the two biggest agent frameworks need a 20-line published recipe each (full middleware later). Done when: `examples/` runs green in CI against both. | ◐ (recipes published in examples/; CI-green needs LLM keys — honest note in examples/README) |
 | P1 | **Retention/rotation** | Unbounded events table + trace dir. Done when: `AXOR_RETENTION_DAYS` prunes runs + traces, documented. | ☑ |
 | P2 | Hosted multi-tenancy (per-tenant Kùzu is stubbed) — explicitly **not** for launch; self-host only. | | ◐ |
 
@@ -28,19 +28,19 @@ Status legend: ☐ open · ◐ partial exists · ☑ done.
 | P0 | **SECURITY.md + threat model page** | Disclosure address, supported versions, and a one-page threat model: what the proxy sees, what is never stored (raw bodies), advisory-overlay failure mode ("Axor down ⇒ agent unaffected"). This is the #1 pre-sales objection — answer it in the repo. | ☑ |
 | P0 | **Default-secure compose** | `.env.example` ships auth ON commented with one-liner to disable, not the reverse; CORS explicit; share-token entropy documented. | ☑ |
 | P1 | **Dependency/SBOM + pip-audit in CI** | `pip-audit`/`npm audit` gate + published SBOM artifact. | ☑ |
-| P2 | SOC2-lite page (controls narrative, no cert claim), DPA template for design partners. | | ☐ |
+| P2 | SOC2-lite page (controls narrative, no cert claim), DPA template for design partners. | | ◐ (docs/security-controls.md; DPA needs counsel) |
 
 ## 3. Distribution & DevRel — the launch itself
 
 | P | Item | Done-when | Status |
 |---|---|---|---|
 | P0 | **Publish to PyPI**: `axor-proxy` (uvx path is quoted all over the UI/docs and currently 404s), `axor-backend`. Compose images to GHCR. | `uvx axor-proxy --demo` works on a clean machine. | ◐ (release.yml + metadata ready; needs PyPI trusted-publisher config + axor-eval on PyPI) |
-| P0 | **Public landing + docs site** | The in-app Home is not a website. Static site: hero = demo GIF (have) + "Run demo-mode" → hosted sandbox or 2-command local start; docs = quickstart, depth ladder, protocol, FAQ. | ☐ |
+| P0 | **Public landing + docs site** | The in-app Home is not a website. Static site: hero = demo GIF (have) + "Run demo-mode" → hosted sandbox or 2-command local start; docs = quickstart, depth ladder, protocol, FAQ. | ◐ (site/ + Pages workflow ready; enable Pages + domain) |
 | P0 | **Launch post** | "Your agent lies when its tools fail — here's the receipt": narrative + GIF + benchmark table (catch rates by fault mode). HN + r/LocalLLaMA + X thread. | ◐ (draft in docs/launch-post-draft.md; needs benchmark table) |
 | P1 | **EvidenceCase link unfurl** | Share permalink gets OG tags + "Caught by Axor" footer — every shared receipt is an ad. (Revocability already done.) | ☑ |
 | P1 | **Community surface**: CONTRIBUTING.md, issue templates, GH Discussions on, public ROADMAP.md (honest: hosted=later, SSO=Enterprise-later). | | ☑ (Discussions toggle needs repo admin) |
-| P1 | **5-minute video**: demo → proxy on your tools → caught lie → replay. | | ☐ |
-| P2 | Comparison page ("vs observability, vs guardrails") — honest table, no FUD. | | ☐ |
+| P1 | **5-minute video**: demo → proxy on your tools → caught lie → replay. | | ◐ (shot list in docs/video-script.md; recording needs a human voice) |
+| P2 | Comparison page ("vs observability, vs guardrails") — honest table, no FUD. | | ☑ (docs/comparison.md) |
 
 ## 4. Paper — the credibility engine
 
@@ -66,8 +66,8 @@ Status legend: ☐ open · ◐ partial exists · ☑ done.
 |---|---|---|---|
 | P0 | **CI fully green on main** including the deploy smoke job (compose build vs private deps — verify `AXOR_ECOSYSTEM_TOKEN` path in a real Actions run). | ☑ suites / ☐ Actions run | ◐ |
 | P1 | **Load smoke**: 50 concurrent SSE subscribers + 100 rps ingest on compose stack; find the first ceiling, write it down honestly in docs. | | ☑ (SQLite numbers in docs/ops-limits.md; re-run on Postgres before quoting) |
-| P1 | **Error tracking**: Sentry (or logs-only + structured logging) on backend/proxy so launch-day bugs are visible. | | ☐ |
-| P2 | Backup/restore runbook (pg_dump + trace dir), upgrade runbook. | | ☐ |
+| P1 | **Error tracking**: Sentry (or logs-only + structured logging) on backend/proxy so launch-day bugs are visible. | | ☑ (AXOR_LOG_JSON structured logs, optional SENTRY_DSN, structured unhandled-error handler) |
+| P2 | Backup/restore runbook (pg_dump + trace dir), upgrade runbook. | | ☑ (docs/runbook.md) |
 
 ## 7. Sequencing (solo, ~6 weeks)
 

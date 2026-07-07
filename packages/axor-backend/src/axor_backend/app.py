@@ -130,7 +130,24 @@ def create_app(
                 with contextlib.suppress(asyncio.CancelledError):
                     await retention_task
 
+    from axor_backend.observability import setup_observability
+
+    setup_observability()
     app = FastAPI(title="axor-backend", lifespan=lifespan)
+
+    @app.exception_handler(Exception)
+    async def unhandled(request: Request, exc: Exception) -> JSONResponse:
+        # Launch-day visibility: an unhandled route error is logged with
+        # structure (and shipped to Sentry when configured) instead of only
+        # surfacing as an opaque 500 in an access log.
+        import logging as _logging
+
+        _logging.getLogger("axor.backend").error(
+            "unhandled error on %s %s", request.method, request.url.path,
+            exc_info=exc,
+        )
+        return JSONResponse({"error": "internal", "detail": str(exc)}, status_code=500)
+
     url = database_url or os.environ.get(
         "AXOR_DATABASE_URL", "sqlite+aiosqlite:///./axor.db"
     )
