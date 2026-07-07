@@ -74,4 +74,4 @@ Dependency direction is one-way: ecosystem -> never depends on -> platform. Cost
 
 Licensing: Apache-2.0, except `packages/axor-backend/src/axor_backend/ee/` (source-visible, commercial — see its `LICENSE`).
 
-Specs: `docs/` — UI v0.14 · architecture v0.1 · control-plane protocol v0.2 · monetization v0.1 · implementation plan v0.1. Mockups: `mockups/`.
+Specs: `docs/` — UI v0.14 · architecture v0.1 · control-plane protocol v0.2 · monetization v0.1 · implementation plan v0.1 · launch readiness v0.1. Mockups: `mockups/`.
