@@ -467,7 +467,7 @@ def create_app(
     # ── EE license (monetization doc section 4) ───────────────────────────────
 
     @app.post("/v1/license/verify")
-    async def license_verify(body: dict) -> dict:
+    async def license_verify(body: dict, request: Request) -> dict:
         from axor_backend.ee.license import LicenseError, verify_license
 
         vendor_key = body.get("vendor_pubkey") or os.environ.get("AXOR_VENDOR_PUBKEY", "")
@@ -477,9 +477,15 @@ def create_app(
             lic = verify_license(body.get("license_json", ""), vendor_key)
         except LicenseError as exc:
             raise HTTPException(403, str(exc)) from exc
+        # Node-ceiling telemetry (launch-readiness §5): compare the live fleet
+        # against the license and WARN — never block; safety never checks a
+        # license (monetization Line 1).
+        live_nodes = len(await request.app.state.store.list_nodes())
         return {
             "org": lic.org, "tier": lic.tier, "node_ceiling": lic.node_ceiling,
             "expiry": lic.expiry, "features": list(lic.features),
+            "live_nodes": live_nodes,
+            "over_ceiling": live_nodes > lic.node_ceiling,
         }
 
     # ── auth: API key management (architecture section 9) ─────────────────────

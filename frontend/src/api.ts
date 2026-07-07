@@ -133,6 +133,8 @@ export interface LicenseInfo {
   node_ceiling: number;
   expiry: string;
   features: string[];
+  live_nodes?: number;
+  over_ceiling?: boolean;
 }
 
 async function j<T>(resp: Response): Promise<T> {

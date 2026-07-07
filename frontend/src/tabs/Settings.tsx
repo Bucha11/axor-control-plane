@@ -290,10 +290,19 @@ export default function Settings() {
           </div>
         )}
         {license.data && (
-          <div className="mt-2" style={{ fontFamily: MONO, fontSize: 11, color: C.green }}>
-            {license.data.org} · {license.data.tier} · up to {license.data.node_ceiling} nodes ·
-            expires {license.data.expiry} · {license.data.features.join(", ") || "no EE features"}
-          </div>
+          <>
+            <div className="mt-2" style={{ fontFamily: MONO, fontSize: 11, color: C.green }}>
+              {license.data.org} · {license.data.tier} · up to {license.data.node_ceiling} nodes ·
+              expires {license.data.expiry} · {license.data.features.join(", ") || "no EE features"}
+            </div>
+            {license.data.over_ceiling && (
+              <div className="mt-1" style={{ fontFamily: MONO, fontSize: 11, color: C.amber }}>
+                {license.data.live_nodes} live nodes exceed the licensed ceiling of{" "}
+                {license.data.node_ceiling} — a warning, never a block (safety never
+                checks a license). Contact us to raise the ceiling.
+              </div>
+            )}
+          </>
         )}
       </Section>
     </div>

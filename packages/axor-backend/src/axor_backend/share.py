@@ -193,6 +193,12 @@ def evidence_receipt_pdf(
 _TEMPLATE = """<!doctype html>
 <html><head><meta charset="utf-8">
 <title>Axor EvidenceCase — {run_id}</title>
+<meta property="og:site_name" content="Axor Control Plane">
+<meta property="og:type" content="article">
+<meta property="og:title" content="Caught by Axor: {deviation}">
+<meta property="og:description" content="A reproducible caught discrepancy \
+— the agent's claim vs observed reality. Observations only; revocable link.">
+<meta name="twitter:card" content="summary">
 <style>
   body {{ background:#12161A; color:#D2DAE1; font-family:system-ui,sans-serif;
           max-width:640px; margin:40px auto; padding:0 20px; }}
@@ -220,4 +226,7 @@ _TEMPLATE = """<!doctype html>
   <ul class="mono mut">{fault_rows}</ul>
   <p class="mono dim">observations only — no raw request/response bodies are
   exported (spec section 8.3).</p>
+  <p class="mono dim">Caught by
+  <a href="https://axor.dev" style="color:#7FA8CC;text-decoration:none">Axor</a>
+  — runtime governance for LLM agents. Catch the lie, replay it, govern the fleet.</p>
 </body></html>"""

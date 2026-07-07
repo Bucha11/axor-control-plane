@@ -388,3 +388,41 @@ def test_license_expiry_degrades_to_readonly() -> None:
     assert lic.enables("fleet_view", today="2025-06-01") is True
     assert lic.enables("fleet_view", today="2026-06-01") is False  # expired
     assert lic.is_expired("2026-06-01") is True
+
+
+async def test_license_verify_reports_node_ceiling_telemetry(
+    client: httpx.AsyncClient,
+) -> None:
+    """§5: verify returns live_nodes/over_ceiling — a warning, never a block."""
+    from axor_backend.ee.license import sign_license
+
+    priv, pub = _vendor_keypair()
+    lic = sign_license({"org": "A", "tier": "team", "node_ceiling": 1,
+                        "expiry": "2999-01-01", "features": []}, priv)
+    # Two live nodes vs a ceiling of 1.
+    for node in ("ce_n1", "ce_n2"):
+        await client.post(f"/v1/plane/{node}/telemetry", json={
+            "run_id": f"{node}-hb",
+            "events": [{"seq": 0, "kind": "heartbeat",
+                        "payload": {"applied_version": 0, "level": "NORMAL"}}],
+        })
+    r = (await client.post("/v1/license/verify", json={
+        "license_json": lic, "vendor_pubkey": pub,
+    })).json()
+    assert r["live_nodes"] >= 2 and r["over_ceiling"] is True
+
+
+def test_license_cli_roundtrip(tmp_path, capsys) -> None:  # noqa: ANN001
+    import json as _json
+
+    from axor_backend.ee.cli import main
+
+    assert main(["keygen"]) == 0
+    keys = _json.loads(capsys.readouterr().out)
+    assert main(["issue", "--key", keys["vendor_private_key"], "--org", "T",
+                 "--expiry", "2999-01-01"]) == 0
+    lic_file = tmp_path / "l.json"
+    lic_file.write_text(capsys.readouterr().out)
+    assert main(["verify", "--pubkey", keys["vendor_public_key"],
+                 str(lic_file)]) == 0
+    assert "VALID" in capsys.readouterr().out
