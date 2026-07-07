@@ -13,6 +13,7 @@ Rules, in order of importance:
 """
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 from typing import Any
@@ -22,7 +23,7 @@ from axor_core.kernel.events import EventKind
 from starlette.applications import Starlette
 from starlette.datastructures import Headers
 from starlette.requests import Request
-from starlette.responses import JSONResponse, Response
+from starlette.responses import JSONResponse, Response, StreamingResponse
 from starlette.routing import Mount, Route
 
 from axor_proxy.agent import ScriptedAgent, default_claim, default_script
@@ -112,39 +113,36 @@ def create_app(state: ProxyState) -> Starlette:
         await state.runs.record(run, EventKind.TOOL_CALL, call_payload)
 
         spec = state.runs.fault_for_call(run, tool)
-        upstream_result: Any | None = None
-        upstream_status: int | None = None
-        response: Response
+        url = upstream_base.rstrip("/") + "/" + path if path else upstream_base
 
-        if spec is None or state.runs.needs_upstream(spec):
-            url = upstream_base.rstrip("/") + "/" + path if path else upstream_base
-            try:
-                upstream = await state.client.request(
-                    request.method,
-                    url,
-                    params=request.query_params,
-                    headers=_forward_headers(request.headers),
-                    content=body,
-                )
-            except httpx.HTTPError as exc:
-                run.call_counts[tool] = run.call_counts.get(tool, 0) + 1
-                await state.runs.record(
-                    run, EventKind.TOOL_RESULT,
-                    {"tool": tool, "status": None, "error": type(exc).__name__},
-                )
-                return JSONResponse(
-                    {"error": "upstream_unreachable", "tool": tool,
-                     "detail": str(exc)},
-                    status_code=502,
-                )
-            upstream_status = upstream.status_code
-            if spec is not None:
+        # ── fault path: the deprivation engine transforms the JSON body, so it
+        # has to be buffered. This is the test-bench path, never production. ──
+        if spec is not None:
+            upstream_result: Any | None = None
+            if state.runs.needs_upstream(spec):
+                try:
+                    upstream = await state.client.request(
+                        request.method, url,
+                        params=request.query_params,
+                        headers=_forward_headers(request.headers),
+                        content=body,
+                    )
+                except httpx.HTTPError as exc:
+                    run.call_counts[tool] = run.call_counts.get(tool, 0) + 1
+                    await state.runs.record(
+                        run, EventKind.TOOL_RESULT,
+                        {"tool": tool, "status": None, "error": type(exc).__name__},
+                    )
+                    return JSONResponse(
+                        {"error": "upstream_unreachable", "tool": tool,
+                         "detail": str(exc)},
+                        status_code=502,
+                    )
                 try:
                     upstream_result = upstream.json()
                 except (json.JSONDecodeError, ValueError):
                     upstream_result = {"content": upstream.text}
 
-        if spec is not None:
             faulted = state.runs.apply_fault(run, spec, upstream_result)
             fault = run.engine.fault_log[-1]
             await state.runs.record(
@@ -160,27 +158,66 @@ def create_app(state: ProxyState) -> Starlette:
                  "response_bytes": len(payload),
                  "response_sha256": sha256_hex(payload)},
             )
-            response = Response(payload, media_type="application/json")
-        else:
-            resp_headers = {
-                k: v for k, v in upstream.headers.items()
-                if k.lower() not in _HOP_BY_HOP
-            }
-            await state.runs.record(
-                run,
-                EventKind.TOOL_RESULT,
-                {"tool": tool, "status": upstream_status,
-                 "response_bytes": len(upstream.content),
-                 "response_sha256": sha256_hex(upstream.content)},
-            )
-            response = Response(
-                upstream.content,
-                status_code=upstream.status_code,
-                headers=resp_headers,
-            )
+            run.call_counts[tool] = run.call_counts.get(tool, 0) + 1
+            return Response(payload, media_type="application/json")
 
+        # ── clean passthrough: STREAM the upstream body through (launch
+        # readiness §1) — an LLM-backed tool answering over SSE/chunked must
+        # flow, not stall behind a full-body buffer. The observation (size +
+        # sha256) accumulates over the stream and is recorded when it ends. ──
+        req = state.client.build_request(
+            request.method, url,
+            params=request.query_params,
+            headers=_forward_headers(request.headers),
+            content=body,
+        )
+        try:
+            upstream = await state.client.send(req, stream=True)
+        except httpx.HTTPError as exc:
+            run.call_counts[tool] = run.call_counts.get(tool, 0) + 1
+            await state.runs.record(
+                run, EventKind.TOOL_RESULT,
+                {"tool": tool, "status": None, "error": type(exc).__name__},
+            )
+            return JSONResponse(
+                {"error": "upstream_unreachable", "tool": tool, "detail": str(exc)},
+                status_code=502,
+            )
+        resp_headers = {
+            k: v for k, v in upstream.headers.items()
+            if k.lower() not in _HOP_BY_HOP
+        }
         run.call_counts[tool] = run.call_counts.get(tool, 0) + 1
-        return response
+
+        async def relay() -> Any:  # noqa: ANN401 - async byte generator
+            hasher = hashlib.sha256()
+            count = 0
+            error: str | None = None
+            try:
+                # aiter_raw: bytes exactly as received (content-encoding intact,
+                # matching the forwarded headers).
+                async for chunk in upstream.aiter_raw():
+                    hasher.update(chunk)
+                    count += len(chunk)
+                    yield chunk
+            except httpx.HTTPError as exc:
+                error = type(exc).__name__
+                raise
+            finally:
+                await upstream.aclose()
+                result_payload: dict[str, Any] = {
+                    "tool": tool, "status": upstream.status_code,
+                    "response_bytes": count,
+                    "response_sha256": hasher.hexdigest(),
+                    "streamed": True,
+                }
+                if error is not None:
+                    result_payload["error"] = error
+                await state.runs.record(run, EventKind.TOOL_RESULT, result_payload)
+
+        return StreamingResponse(
+            relay(), status_code=upstream.status_code, headers=resp_headers,
+        )
 
     async def start_run(request: Request) -> Response:
         try:
