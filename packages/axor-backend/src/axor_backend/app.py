@@ -62,6 +62,21 @@ def create_app(
 ) -> FastAPI:
     @contextlib.asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+        # Open dev posture must be loud (SECURITY.md): no token means every
+        # endpoint is public; unsigned commands mean no operator integrity.
+        import logging
+
+        log = logging.getLogger("axor.backend")
+        if app.state.api_token is None:
+            log.warning(
+                "AUTH IS OFF (no AXOR_API_TOKEN) — every endpoint is open. "
+                "Fine for localhost, not for a deployment; see SECURITY.md."
+            )
+        if app.state.allow_unsigned and app.state.keyring.empty:
+            log.warning(
+                "UNSIGNED PLANE COMMANDS ACCEPTED (AXOR_ALLOW_UNSIGNED=1, no "
+                "operator keys) — set AXOR_OPERATOR_KEYS for any real deployment."
+            )
         await init_db(app.state.store.engine)
         # The taint graph is a derived index over the persisted event log —
         # rebuild it from the DB at boot so it survives restarts (and a fresh
