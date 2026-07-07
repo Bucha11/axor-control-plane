@@ -6,6 +6,7 @@ ingest/read, replay + regression corpus.
 """
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import json
 import os
@@ -59,6 +60,7 @@ def create_app(
     operator_keys: dict[str, str] | None = None,
     allow_unsigned: bool | None = None,
     api_token: str | None = None,
+    retention_days: float | None = None,
 ) -> FastAPI:
     @contextlib.asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -78,6 +80,30 @@ def create_app(
                 "operator keys) — set AXOR_OPERATOR_KEYS for any real deployment."
             )
         await init_db(app.state.store.engine)
+        # Retention (launch-readiness §1): AXOR_RETENTION_DAYS prunes runs
+        # older than the window — at boot, then every 6h. Unset = keep forever.
+        days = retention_days
+        if days is None:
+            raw = os.environ.get("AXOR_RETENTION_DAYS", "")
+            days = float(raw) if raw else None
+        retention_task: asyncio.Task | None = None
+        if days is not None and days > 0:
+            from datetime import timedelta
+
+            async def prune_once() -> None:
+                cutoff = (datetime.now(UTC) - timedelta(days=days)).isoformat()
+                pruned = await app.state.store.prune_runs_older_than(cutoff)
+                if pruned:
+                    log.info("retention: pruned %d runs older than %s", pruned, cutoff)
+
+            async def prune_loop() -> None:
+                while True:
+                    await asyncio.sleep(6 * 3600)
+                    with contextlib.suppress(Exception):
+                        await prune_once()
+
+            await prune_once()
+            retention_task = asyncio.create_task(prune_loop())
         # The taint graph is a derived index over the persisted event log —
         # rebuild it from the DB at boot so it survives restarts (and a fresh
         # instance catches up) without a graph database.
@@ -95,8 +121,14 @@ def create_app(
             )
         # The node_stale trigger is edge-detected by a background sweep (spec
         # §16): a silent node emits nothing, so its absence is what we watch.
-        async with running_stale_monitor(app):
-            yield
+        try:
+            async with running_stale_monitor(app):
+                yield
+        finally:
+            if retention_task is not None:
+                retention_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await retention_task
 
     app = FastAPI(title="axor-backend", lifespan=lifespan)
     url = database_url or os.environ.get(

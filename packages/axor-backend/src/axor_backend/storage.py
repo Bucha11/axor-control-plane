@@ -455,6 +455,29 @@ class Store:
                     .values(side=side, label=label)
                 )
 
+    async def prune_runs_older_than(self, cutoff_ts: str) -> int:
+        """Retention (launch-readiness §1): delete runs created before the ISO
+        cutoff, with their events, pins and share links. Plane state (facts,
+        desired/reported) is node-scoped operational state and is kept.
+        created_ts is ISO-8601, so lexicographic compare is chronological."""
+        from sqlalchemy import delete
+
+        async with self.engine.begin() as conn:
+            old_ids = [
+                r.run_id for r in (await conn.execute(
+                    select(runs.c.run_id).where(runs.c.created_ts < cutoff_ts)
+                )).all()
+            ]
+            if not old_ids:
+                return 0
+            await conn.execute(delete(events).where(events.c.run_id.in_(old_ids)))
+            await conn.execute(delete(pins).where(pins.c.run_id.in_(old_ids)))
+            await conn.execute(
+                delete(share_links).where(share_links.c.run_id.in_(old_ids))
+            )
+            await conn.execute(delete(runs).where(runs.c.run_id.in_(old_ids)))
+            return len(old_ids)
+
     async def pinned(self) -> list[dict[str, str]]:
         async with self.engine.connect() as conn:
             rows = (await conn.execute(select(pins))).all()

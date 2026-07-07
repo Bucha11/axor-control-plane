@@ -58,8 +58,14 @@ class ProxyState:
         agent_client: httpx.AsyncClient | None = None,
         ingest_key: str | None = None,
     ) -> None:
+        import os as _os
+
         self.tools = tools  # tool name -> upstream base url
-        self.runs = RunManager(trace_dir)
+        retention_raw = _os.environ.get("AXOR_RETENTION_DAYS", "")
+        self.runs = RunManager(
+            trace_dir,
+            retention_days=float(retention_raw) if retention_raw else None,
+        )
         self.client = client or httpx.AsyncClient(timeout=30.0)
         self.uploader = uploader or (
             BackendUploader(backend_url, ingest_key=ingest_key) if backend_url else None
@@ -82,11 +88,14 @@ def create_app(state: ProxyState) -> Starlette:
     async def tool_route(request: Request) -> Response:
         tool = request.path_params["tool"]
         path = request.path_params.get("path", "")
-        run = state.runs.active
+        # Concurrent runs: X-Axor-Run names this caller's armed run; without it
+        # the most recently armed run applies (single-user compat).
+        run = state.runs.active_for(request.headers.get("x-axor-run"))
         if run is None:
             return JSONResponse(
                 {"error": "proxy_disarmed",
-                 "detail": "no armed run; start one via POST /axor/runs"},
+                 "detail": "no armed run for this caller; start one via POST "
+                           "/axor/runs (and send X-Axor-Run when sharing a proxy)"},
                 status_code=503,
             )
         upstream_base = state.tools.get(tool)
@@ -242,7 +251,7 @@ def create_app(state: ProxyState) -> Starlette:
         run = state.runs.get(request.path_params["run_id"])
         if run is None:
             return JSONResponse({"error": "unknown_run"}, status_code=404)
-        if state.runs.active is not run:
+        if not state.runs.is_armed(run):
             return JSONResponse(
                 {"error": "run_not_armed",
                  "detail": "simulate needs the run armed; it disarms on claim"},

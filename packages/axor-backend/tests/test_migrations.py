@@ -55,3 +55,25 @@ async def test_init_db_is_idempotent(db_url: str) -> None:
     await init_db(engine)  # second boot: upgrade head is a no-op
     assert "runs" in await _tables(engine)
     await engine.dispose()
+
+
+async def test_retention_prunes_old_runs_with_children(db_url: str) -> None:
+    """AXOR_RETENTION_DAYS semantics: runs before the cutoff go, with their
+    events, pins and share links; newer runs and plane state stay."""
+    engine = make_engine(db_url)
+    await init_db(engine)
+    store = Store(engine)
+    await store.upsert_run("run_old", "n", "s", "2020-01-01T00:00:00+00:00")
+    await store.ingest_events("run_old", "n", [
+        {"seq": 0, "kind": "claim", "payload": {}}], None)
+    await store.pin("run_old", "must_block", "old")
+    await store.create_share_link("tok_old", "run_old", 0, "2020-01-01T00:00:00+00:00")
+    await store.upsert_run("run_new", "n", "s", "2999-01-01T00:00:00+00:00")
+
+    pruned = await store.prune_runs_older_than("2025-01-01T00:00:00+00:00")
+    assert pruned == 1
+    assert [r["run_id"] for r in await store.list_runs()] == ["run_new"]
+    assert await store.run_events("run_old") == []
+    assert await store.pinned() == []
+    assert await store.list_share_links() == []
+    await engine.dispose()

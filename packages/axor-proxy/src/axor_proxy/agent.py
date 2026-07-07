@@ -56,7 +56,8 @@ class ScriptedAgent:
             await self._client.get(
                 f"{self._base}/t/{tool}/",
                 params=params,
-                headers={"Authorization": "Bearer scripted-agent-token"},
+                headers={"Authorization": "Bearer scripted-agent-token",
+                         "X-Axor-Run": run_id},
             )
         resp = await self._client.post(
             f"{self._base}/axor/runs/{run_id}/claim", json=claim

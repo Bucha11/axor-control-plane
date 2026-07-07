@@ -72,19 +72,51 @@ def sha256_hex(data: bytes) -> str:
 
 
 class RunManager:
-    """One active run at a time per proxy instance (v1)."""
+    """Concurrent armed runs (launch-readiness §1): a shared proxy serves N
+    runs at once. A caller names its run with the X-Axor-Run header; without
+    the header the most recently armed run applies (single-user compat)."""
 
-    def __init__(self, trace_dir: Path) -> None:
+    def __init__(self, trace_dir: Path, retention_days: float | None = None) -> None:
         self._trace_dir = trace_dir
         self._runs: dict[str, Run] = {}
-        self._active: Run | None = None
+        # armed run_ids in arming order; last is the header-less default
+        self._armed: list[str] = []
+        self._retention_days = retention_days
 
     @property
     def active(self) -> Run | None:
-        return self._active
+        """The most recently armed run — the default when no header names one."""
+        return self._runs[self._armed[-1]] if self._armed else None
+
+    def active_for(self, run_id: str | None) -> Run | None:
+        """Resolve the armed run a tool call belongs to. An explicit header
+        naming an unknown/disarmed run resolves to None (503 at the route) —
+        never silently falls back to somebody else's run."""
+        if run_id is None:
+            return self.active
+        return self._runs[run_id] if run_id in self._armed else None
+
+    def is_armed(self, run: Run) -> bool:
+        return run.run_id in self._armed
 
     def get(self, run_id: str) -> Run | None:
         return self._runs.get(run_id)
+
+    def prune_traces(self) -> int:
+        """Retention: delete trace files older than the window (mtime). Called
+        on each arm — cheap (one listdir). No-op when retention is unset."""
+        if not self._retention_days or self._retention_days <= 0:
+            return 0
+        import time
+
+        cutoff = time.time() - self._retention_days * 86400
+        pruned = 0
+        for f in self._trace_dir.glob("*.jsonl"):
+            if f.stat().st_mtime < cutoff and f.stem not in self._armed:
+                f.unlink(missing_ok=True)
+                self._runs.pop(f.stem, None)
+                pruned += 1
+        return pruned
 
     def start(
         self, scenario: str, faults: list[dict[str, Any]], node_id: str = "proxy"
@@ -110,11 +142,15 @@ class RunManager:
             recorder=TraceRecorder(self._trace_dir, run_id),
         )
         self._runs[run_id] = run
-        self._active = run
+        self._armed.append(run_id)
+        self.prune_traces()
         return run
 
-    def disarm(self) -> None:
-        self._active = None
+    def disarm(self, run: Run | None = None) -> None:
+        if run is None:
+            self._armed.clear()
+        elif run.run_id in self._armed:
+            self._armed.remove(run.run_id)
 
     # ── fault application at the HTTP boundary ────────────────────────────────
 
@@ -185,8 +221,7 @@ class RunManager:
         )
         run.evidence = cases
         run.completed = True
-        if self._active is run:
-            self._active = None
+        self.disarm(run)
         return cases
 
 
