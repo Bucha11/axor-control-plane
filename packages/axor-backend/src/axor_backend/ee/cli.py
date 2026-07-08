@@ -1,9 +1,10 @@
 """Vendor-side license tooling (launch-readiness §5): issue licenses without
 hand-writing code. Same Ed25519 + JCS stack the plane uses; fully offline.
 
-  axor-license keygen                       → vendor keypair (hex)
-  axor-license issue --key <priv> --org …   → signed license-file JSON
-  axor-license verify --pubkey <pub> <file> → validity + fields
+  axor-license keygen                            → vendor keypair (hex)
+  axor-license issue --key-file <path> --org …   → signed license-file JSON
+      (key sources, preferred first: --key-file, AXOR_VENDOR_KEY env, --key)
+  axor-license verify --pubkey <pub> <file>      → validity + fields
 
 Commercial module (ee/) — see ee/LICENSE.
 """
@@ -30,7 +31,25 @@ def _keygen(_args: argparse.Namespace) -> int:
     return 0
 
 
+def _resolve_key(args: argparse.Namespace) -> str | None:
+    """Private key, most-hygienic source first: --key-file, then
+    AXOR_VENDOR_KEY, then --key. An argv key lands in shell history and `ps`
+    output — supported for compat, discouraged in help."""
+    import os
+
+    if args.key_file:
+        return open(args.key_file).read().strip()
+    return os.environ.get("AXOR_VENDOR_KEY") or args.key
+
+
 def _issue(args: argparse.Namespace) -> int:
+    key = _resolve_key(args)
+    if not key:
+        print(
+            "no signing key: pass --key-file, set AXOR_VENDOR_KEY, or --key",
+            file=sys.stderr,
+        )
+        return 2
     lic = {
         "org": args.org,
         "tier": args.tier,
@@ -38,7 +57,7 @@ def _issue(args: argparse.Namespace) -> int:
         "expiry": args.expiry,
         "features": args.features or [],
     }
-    print(sign_license(lic, args.key))
+    print(sign_license(lic, key))
     return 0
 
 
@@ -66,7 +85,15 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("keygen", help="generate a vendor Ed25519 keypair").set_defaults(fn=_keygen)
 
     issue = sub.add_parser("issue", help="sign a license file")
-    issue.add_argument("--key", required=True, help="vendor private key (hex)")
+    issue.add_argument(
+        "--key-file",
+        help="path to a file holding the vendor private key (hex) — preferred",
+    )
+    issue.add_argument(
+        "--key",
+        help="vendor private key (hex) on argv — lands in shell history; "
+             "prefer --key-file or the AXOR_VENDOR_KEY env var",
+    )
     issue.add_argument("--org", required=True)
     issue.add_argument("--tier", default="team", choices=["team", "enterprise"])
     issue.add_argument("--nodes", type=int, default=10, help="node ceiling")

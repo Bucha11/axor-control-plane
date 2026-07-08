@@ -4,11 +4,12 @@ What's shipping vs what's an idea. Updated with releases; no dates promised.
 
 **Now (shipped)**: eval → EvidenceCase (share/HTML/PDF) · deterministic replay
 + counterfactuals · taint/provenance graph · live Control (pause/stop/budget/
-cascade) · two-sided regression CI · MCP onboarding (HTTP servers) · streaming
-passthrough · webhook notifications + dead-letter · scoped API keys · alembic
-migrations · retention · concurrent runs per proxy · offline EE license.
+cascade) · two-sided regression CI · MCP onboarding (HTTP + stdio servers, the
+proxy spawns stdio gateways) · streaming passthrough · webhook notifications +
+dead-letter · scoped API keys · alembic migrations · retention · concurrent
+runs per proxy · offline EE license.
 
-**Next**: OpenAI Agents SDK + CrewAI wrap recipes · stdio-MCP local gateway ·
+**Next**: OpenAI Agents SDK + CrewAI wrap recipes ·
 landing + docs site · benchmark harness (catch-rate table) · load-ceiling doc.
 
 **Later (needs demand)**: hosted multi-tenant (per-tenant Kùzu is stubbed) ·

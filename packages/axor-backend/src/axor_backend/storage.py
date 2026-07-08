@@ -20,6 +20,7 @@ from sqlalchemy import (
     String,
     Table,
     UniqueConstraint,
+    delete,
     insert,
     select,
     update,
@@ -114,6 +115,20 @@ notification_subs = Table(
     Column("triggers", String(300), nullable=False),  # comma-separated, sorted
     Column("debounce_seconds", Float, nullable=False, default=0.0),
     UniqueConstraint("url", "triggers", name="uq_sub_url_triggers"),
+)
+
+# Dead letters are the honesty ledger of the notification channel: a webhook
+# that never arrived. They persist (capped) so a restart doesn't erase the
+# evidence that deliveries were lost — the exact failure mode the dead-letter
+# log exists to expose.
+dead_letters = Table(
+    "dead_letters", metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("url", String(500), nullable=False),
+    Column("payload_json", _JSON, nullable=False),
+    Column("error", String(500), nullable=False),
+    Column("attempts", Integer, nullable=False),
+    Column("created_ts", String(40), nullable=False),
 )
 
 api_keys = Table(
@@ -546,5 +561,39 @@ class Store:
             {"url": r.url,
              "triggers": [t for t in r.triggers.split(",") if t],
              "debounce_seconds": r.debounce_seconds}
+            for r in rows
+        ]
+
+    # ── notification dead letters (persist: a restart must not erase the
+    # evidence that deliveries were lost) ─────────────────────────────────────
+
+    async def add_dead_letter(
+        self, url: str, payload: dict[str, Any], error: str, attempts: int,
+        created_ts: str, cap: int = 500,
+    ) -> None:
+        async with self.engine.begin() as conn:
+            await conn.execute(insert(dead_letters).values(
+                url=url, payload_json=payload, error=error[:500],
+                attempts=attempts, created_ts=created_ts,
+            ))
+            # Keep only the newest `cap` rows — same bound the in-memory deque
+            # had, enforced in SQL so the table cannot grow without limit.
+            keep = select(dead_letters.c.id).order_by(
+                dead_letters.c.id.desc()
+            ).limit(cap).subquery()
+            await conn.execute(
+                delete(dead_letters).where(
+                    dead_letters.c.id.not_in(select(keep.c.id))
+                )
+            )
+
+    async def list_dead_letters(self, limit: int = 500) -> list[dict[str, Any]]:
+        async with self.engine.connect() as conn:
+            rows = (await conn.execute(
+                select(dead_letters).order_by(dead_letters.c.id.desc()).limit(limit)
+            )).all()
+        return [
+            {"url": r.url, "payload": r.payload_json, "error": r.error,
+             "attempts": r.attempts, "created_ts": r.created_ts}
             for r in rows
         ]

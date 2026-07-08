@@ -4,8 +4,8 @@ onboarding must accept an MCP server, not only bare HTTP endpoints.
 Scope (launch-readiness §1): HTTP-transported MCP servers (streamable HTTP).
 `discover()` performs the client handshake — `initialize` →
 `notifications/initialized` → `tools/list` — and returns the server name and its
-tool inventory. stdio-transported servers are out of scope here (they need a
-local gateway; the CLI story), and we say so honestly at the API.
+tool inventory. stdio-transported servers go through the local gateway in
+`stdio_mcp.py` (same handshake, subprocess transport).
 
 The proxy stays observe-only: discovery is read-only JSON-RPC, and a registered
 MCP server is proxied exactly like any other tool endpoint — auth passthrough,

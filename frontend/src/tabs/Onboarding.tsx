@@ -23,23 +23,37 @@ const TOOLS: Tool[] = [
 
 type RowState = "idle" | "testing" | "ok" | "fail";
 
-// Parse either a full client config ({"mcpServers": {name: {url}}}) — the shape
-// Claude Desktop / Cursor use — or a bare server URL. stdio servers (command:)
-// are reported honestly as unsupported here.
-function parseMcpConfig(raw: string): { servers: { name?: string; url: string }[]; stdio: string[] } {
+// Parse either a full client config ({"mcpServers": {name: {url | command}}})
+// — the shape Claude Desktop / Cursor use — or a bare server URL, or a bare
+// command line ("npx -y @modelcontextprotocol/server-…"). stdio servers go
+// through the proxy's local gateway; HTTP servers are dialed directly.
+type McpTarget = { name?: string; url?: string; command?: string[] };
+
+function parseMcpConfig(raw: string): McpTarget[] {
   const trimmed = raw.trim();
-  if (/^https?:\/\//.test(trimmed)) return { servers: [{ url: trimmed }], stdio: [] };
-  const parsed = JSON.parse(trimmed) as Record<string, unknown>;
+  if (/^https?:\/\//.test(trimmed)) return [{ url: trimmed }];
+  let parsed: Record<string, unknown>;
+  try {
+    parsed = JSON.parse(trimmed) as Record<string, unknown>;
+  } catch {
+    // Not JSON and not a URL: treat it as a stdio command line.
+    const command = trimmed.split(/\s+/).filter(Boolean);
+    return command.length ? [{ command }] : [];
+  }
   const entries = (parsed.mcpServers ?? parsed) as Record<string, Record<string, unknown>>;
-  const servers: { name?: string; url: string }[] = [];
-  const stdio: string[] = [];
+  const targets: McpTarget[] = [];
   for (const [name, spec] of Object.entries(entries)) {
     if (typeof spec !== "object" || spec === null) continue;
     const url = (spec.url ?? spec.serverUrl) as string | undefined;
-    if (typeof url === "string" && url) servers.push({ name, url });
-    else if ("command" in spec) stdio.push(name);
+    if (typeof url === "string" && url) targets.push({ name, url });
+    else if (typeof spec.command === "string" && spec.command) {
+      const args = Array.isArray(spec.args)
+        ? spec.args.filter((a): a is string => typeof a === "string")
+        : [];
+      targets.push({ name, command: [spec.command, ...args] });
+    }
   }
-  return { servers, stdio };
+  return targets;
 }
 
 export default function Onboarding() {
@@ -57,22 +71,26 @@ export default function Onboarding() {
     setMcpBusy(true);
     setMcpNote(null);
     try {
-      const { servers, stdio } = parseMcpConfig(mcpRaw);
-      if (servers.length === 0) {
+      const targets = parseMcpConfig(mcpRaw);
+      if (targets.length === 0) {
         setMcpNote({
           kind: "err",
-          text: stdio.length
-            ? `only stdio servers found (${stdio.join(", ")}) — stdio needs a local gateway (roadmap); paste an HTTP MCP url`
-            : "no MCP servers found — paste {\"mcpServers\": {…}} or an http(s) url",
+          text: "no MCP servers found — paste {\"mcpServers\": {…}}, an http(s) url, or a stdio command line",
         });
         return;
       }
       const added: Tool[] = [];
       const found: Record<string, string[]> = {};
-      for (const s of servers) {
-        const info = await api.mcpDiscover(s.url, s.name);
-        added.push({ name: info.registered, url: s.url });
-        found[info.registered] = info.tools.map((t) => t.name);
+      for (const t of targets) {
+        const info = await api.mcpDiscover(
+          t.url ? { url: t.url } : { command: t.command },
+          t.name,
+        );
+        added.push({
+          name: info.registered,
+          url: t.url ?? `stdio: ${t.command?.join(" ") ?? ""}`,
+        });
+        found[info.registered] = info.tools.map((tl) => tl.name);
       }
       setTools((prev) => [
         ...prev.filter((t) => !added.some((a) => a.name === t.name)),
@@ -82,7 +100,7 @@ export default function Onboarding() {
       const total = Object.values(found).reduce((n, ts) => n + ts.length, 0);
       setMcpNote({
         kind: "ok",
-        text: `registered ${added.length} MCP server${added.length === 1 ? "" : "s"} · ${total} tools discovered${stdio.length ? ` · skipped stdio: ${stdio.join(", ")}` : ""}`,
+        text: `registered ${added.length} MCP server${added.length === 1 ? "" : "s"} · ${total} tools discovered`,
       });
       setMcpRaw("");
     } catch (e) {
@@ -176,12 +194,12 @@ export default function Onboarding() {
               onChange={(e) => setMcpRaw(e.target.value)}
               rows={3}
               spellCheck={false}
-              placeholder={'{"mcpServers": {"docs": {"url": "https://mcp.example/sse"}}}  ·  or a bare http(s) url'}
+              placeholder={'{"mcpServers": {"docs": {"url": "https://mcp.example/sse"}, "fs": {"command": "npx", "args": ["-y", "@modelcontextprotocol/server-filesystem"]}}}  ·  or a bare url / command line'}
               className="w-full mb-2"
               style={{ background: C.bg, border: `1px solid ${C.line}`, borderRadius: 5, color: C.text, fontFamily: MONO, fontSize: 11, padding: 8, resize: "vertical", outline: "none" }}
             />
             <div className="flex items-center gap-3">
-              <Tooltip content="We handshake with each HTTP MCP server (initialize → tools/list), list its tools, and register it as a proxied endpoint — your agent then points at /t/{server}/ instead.">
+              <Tooltip content="We handshake with each MCP server (initialize → tools/list), list its tools, and register it as a proxied endpoint — your agent then points at /t/{server}/ instead. HTTP servers are dialed directly; stdio servers (command:) are spawned locally by the proxy's gateway.">
                 <button
                   onClick={() => void discoverMcp()}
                   disabled={mcpBusy || !mcpRaw.trim()}
@@ -205,7 +223,7 @@ export default function Onboarding() {
                 </button>
               </Tooltip>
               <span style={{ fontFamily: MONO, fontSize: 11, color: C.dim }}>
-                loads a sample set — parsing a real MCP manifest is on the roadmap · or add endpoints by hand · or use our mock tools (zero creds)
+                loads a sample set · or paste your MCP config above (http + stdio both work) · or add endpoints by hand · or use our mock tools (zero creds)
               </span>
               <div className="w-full">{addRow}</div>
             </div>

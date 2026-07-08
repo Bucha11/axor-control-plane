@@ -125,6 +125,7 @@ export interface DeadLetter {
   error: string;
   attempts: number;
   trigger: string;
+  created_ts?: string; // persisted (survives restarts) since migration 0002
 }
 
 export interface LicenseInfo {
@@ -201,15 +202,16 @@ export const api = {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ config }),
     }).then((r) => j<RegressionReport>(r)),
-  // ── MCP onboarding: discover an HTTP MCP server's tools + register it ──────
-  mcpDiscover: (url: string, name?: string) =>
+  // ── MCP onboarding: discover an MCP server's tools + register it. Either an
+  // HTTP url or a local stdio command (the proxy spawns it as a gateway). ────
+  mcpDiscover: (target: { url?: string; command?: string[] }, name?: string) =>
     af("/axor/mcp/discover", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ url, ...(name ? { name } : {}) }),
+      body: JSON.stringify({ ...target, ...(name ? { name } : {}) }),
     }).then((r) =>
       j<{ registered: string; proxied_base: string; server: string;
-          protocol_version: string;
+          protocol_version: string; transport: "http" | "stdio";
           tools: { name: string; description: string }[] }>(r),
     ),
   proxyPreflight: () =>

@@ -161,11 +161,18 @@ def create_app(
     if api_token is None:
         api_token = os.environ.get("AXOR_API_TOKEN") or None
 
-    app.state.store = Store(make_engine(url))
+    _store = Store(make_engine(url))
+    app.state.store = _store
     app.state.broadcast = Broadcast()
     app.state.keyring = OperatorKeyring(keys)
     app.state.allow_unsigned = allow_unsigned
-    app.state.notifier = Notifier()
+
+    async def _persist_dead_letter(letter: Any) -> None:  # noqa: ANN401 - DeadLetter
+        await _store.add_dead_letter(
+            letter.url, letter.payload, letter.error, letter.attempts, _now()
+        )
+
+    app.state.notifier = Notifier(dead_sink=_persist_dead_letter)
     app.state.shares = ShareRegistry()
     app.state.api_token = api_token
     # Taint/provenance graph (spec decision 6). In-memory by default — the same
@@ -419,10 +426,14 @@ def create_app(
 
     @app.get("/v1/notifications/dead-letters")
     async def notif_dead_letters(request: Request) -> list[dict]:
+        # Read-through from the store: dead letters persist across restarts
+        # (migration 0002) — the log of lost deliveries must not itself be lossy.
+        rows = await request.app.state.store.list_dead_letters()
         return [
-            {"url": d.url, "error": d.error, "attempts": d.attempts,
-             "trigger": d.payload.get("trigger")}
-            for d in request.app.state.notifier.dead_letters
+            {"url": d["url"], "error": d["error"], "attempts": d["attempts"],
+             "trigger": (d["payload"] or {}).get("trigger"),
+             "created_ts": d["created_ts"]}
+            for d in rows
         ]
 
     # ── EvidenceCase export & share (spec section 8.3) ────────────────────────

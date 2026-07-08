@@ -41,6 +41,36 @@ async def test_notifier_retries_then_dead_letters() -> None:
     assert n.dead_letters[0].error == "status 500"
 
 
+async def test_notifier_hands_dead_letters_to_the_persistence_sink() -> None:
+    persisted = []
+
+    async def failing_post(url: str, body: dict) -> int:
+        return 503
+
+    async def sink(letter) -> None:  # noqa: ANN001 - DeadLetter
+        persisted.append(letter)
+
+    n = Notifier(post=failing_post, max_attempts=2, dead_sink=sink)
+    n.subscribe("http://sink.test/hook", ["node_stale"])
+    await n.emit("node_stale", "node1", {"silent_for": 31})
+    assert len(persisted) == 1
+    assert persisted[0].payload["trigger"] == "node_stale"
+
+
+async def test_notifier_survives_a_broken_persistence_sink() -> None:
+    async def failing_post(url: str, body: dict) -> int:
+        return 500
+
+    async def broken_sink(letter) -> None:  # noqa: ANN001
+        raise RuntimeError("db down")
+
+    n = Notifier(post=failing_post, max_attempts=1, dead_sink=broken_sink)
+    n.subscribe("http://sink.test/hook", ["node_stale"])
+    # Must not raise — the in-memory record still lands.
+    assert await n.emit("node_stale", "node1", {}) == 1
+    assert len(n.dead_letters) == 1
+
+
 async def test_notifier_debounce_suppresses_repeats() -> None:
     seen = []
 
@@ -426,3 +456,30 @@ def test_license_cli_roundtrip(tmp_path, capsys) -> None:  # noqa: ANN001
     assert main(["verify", "--pubkey", keys["vendor_public_key"],
                  str(lic_file)]) == 0
     assert "VALID" in capsys.readouterr().out
+
+
+def test_license_cli_reads_key_from_file_and_env(
+    tmp_path, capsys, monkeypatch,  # noqa: ANN001
+) -> None:
+    """The private key should not have to travel via argv (shell history):
+    --key-file and AXOR_VENDOR_KEY both work; no key at all is a clear error."""
+    import json as _json
+
+    from axor_backend.ee.cli import main
+
+    assert main(["keygen"]) == 0
+    keys = _json.loads(capsys.readouterr().out)
+
+    key_file = tmp_path / "vendor.key"
+    key_file.write_text(keys["vendor_private_key"] + "\n")
+    assert main(["issue", "--key-file", str(key_file), "--org", "F",
+                 "--expiry", "2999-01-01"]) == 0
+    assert '"org"' in capsys.readouterr().out
+
+    monkeypatch.setenv("AXOR_VENDOR_KEY", keys["vendor_private_key"])
+    assert main(["issue", "--org", "E", "--expiry", "2999-01-01"]) == 0
+    assert '"org"' in capsys.readouterr().out
+
+    monkeypatch.delenv("AXOR_VENDOR_KEY")
+    assert main(["issue", "--org", "N", "--expiry", "2999-01-01"]) == 2
+    assert "no signing key" in capsys.readouterr().err

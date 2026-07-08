@@ -9,6 +9,8 @@ where wrong gets loud. We emit and route — never a pager.
   threshold, a run completing with >=1 EvidenceCase, a node stale.
 - Failure honesty: at-least-once with retries and a dead-letter log visible in
   settings — a notification system that fails silently is worse than none.
+  Dead letters persist (capped, migration 0002): a restart must not erase the
+  evidence that deliveries were lost.
 - Source: the plane event feed the backend already has; a subscriber with an
   HTTP sink and per-trigger debounce, no new instrumentation.
 """
@@ -16,6 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from collections import deque
 from dataclasses import dataclass, field
 from typing import Any
@@ -51,11 +54,13 @@ class Notifier:
         post: Any = None,  # noqa: ANN401 - injected async POST(url, json) -> status
         max_attempts: int = 4,
         dead_letter_cap: int = 500,
+        dead_sink: Any = None,  # noqa: ANN401 - async callable(DeadLetter) that persists it
     ) -> None:
         self._subs: list[Subscription] = []
         self._post = post or _default_post
         self._max_attempts = max_attempts
         self._dead: deque[DeadLetter] = deque(maxlen=dead_letter_cap)
+        self._dead_sink = dead_sink
         self._clock = 0.0  # logical clock; debounce is in these units
 
     def subscribe(self, url: str, triggers: list[str], debounce_seconds: float = 0.0) -> None:
@@ -107,10 +112,18 @@ class Notifier:
             if attempt < self._max_attempts:
                 await asyncio.sleep(backoff)
                 backoff = min(backoff * 2, 2.0)
-        self._dead.append(
-            DeadLetter(url=url, payload=body, error=last_error,
-                       attempts=self._max_attempts)
-        )
+        letter = DeadLetter(url=url, payload=body, error=last_error,
+                            attempts=self._max_attempts)
+        self._dead.append(letter)
+        if self._dead_sink is not None:
+            # Persistence must never make emit() itself fail — a broken DB on
+            # top of a broken webhook still leaves the in-memory record.
+            try:
+                await self._dead_sink(letter)
+            except Exception:  # noqa: BLE001 - deliberately non-fatal
+                logging.getLogger("axor.notifications").exception(
+                    "dead-letter persist failed"
+                )
 
 
 async def _default_post(url: str, body: dict[str, Any]) -> int:

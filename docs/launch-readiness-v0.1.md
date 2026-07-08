@@ -13,7 +13,7 @@ Status legend: ☐ open · ◐ partial exists · ☑ done.
 
 | P | Item | Why / done-when | Status |
 |---|---|---|---|
-| P0 | **MCP-native onboarding** | Onboarding says "parsing a real MCP manifest is on the roadmap" — for the 2026 agent stack MCP *is* the tool layer. Done when: paste/upload an MCP manifest → tools declared, proxied MCP endpoint works against a real client. | ☑ |
+| P0 | **MCP-native onboarding** | Onboarding says "parsing a real MCP manifest is on the roadmap" — for the 2026 agent stack MCP *is* the tool layer. Done when: paste/upload an MCP manifest → tools declared, proxied MCP endpoint works against a real client. | ☑ (HTTP **and stdio** — the proxy spawns local `command:` servers as gateways; loopback-only registration) |
 | P0 | **Streaming passthrough in the proxy** | `tool_route` buffers the full upstream body; SSE/chunked tool responses (LLM-backed tools) stall. Done when: pass-through streams, observation records size/hash without buffering. | ☑ |
 | P0 | **DB migrations** | `create_all` only; first schema change after launch strands early adopters. Done when: alembic baseline + upgrade path tested SQLite+Postgres. | ☑ |
 | P1 | **Concurrent runs per proxy** | One active run at a time (v1) breaks the first team that shares a proxy. Done when: N armed runs keyed by header/route, docs updated. | ☑ |
@@ -65,7 +65,7 @@ Status legend: ☐ open · ◐ partial exists · ☑ done.
 | P | Item | Done-when | Status |
 |---|---|---|---|
 | P0 | **CI fully green on main** including the deploy smoke job (compose build vs private deps — verify `AXOR_ECOSYSTEM_TOKEN` path in a real Actions run). | ☑ suites / ☐ Actions run | ◐ |
-| P1 | **Load smoke**: 50 concurrent SSE subscribers + 100 rps ingest on compose stack; find the first ceiling, write it down honestly in docs. | | ☑ (SQLite numbers in docs/ops-limits.md; re-run on Postgres before quoting) |
+| P1 | **Load smoke**: 50 concurrent SSE subscribers + 100 rps ingest on compose stack; find the first ceiling, write it down honestly in docs. | | ☑ (SQLite **and Postgres 16** numbers in docs/ops-limits.md: ~150 rps ingest ceiling on PG, SSE fan-out is the next bottleneck) |
 | P1 | **Error tracking**: Sentry (or logs-only + structured logging) on backend/proxy so launch-day bugs are visible. | | ☑ (AXOR_LOG_JSON structured logs, optional SENTRY_DSN, structured unhandled-error handler) |
 | P2 | Backup/restore runbook (pg_dump + trace dir), upgrade runbook. | | ☑ (docs/runbook.md) |
 

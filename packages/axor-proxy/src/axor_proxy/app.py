@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
@@ -30,6 +31,7 @@ from axor_proxy.agent import ScriptedAgent, default_claim, default_script
 from axor_proxy.mcp import McpError, discover, sniff_rpc_call
 from axor_proxy.mock_tools import mock_tools_app
 from axor_proxy.runs import RunManager, evidence_to_dict, sha256_hex
+from axor_proxy.stdio_mcp import StdioMcpServer, discover_stdio
 from axor_proxy.upload import BackendUploader
 
 # Hop-by-hop headers never forwarded in either direction (RFC 9110 s7.6.1).
@@ -60,7 +62,9 @@ class ProxyState:
     ) -> None:
         import os as _os
 
-        self.tools = tools  # tool name -> upstream base url
+        # tool name -> upstream: an HTTP base url, or a live StdioMcpServer
+        # (the stdio-MCP gateway) registered via /axor/mcp/discover.
+        self.tools: dict[str, str | StdioMcpServer] = dict(tools)
         retention_raw = _os.environ.get("AXOR_RETENTION_DAYS", "")
         self.runs = RunManager(
             trace_dir,
@@ -82,6 +86,90 @@ class ProxyState:
         self.ingest_key = ingest_key
         # Live governed nodes (node_id -> keepalive task) so they are not GC'd.
         self.governed: dict[str, Any] = {}
+
+
+async def _stdio_dispatch(
+    state: ProxyState,
+    run: Any,  # noqa: ANN401 - RunManager's run record
+    tool: str,
+    server: StdioMcpServer,
+    body: bytes,
+    spec: Any,  # noqa: ANN401 - fault spec or None
+) -> Response:
+    """Relay one JSON-RPC message to a stdio-MCP server. The TOOL_CALL event
+    is already recorded by the caller; this handles fault/clean result paths.
+    Buffered by nature — stdio MCP is one message per line, nothing streams."""
+    try:
+        parsed = json.loads(body) if body else None
+    except json.JSONDecodeError:
+        parsed = None
+    if not isinstance(parsed, dict) or parsed.get("jsonrpc") != "2.0":
+        return JSONResponse(
+            {"error": "jsonrpc_required",
+             "detail": "a stdio-MCP tool speaks JSON-RPC 2.0 — POST one "
+                       "message object per request"},
+            status_code=400,
+        )
+
+    async def upstream_or_502() -> tuple[dict[str, Any] | None, Response | None]:
+        try:
+            return await server.rpc(parsed), None
+        except McpError as exc:
+            run.call_counts[tool] = run.call_counts.get(tool, 0) + 1
+            await state.runs.record(
+                run, EventKind.TOOL_RESULT,
+                {"tool": tool, "status": None, "error": "McpError",
+                 "transport": "stdio"},
+            )
+            return None, JSONResponse(
+                {"error": "upstream_unreachable", "tool": tool,
+                 "detail": str(exc)},
+                status_code=502,
+            )
+
+    # ── fault path: identical semantics to the HTTP fault path. ──
+    if spec is not None:
+        upstream_result: Any | None = None
+        if state.runs.needs_upstream(spec):
+            upstream_result, err = await upstream_or_502()
+            if err is not None:
+                return err
+        faulted = state.runs.apply_fault(run, spec, upstream_result)
+        fault = run.engine.fault_log[-1]
+        await state.runs.record(
+            run, EventKind.FAULT_INJECTED,
+            {"tool": tool, "mode": fault.mode, "canary": fault.canary},
+        )
+        payload = json.dumps(faulted).encode()
+        await state.runs.record(
+            run, EventKind.TOOL_RESULT,
+            {"tool": tool, "status": 200, "faulted": True,
+             "response_bytes": len(payload),
+             "response_sha256": sha256_hex(payload), "transport": "stdio"},
+        )
+        run.call_counts[tool] = run.call_counts.get(tool, 0) + 1
+        return Response(payload, media_type="application/json")
+
+    # ── clean path ──
+    result, err = await upstream_or_502()
+    if err is not None:
+        return err
+    run.call_counts[tool] = run.call_counts.get(tool, 0) + 1
+    if result is None:
+        # A notification: delivered, nothing to return (MCP stdio semantics).
+        await state.runs.record(
+            run, EventKind.TOOL_RESULT,
+            {"tool": tool, "status": 202, "response_bytes": 0,
+             "transport": "stdio"},
+        )
+        return Response(status_code=202)
+    payload = json.dumps(result).encode()
+    await state.runs.record(
+        run, EventKind.TOOL_RESULT,
+        {"tool": tool, "status": 200, "response_bytes": len(payload),
+         "response_sha256": sha256_hex(payload), "transport": "stdio"},
+    )
+    return Response(payload, media_type="application/json")
 
 
 def create_app(state: ProxyState) -> Starlette:
@@ -122,6 +210,12 @@ def create_app(state: ProxyState) -> Starlette:
         await state.runs.record(run, EventKind.TOOL_CALL, call_payload)
 
         spec = state.runs.fault_for_call(run, tool)
+
+        # ── stdio-MCP gateway: the upstream is a local process, not a URL.
+        # One JSON-RPC message in, one out — same fault/observation pipeline. ──
+        if isinstance(upstream_base, StdioMcpServer):
+            return await _stdio_dispatch(state, run, tool, upstream_base, body, spec)
+
         url = upstream_base.rstrip("/") + "/" + path if path else upstream_base
 
         # ── fault path: the deprivation engine transforms the JSON body, so it
@@ -311,6 +405,9 @@ def create_app(state: ProxyState) -> Starlette:
         """Onboarding step 3: prove the plumbing before it matters."""
         results: dict[str, dict[str, Any]] = {}
         for tool, base in state.tools.items():
+            if isinstance(base, StdioMcpServer):
+                results[tool] = {"ok": base.alive, "transport": "stdio"}
+                continue
             try:
                 resp = await state.client.request("GET", base, timeout=5.0)
                 results[tool] = {"ok": resp.status_code < 500,
@@ -352,23 +449,79 @@ def create_app(state: ProxyState) -> Starlette:
         return JSONResponse(result)
 
     async def mcp_discover(request: Request) -> Response:
-        """Onboarding: point us at an HTTP MCP server → we handshake, list its
+        """Onboarding: point us at an MCP server → we handshake, list its
         tools, and register the server as a proxied tool endpoint, so
-        /t/{name}/ fronts it immediately (auth passthrough, faults,
-        observation — like any other tool). stdio servers are out of scope
-        here and rejected honestly."""
+        /t/{name}/ fronts it immediately (faults, observation — like any
+        other tool). Two transports: {url} for streamable-HTTP servers,
+        {command} for local stdio servers (the gateway spawns the process)."""
         try:
             payload = await request.json()
         except json.JSONDecodeError:
             return JSONResponse({"error": "malformed_json"}, status_code=400)
         url = payload.get("url")
-        if not isinstance(url, str) or not url:
+        command = payload.get("command")
+
+        if isinstance(command, str) and command.strip():
+            import shlex
+
+            command = shlex.split(command)
+        stdio_ok = (
+            isinstance(command, list) and command
+            and all(isinstance(c, str) and c for c in command)
+        )
+        if not stdio_ok and (not isinstance(url, str) or not url):
             return JSONResponse(
-                {"error": "url_required",
-                 "detail": "POST {url, name?} — url of an HTTP MCP server. "
-                           "stdio servers need a local gateway (roadmap)."},
+                {"error": "url_or_command_required",
+                 "detail": "POST {url, name?} for an HTTP MCP server, or "
+                           "{command: [\"npx\", …], name?} for a local stdio "
+                           "server (the proxy spawns it as a gateway)."},
                 status_code=400,
             )
+
+        if stdio_ok:
+            # Spawning a process is a step up from dialing a URL: only accept
+            # stdio registrations from loopback callers (the operator on the
+            # same box), unless explicitly opened up. Keeps an exposed proxy
+            # port from being a remote-exec endpoint.
+            import ipaddress
+            import os
+
+            client_host = request.client.host if request.client else ""
+            try:
+                is_local = ipaddress.ip_address(client_host).is_loopback
+            except ValueError:
+                is_local = False
+            if not is_local and os.environ.get("AXOR_ALLOW_REMOTE_STDIO") != "1":
+                return JSONResponse(
+                    {"error": "stdio_requires_loopback",
+                     "detail": "stdio-MCP registration spawns a local process; "
+                               "only loopback callers may do that (set "
+                               "AXOR_ALLOW_REMOTE_STDIO=1 to override)."},
+                    status_code=403,
+                )
+            try:
+                server = await discover_stdio(command)
+            except McpError as exc:
+                return JSONResponse(
+                    {"error": "mcp_discovery_failed", "detail": str(exc)},
+                    status_code=502,
+                )
+            name = payload.get("name") or server.server_name
+            # Repointing an existing stdio registration must not leak the old
+            # process.
+            old = state.tools.get(name)
+            if isinstance(old, StdioMcpServer):
+                await old.close()
+            state.tools[name] = server
+            return JSONResponse({
+                "registered": name,
+                "proxied_base": f"/t/{name}/",
+                "server": server.server_name,
+                "protocol_version": server.protocol_version,
+                "transport": "stdio",
+                "tools": server.tools,
+            })
+
         try:
             info = await discover(url, state.client)
         except McpError as exc:
@@ -379,19 +532,31 @@ def create_app(state: ProxyState) -> Starlette:
         name = payload.get("name") or info["server"]
         # Registering under an existing name repoints it — explicit, visible in
         # the response; the tool table is dev-scoped runtime state.
+        old = state.tools.get(name)
+        if isinstance(old, StdioMcpServer):
+            await old.close()
         state.tools[name] = url
         return JSONResponse({
             "registered": name,
             "proxied_base": f"/t/{name}/",
             "server": info["server"],
             "protocol_version": info["protocol_version"],
+            "transport": "http",
             "tools": info["tools"],
         })
 
     async def healthz(request: Request) -> Response:
         return JSONResponse({"ok": True, "armed": state.runs.active is not None})
 
-    app = Starlette(routes=[
+    @asynccontextmanager
+    async def lifespan(_app: Starlette) -> Any:  # noqa: ANN401 - CM protocol
+        yield
+        # Spawned stdio-MCP gateways die with the proxy, not as orphans.
+        for upstream in state.tools.values():
+            if isinstance(upstream, StdioMcpServer):
+                await upstream.close()
+
+    app = Starlette(lifespan=lifespan, routes=[
         Route("/axor/healthz", healthz),
         Route("/axor/preflight", preflight),
         Route("/axor/mcp/discover", mcp_discover, methods=["POST"]),

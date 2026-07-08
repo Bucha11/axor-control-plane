@@ -51,7 +51,12 @@ safety features**.
 - The proxy is not a sandbox: it observes and injects test-bench faults; it
   does not block traffic (enforcement is the adapter's job).
 - Single-instance backend; no HA story yet.
-- stdio MCP servers are not proxied (HTTP transport only).
+- stdio MCP servers are proxied via a local gateway: the proxy *spawns the
+  server process from operator-supplied config*. Registration is accepted
+  from loopback callers only (`AXOR_ALLOW_REMOTE_STDIO=1` overrides — don't,
+  unless the proxy port is already access-controlled), so an exposed proxy
+  port is not a remote-exec endpoint. Treat the command like any other
+  deploy-time config; it is never taken from runtime/agent input.
 
 ## Hardening checklist for a real deployment
 

@@ -254,6 +254,7 @@ export default function Settings() {
           (deadLetters.data ?? []).map((d, i) => (
             <div key={i} style={{ fontFamily: MONO, fontSize: 11, color: C.amber, marginTop: 4 }}>
               {d.trigger} → {d.url} · {d.error} ({d.attempts} attempts)
+              {d.created_ts ? ` · ${d.created_ts.slice(0, 19)}` : ""}
             </div>
           ))
         )}

@@ -15,11 +15,15 @@ test.describe("onboarding", () => {
     await expect(page.getByText(/registered 1 MCP server · 2 tools discovered/)).toBeVisible();
     // The server lands in the declared-tools list with its tool inventory.
     await expect(page.getByText("demo_mcp", { exact: true })).toBeVisible();
-    await expect(page.getByText(/tools: web_search · get_weather/)).toBeVisible();
-    // stdio-only config is refused honestly.
-    await page.getByPlaceholder(/mcpServers/).fill('{"mcpServers": {"local": {"command": "npx"}}}');
+    await expect(page.getByText(/tools: web_search · get_weather/).first()).toBeVisible();
+    // A stdio server (command:) goes through the local gateway — the proxy
+    // spawns a REAL process (our stdio mock) and handshakes with it.
+    await page
+      .getByPlaceholder(/mcpServers/)
+      .fill('{"mcpServers": {"local_stdio": {"command": "python", "args": ["-m", "axor_proxy.stdio_mock"]}}}');
     await page.getByRole("button", { name: /Discover MCP tools/ }).click();
-    await expect(page.getByText(/stdio needs a local gateway/)).toBeVisible();
+    await expect(page.getByText(/registered 1 MCP server · 2 tools discovered/)).toBeVisible();
+    await expect(page.getByText("local_stdio", { exact: true })).toBeVisible();
   });
 
   test("walks tools → point agent → connection check", async ({ page }) => {
