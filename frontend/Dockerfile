@@ -6,6 +6,10 @@ RUN corepack enable
 COPY frontend/package.json frontend/pnpm-lock.yaml ./
 RUN pnpm install --frozen-lockfile
 COPY frontend ./
+# Checkout link for the Pricing CTA (launch-readiness §5): bake a Stripe
+# payment link in at build time — no code change, just a build arg.
+ARG VITE_CHECKOUT_URL=""
+ENV VITE_CHECKOUT_URL=${VITE_CHECKOUT_URL}
 RUN pnpm build
 
 FROM nginx:1.27-alpine
