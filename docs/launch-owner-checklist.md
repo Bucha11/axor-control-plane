@@ -106,12 +106,21 @@ For the paper/launch post, add real-model rows: export `ANTHROPIC_API_KEY`
 axor-eval `benchmarks/`, run `--trials 20 --write` per model. Update the
 launch-post table.
 
-## 9. Design partners + DPA (external)
+## 9. Design partners (paperwork is drafted — execution only)
 
-docs/design-partner-kit.md is ready to send. Before the first signature,
-have counsel produce a DPA template (the security-controls page and EU AI
-Act mapping are written and linkable). 3 slots, fixed price, case-study
-clause in.
+Everything is in `docs/partner/`: external one-pager, outreach templates +
+qualification checklist, Design Partner Agreement, mutual NDA, and a DPA
+template (dormant while self-hosted — Axor processes no partner data). Your
+steps:
+
+1. Fill the `[BRACKETS]` (legal name, jurisdiction) in the agreement + NDA.
+2. Add the video/site links to the one-pager and outreach email (after
+   steps 6–7).
+3. Source 15–20 qualified conversations from the three pipelines in
+   `docs/design-partner-kit.md`; run the qualification checklist; sign via
+   any free e-sign tier.
+4. Rule from `docs/partner/README.md`: the first PAID deal or any HOSTED
+   data is the trigger for professional legal review — not before.
 
 ## 10. Paper venue (15 min decision)
 

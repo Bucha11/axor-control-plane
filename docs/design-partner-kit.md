@@ -29,3 +29,8 @@ per vertical (fintech / healthcare / dev-tools) — reference diversity.
 **Pipeline**: paper reviewers' orgs · HN launch inbound · MCP-community teams.
 Pitch line: "You get the receipts and the kill switch before your auditors
 ask; we get proof it works outside our lab."
+
+**Paperwork** (ready to send, see `partner/`): external one-pager ·
+outreach templates + qualification checklist · Design Partner Agreement ·
+mutual NDA · DPA template (dormant while self-hosted — see its "when this
+applies").

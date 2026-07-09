@@ -28,7 +28,7 @@ Status legend: ☐ open · ◐ partial exists · ☑ done.
 | P0 | **SECURITY.md + threat model page** | Disclosure address, supported versions, and a one-page threat model: what the proxy sees, what is never stored (raw bodies), advisory-overlay failure mode ("Axor down ⇒ agent unaffected"). This is the #1 pre-sales objection — answer it in the repo. | ☑ |
 | P0 | **Default-secure compose** | `.env.example` ships auth ON commented with one-liner to disable, not the reverse; CORS explicit; share-token entropy documented. | ☑ |
 | P1 | **Dependency/SBOM + pip-audit in CI** | `pip-audit`/`npm audit` gate + published SBOM artifact. | ☑ |
-| P2 | SOC2-lite page (controls narrative, no cert claim), DPA template for design partners. | | ◐ (docs/security-controls.md; DPA needs counsel) |
+| P2 | SOC2-lite page (controls narrative, no cert claim), DPA template for design partners. | | ☑ (docs/security-controls.md; full partner paperwork in docs/partner/ — agreement, NDA, DPA; counsel deferred to first paid/hosted deal) |
 
 ## 3. Distribution & DevRel — the launch itself
 
