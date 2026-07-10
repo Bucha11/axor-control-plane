@@ -13,7 +13,9 @@ axor-backend = { workspace = true }
 # to a ref until the kernel merge ships in a release. CI/dev environments that
 # cannot reach github.com directly redirect via `git config url...insteadOf`.
 axor-core = { git = "https://github.com/Bucha11/axor-core", branch = "claude/design-mockups-plan-jgqwup" }
-axor-eval = { git = "https://github.com/Bucha11/axor-eval", branch = "main" }
+# The branch carries the <0.10 core-range widening needed for core 0.9.1;
+# repoint both pins to main (or PyPI versions) once the release PRs merge.
+axor-eval = { git = "https://github.com/Bucha11/axor-eval", branch = "claude/design-mockups-plan-jgqwup" }
 
 [dependency-groups]
 dev = ["pytest>=8.0", "pytest-asyncio>=0.23", "ruff>=0.4"]

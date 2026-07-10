@@ -127,7 +127,7 @@ requires-dist = [
     { name = "alembic", specifier = ">=1.13" },
     { name = "asyncpg", specifier = ">=0.29" },
     { name = "axor-core", git = "https://github.com/Bucha11/axor-core?branch=claude%2Fdesign-mockups-plan-jgqwup" },
-    { name = "axor-eval", git = "https://github.com/Bucha11/axor-eval?branch=main" },
+    { name = "axor-eval", git = "https://github.com/Bucha11/axor-eval?branch=claude%2Fdesign-mockups-plan-jgqwup" },
     { name = "fastapi", specifier = ">=0.111" },
     { name = "kuzu", specifier = ">=0.4" },
     { name = "pynacl", specifier = ">=1.5" },
@@ -159,13 +159,13 @@ dev = [
 
 [[package]]
 name = "axor-core"
-version = "0.8.0"
-source = { git = "https://github.com/Bucha11/axor-core?branch=claude%2Fdesign-mockups-plan-jgqwup#aac29c8d6ff534aeccfccd9fbcdedf7b12f45a0d" }
+version = "0.9.1"
+source = { git = "https://github.com/Bucha11/axor-core?branch=claude%2Fdesign-mockups-plan-jgqwup#acc5cbd0098f8d5abbbfb56ac3242966a4e4269e" }
 
 [[package]]
 name = "axor-eval"
 version = "0.1.0"
-source = { git = "https://github.com/Bucha11/axor-eval?branch=main#2ad21990f630a24025dd04f6c116ea8ca26a6cbd" }
+source = { git = "https://github.com/Bucha11/axor-eval?branch=claude%2Fdesign-mockups-plan-jgqwup#8957a3df0f1c27da7ae152804042a42d30984fed" }
 dependencies = [
     { name = "axor-core" },
 ]
@@ -192,7 +192,7 @@ dev = [
 requires-dist = [
     { name = "anyio", specifier = ">=4.0" },
     { name = "axor-core", git = "https://github.com/Bucha11/axor-core?branch=claude%2Fdesign-mockups-plan-jgqwup" },
-    { name = "axor-eval", git = "https://github.com/Bucha11/axor-eval?branch=main" },
+    { name = "axor-eval", git = "https://github.com/Bucha11/axor-eval?branch=claude%2Fdesign-mockups-plan-jgqwup" },
     { name = "httpx", specifier = ">=0.27" },
     { name = "starlette", specifier = ">=0.37" },
     { name = "uvicorn", specifier = ">=0.29" },
