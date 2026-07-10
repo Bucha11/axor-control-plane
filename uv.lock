@@ -165,7 +165,7 @@ source = { git = "https://github.com/Bucha11/axor-core?branch=claude%2Fdesign-mo
 [[package]]
 name = "axor-eval"
 version = "0.1.0"
-source = { git = "https://github.com/Bucha11/axor-eval?branch=claude%2Fdesign-mockups-plan-jgqwup#8957a3df0f1c27da7ae152804042a42d30984fed" }
+source = { git = "https://github.com/Bucha11/axor-eval?branch=claude%2Fdesign-mockups-plan-jgqwup#a66011d77fb252c5c762e328063531da503ed6b8" }
 dependencies = [
     { name = "axor-core" },
 ]
