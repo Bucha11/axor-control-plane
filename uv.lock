@@ -160,7 +160,7 @@ dev = [
 [[package]]
 name = "axor-core"
 version = "0.8.0"
-source = { git = "https://github.com/Bucha11/axor-core?branch=claude%2Fdesign-mockups-plan-jgqwup#115828c7e8094d11dbcff22ad7fe7f04166bb055" }
+source = { git = "https://github.com/Bucha11/axor-core?branch=claude%2Fdesign-mockups-plan-jgqwup#aac29c8d6ff534aeccfccd9fbcdedf7b12f45a0d" }
 
 [[package]]
 name = "axor-eval"
