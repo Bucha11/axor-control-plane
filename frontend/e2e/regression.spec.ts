@@ -42,4 +42,12 @@ test.describe("regression", () => {
     await expect(page.getByText("REGRESSED").first()).toBeVisible();
     await expect(page.getByText(/Safe to ship/)).toHaveCount(0);
   });
+
+  test("the org layer (schedule + history) renders locked without a license", async ({ page }) => {
+    await goHash(page, "regression");
+    await expect(page.getByText("SCHEDULED CI · HISTORY")).toBeVisible();
+    // Honest upsell: the lock names the tier and what stays free.
+    await expect(page.getByText(/scheduled corpus runs \+ history are org features/)).toBeVisible();
+    await expect(page.getByText(/manual runs stay free forever/)).toBeVisible();
+  });
 });

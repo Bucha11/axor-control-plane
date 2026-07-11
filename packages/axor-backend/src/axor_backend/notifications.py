@@ -6,7 +6,10 @@ where wrong gets loud. We emit and route — never a pager.
 
 - Channel: webhook (JSON POST). Slack/Discord/PagerDuty are webhook consumers.
 - Triggers (v1): degradation transition upward, Sentinel heat crossing a
-  threshold, a run completing with >=1 EvidenceCase, a node stale.
+  threshold, a run completing with >=1 EvidenceCase, a node stale, a corpus
+  run that regressed (regression_failed).
+- Routing (EE): subscriptions carry a node glob + channel label; the free
+  shape is one global webhook (pattern "*").
 - Failure honesty: at-least-once with retries and a dead-letter log visible in
   settings — a notification system that fails silently is worse than none.
   Dead letters persist (capped, migration 0002): a restart must not erase the
@@ -21,10 +24,12 @@ import json
 import logging
 from collections import deque
 from dataclasses import dataclass, field
+from fnmatch import fnmatch
 from typing import Any
 
 TRIGGERS = frozenset({
     "level_transition_up", "heat_threshold", "evidence_run", "node_stale",
+    "regression_failed",
 })
 
 
@@ -33,6 +38,10 @@ class Subscription:
     url: str
     triggers: frozenset[str]
     debounce_seconds: float = 0.0
+    # Routing (EE): a named channel + node glob. "*" = everything — the free
+    # single-webhook shape. Matching is fnmatch on the emitting node_id.
+    label: str = ""
+    node_pattern: str = "*"
     # last fire time per (trigger, node) — debounce key. Trace-free: we stamp
     # from a monotonic counter passed in, so tests stay deterministic.
     _last: dict[tuple[str, str], float] = field(default_factory=dict)
@@ -63,11 +72,17 @@ class Notifier:
         self._dead_sink = dead_sink
         self._clock = 0.0  # logical clock; debounce is in these units
 
-    def subscribe(self, url: str, triggers: list[str], debounce_seconds: float = 0.0) -> None:
+    def subscribe(
+        self, url: str, triggers: list[str], debounce_seconds: float = 0.0,
+        label: str = "", node_pattern: str = "*",
+    ) -> None:
         bad = set(triggers) - TRIGGERS
         if bad:
             raise ValueError(f"unknown triggers: {sorted(bad)}")
-        self._subs.append(Subscription(url, frozenset(triggers), debounce_seconds))
+        self._subs.append(Subscription(
+            url, frozenset(triggers), debounce_seconds,
+            label=label, node_pattern=node_pattern or "*",
+        ))
 
     def tick(self, dt: float = 1.0) -> None:
         self._clock += dt
@@ -87,6 +102,8 @@ class Notifier:
         body = {"trigger": trigger, "node_id": node_id, **payload}
         for sub in self._subs:
             if trigger not in sub.triggers:
+                continue
+            if not fnmatch(node_id, sub.node_pattern):
                 continue
             key = (trigger, node_id)
             if sub.debounce_seconds > 0:

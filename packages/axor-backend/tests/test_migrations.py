@@ -26,10 +26,11 @@ async def test_fresh_db_reaches_head_with_all_tables(db_url: str) -> None:
     tables = await _tables(engine)
     assert {"runs", "events", "desired_state", "reported_state", "facts",
             "pins", "api_keys", "share_links", "notification_subs",
-            "ingest_keys", "dead_letters", "alembic_version"} <= tables
+            "ingest_keys", "dead_letters", "settings", "regression_reports",
+            "alembic_version"} <= tables
     async with engine.connect() as conn:
         rev = (await conn.execute(text("SELECT version_num FROM alembic_version"))).scalar()
-    assert rev == "0002"
+    assert rev == "0003"
     await engine.dispose()
 
 
@@ -39,7 +40,18 @@ async def test_legacy_create_all_db_is_stamped_and_kept(db_url: str) -> None:
     engine = make_engine(db_url)
     async with engine.begin() as conn:
         await conn.run_sync(metadata.create_all)
+        # Strip everything that arrived after the baseline: post-0001 tables,
+        # and notification_subs' post-0001 columns/constraint (0003).
         await conn.exec_driver_sql("DROP TABLE dead_letters")
+        await conn.exec_driver_sql("DROP TABLE settings")
+        await conn.exec_driver_sql("DROP TABLE regression_reports")
+        await conn.exec_driver_sql("DROP TABLE notification_subs")
+        await conn.exec_driver_sql(
+            "CREATE TABLE notification_subs ("
+            "id INTEGER PRIMARY KEY AUTOINCREMENT, url VARCHAR(500) NOT NULL, "
+            "triggers VARCHAR(300) NOT NULL, debounce_seconds FLOAT NOT NULL, "
+            "CONSTRAINT uq_sub_url_triggers UNIQUE (url, triggers))"
+        )
     store = Store(engine)
     await store.pin("run_legacy", "must_block", "kept")
 
