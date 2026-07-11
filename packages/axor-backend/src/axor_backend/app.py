@@ -11,7 +11,7 @@ import contextlib
 import json
 import os
 from collections.abc import AsyncIterator, Callable
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from axor_core.kernel.replay import replay
@@ -88,8 +88,6 @@ def create_app(
             days = float(raw) if raw else None
         retention_task: asyncio.Task | None = None
         if days is not None and days > 0:
-            from datetime import timedelta
-
             async def prune_once() -> None:
                 cutoff = (datetime.now(UTC) - timedelta(days=days)).isoformat()
                 pruned = await app.state.store.prune_runs_older_than(cutoff)
@@ -118,13 +116,23 @@ def create_app(
         for sub in await app.state.store.list_subscriptions():
             app.state.notifier.subscribe(
                 sub["url"], sub["triggers"], sub["debounce_seconds"],
+                label=sub.get("label", ""),
+                node_pattern=sub.get("node_pattern", "*"),
             )
+        # EE license: rehydrate the verified license (env or Settings-pasted)
+        # so org features survive a restart; scheduler fires the corpus when
+        # due — license re-checked at fire time.
+        await _load_license(app)
+        schedule_task = asyncio.create_task(_regression_schedule_loop(app))
         # The node_stale trigger is edge-detected by a background sweep (spec
         # §16): a silent node emits nothing, so its absence is what we watch.
         try:
             async with running_stale_monitor(app):
                 yield
         finally:
+            schedule_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await schedule_task
             if retention_task is not None:
                 retention_task.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
@@ -173,6 +181,7 @@ def create_app(
         )
 
     app.state.notifier = Notifier(dead_sink=_persist_dead_letter)
+    app.state.license = None  # set by _load_license / a verified paste
     app.state.shares = ShareRegistry()
     app.state.api_token = api_token
     # Taint/provenance graph (spec decision 6). In-memory by default — the same
@@ -361,31 +370,57 @@ def create_app(
     @app.post("/v1/regression")
     async def regression(body: dict, request: Request) -> dict:
         """Config CI over the pinned corpus (decision 11): a corpus needs both
-        sides, or a config that blocks everything passes."""
-        store: Store = request.app.state.store
-        config = kernel_config_from_json(body.get("config", {}))
-        rows: list[dict[str, Any]] = []
-        skipped: list[str] = []
-        for pin in await store.pinned():
-            # A pin whose run has no replayable kernel trace (deleted events,
-            # telemetry-only) must not 4xx the whole report — skip it and say so.
-            try:
-                events = await _events_for(store, pin["run_id"])
-            except HTTPException:
-                skipped.append(pin["run_id"])
-                continue
-            rows.append(regression_row(
-                pin["run_id"], pin["side"], pin["label"], events, config
-            ))
-        regressed = sum(1 for r in rows if r["result"] == "regressed")
-        escaped = sum(1 for r in rows if r["result"] == "escaped")
+        sides, or a config that blocks everything passes. Manual runs are free
+        forever (Line 1); every run leaves a history row and a failing corpus
+        fires the regression_failed trigger."""
+        report = await _regression_report(
+            request.app.state.store, body.get("config", {})
+        )
+        await _record_corpus_run(request.app, report, "manual")
+        return report
+
+    @app.get("/v1/regression/history")
+    async def regression_history(request: Request, limit: int = 50) -> list[dict]:
+        """Corpus-run history — the org surface (EE): "when did this config
+        last regress"."""
+        _require_ee(request.app, "regression history")
+        return await request.app.state.store.list_regression_reports(limit)
+
+    @app.get("/v1/regression/schedule")
+    async def get_regression_schedule(request: Request) -> dict:
+        """Free to read (the UI shows the locked state); writing needs EE."""
+        sched = await request.app.state.store.get_setting("regression_schedule")
         return {
-            "rows": rows,
-            "regressed": regressed,
-            "escaped": escaped,
-            "skipped": skipped,
-            "safe_to_ship": regressed == 0 and escaped == 0,
+            "enabled": bool(sched and sched.get("enabled")),
+            "interval_hours": (sched or {}).get("interval_hours"),
+            "last_run_ts": (sched or {}).get("last_run_ts"),
+            "ee_active": _active_license(request.app) is not None,
         }
+
+    @app.put("/v1/regression/schedule")
+    async def put_regression_schedule(body: dict, request: Request) -> dict:
+        """Scheduled corpus CI (EE): store {enabled, interval_hours, config};
+        the sweep loop fires it when due and regression_failed gets loud."""
+        _require_ee(request.app, "scheduled corpus CI")
+        enabled = bool(body.get("enabled"))
+        try:
+            interval = float(body.get("interval_hours", 24))
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(400, "interval_hours must be a number") from exc
+        if enabled and interval < 1:
+            raise HTTPException(400, "interval_hours must be >= 1")
+        config = body.get("config", {})
+        if not isinstance(config, dict):
+            raise HTTPException(400, "config must be an object")
+        # Setting a schedule validates the config now, not at 3am.
+        kernel_config_from_json(config)
+        prior = await request.app.state.store.get_setting("regression_schedule")
+        sched = {
+            "enabled": enabled, "interval_hours": interval, "config": config,
+            "last_run_ts": (prior or {}).get("last_run_ts"),
+        }
+        await request.app.state.store.set_setting("regression_schedule", sched)
+        return {"enabled": enabled, "interval_hours": interval}
 
     # ── taint / provenance graph (spec decision 6) ────────────────────────────
 
@@ -415,14 +450,29 @@ def create_app(
             debounce = float(body.get("debounce_seconds", 0.0))
         except (TypeError, ValueError) as exc:
             raise HTTPException(400, "debounce_seconds must be a number") from exc
+        # Routing (channels + node globs) is the org layer (EE); the free
+        # shape — one plain webhook catching everything — stays free forever.
+        label = str(body.get("label") or "")
+        node_pattern = str(body.get("node_pattern") or "*")
+        if label or node_pattern != "*":
+            _require_ee(request.app, "notification routing (channels / node patterns)")
         try:
-            request.app.state.notifier.subscribe(url, triggers, debounce)
+            request.app.state.notifier.subscribe(
+                url, triggers, debounce, label=label, node_pattern=node_pattern
+            )
         except ValueError as exc:
             raise HTTPException(400, str(exc)) from exc
         # Persist so the subscription survives a restart (idempotent on
-        # url+triggers, so the boot rehydrate never double-registers).
-        await request.app.state.store.add_subscription(url, triggers, debounce)
-        return {"subscribed": url, "triggers": triggers}
+        # url+triggers+pattern, so the boot rehydrate never double-registers).
+        await request.app.state.store.add_subscription(
+            url, triggers, debounce, label=label, node_pattern=node_pattern
+        )
+        return {"subscribed": url, "triggers": triggers,
+                "label": label, "node_pattern": node_pattern}
+
+    @app.get("/v1/notifications/subscriptions")
+    async def notif_subscriptions(request: Request) -> list[dict]:
+        return await request.app.state.store.list_subscriptions()
 
     @app.get("/v1/notifications/dead-letters")
     async def notif_dead_letters(request: Request) -> list[dict]:
@@ -505,6 +555,16 @@ def create_app(
             lic = verify_license(body.get("license_json", ""), vendor_key)
         except LicenseError as exc:
             raise HTTPException(403, str(exc)) from exc
+        # A verified license ACTIVATES EE: persist it (survives restarts) and
+        # hold it in state so org features unlock immediately. Only licenses
+        # verified against the operator-pinned vendor key ever get stored.
+        if not body.get("vendor_pubkey") or body.get("vendor_pubkey") == os.environ.get(
+            "AXOR_VENDOR_PUBKEY", ""
+        ):
+            await request.app.state.store.set_setting(
+                "license_json", body.get("license_json", "")
+            )
+            request.app.state.license = lic
         # Node-ceiling telemetry (launch-readiness §5): compare the live fleet
         # against the license and WARN — never block; safety never checks a
         # license (monetization Line 1).
@@ -514,6 +574,20 @@ def create_app(
             "expiry": lic.expiry, "features": list(lic.features),
             "live_nodes": live_nodes,
             "over_ceiling": live_nodes > lic.node_ceiling,
+            "activated": request.app.state.license is lic,
+        }
+
+    @app.get("/v1/license/status")
+    async def license_status(request: Request) -> dict:
+        """The currently ACTIVE license (post-boot rehydrate) — what the UI
+        uses to decide which org features to unlock vs render locked."""
+        lic = _active_license(request.app)
+        if lic is None:
+            return {"active": False}
+        return {
+            "active": True, "org": lic.org, "tier": lic.tier,
+            "expiry": lic.expiry, "node_ceiling": lic.node_ceiling,
+            "features": list(lic.features),
         }
 
     # ── auth: API key management (architecture section 9) ─────────────────────
@@ -563,6 +637,130 @@ def create_app(
         return {"ok": True}
 
     return app
+
+
+async def _regression_report(store: Store, config_json: dict) -> dict:
+    """Run the pinned corpus under a config — shared by the manual route and
+    the EE scheduler, so both produce identical reports."""
+    config = kernel_config_from_json(config_json)
+    rows: list[dict[str, Any]] = []
+    skipped: list[str] = []
+    for pin in await store.pinned():
+        # A pin whose run has no replayable kernel trace (deleted events,
+        # telemetry-only) must not 4xx the whole report — skip it and say so.
+        try:
+            events = await _events_for(store, pin["run_id"])
+        except HTTPException:
+            skipped.append(pin["run_id"])
+            continue
+        rows.append(regression_row(
+            pin["run_id"], pin["side"], pin["label"], events, config
+        ))
+    regressed = sum(1 for r in rows if r["result"] == "regressed")
+    escaped = sum(1 for r in rows if r["result"] == "escaped")
+    return {
+        "rows": rows,
+        "regressed": regressed,
+        "escaped": escaped,
+        "skipped": skipped,
+        "safe_to_ship": regressed == 0 and escaped == 0,
+    }
+
+
+async def _record_corpus_run(app: FastAPI, report: dict, source: str) -> None:
+    """Every corpus run leaves history; a failing one gets loud (spec §16)."""
+    await app.state.store.add_regression_report(report, source, _now())
+    if report["regressed"] or report["escaped"]:
+        await app.state.notifier.emit("regression_failed", "corpus", {
+            "source": source,
+            "regressed": report["regressed"],
+            "escaped": report["escaped"],
+            "total": len(report["rows"]),
+        })
+
+
+# ── EE license state (monetization §4): verified once, persisted, honest ─────
+
+def _verify_license_str(license_json: str) -> Any:  # noqa: ANN401 - License
+    from axor_backend.ee.license import verify_license
+
+    vendor_key = os.environ.get("AXOR_VENDOR_PUBKEY", "")
+    if not vendor_key:
+        raise ValueError("no AXOR_VENDOR_PUBKEY configured")
+    return verify_license(license_json, vendor_key)
+
+
+async def _load_license(app: FastAPI) -> None:
+    """Boot rehydrate: AXOR_LICENSE env (raw license-file JSON) wins, else the
+    license pasted in Settings (persisted in the settings KV). Invalid or
+    unverifiable licenses log a warning and leave EE off — never crash boot."""
+    import logging
+
+    raw = os.environ.get("AXOR_LICENSE") or await app.state.store.get_setting(
+        "license_json"
+    )
+    if not raw:
+        return
+    try:
+        app.state.license = _verify_license_str(raw)
+    except Exception as exc:  # noqa: BLE001 - boot must not die on a bad license
+        logging.getLogger("axor.backend").warning("stored license ignored: %s", exc)
+
+
+def _active_license(app: FastAPI) -> Any | None:  # noqa: ANN401 - License
+    """The verified, non-expired license — or None. Expiry degrades EE to
+    read-only (Line 1: safety never checks a license)."""
+    lic = getattr(app.state, "license", None)
+    if lic is None or lic.is_expired(datetime.now(UTC).date().isoformat()):
+        return None
+    return lic
+
+
+def _require_ee(app: FastAPI, what: str) -> None:
+    if _active_license(app) is None:
+        # 402: honest and machine-readable — this is a paid org feature.
+        raise HTTPException(
+            402,
+            f"{what} is an org feature (Team tier) — add a license in "
+            "Settings → ENTERPRISE LICENSE. Safety features never require one.",
+        )
+
+
+async def _regression_schedule_loop(app: FastAPI) -> None:
+    """EE scheduler sweep: fire the corpus when the operator-set interval is
+    due. License is checked at fire time — an expired license pauses the
+    schedule (EE read-only) without touching the stored setting."""
+    import logging
+
+    log = logging.getLogger("axor.backend")
+    sweep = float(os.environ.get("AXOR_SCHEDULE_SWEEP_SECONDS", "60"))
+    while True:
+        await asyncio.sleep(sweep)
+        try:
+            sched = await app.state.store.get_setting("regression_schedule")
+            if not sched or not sched.get("enabled"):
+                continue
+            if _active_license(app) is None:
+                continue
+            last = sched.get("last_run_ts")
+            interval = timedelta(hours=float(sched.get("interval_hours", 24)))
+            now = datetime.now(UTC)
+            if last is not None and now - datetime.fromisoformat(last) < interval:
+                continue
+            report = await _regression_report(
+                app.state.store, sched.get("config", {})
+            )
+            await _record_corpus_run(app, report, "scheduled")
+            sched["last_run_ts"] = now.isoformat()
+            await app.state.store.set_setting("regression_schedule", sched)
+            log.info(
+                "scheduled corpus run: %d rows, regressed=%d escaped=%d",
+                len(report["rows"]), report["regressed"], report["escaped"],
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception:  # noqa: BLE001 - the loop must survive a bad cycle
+            log.exception("scheduled corpus run failed")
 
 
 async def _events_for(store: Store, run_id: str) -> list:

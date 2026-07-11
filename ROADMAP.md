@@ -7,7 +7,8 @@ What's shipping vs what's an idea. Updated with releases; no dates promised.
 cascade) · two-sided regression CI · MCP onboarding (HTTP + stdio servers, the
 proxy spawns stdio gateways) · streaming passthrough · webhook notifications +
 dead-letter · scoped API keys · alembic migrations · retention · concurrent
-runs per proxy · offline EE license.
+runs per proxy · offline EE license · **Team (EE): scheduled corpus CI + run
+history, notification routing (channels + node globs)**.
 
 **Next**: OpenAI Agents SDK + CrewAI wrap recipes ·
 landing + docs site · benchmark harness (catch-rate table) · load-ceiling doc.

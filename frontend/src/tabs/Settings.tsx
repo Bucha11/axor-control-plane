@@ -16,6 +16,7 @@ const TRIGGERS = [
   { id: "evidence_run", label: "run completes with an EvidenceCase" },
   { id: "heat_threshold", label: "Sentinel heat crosses a threshold" },
   { id: "node_stale", label: "a node goes stale" },
+  { id: "regression_failed", label: "a corpus run regresses (config CI)" },
 ];
 
 const KEY_SCOPES = ["read", "ingest", "operate", "admin"];
@@ -30,6 +31,8 @@ export default function Settings() {
 
   const [url, setUrl] = useState("");
   const [selected, setSelected] = useState<string[]>(["level_transition_up", "evidence_run"]);
+  const [chanLabel, setChanLabel] = useState("");
+  const [nodePattern, setNodePattern] = useState("");
   const [licenseJson, setLicenseJson] = useState("");
   const [vendorKey, setVendorKey] = useState("");
   const [keyScopes, setKeyScopes] = useState<string[]>(["ingest"]);
@@ -57,8 +60,17 @@ export default function Settings() {
     onSuccess: () => void qc.invalidateQueries({ queryKey: ["api-keys"] }),
   });
 
+  const licenseStatus = useQuery({ queryKey: ["license-status"], queryFn: api.licenseStatus });
+  const eeActive = licenseStatus.data?.active === true;
+  const subscriptions = useQuery({ queryKey: ["subscriptions"], queryFn: api.listSubscriptions });
+
   const subscribe = useMutation({
-    mutationFn: () => api.subscribeNotifications(url, selected),
+    mutationFn: () =>
+      api.subscribeNotifications(url, selected, 0, {
+        label: chanLabel || undefined,
+        nodePattern: nodePattern || undefined,
+      }),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ["subscriptions"] }),
   });
   const license = useMutation({
     mutationFn: () => api.verifyLicense(licenseJson, vendorKey),
@@ -229,6 +241,32 @@ export default function Settings() {
             </label>
           ))}
         </div>
+        {/* Routing (EE): named channel + node glob — the org layer. Inputs
+            stay visible but disabled without a license (honest upsell). */}
+        <div className="flex items-center gap-2 mb-3" style={{ opacity: eeActive ? 1 : 0.55 }}>
+          <input
+            value={chanLabel}
+            onChange={(e) => setChanLabel(e.target.value)}
+            placeholder="channel label (e.g. team-a)"
+            disabled={!eeActive}
+            style={{ background: C.bg, border: `1px solid ${C.line}`, borderRadius: 5, color: C.text, fontFamily: MONO, fontSize: 11, padding: "5px 8px", width: 170, outline: "none" }}
+          />
+          <input
+            value={nodePattern}
+            onChange={(e) => setNodePattern(e.target.value)}
+            placeholder="node pattern (e.g. team-a-*)"
+            disabled={!eeActive}
+            style={{ background: C.bg, border: `1px solid ${C.line}`, borderRadius: 5, color: C.text, fontFamily: MONO, fontSize: 11, padding: "5px 8px", width: 170, outline: "none" }}
+          />
+          <span style={{ fontFamily: MONO, fontSize: 8.5, color: C.dim, border: `1px solid ${C.line}`, borderRadius: 20, padding: "1px 6px" }}>
+            Team
+          </span>
+          {!eeActive && (
+            <span style={{ fontFamily: MONO, fontSize: 10, color: C.dim }}>
+              routing needs a license — one global webhook is free
+            </span>
+          )}
+        </div>
         <button
           onClick={() => subscribe.mutate()}
           disabled={!url || selected.length === 0 || subscribe.isPending}
@@ -241,6 +279,20 @@ export default function Settings() {
           <div className="mt-2" style={{ fontFamily: MONO, fontSize: 11, color: C.red }}>
             {(subscribe.error as Error).message}
           </div>
+        )}
+
+        {(subscriptions.data ?? []).length > 0 && (
+          <>
+            <div className="mt-4" style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim, letterSpacing: "0.08em" }}>
+              ACTIVE SUBSCRIPTIONS
+            </div>
+            {(subscriptions.data ?? []).map((s, i) => (
+              <div key={i} style={{ fontFamily: MONO, fontSize: 11, color: C.mut, marginTop: 4 }}>
+                {s.label ? `[${s.label}] ` : ""}{s.url} · {s.triggers.join(", ")}
+                {s.node_pattern !== "*" ? ` · nodes: ${s.node_pattern}` : ""}
+              </div>
+            ))}
+          </>
         )}
 
         <div className="mt-4" style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim, letterSpacing: "0.08em" }}>

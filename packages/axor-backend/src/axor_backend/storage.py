@@ -114,7 +114,34 @@ notification_subs = Table(
     Column("url", String(500), nullable=False),
     Column("triggers", String(300), nullable=False),  # comma-separated, sorted
     Column("debounce_seconds", Float, nullable=False, default=0.0),
-    UniqueConstraint("url", "triggers", name="uq_sub_url_triggers"),
+    # Routing (EE, migration 0003): a named channel + a node glob. The free
+    # tier is one global webhook — label "" and pattern "*".
+    Column("label", String(100), nullable=False, default="", server_default=""),
+    Column("node_pattern", String(200), nullable=False, default="*", server_default="*"),
+    UniqueConstraint("url", "triggers", "node_pattern", name="uq_sub_url_triggers"),
+)
+
+# Small KV for operator-set runtime state that must survive restarts: the
+# active EE license, the regression schedule. JSON values, single row per key.
+settings = Table(
+    "settings", metadata,
+    Column("key", String(64), primary_key=True),
+    Column("value", _JSON, nullable=False),
+)
+
+# Every corpus run leaves a report (source: manual | scheduled) — the history
+# an org needs to answer "when did this config last regress" (EE surfaces it).
+regression_reports = Table(
+    "regression_reports", metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("created_ts", String(40), nullable=False),
+    Column("source", String(16), nullable=False),  # manual | scheduled
+    Column("regressed", Integer, nullable=False),
+    Column("escaped", Integer, nullable=False),
+    Column("skipped", Integer, nullable=False),
+    Column("total", Integer, nullable=False),
+    Column("safe_to_ship", Boolean, nullable=False),
+    Column("report_json", _JSON, nullable=False),
 )
 
 # Dead letters are the honesty ledger of the notification channel: a webhook
@@ -532,26 +559,29 @@ class Store:
 
     async def add_subscription(
         self, url: str, triggers: list[str], debounce_seconds: float,
+        label: str = "", node_pattern: str = "*",
     ) -> None:
-        """Persist a subscription; idempotent on (url, trigger-set) so a repeated
-        subscribe or a boot rehydrate never multiplies deliveries."""
+        """Persist a subscription; idempotent on (url, trigger-set, pattern) so
+        a repeated subscribe or a boot rehydrate never multiplies deliveries."""
         joined = ",".join(sorted(triggers))
         async with self.engine.begin() as conn:
             dup = (await conn.execute(
                 select(notification_subs.c.id).where(
                     notification_subs.c.url == url,
                     notification_subs.c.triggers == joined,
+                    notification_subs.c.node_pattern == node_pattern,
                 )
             )).first()
             if dup is not None:
                 await conn.execute(
                     update(notification_subs)
                     .where(notification_subs.c.id == dup.id)
-                    .values(debounce_seconds=debounce_seconds)
+                    .values(debounce_seconds=debounce_seconds, label=label)
                 )
                 return
             await conn.execute(insert(notification_subs).values(
                 url=url, triggers=joined, debounce_seconds=debounce_seconds,
+                label=label, node_pattern=node_pattern,
             ))
 
     async def list_subscriptions(self) -> list[dict[str, Any]]:
@@ -560,7 +590,59 @@ class Store:
         return [
             {"url": r.url,
              "triggers": [t for t in r.triggers.split(",") if t],
-             "debounce_seconds": r.debounce_seconds}
+             "debounce_seconds": r.debounce_seconds,
+             "label": r.label, "node_pattern": r.node_pattern}
+            for r in rows
+        ]
+
+    # ── settings KV (license, regression schedule) ────────────────────────────
+
+    async def get_setting(self, key: str) -> Any | None:  # noqa: ANN401 - JSON value
+        async with self.engine.connect() as conn:
+            row = (await conn.execute(
+                select(settings.c.value).where(settings.c.key == key)
+            )).first()
+        return row.value if row is not None else None
+
+    async def set_setting(self, key: str, value: Any) -> None:  # noqa: ANN401 - JSON
+        async with self.engine.begin() as conn:
+            existing = (await conn.execute(
+                select(settings.c.key).where(settings.c.key == key)
+            )).first()
+            if existing is None:
+                await conn.execute(insert(settings).values(key=key, value=value))
+            else:
+                await conn.execute(
+                    update(settings).where(settings.c.key == key).values(value=value)
+                )
+
+    # ── regression report history (EE surfaces it; every run records) ────────
+
+    async def add_regression_report(
+        self, report: dict[str, Any], source: str, created_ts: str,
+    ) -> None:
+        async with self.engine.begin() as conn:
+            await conn.execute(insert(regression_reports).values(
+                created_ts=created_ts, source=source,
+                regressed=report.get("regressed", 0),
+                escaped=report.get("escaped", 0),
+                skipped=len(report.get("skipped", [])),
+                total=len(report.get("rows", [])),
+                safe_to_ship=bool(report.get("safe_to_ship")),
+                report_json=report,
+            ))
+
+    async def list_regression_reports(self, limit: int = 50) -> list[dict[str, Any]]:
+        async with self.engine.connect() as conn:
+            rows = (await conn.execute(
+                select(regression_reports)
+                .order_by(regression_reports.c.id.desc()).limit(limit)
+            )).all()
+        return [
+            {"created_ts": r.created_ts, "source": r.source,
+             "regressed": r.regressed, "escaped": r.escaped,
+             "skipped": r.skipped, "total": r.total,
+             "safe_to_ship": r.safe_to_ship}
             for r in rows
         ]
 

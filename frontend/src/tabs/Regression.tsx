@@ -2,8 +2,8 @@
 // (regression-report mockup). Wired to /v1/regression — deterministic replay,
 // no model calls.
 import { useState } from "react";
-import { useMutation } from "@tanstack/react-query";
-import { ChevronDown, ChevronRight, Circle, ExternalLink, Loader2, Play } from "lucide-react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { CalendarClock, ChevronDown, ChevronRight, Circle, ExternalLink, Loader2, Lock, Play } from "lucide-react";
 import { api, RegressionReport, RegressionRow } from "../api";
 import { C, MONO, btn } from "../theme";
 import { navigate } from "../router";
@@ -46,6 +46,104 @@ function headline(report: RegressionReport): React.ReactNode {
     <>
       <span style={{ color: C.red }}>{parts.join(" + ") || "Failure"}</span> — v2 changes governed behavior.
     </>
+  );
+}
+
+// Org layer (EE): schedule the corpus + browse run history. Rendered locked
+// (honest upsell, same pattern as the availability ladder) without a license.
+function ScheduleAndHistory({ parseConfig }: { parseConfig: () => Record<string, unknown> | null }) {
+  const qc = useQueryClient();
+  const schedule = useQuery({ queryKey: ["regression-schedule"], queryFn: api.getRegressionSchedule });
+  const ee = schedule.data?.ee_active === true;
+  const history = useQuery({
+    queryKey: ["regression-history"],
+    queryFn: () => api.regressionHistory(20),
+    enabled: ee,
+  });
+  const [hours, setHours] = useState("24");
+  const save = useMutation({
+    mutationFn: (enabled: boolean) => {
+      const config = parseConfig();
+      if (config === null) throw new Error("config above must be valid JSON");
+      return api.putRegressionSchedule(enabled, Number(hours) || 24, config);
+    },
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ["regression-schedule"] });
+    },
+  });
+
+  if (!schedule.data) return null;
+  return (
+    <div className="mb-8">
+      <div style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim, letterSpacing: "0.08em", marginBottom: 8 }}>
+        SCHEDULED CI · HISTORY
+        <span style={{ marginLeft: 8, border: `1px solid ${C.line}`, borderRadius: 20, padding: "1px 6px", fontSize: 8.5 }}>
+          Team
+        </span>
+      </div>
+      {!ee ? (
+        <div className="flex items-center gap-2 p-4" style={{ background: C.panel, border: `1px dashed ${C.line}`, borderRadius: 8 }}>
+          <Lock size={13} color={C.dim} />
+          <span style={{ fontFamily: MONO, fontSize: 11.5, color: C.dim }}>
+            scheduled corpus runs + history are org features — add a license in
+            Settings · manual runs stay free forever
+          </span>
+        </div>
+      ) : (
+        <>
+          <div className="flex items-center gap-3 mb-3">
+            <span style={{ fontFamily: MONO, fontSize: 11.5, color: schedule.data.enabled ? C.green : C.dim }}>
+              {schedule.data.enabled
+                ? `on — every ${schedule.data.interval_hours}h`
+                : "off"}
+              {schedule.data.last_run_ts ? ` · last ${schedule.data.last_run_ts.slice(0, 16)}` : ""}
+            </span>
+            <span style={{ fontFamily: MONO, fontSize: 11, color: C.mut }}>every</span>
+            <input
+              value={hours}
+              onChange={(e) => setHours(e.target.value)}
+              style={{
+                width: 44, background: C.bg, border: `1px solid ${C.line}`, borderRadius: 5,
+                color: C.text, fontFamily: MONO, fontSize: 11.5, padding: "4px 6px", outline: "none",
+              }}
+            />
+            <span style={{ fontFamily: MONO, fontSize: 11, color: C.mut }}>h</span>
+            <button onClick={() => save.mutate(true)} disabled={save.isPending}
+              style={btn({ color: C.steel, fontSize: 11, padding: "6px 10px" })}>
+              <CalendarClock size={12} /> Schedule with config above
+            </button>
+            {schedule.data.enabled && (
+              <button onClick={() => save.mutate(false)} disabled={save.isPending}
+                style={btn({ color: C.mut, fontSize: 11, padding: "6px 10px" })}>
+                Disable
+              </button>
+            )}
+            {save.isError && (
+              <span style={{ fontFamily: MONO, fontSize: 11, color: C.red }}>
+                {(save.error as Error).message}
+              </span>
+            )}
+          </div>
+          {(history.data ?? []).length > 0 && (
+            <div style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 8 }}>
+              {(history.data ?? []).map((h, i) => (
+                <div key={i} className="flex items-center gap-3 px-4 py-2"
+                  style={{ borderTop: i ? `1px solid ${C.line}` : "none", fontFamily: MONO, fontSize: 11 }}>
+                  <Circle size={8} fill={h.safe_to_ship ? C.green : C.red} color={h.safe_to_ship ? C.green : C.red} />
+                  <span style={{ color: C.dim, width: 122 }}>{h.created_ts.slice(0, 16)}</span>
+                  <span style={{ color: C.dim, width: 72 }}>{h.source}</span>
+                  <span style={{ color: h.safe_to_ship ? C.mut : C.text, flex: 1 }}>
+                    {h.safe_to_ship
+                      ? `safe — ${h.total} rows`
+                      : `${h.regressed} regressed · ${h.escaped} escaped of ${h.total}`}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+        </>
+      )}
+    </div>
   );
 }
 
@@ -139,6 +237,19 @@ export default function Regression({ initialConfig }: { initialConfig?: string }
           </span>
         )}
       </div>
+
+      <ScheduleAndHistory
+        parseConfig={() => {
+          try {
+            const parsed: unknown = JSON.parse(raw);
+            return parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)
+              ? (parsed as Record<string, unknown>)
+              : null;
+          } catch {
+            return null;
+          }
+        }}
+      />
 
       {report && (
         report.rows.length === 0 ? (

@@ -54,9 +54,10 @@ const TIERS: Tier[] = [
     who: "first company deployments · 5–30 nodes",
     features: [
       { text: "everything in Free, plus:", plus: true },
-      { text: "hosted convenience + license", roadmap: true },
-      { text: "scheduled corpus CI + history", roadmap: true },
-      { text: "notification routing rules / per-team channels", roadmap: true },
+      { text: "scheduled corpus CI + run history" },
+      { text: "notification routing / per-team channels (node globs)" },
+      { text: "license + node-ceiling telemetry" },
+      { text: "hosted convenience", roadmap: true },
     ],
     free: false,
     paidNote: "paid — the typical first paid step",

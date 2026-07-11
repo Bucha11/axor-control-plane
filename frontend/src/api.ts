@@ -246,14 +246,48 @@ export const api = {
     withToken(`/v1/runs/${runId}/cases/${caseIndex}/export?format=${format}`),
 
   // ── notifications (spec 16) ────────────────────────────────────────────────
-  subscribeNotifications: (url: string, triggers: string[], debounceSeconds = 0) =>
+  subscribeNotifications: (
+    url: string, triggers: string[], debounceSeconds = 0,
+    routing?: { label?: string; nodePattern?: string },
+  ) =>
     af("/v1/notifications/subscribe", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ url, triggers, debounce_seconds: debounceSeconds }),
+      body: JSON.stringify({
+        url, triggers, debounce_seconds: debounceSeconds,
+        ...(routing?.label ? { label: routing.label } : {}),
+        ...(routing?.nodePattern ? { node_pattern: routing.nodePattern } : {}),
+      }),
     }).then((r) => j<{ subscribed: string; triggers: string[] }>(r)),
+  listSubscriptions: () =>
+    af("/v1/notifications/subscriptions").then((r) =>
+      j<{ url: string; triggers: string[]; debounce_seconds: number;
+          label: string; node_pattern: string }[]>(r),
+    ),
   deadLetters: () =>
     af("/v1/notifications/dead-letters").then((r) => j<DeadLetter[]>(r)),
+
+  // ── org features (EE): scheduled corpus CI + history ───────────────────────
+  regressionHistory: (limit = 50) =>
+    af(`/v1/regression/history?limit=${limit}`).then((r) =>
+      j<{ created_ts: string; source: string; regressed: number; escaped: number;
+          skipped: number; total: number; safe_to_ship: boolean }[]>(r),
+    ),
+  getRegressionSchedule: () =>
+    af("/v1/regression/schedule").then((r) =>
+      j<{ enabled: boolean; interval_hours: number | null;
+          last_run_ts: string | null; ee_active: boolean }>(r),
+    ),
+  putRegressionSchedule: (enabled: boolean, intervalHours: number, config: Record<string, unknown>) =>
+    af("/v1/regression/schedule", {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ enabled, interval_hours: intervalHours, config }),
+    }).then((r) => j<{ enabled: boolean; interval_hours: number }>(r)),
+  licenseStatus: () =>
+    af("/v1/license/status").then((r) =>
+      j<{ active: boolean; org?: string; tier?: string; expiry?: string }>(r),
+    ),
 
   // ── operator interventions over the plane (spec §12) ───────────────────────
   appendFact: (nodeId: string, fact: Record<string, unknown>) =>

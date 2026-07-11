@@ -36,6 +36,7 @@ _WRITE_POLICY: tuple[tuple[str, str], ...] = (
     ("/v1/pins/", "ingest"),
     ("/v1/plane/", "operate"),        # command / facts / consumed / telemetry
     ("/v1/keys", "admin"),            # mint / list API keys
+    ("/v1/regression/schedule", "operate"),  # EE schedule is operator config
     ("/v1/regression", "read"),       # replay-only, no state change
     ("/v1/replay/", "read"),          # counterfactual POST is read-only
     ("/v1/notifications/", "operate"),
