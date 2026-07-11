@@ -34,7 +34,7 @@ Status legend: ☐ open · ◐ partial exists · ☑ done.
 
 | P | Item | Done-when | Status |
 |---|---|---|---|
-| P0 | **Publish to PyPI**: `axor-proxy` (uvx path is quoted all over the UI/docs and currently 404s), `axor-backend`. Compose images to GHCR. | `uvx axor-proxy --demo` works on a clean machine. | ◐ (release.yml + metadata ready; needs PyPI trusted-publisher config + axor-eval on PyPI) |
+| P0 | **Publish to PyPI**: `axor-proxy` (uvx path is quoted all over the UI/docs and currently 404s), `axor-backend`. Compose images to GHCR. | `uvx axor-proxy --demo` works on a clean machine. | ◐ (ecosystem deps published — core 0.9.1, eval 0.1.0 — and pinned from PyPI; remaining: trusted-publisher config for the two platform packages + tag v0.1.0) |
 | P0 | **Public landing + docs site** | The in-app Home is not a website. Static site: hero = demo GIF (have) + "Run demo-mode" → hosted sandbox or 2-command local start; docs = quickstart, depth ladder, protocol, FAQ. | ◐ (site/ + Pages workflow ready; enable Pages + domain) |
 | P0 | **Launch post** | "Your agent lies when its tools fail — here's the receipt": narrative + GIF + benchmark table (catch rates by fault mode). HN + r/LocalLLaMA + X thread. | ◐ (draft in docs/launch-post-draft.md; needs benchmark table) |
 | P1 | **EvidenceCase link unfurl** | Share permalink gets OG tags + "Caught by Axor" footer — every shared receipt is an ad. (Revocability already done.) | ☑ |
@@ -64,7 +64,7 @@ Status legend: ☐ open · ◐ partial exists · ☑ done.
 
 | P | Item | Done-when | Status |
 |---|---|---|---|
-| P0 | **CI fully green on main** including the deploy smoke job (compose build vs private deps — verify `AXOR_ECOSYSTEM_TOKEN` path in a real Actions run). | ☑ suites / ☐ Actions run | ◐ |
+| P0 | **CI fully green on main** including the deploy smoke job. Ecosystem deps now resolve from PyPI (core 0.9.1, eval 0.1.0) — the private-repo token path is obsolete; just verify one real Actions run on main. | ☑ suites / ☐ Actions run | ◐ |
 | P1 | **Load smoke**: 50 concurrent SSE subscribers + 100 rps ingest on compose stack; find the first ceiling, write it down honestly in docs. | | ☑ (SQLite **and Postgres 16** numbers in docs/ops-limits.md: ~150 rps ingest ceiling on PG, SSE fan-out is the next bottleneck) |
 | P1 | **Error tracking**: Sentry (or logs-only + structured logging) on backend/proxy so launch-day bugs are visible. | | ☑ (AXOR_LOG_JSON structured logs, optional SENTRY_DSN, structured unhandled-error handler) |
 | P2 | Backup/restore runbook (pg_dump + trace dir), upgrade runbook. | | ☑ (docs/runbook.md) |

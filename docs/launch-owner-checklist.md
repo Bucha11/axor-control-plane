@@ -4,22 +4,14 @@ Everything code-side in docs/launch-readiness-v0.1.md is done. What remains
 needs the OWNER's accounts, money, voice, or a machine outside this repo.
 Ordered so each step unblocks the next; ~2–3 working days end to end.
 
-## 1. Unblock CI: ecosystem repo access (15 min)
+## 1. Unblock CI: ecosystem repo access — **RESOLVED**
 
-CI's deploy job and the release image builds fetch `axor-core`/`axor-eval`
-from GitHub; the fallback `GITHUB_TOKEN` cannot read other private repos.
-
-**Path A (recommended — PyPI needs the code public anyway):** make
-`bucha11/axor-core` and `bucha11/axor-eval` public. Each repo → Settings →
-General → Danger Zone → Change visibility. Both are Apache-2.0 already.
-
-**Path B:** GitHub → Settings → Developer settings → Fine-grained tokens →
-Generate: resource owner `bucha11`, repos `axor-core` + `axor-eval`,
-permissions Contents: Read-only. Then in `axor-control-plane` → Settings →
-Secrets and variables → Actions → new secret `AXOR_ECOSYSTEM_TOKEN`.
-
-**Verify:** re-run CI on main; the `deploy` job (compose build + smoke) goes
-green. That flips the last ◐ in launch-readiness §6.
+Obsolete: `axor-core` (0.9.1) and `axor-eval` (0.1.0) are published on PyPI
+and the platform's `uv.lock` now resolves them from there — no git fetches,
+no `AXOR_ECOSYSTEM_TOKEN` needed for builds. Just re-run CI on main and
+confirm the `deploy` job is green; that flips the last ◐ in launch-readiness
+§6. (The token plumbing left in ci.yml/Dockerfile is a harmless no-op —
+remove at leisure.)
 
 ## 2. PyPI release (60–90 min, order matters)
 

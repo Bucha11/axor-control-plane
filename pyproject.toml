@@ -9,13 +9,9 @@ members = ["packages/*"]
 [tool.uv.sources]
 axor-proxy = { workspace = true }
 axor-backend = { workspace = true }
-# Git-ref pins (plan decision 5.1): axor-eval is not on PyPI; axor-core is pinned
-# to a ref until the kernel merge ships in a release. CI/dev environments that
-# cannot reach github.com directly redirect via `git config url...insteadOf`.
-axor-core = { git = "https://github.com/Bucha11/axor-core", branch = "claude/design-mockups-plan-jgqwup" }
-# The branch carries the <0.10 core-range widening needed for core 0.9.1;
-# repoint both pins to main (or PyPI versions) once the release PRs merge.
-axor-eval = { git = "https://github.com/Bucha11/axor-eval", branch = "claude/design-mockups-plan-jgqwup" }
+# Ecosystem deps come from PyPI now (axor-core 0.9.1+, axor-eval 0.1.0+ are
+# published); the version ranges live in the packages' own dependency lists.
+# The git-ref era (plan decision 5.1) is over — no tokens, no insteadOf.
 
 [dependency-groups]
 dev = ["pytest>=8.0", "pytest-asyncio>=0.23", "ruff>=0.4"]

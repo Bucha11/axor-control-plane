@@ -126,8 +126,8 @@ requires-dist = [
     { name = "aiosqlite", specifier = ">=0.20" },
     { name = "alembic", specifier = ">=1.13" },
     { name = "asyncpg", specifier = ">=0.29" },
-    { name = "axor-core", git = "https://github.com/Bucha11/axor-core?branch=claude%2Fdesign-mockups-plan-jgqwup" },
-    { name = "axor-eval", git = "https://github.com/Bucha11/axor-eval?branch=claude%2Fdesign-mockups-plan-jgqwup" },
+    { name = "axor-core", specifier = ">=0.9.1,<0.10" },
+    { name = "axor-eval", specifier = ">=0.1.0,<0.2" },
     { name = "fastapi", specifier = ">=0.111" },
     { name = "kuzu", specifier = ">=0.4" },
     { name = "pynacl", specifier = ">=1.5" },
@@ -160,14 +160,22 @@ dev = [
 [[package]]
 name = "axor-core"
 version = "0.9.1"
-source = { git = "https://github.com/Bucha11/axor-core?branch=claude%2Fdesign-mockups-plan-jgqwup#acc5cbd0098f8d5abbbfb56ac3242966a4e4269e" }
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/42/8a/59e7b6f6a8aa469861dfab7c6d9b0c99dc55c3d88f41b8a68bd62b598c6c/axor_core-0.9.1.tar.gz", hash = "sha256:4e1697072faadc0babb575711a0b47833a51881d4d157843b1dd2d85e9fe61ea", size = 577118, upload-time = "2026-07-10T15:46:08.746Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/b0/5e/c43b82007614c9cd93e5bdd9eda662b59d9e4fd3331a26e47a4df4993eed/axor_core-0.9.1-py3-none-any.whl", hash = "sha256:3dc1f1f70b079432ce68de7d83f72ee0a4801539aae229cf1f5eae960ac595ec", size = 286281, upload-time = "2026-07-10T15:46:06.313Z" },
+]
 
 [[package]]
 name = "axor-eval"
 version = "0.1.0"
-source = { git = "https://github.com/Bucha11/axor-eval?branch=claude%2Fdesign-mockups-plan-jgqwup#a66011d77fb252c5c762e328063531da503ed6b8" }
+source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "axor-core" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/37/ee/24679c1317ee017a787842c7169001aac6a4d2e045a9b207ab12175e2c1b/axor_eval-0.1.0.tar.gz", hash = "sha256:4ef55d4a9afa6a7783a52c2abf5c81b6e4b054c528c2f960d3623e0d0449cae7", size = 74434, upload-time = "2026-07-11T15:39:01.774Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/ad/c1/73bede8d8e7b6a521d648a57a8380b32b93512ac57b0940ed9fae449f5a5/axor_eval-0.1.0-py3-none-any.whl", hash = "sha256:066c6759bb97c8e0f418873b683f999f9edabd772e67a02ed6a8e3534efe180b", size = 35174, upload-time = "2026-07-11T15:39:00.583Z" },
 ]
 
 [[package]]
@@ -191,8 +199,8 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "anyio", specifier = ">=4.0" },
-    { name = "axor-core", git = "https://github.com/Bucha11/axor-core?branch=claude%2Fdesign-mockups-plan-jgqwup" },
-    { name = "axor-eval", git = "https://github.com/Bucha11/axor-eval?branch=claude%2Fdesign-mockups-plan-jgqwup" },
+    { name = "axor-core", specifier = ">=0.9.1,<0.10" },
+    { name = "axor-eval", specifier = ">=0.1.0,<0.2" },
     { name = "httpx", specifier = ">=0.27" },
     { name = "starlette", specifier = ">=0.37" },
     { name = "uvicorn", specifier = ">=0.29" },
