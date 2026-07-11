@@ -1,0 +1,131 @@
+{
+  "$defs": {
+    "Excision": {
+      "description": "Context excision (self-heal): one-shot like injection (protocol 4a).\n\n``target_refs`` are the causal-root refs of the context segments to remove.\nThe provenance guard (spec 8.2.1) is applied by the adapter before consuming:\na target with operator-config provenance refuses the whole excision.",
+      "properties": {
+        "excision_id": {
+          "title": "Excision Id",
+          "type": "string"
+        },
+        "target_refs": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Target Refs",
+          "type": "array"
+        },
+        "reason": {
+          "title": "Reason",
+          "type": "string"
+        },
+        "operator": {
+          "title": "Operator",
+          "type": "string"
+        },
+        "sig": {
+          "title": "Sig",
+          "type": "string"
+        }
+      },
+      "required": [
+        "excision_id",
+        "target_refs",
+        "reason",
+        "operator",
+        "sig"
+      ],
+      "title": "Excision",
+      "type": "object"
+    },
+    "Injection": {
+      "description": "Operator prompt injection: single-shot, at-most-once by id (protocol 4).",
+      "properties": {
+        "injection_id": {
+          "title": "Injection Id",
+          "type": "string"
+        },
+        "text": {
+          "title": "Text",
+          "type": "string"
+        },
+        "reason": {
+          "title": "Reason",
+          "type": "string"
+        },
+        "operator": {
+          "title": "Operator",
+          "type": "string"
+        },
+        "sig": {
+          "title": "Sig",
+          "type": "string"
+        }
+      },
+      "required": [
+        "injection_id",
+        "text",
+        "reason",
+        "operator",
+        "sig"
+      ],
+      "title": "Injection",
+      "type": "object"
+    }
+  },
+  "description": "Control-plane target posture for one node. LWW by version.\n\n``stopped`` is absorbing \u2014 merge() keeps later writes' version but their\neffects are dropped; the adapter reports them as noop_absorbed.\n``budget_cap_calls`` is decrease-only AT THE ADAPTER (protocol, section 3).",
+  "properties": {
+    "version": {
+      "title": "Version",
+      "type": "integer"
+    },
+    "stopped": {
+      "default": false,
+      "title": "Stopped",
+      "type": "boolean"
+    },
+    "paused": {
+      "default": false,
+      "title": "Paused",
+      "type": "boolean"
+    },
+    "budget_cap_calls": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Budget Cap Calls"
+    },
+    "pending_injection": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Injection"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "pending_excision": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Excision"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    }
+  },
+  "required": [
+    "version"
+  ],
+  "title": "DesiredState",
+  "type": "object"
+}

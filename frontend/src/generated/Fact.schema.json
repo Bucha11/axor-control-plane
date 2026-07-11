@@ -1,0 +1,80 @@
+{
+  "description": "Degradation-machine input. Attestations are facts too (spec 8.1.1).\n\n``severity`` indexes :class:`~axor_core.contracts.degradation.DegradationLevel`\n(0=NORMAL .. 4=TERMINAL). ``covers`` lists fact_ids an attestation spans;\n``revokes`` names an attestation fact_id being revoked.",
+  "properties": {
+    "fact_id": {
+      "title": "Fact Id",
+      "type": "string"
+    },
+    "fact_type": {
+      "title": "Fact Type",
+      "type": "string"
+    },
+    "severity": {
+      "default": 0,
+      "title": "Severity",
+      "type": "integer"
+    },
+    "covers": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "title": "Covers",
+      "type": "array"
+    },
+    "revokes": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Revokes"
+    },
+    "operator": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Operator"
+    },
+    "reason": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Reason"
+    },
+    "sig": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Sig"
+    }
+  },
+  "required": [
+    "fact_id",
+    "fact_type"
+  ],
+  "title": "Fact",
+  "type": "object"
+}

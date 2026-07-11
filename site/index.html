@@ -1,0 +1,229 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Axor — your agent lies when its tools fail. Catch it, then govern it.</title>
+<meta name="description" content="Open-source runtime governance for LLM agents: catch fabrications as reproducible EvidenceCases, replay any run deterministically, govern live fleets.">
+<meta property="og:title" content="Axor Control Plane — catch the lie, replay it, govern the fleet">
+<meta property="og:description" content="Break a tool on purpose. Watch the agent claim success. Get the receipt. Apache-2.0.">
+<meta property="og:type" content="website">
+<style>
+  :root { --bg:#12161A; --panel:#191F26; --panel2:#141920; --line:#262E37;
+          --text:#D2DAE1; --mut:#78848F; --dim:#4C5760; --red:#E5484D;
+          --amber:#F2A33C; --green:#46A758; --steel:#7FA8CC; }
+  * { box-sizing:border-box; margin:0; }
+  body { background:var(--bg); color:var(--text);
+         font-family:Inter,system-ui,sans-serif; line-height:1.6; }
+  .mono { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; }
+  .wrap { max-width:860px; margin:0 auto; padding:0 20px; }
+  header { padding:20px 0; border-bottom:1px solid var(--line); position:sticky; top:0; background:rgba(18,22,26,.94); backdrop-filter:blur(4px); z-index:10; }
+  header .wrap { display:flex; justify-content:space-between; align-items:center; }
+  .brand { font-weight:700; font-size:14px; letter-spacing:.04em; }
+  .brand span { color:var(--steel); }
+  nav a { color:var(--mut); text-decoration:none; font-size:12.5px; margin-left:16px; }
+  nav a:hover { color:var(--text); }
+  nav a.cta { color:var(--green); border:1px solid var(--green); border-radius:5px; padding:5px 10px; }
+  .hero { padding:56px 0 36px; }
+  .eyebrow { font-size:12px; font-weight:700; letter-spacing:.14em; margin-bottom:14px; }
+  h1 { font-size:36px; line-height:1.2; font-weight:700; margin-bottom:12px; }
+  h1 .mut { color:var(--mut); }
+  .lede { color:var(--mut); font-size:15px; max-width:620px; margin-bottom:22px; }
+  .lede b { color:var(--text); font-weight:600; }
+  a.btn { display:inline-block; background:var(--green); color:var(--bg); font-weight:700;
+          font-size:13.5px; padding:12px 20px; border-radius:6px; text-decoration:none; margin:0 10px 10px 0; }
+  a.btn.ghost { background:none; border:1px solid var(--steel); color:var(--steel); }
+  .under-cta { color:var(--dim); font-size:11px; margin-bottom:26px; }
+  .gif { width:100%; border:1px solid var(--line); border-radius:10px; display:block; }
+  .caption { color:var(--dim); font-size:11px; margin-top:8px; }
+  .quick { background:var(--panel2); border:1px solid var(--line); border-radius:8px;
+           padding:14px 16px; font-size:12.5px; color:var(--mut); overflow-x:auto;
+           margin:22px 0 6px; white-space:pre; }
+  .quick b { color:var(--green); font-weight:400; }
+  section { padding:40px 0; border-top:1px solid var(--line); }
+  h2 { font-size:22px; margin-bottom:6px; }
+  .h2sub { color:var(--mut); font-size:13.5px; margin-bottom:20px; max-width:640px; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(240px,1fr)); gap:14px; }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:16px; }
+  .card h3 { font-size:13.5px; margin-bottom:8px; }
+  .card p { color:var(--mut); font-size:12.5px; }
+  .card .tag { font-size:10px; letter-spacing:.1em; color:var(--dim); display:block; margin-bottom:6px; }
+  .card .outcome { display:block; margin-top:10px; color:var(--green); font-size:11.5px; }
+  .pain { border-left:2px solid var(--red); }
+  .pain q { color:var(--text); font-size:13px; font-style:italic; display:block; margin-bottom:8px; }
+  table { border-collapse:collapse; width:100%; font-size:12px; }
+  th,td { border:1px solid var(--line); padding:8px 10px; text-align:left; color:var(--mut); }
+  th { color:var(--text); background:var(--panel); font-weight:600; }
+  td.ok { color:var(--green); } td.warn { color:var(--amber); }
+  .price { text-align:center; }
+  .price .amount { font-size:17px; color:var(--text); margin:6px 0 2px; }
+  .price .per { color:var(--dim); font-size:11px; margin-bottom:10px; }
+  .price.hl { border-color:var(--steel); }
+  .price a { color:var(--steel); font-size:12px; }
+  details { border:1px solid var(--line); border-radius:8px; padding:12px 16px; margin-bottom:10px; background:var(--panel); }
+  summary { cursor:pointer; font-size:13.5px; color:var(--text); }
+  details p { color:var(--mut); font-size:12.5px; margin-top:8px; }
+  .banner { background:var(--panel); border:1px solid var(--steel); border-radius:12px;
+            padding:28px; text-align:center; margin:44px 0; }
+  .banner h2 { margin-bottom:8px; }
+  footer { border-top:1px solid var(--line); padding:28px 0 48px; color:var(--dim); font-size:12px; }
+  footer a { color:var(--mut); }
+</style>
+</head>
+<body>
+<header><div class="wrap">
+  <div class="brand mono">AXOR <span>CONTROL PLANE</span></div>
+  <nav class="mono">
+    <a href="#proof">proof</a>
+    <a href="#pricing">pricing</a>
+    <a href="#faq">faq</a>
+    <a href="https://github.com/Bucha11/axor-control-plane">github</a>
+    <a class="cta" href="#run">run it →</a>
+  </nav>
+</div></header>
+
+<!-- ── HERO: the pain, the promise, two CTAs ─────────────────────────────── -->
+<div class="wrap hero">
+  <div class="eyebrow mono"><span style="color:var(--steel)">Eval.</span>
+    <span style="color:var(--amber)">Control.</span>
+    <span style="color:var(--green)">Protect.</span></div>
+  <h1>Your agent lies when its tools fail.<br><span class="mut">Catch it. Prove it. Govern it.</span></h1>
+  <p class="lede">Break a tool on purpose and most agents don't report the failure — they
+  <b>fabricate a result and ship it</b>. Axor catches the lie as a <b>reproducible receipt</b>
+  you can replay deterministically, hand to your security team, and attach to the incident.
+  Then it gives you the <b>pause button and the kill switch</b> for the whole fleet.</p>
+  <p>
+    <a class="btn mono" href="#run">Catch your first lie — 10 min, free →</a>
+    <a class="btn ghost mono" href="mailto:sales@axor.dev?subject=Design%20partner%20program&body=Org:%0AAgents%20in%20prod%20(approx):%0AStack:">Become a design partner</a>
+  </p>
+  <div class="under-cta mono">open source (Apache-2.0) · self-hosted · no credentials leave your machine · 3 design-partner slots, one per vertical</div>
+  <img class="gif" src="demo.gif" alt="One run: a fabrication is caught as an EvidenceCase, replayed, and a live governed node obeys interventions">
+  <div class="caption mono">one continuous demo run: fault injected → fabrication caught → replayed with a taint graph → live node paused. recorded, deterministic.</div>
+</div>
+
+<!-- ── PAIN: you've been here ────────────────────────────────────────────── -->
+<section><div class="wrap">
+  <h2>You've been in one of these rooms</h2>
+  <div class="grid" style="margin-top:18px">
+    <div class="card pain"><q>Why did the agent email that customer? Show me exactly what it saw.</q>
+      <p>The exec question. Your observability trace is 4,000 lines of JSON. Axor's answer is one EvidenceCase and a replay cursor pointing at the exact step.</p></div>
+    <div class="card pain"><q>It's 3am and the agent is burning API budget in a loop.</q>
+      <p>The on-call moment. Axor pages you (webhook, dead-letter honesty), and gives you pause / budget-cap / cascade-stop — instead of kill -9 and prayer.</p></div>
+    <div class="card pain"><q>What controls do you have around your AI agents?</q>
+      <p>The auditor. You hand over signed intervention logs, append-only facts, and PDF receipts — mapped to EU AI Act Articles 12/14/26.</p></div>
+  </div>
+</div></section>
+
+<!-- ── HOW + outcome lines ───────────────────────────────────────────────── -->
+<section><div class="wrap">
+  <h2>How it works</h2>
+  <p class="h2sub">Four surfaces, one loop. Every one produces an artifact you can show someone.</p>
+  <div class="grid">
+    <div class="card"><span class="tag mono">1 · CATCH</span><h3>Break a tool. Read the receipt.</h3>
+      <p>An observe-only proxy fronts your tools (auth passes byte-for-byte, raw bodies never stored). Inject a fault; the audit compares reality against the agent's claim.</p>
+      <span class="outcome mono">→ you stop arguing about what the agent did</span></div>
+    <div class="card"><span class="tag mono">2 · REPLAY</span><h3>Question any run, deterministically.</h3>
+      <p>Scrub the trace; fork counterfactuals ("no exec capability", "this value arrives tainted") and see the first step that diverges. No model call, ever.</p>
+      <span class="outcome mono">→ incident review takes minutes, not a day</span></div>
+    <div class="card"><span class="tag mono">3 · GOVERN</span><h3>Live fleet, real interventions.</h3>
+      <p>Wrapped agents are live nodes: pause, budget-cap (decrease-only), cascade-stop the subtree. Ed25519-signed commands; Axor down ⇒ agent unaffected.</p>
+      <span class="outcome mono">→ you get a pause button before you need it</span></div>
+    <div class="card"><span class="tag mono">4 · REGRESS</span><h3>CI for governance configs.</h3>
+      <p>Pin caught attacks and legit flows; replay the corpus under a candidate policy. Two-sided — a config that blocks everything fails honestly.</p>
+      <span class="outcome mono">→ you ship policy changes without fear</span></div>
+  </div>
+  <div class="quick mono" id="run"><b>git clone</b> https://github.com/Bucha11/axor-control-plane && cd axor-control-plane
+<b>cp</b> .env.example .env   <b>&&</b>   <b>docker compose</b> up --build
+<b>open</b> http://localhost:8080   →   Run demo-mode (mock tools, zero credentials)</div>
+  <div class="under-cta mono">MCP-native: paste the mcpServers config you already have — tools discovered, proxied, done.</div>
+</div></section>
+
+<!-- ── PROOF: numbers instead of testimonials ────────────────────────────── -->
+<section id="proof"><div class="wrap">
+  <h2>Proof, not promises</h2>
+  <p class="h2sub">No customer logos yet — we're pre-launch, and we won't fake them. What we have instead is
+  better: <b style="color:var(--text)">claims you can re-run yourself.</b> Every number below reproduces with one command.</p>
+  <table class="mono">
+    <tr><th>persona \ fault mode</th><th>silent_fail</th><th>corrupt_retrieval</th><th>instruction_injection</th><th>tool_substitution</th></tr>
+    <tr><td>misbehaving agent (structured claims)</td><td class="ok">100%</td><td class="ok">100%</td><td class="ok">100%</td><td class="ok">100%</td></tr>
+    <tr><td>misbehaving agent (free text only)</td><td class="warn">100% (heuristic)</td><td class="ok">100%</td><td class="ok">100%</td><td class="warn">100% (heuristic)</td></tr>
+    <tr><td>honest agent (false-positive check)</td><td class="ok">0%</td><td class="ok">0%</td><td class="ok">0%</td><td class="ok">0%</td></tr>
+  </table>
+  <div class="grid" style="margin-top:14px">
+    <div class="card"><h3 class="mono">140+ tests, all E2E-real</h3><p>Playwright drives the actual UI against the actual stack; the backend E2E suite boots real processes. The deploy gate smokes the compose stack on Postgres before merge.</p></div>
+    <div class="card"><h3 class="mono">Limits, not adjectives</h3><p>50 concurrent SSE subscribers, zero drops, perfect fan-out; ~70 rps ingest ceiling on the dev DB — published in docs/ops-limits.md with the script that measured it.</p></div>
+    <div class="card"><h3 class="mono">Same kernel enforces and replays</h3><p>Replay isn't a reconstruction — it's the identical pure function over the recorded trace. That's why the receipt is evidence, not narrative. Paper in submission.</p></div>
+  </div>
+</div></section>
+
+<!-- ── WHO ───────────────────────────────────────────────────────────────── -->
+<section><div class="wrap">
+  <h2>Built for the person who gets the call</h2>
+  <div class="grid">
+    <div class="card"><h3>Platform / SRE</h3><p>You run the agents everyone else ships. You get the pager, the pause button, budget caps, and a regression gate for policy changes.</p></div>
+    <div class="card"><h3>Security & compliance</h3><p>You answer for them. You get signed, append-only intervention logs, scoped share links, PDF receipts, and the EU AI Act mapping one-pager.</p></div>
+    <div class="card"><h3>Agencies shipping agents</h3><p>You hand clients a deliverable: "here's the EvidenceCase report and the regression corpus proving it's governed." Per-client licensing.</p></div>
+  </div>
+</div></section>
+
+<!-- ── PRICING ───────────────────────────────────────────────────────────── -->
+<section id="pricing"><div class="wrap">
+  <h2>Pricing that won't ambush you</h2>
+  <p class="h2sub">Line 1: anything that makes an agent <b style="color:var(--text)">safer</b> is free forever — that's structural, not a promo.
+  Line 2: you pay only for how your <b style="color:var(--text)">org</b> runs it.</p>
+  <div class="grid">
+    <div class="card price"><h3 class="mono">Free</h3><div class="amount mono">$0</div><div class="per mono">open source · unlimited agents</div>
+      <p>Everything above: catch, replay, govern, regress, export, self-host.</p>
+      <p style="margin-top:10px"><a class="mono" href="#run">compose up →</a></p></div>
+    <div class="card price hl"><h3 class="mono">Team</h3><div class="amount mono">$50–100 / node·mo</div><div class="per mono">first company deployments · 5–30 nodes</div>
+      <p>Hosted convenience, scheduled corpus CI, routing rules.</p>
+      <p style="margin-top:10px"><a class="mono" href="mailto:sales@axor.dev?subject=Axor%20Team">get Team →</a></p></div>
+    <div class="card price"><h3 class="mono">Enterprise</h3><div class="amount mono">annual</div><div class="per mono">SSO · RBAC · air-gapped · compliance reports</div>
+      <p>From $20–50k/yr. Offline license — never phones home.</p>
+      <p style="margin-top:10px"><a class="mono" href="mailto:sales@axor.dev?subject=Axor%20Enterprise">talk to us →</a></p></div>
+  </div>
+  <p class="under-cta mono" style="margin-top:12px">worried about vendor risk? the escape hatch is structural: the safety layer is Apache-2.0 — if we vanish, your governance doesn't.</p>
+</div></section>
+
+<!-- ── URGENCY (honest) ──────────────────────────────────────────────────── -->
+<section><div class="wrap">
+  <h2>Why now</h2>
+  <p class="h2sub">EU AI Act record-keeping and human-oversight obligations (Articles 12, 14, 26) are entering
+  application for high-risk systems — and "show me the agent's audit trail" is becoming a
+  procurement question everywhere, regulated or not. Teams that can answer it with a receipt
+  instead of a shrug win those deals. <a style="color:var(--steel)" href="https://github.com/Bucha11/axor-control-plane/blob/main/docs/eu-ai-act-mapping.md">Our article-by-article mapping →</a></p>
+</div></section>
+
+<!-- ── FAQ ───────────────────────────────────────────────────────────────── -->
+<section id="faq"><div class="wrap">
+  <h2>The questions you're already asking</h2>
+  <details><summary>Does the proxy add latency to my agent?</summary>
+    <p>One local hop. Clean passthrough streams (no buffering — SSE/chunked tool responses flow), and the proxy is observe-only: it never blocks traffic. Enforcement, when you opt into it, happens in-process in the adapter.</p></details>
+  <details><summary>What happens if Axor goes down mid-run?</summary>
+    <p>Nothing, structurally: the control plane is an advisory overlay. The adapter enforces locally with its own config and keys; the observe-only proxy fails loud (502), never fabricates. Your agent never depends on our backend being up.</p></details>
+  <details><summary>What does Axor see — and store?</summary>
+    <p>Observations only: tool names, statuses, sizes, SHA-256 hashes. Raw request/response bodies are never persisted; your Authorization headers pass through byte-for-byte, unparsed. Threat model: SECURITY.md.</p></details>
+  <details><summary>Am I locking into a framework?</summary>
+    <p>No. Observe-only works with anything that makes HTTP/MCP tool calls — zero code change. The deepest integration is one wrapper around your agent loop. Recipes for OpenAI Agents SDK and CrewAI are in examples/.</p></details>
+  <details><summary>Why is the good stuff free?</summary>
+    <p>Because the paper, the community, and your trust are worth more than gating a taint graph. The paid tiers sell what only organizations need — fleets, SSO, compliance reports, hosting. Safety never checks a license (that's enforced in code, not in a pinky promise).</p></details>
+</div></section>
+
+<!-- ── FINAL CTA ─────────────────────────────────────────────────────────── -->
+<div class="wrap"><div class="banner">
+  <h2>Break something. Get the receipt.</h2>
+  <p class="h2sub" style="margin:0 auto 18px">Ten minutes from clone to your first caught lie — mock tools, zero credentials, nothing leaves your machine.</p>
+  <a class="btn mono" href="#run">Run the demo →</a>
+  <a class="btn ghost mono" href="mailto:sales@axor.dev?subject=Keep%20me%20posted&body=Just%20the%20launch%20announcement%2C%20please.">Not ready? Get the launch email</a>
+</div></div>
+
+<footer><div class="wrap mono">
+  Apache-2.0 (EE directory: source-visible commercial) ·
+  <a href="https://github.com/Bucha11/axor-control-plane">github</a> ·
+  <a href="https://github.com/Bucha11/axor-control-plane/blob/main/ROADMAP.md">roadmap</a> ·
+  <a href="https://github.com/Bucha11/axor-control-plane/blob/main/SECURITY.md">security</a> ·
+  <a href="https://github.com/Bucha11/axor-control-plane/blob/main/docs/comparison.md">vs observability & guardrails</a> ·
+  security@axor.dev
+</div></footer>
+</body>
+</html>

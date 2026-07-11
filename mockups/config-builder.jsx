@@ -1,0 +1,299 @@
+import { useState } from "react";
+import { Plus, ChevronDown, ChevronRight, Download, Check, X, ArrowRight, Upload, FileCode, Terminal, AlertTriangle } from "lucide-react";
+
+const C = {
+  bg: "#12161A", panel: "#191F26", panel2: "#141920", line: "#262E37",
+  text: "#D2DAE1", mut: "#78848F", dim: "#4C5760",
+  red: "#E5484D", amber: "#F2A33C", green: "#46A758", steel: "#7FA8CC",
+};
+const MONO = "ui-monospace, SFMono-Regular, Menlo, monospace";
+const TYPES = ["READ", "WRITE", "EXPORT", "EXEC"];
+const typeColor = (t) => ({ READ: C.green, WRITE: C.amber, EXPORT: C.red, EXEC: C.red, "?": C.amber }[t]);
+const btn = (extra = {}) => ({
+  display: "flex", alignItems: "center", gap: 6, background: "none", border: `1px solid ${C.line}`,
+  borderRadius: 5, color: C.mut, fontFamily: MONO, fontSize: 11.5, padding: "6px 12px", cursor: "pointer", ...extra,
+});
+
+function Fold({ label, children, openDefault }) {
+  const [open, setOpen] = useState(!!openDefault);
+  return (
+    <div>
+      <button onClick={() => setOpen(!open)} style={{ background: "none", border: "none", color: C.mut, fontSize: 12, fontFamily: MONO, cursor: "pointer", display: "flex", alignItems: "center", gap: 6, padding: "8px 0" }}>
+        {open ? <ChevronDown size={13} /> : <ChevronRight size={13} />} {label}
+      </button>
+      {open && <div className="pb-2">{children}</div>}
+    </div>
+  );
+}
+
+const DETECTED = [
+  { name: "web_search", src: "tools.py:14 · @tool", endpoint: "https://api.search.example/v1", type: "?", critical: false, args: [] },
+  { name: "send_report", src: "tools.py:31 · @tool", endpoint: "https://slack.example/api/post", type: "?", critical: false, args: [{ arg: "channel", set: ["#reports", "#alerts"] }] },
+  { name: "run_query", src: "db.py:8 · langchain Tool()", endpoint: "postgres://…", type: "?", critical: false, args: [] },
+  { name: "shell", src: "agent.py:52 · subprocess", endpoint: "local://bash", type: "?", critical: false, args: [] },
+];
+
+// ---- per-sink allowlist editor ----
+function ArgEditor({ sink, update }) {
+  const [newArg, setNewArg] = useState("");
+  const [addingArg, setAddingArg] = useState(false);
+  const [valDrafts, setValDrafts] = useState({}); // argName -> current input
+
+  const addArg = () => {
+    if (!newArg.trim()) return;
+    update({ args: [...sink.args, { arg: newArg.trim(), set: [] }] });
+    setNewArg(""); setAddingArg(false);
+  };
+  const addVal = (argName) => {
+    const v = (valDrafts[argName] || "").trim();
+    if (!v) return;
+    update({ args: sink.args.map((a) => (a.arg === argName ? { ...a, set: [...a.set, v] } : a)) });
+    setValDrafts({ ...valDrafts, [argName]: "" });
+  };
+  const rmVal = (argName, v) =>
+    update({ args: sink.args.map((a) => (a.arg === argName ? { ...a, set: a.set.filter((x) => x !== v) } : a)) });
+  const rmArg = (argName) => update({ args: sink.args.filter((a) => a.arg !== argName) });
+
+  return (
+    <div className="flex flex-col gap-2">
+      <div style={{ fontFamily: MONO, fontSize: 10, color: C.dim, letterSpacing: "0.08em" }}>ARGUMENT ALLOWLISTS</div>
+      {sink.args.length === 0 && (
+        <div style={{ fontFamily: MONO, fontSize: 11.5, color: C.dim }}>
+          None declared — every argument stays under full taint (safe default).
+        </div>
+      )}
+      {sink.args.map((a) => (
+        <div key={a.arg} className="flex items-center gap-2 flex-wrap">
+          <span style={{ fontFamily: MONO, fontSize: 11.5, color: C.text }}>{a.arg} ∈</span>
+          {a.set.map((v) => (
+            <span key={v} className="flex items-center gap-1 px-2 py-0.5" style={{ background: C.panel2, border: `1px solid ${C.line}`, borderRadius: 10, fontFamily: MONO, fontSize: 11, color: C.green }}>
+              {v}
+              <X size={10} color={C.dim} style={{ cursor: "pointer" }} onClick={() => rmVal(a.arg, v)} />
+            </span>
+          ))}
+          <input value={valDrafts[a.arg] || ""} onChange={(e) => setValDrafts({ ...valDrafts, [a.arg]: e.target.value })}
+            onKeyDown={(e) => e.key === "Enter" && addVal(a.arg)} placeholder="+ value ⏎"
+            style={{ width: 90, background: "none", border: "none", borderBottom: `1px solid ${C.line}`, color: C.text, fontFamily: MONO, fontSize: 11, padding: "2px 4px", outline: "none" }} />
+          <span onClick={() => rmArg(a.arg)} style={{ fontFamily: MONO, fontSize: 10, color: C.dim, cursor: "pointer" }}>remove</span>
+          {a.set.length > 0 && <span style={{ fontFamily: MONO, fontSize: 10, color: C.dim }}>— supersession enabled for this argument</span>}
+          {a.set.length === 0 && <span style={{ fontFamily: MONO, fontSize: 10, color: C.amber }}>— empty set: still fully tainted</span>}
+        </div>
+      ))}
+      {addingArg ? (
+        <div className="flex items-center gap-2">
+          <input autoFocus value={newArg} onChange={(e) => setNewArg(e.target.value)} onKeyDown={(e) => e.key === "Enter" && addArg()}
+            placeholder="argument name ⏎"
+            style={{ width: 160, background: C.bg, border: `1px solid ${C.line}`, borderRadius: 4, color: C.text, fontFamily: MONO, fontSize: 11.5, padding: "5px 8px", outline: "none" }} />
+          <button onClick={addArg} style={btn({ padding: "4px 8px" })}><Check size={12} /></button>
+        </div>
+      ) : (
+        <button onClick={() => setAddingArg(true)} style={{ background: "none", border: "none", color: C.steel, fontFamily: MONO, fontSize: 11.5, cursor: "pointer", padding: 0, textAlign: "left" }}>
+          + declare argument
+        </button>
+      )}
+    </div>
+  );
+}
+
+export default function App() {
+  const [stage, setStage] = useState("entry");
+  const [sinks, setSinks] = useState([]);
+  const [adding, setAdding] = useState(false);
+  const [draft, setDraft] = useState({ name: "", type: "READ" });
+  const [sel, setSel] = useState(null);
+  const [emitted, setEmitted] = useState(false);
+
+  const upload = () => { setStage("analyzing"); setTimeout(() => { setSinks(DETECTED.map((d) => ({ ...d, args: d.args.map(a => ({...a, set: [...a.set]})) }))); setStage("build"); }, 1100); };
+  const patch = (i, p) => setSinks(sinks.map((s, j) => (j === i ? { ...s, ...p } : s)));
+  const unclassified = sinks.filter((s) => s.type === "?").length;
+  const fromCode = sinks.some((s) => s.src);
+
+  const config = {
+    version: "axor-config/1",
+    sinks: Object.fromEntries(sinks.filter((s) => s.type !== "?").map((s) => [s.name, {
+      consequence_class: s.type,
+      ...(s.critical ? { criticality: "critical" } : {}),
+      ...(s.args.some((a) => a.set.length) ? { trusted_sets: Object.fromEntries(s.args.filter((a) => a.set.length).map((a) => [a.arg, a.set])) } : {}),
+    }])),
+    default: "DENY",
+  };
+
+  if (stage === "entry" || stage === "analyzing") {
+    return (
+      <Shell>
+        <h1 style={{ fontSize: 22, fontWeight: 650, margin: "0 0 4px" }}>Bring your agent. Leave governed.</h1>
+        <div style={{ fontFamily: MONO, fontSize: 11.5, color: C.mut, marginBottom: 24 }}>
+          Drop the code — we find its tools, you tell us what they can do, you download the wrapped package.
+        </div>
+        <div onClick={stage === "entry" ? upload : undefined} className="p-8 flex flex-col items-center gap-3"
+          style={{ background: C.panel, border: `1px dashed ${stage === "analyzing" ? C.steel : C.line}`, borderRadius: 8, cursor: stage === "entry" ? "pointer" : "default" }}>
+          {stage === "analyzing" ? (
+            <><FileCode size={22} color={C.steel} />
+              <span style={{ fontFamily: MONO, fontSize: 12, color: C.steel }}>analyzing my_agent/ — extracting tool signatures…</span>
+              <span style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim }}>names and signatures only — classes are yours to assign</span></>
+          ) : (
+            <><Upload size={22} color={C.mut} />
+              <span style={{ fontFamily: MONO, fontSize: 12.5, color: C.text }}>Drop your agent folder or tools file</span>
+              <span style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim }}>.py · MCP manifest · LangChain project (click to simulate)</span></>
+          )}
+        </div>
+        {stage === "entry" && (
+          <>
+            <button onClick={() => { setSinks([]); setStage("build"); }} className="mt-4" style={{ background: "none", border: "none", color: C.mut, fontFamily: MONO, fontSize: 11.5, cursor: "pointer", padding: 0 }}>
+              declare sinks by hand instead
+            </button>
+            <div className="flex items-start gap-2 mt-6 p-3" style={{ background: C.panel2, border: `1px solid ${C.line}`, borderRadius: 6 }}>
+              <Terminal size={13} color={C.dim} style={{ marginTop: 1 }} />
+              <div style={{ fontFamily: MONO, fontSize: 11, color: C.dim, lineHeight: 1.6 }}>
+                Code shouldn't leave your machine? <span style={{ color: C.mut }}>uvx axor wrap ./my_agent</span> — same screen, pre-filled, nothing uploaded.
+              </div>
+            </div>
+          </>
+        )}
+      </Shell>
+    );
+  }
+
+  if (stage === "build") {
+    return (
+      <Shell>
+        <h1 style={{ fontSize: 22, fontWeight: 650, margin: "0 0 4px" }}>
+          {fromCode ? <>Found {sinks.length} tools. What is each allowed to be?</> : <>What can your agent touch?</>}
+        </h1>
+        <div style={{ fontFamily: MONO, fontSize: 11.5, color: C.mut, marginBottom: 20 }}>
+          {fromCode
+            ? <>Detection reads names, never intent — <span style={{ color: C.amber }}>you assign the class</span>. Unclassified stays denied.</>
+            : <>Declare its tools as sinks. Everything you don't declare will be denied.</>}
+        </div>
+
+        <div style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 8 }}>
+          {sinks.map((s, i) => (
+            <div key={s.name}>
+              <div onClick={() => setSel(sel === i ? null : i)} className="flex items-center gap-3 px-4 py-3"
+                style={{ cursor: "pointer", borderTop: i ? `1px solid ${C.line}` : "none" }}>
+                {s.type === "?" ? (
+                  <div className="flex gap-1" style={{ width: 168 }} onClick={(e) => e.stopPropagation()}>
+                    {TYPES.map((t) => (
+                      <button key={t} onClick={() => patch(i, { type: t })}
+                        style={{ background: "none", border: `1px solid ${C.line}`, borderRadius: 3, color: typeColor(t), fontFamily: MONO, fontSize: 9, fontWeight: 700, padding: "3px 5px", cursor: "pointer" }}>{t}</button>
+                    ))}
+                  </div>
+                ) : (
+                  <span onClick={(e) => { e.stopPropagation(); patch(i, { type: "?" }); }}
+                    style={{ fontFamily: MONO, fontSize: 10, fontWeight: 700, color: typeColor(s.type), width: 168 }}>{s.type}</span>
+                )}
+                <span style={{ fontFamily: MONO, fontSize: 13, color: s.type === "?" ? C.amber : C.text }}>{s.name}</span>
+                {s.critical && <AlertTriangle size={12} color={C.red} />}
+                <span style={{ flex: 1 }} />
+                {s.args.some((a) => a.set.length) && <span style={{ fontFamily: MONO, fontSize: 10, color: C.green }}>{s.args.filter((a) => a.set.length).length} allowlist</span>}
+                {s.src && <span style={{ fontFamily: MONO, fontSize: 10, color: C.dim }}>{s.src}</span>}
+                <X size={13} color={C.dim} style={{ cursor: "pointer" }} onClick={(e) => { e.stopPropagation(); setSinks(sinks.filter((_, j) => j !== i)); setSel(null); }} />
+              </div>
+              {sel === i && (
+                <div className="px-4 pb-4 flex flex-col gap-3" style={{ paddingLeft: 184 }}>
+                  <div style={{ fontFamily: MONO, fontSize: 11, color: C.dim }}>{s.endpoint || "no endpoint"}</div>
+                  {/* criticality */}
+                  <div className="flex items-center gap-2">
+                    <span style={{ fontFamily: MONO, fontSize: 10, color: C.dim, letterSpacing: "0.08em" }}>CRITICALITY</span>
+                    {["standard", "critical"].map((c) => (
+                      <button key={c} onClick={() => patch(i, { critical: c === "critical" })}
+                        style={{ background: (s.critical ? "critical" : "standard") === c ? "rgba(127,168,204,0.1)" : "none", border: `1px solid ${(s.critical ? "critical" : "standard") === c ? (c === "critical" ? C.red : C.steel) : C.line}`, borderRadius: 4, color: (s.critical ? "critical" : "standard") === c ? (c === "critical" ? C.red : C.steel) : C.dim, fontFamily: MONO, fontSize: 10.5, padding: "4px 10px", cursor: "pointer" }}>
+                        {c}
+                      </button>
+                    ))}
+                    <span style={{ fontFamily: MONO, fontSize: 10, color: C.dim }}>
+                      {s.critical ? "denials here escalate degradation immediately; evidence ranked first" : "amplifier only — standard never relaxes anything"}
+                    </span>
+                  </div>
+                  {/* allowlists */}
+                  <ArgEditor sink={s} update={(p) => patch(i, p)} />
+                </div>
+              )}
+            </div>
+          ))}
+          {adding ? (
+            <div className="flex items-center gap-2 px-4 py-3" style={{ borderTop: `1px solid ${C.line}` }}>
+              <select value={draft.type} onChange={(e) => setDraft({ ...draft, type: e.target.value })}
+                style={{ background: C.bg, border: `1px solid ${C.line}`, borderRadius: 4, color: typeColor(draft.type), fontFamily: MONO, fontSize: 11, padding: "5px 6px" }}>
+                {TYPES.map((t) => <option key={t}>{t}</option>)}
+              </select>
+              <input autoFocus placeholder="tool name ⏎" value={draft.name} onChange={(e) => setDraft({ ...draft, name: e.target.value })}
+                onKeyDown={(e) => e.key === "Enter" && draft.name.trim() && (setSinks([...sinks, { ...draft, critical: false, args: [] }]), setDraft({ name: "", type: "READ" }), setAdding(false))}
+                style={{ flex: 1, background: C.bg, border: `1px solid ${C.line}`, borderRadius: 4, color: C.text, fontFamily: MONO, fontSize: 12, padding: "6px 8px", outline: "none" }} />
+            </div>
+          ) : (
+            <button onClick={() => setAdding(true)} className="flex items-center gap-2 px-4 py-3 w-full"
+              style={{ background: "none", border: "none", borderTop: sinks.length ? `1px solid ${C.line}` : "none", color: C.mut, fontFamily: MONO, fontSize: 12, cursor: "pointer" }}>
+              <Plus size={13} /> Add tool
+            </button>
+          )}
+        </div>
+
+        <div className="mt-4 flex items-center gap-3">
+          <button onClick={() => unclassified === 0 && sinks.length > 0 && setStage("preview")} disabled={unclassified > 0 || sinks.length === 0}
+            style={btn({ color: unclassified || !sinks.length ? C.dim : C.text, borderColor: unclassified || !sinks.length ? C.line : C.steel, padding: "9px 18px", fontSize: 12.5, opacity: unclassified || !sinks.length ? 0.6 : 1, cursor: unclassified || !sinks.length ? "default" : "pointer" })}>
+            Preview config <ArrowRight size={13} />
+          </button>
+          {unclassified > 0 && <span style={{ fontFamily: MONO, fontSize: 11.5, color: C.amber }}>{unclassified} unclassified — still denied</span>}
+        </div>
+      </Shell>
+    );
+  }
+
+  // preview
+  const readings = [
+    ...sinks.filter((s) => s.critical).map((s) => <><b style={{ color: C.red }}>{s.name}</b> is critical — a denial there escalates degradation immediately and its evidence is shown first.</>),
+    ...sinks.filter((s) => s.type === "EXPORT").map((s) => <>Exports through <b style={{ color: C.text }}>{s.name}</b> require untainted values{s.args.some((a) => a.set.length) ? <> or membership in {s.args.filter((a) => a.set.length).map((a) => a.arg).join(", ")}</> : null}.</>),
+    ...sinks.filter((s) => s.type === "EXEC").map((s) => <><b style={{ color: C.text }}>{s.name}</b> after an external read is denied.</>),
+    ...sinks.filter((s) => s.type === "WRITE").map((s) => <><b style={{ color: C.text }}>{s.name}</b> writes are gated on value provenance.</>),
+  ];
+
+  return (
+    <Shell>
+      <button onClick={() => { setStage("build"); setEmitted(false); }} style={{ background: "none", border: "none", color: C.dim, fontFamily: MONO, fontSize: 11.5, cursor: "pointer", padding: 0, marginBottom: 12 }}>← back to sinks</button>
+      <h1 style={{ fontSize: 22, fontWeight: 650, margin: "0 0 20px" }}>Here's what this config means.</h1>
+      <div className="p-4 flex flex-col gap-2" style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 8 }}>
+        {readings.map((r, i) => <div key={i} style={{ fontFamily: MONO, fontSize: 12.5, color: C.mut, lineHeight: 1.6 }}>{r}</div>)}
+        <div className="mt-1 pt-3 flex items-center gap-2" style={{ borderTop: `1px solid ${C.line}` }}>
+          <span style={{ fontFamily: MONO, fontSize: 12.5, color: C.red, fontWeight: 700 }}>Anything not listed above is denied.</span>
+          <span style={{ fontFamily: MONO, fontSize: 11, color: C.dim }}>— fail-closed; you are confirming this, not discovering it later</span>
+        </div>
+      </div>
+      {fromCode && (
+        <Fold label="wrapped package — your code untouched, two files added" openDefault>
+          <div style={{ background: C.panel2, border: `1px solid ${C.line}`, borderRadius: 6, padding: 12, fontFamily: MONO, fontSize: 11.5, lineHeight: 1.8 }}>
+            <div style={{ color: C.dim }}>my_agent/</div>
+            <div style={{ color: C.dim, paddingLeft: 16 }}>agent.py · tools.py · db.py <span style={{ fontSize: 10 }}>— unchanged</span></div>
+            <div style={{ color: C.green, paddingLeft: 16 }}>+ axor_wrapper.py</div>
+            <div style={{ color: C.green, paddingLeft: 16 }}>+ axor.config.json</div>
+          </div>
+        </Fold>
+      )}
+      <Fold label="generated config (axor.config.json)">
+        <pre style={{ background: C.panel2, border: `1px solid ${C.line}`, borderRadius: 6, padding: 12, fontFamily: MONO, fontSize: 11, color: C.mut, overflow: "auto", margin: 0 }}>{JSON.stringify(config, null, 2)}</pre>
+      </Fold>
+      <div className="flex items-center gap-3 mt-5">
+        <button onClick={() => setEmitted(true)} style={btn({ color: C.text, borderColor: C.steel, padding: "9px 18px", fontSize: 12.5 })}>
+          <Download size={14} /> {fromCode ? "Download wrapped package" : "Download config + scaffold"}
+        </button>
+        {emitted && (
+          <span style={{ fontFamily: MONO, fontSize: 12, color: C.green, display: "flex", alignItems: "center", gap: 6 }}>
+            <Check size={13} /> saved · <span style={{ color: C.steel, cursor: "pointer" }}>run first governed experiment →</span>
+          </span>
+        )}
+      </div>
+    </Shell>
+  );
+}
+
+function Shell({ children }) {
+  return (
+    <div style={{ minHeight: "100vh", background: C.bg, color: C.text, fontFamily: "Inter, system-ui, sans-serif", padding: "28px 20px" }}>
+      <div className="flex items-center gap-6" style={{ maxWidth: 680, margin: "0 auto 36px" }}>
+        <span style={{ fontFamily: MONO, fontSize: 14, fontWeight: 700 }}>AXOR<span style={{ color: C.steel }}> EVAL</span></span>
+        <span style={{ fontFamily: MONO, fontSize: 12, color: C.text, borderBottom: `2px solid ${C.steel}`, paddingBottom: 2 }}>config builder</span>
+      </div>
+      <div style={{ maxWidth: 680, margin: "0 auto" }}>{children}</div>
+    </div>
+  );
+}

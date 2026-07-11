@@ -1,0 +1,24 @@
+name: Bug report
+description: Something behaved wrong (for security issues use SECURITY.md, not an issue)
+labels: [bug]
+body:
+  - type: input
+    id: version
+    attributes: { label: Version / commit }
+    validations: { required: true }
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options: [proxy, backend, frontend, replay/kernel, plane/control, docs]
+    validations: { required: true }
+  - type: textarea
+    id: repro
+    attributes:
+      label: Reproduction
+      description: Smallest sequence that shows it (curl/UI steps). Include the run_id if relevant.
+    validations: { required: true }
+  - type: textarea
+    id: expected
+    attributes: { label: Expected vs actual }
+    validations: { required: true }

@@ -1,0 +1,104 @@
+{
+  "$defs": {
+    "EventKind": {
+      "enum": [
+        "intent",
+        "gate_eval",
+        "tool_call",
+        "tool_result",
+        "fault_injected",
+        "claim",
+        "denial",
+        "fact",
+        "context_excision",
+        "operator_intervention",
+        "state_applied",
+        "injection_consumed",
+        "injection_refused",
+        "excision_refused",
+        "heartbeat"
+      ],
+      "title": "EventKind",
+      "type": "string"
+    },
+    "Verdict": {
+      "enum": [
+        "pass",
+        "deny"
+      ],
+      "title": "Verdict",
+      "type": "string"
+    }
+  },
+  "description": "A single trace line. Append-only; never mutated after emission.\n\n``ts`` is ISO 8601 and informational \u2014 ordering is by ``seq`` (monotonic\nper node). ``causal_root`` is the value-ref this event is about, when any.",
+  "properties": {
+    "seq": {
+      "title": "Seq",
+      "type": "integer"
+    },
+    "node_id": {
+      "title": "Node Id",
+      "type": "string"
+    },
+    "kind": {
+      "$ref": "#/$defs/EventKind"
+    },
+    "ts": {
+      "title": "Ts",
+      "type": "string"
+    },
+    "schema_version": {
+      "default": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "causal_root": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Causal Root"
+    },
+    "gate": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Gate"
+    },
+    "verdict": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Verdict"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "payload": {
+      "additionalProperties": true,
+      "title": "Payload",
+      "type": "object"
+    }
+  },
+  "required": [
+    "seq",
+    "node_id",
+    "kind",
+    "ts"
+  ],
+  "title": "Event",
+  "type": "object"
+}
