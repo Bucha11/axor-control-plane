@@ -268,6 +268,18 @@ export const api = {
       body: JSON.stringify({ anchor_node: anchor.node_id, anchor_seq: anchor.seq, config }),
     }).then((r) => j<{ ranking: InfluenceEntry[] }>(r)),
 
+  vaultCredsHealth: () =>
+    af("/v1/vault/creds/health").then((r) =>
+      j<{ enrolled: { tool: string; endpoint: string; version: number; revoked: boolean; scope_nodes: string[] }[] }>(r)),
+
+  vaultSigningKeys: () =>
+    af("/v1/vault/signing/keys").then((r) =>
+      j<{ key_id: string; public_key_hex: string; operators: string[]; created_ts: string }[]>(r)),
+
+  vaultSigningAudit: () =>
+    af("/v1/vault/signing/audit").then((r) =>
+      j<{ operator: string; key_id: string; payload_sha256: string; granted: boolean; ts: string }[]>(r)),
+
   seedTreeRun: () =>
     af("/v1/demo/seed-tree-run", { method: "POST" }).then((r) => j<unknown>(r)),
   command: (nodeId: string, version: number, state: Record<string, unknown>) =>

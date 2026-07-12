@@ -358,6 +358,75 @@ export default function Settings() {
           </>
         )}
       </Section>
+
+      <FederationVault />
+    </div>
+  );
+}
+
+// Federation vault (spec v2 Ch.5): TWO panes, visibly separate — "manage our
+// API keys" must never be conflated with "manage who can command the
+// federation". The separation is backend-enforced (separate credentials);
+// the UI mirrors it structurally.
+function FederationVault() {
+  const creds = useQuery({ queryKey: ["vault-creds"], queryFn: api.vaultCredsHealth });
+  const keys = useQuery({ queryKey: ["vault-keys"], queryFn: api.vaultSigningKeys });
+  const audit = useQuery({ queryKey: ["vault-audit"], queryFn: api.vaultSigningAudit });
+  return (
+    <div className="flex gap-4 mb-4" data-testid="federation-vault" style={{ alignItems: "stretch" }}>
+      <div className="p-4 flex-1" style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 8 }}>
+        <div style={{ fontSize: 10, fontFamily: MONO, color: C.dim, letterSpacing: "0.1em", marginBottom: 8 }}>
+          FEDERATION VAULT · TOOL CREDENTIALS
+        </div>
+        <div style={{ fontFamily: MONO, fontSize: 10.5, color: C.mut, marginBottom: 10, lineHeight: 1.6 }}>
+          dispensed at the sink, per-node scope, fail-closed. rotation is config;
+          the plane may revoke, never grant.
+        </div>
+        {(creds.data?.enrolled ?? []).length === 0 ? (
+          <div style={{ fontFamily: MONO, fontSize: 11, color: C.dim }}>no credentials enrolled</div>
+        ) : (
+          (creds.data?.enrolled ?? []).map((e) => (
+            <div key={`${e.tool}-${e.endpoint}`} className="flex items-center gap-2 py-1" style={{ fontFamily: MONO, fontSize: 11 }}>
+              <span style={{ color: e.revoked ? C.dim : C.text, textDecoration: e.revoked ? "line-through" : "none" }}>{e.tool}</span>
+              <span style={{ color: C.dim, fontSize: 10 }}>v{e.version}</span>
+              <span style={{ color: C.dim, fontSize: 10 }}>scope: {e.scope_nodes.join(", ") || "none"}</span>
+              {e.revoked && <span style={{ color: C.red, fontSize: 10 }}>revoked</span>}
+            </div>
+          ))
+        )}
+      </div>
+      <div className="p-4 flex-1" style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 8 }}>
+        <div style={{ fontSize: 10, fontFamily: MONO, color: C.dim, letterSpacing: "0.1em", marginBottom: 8 }}>
+          FEDERATION VAULT · SIGNING KEYS
+        </div>
+        <div style={{ fontFamily: MONO, fontSize: 10.5, color: C.mut, marginBottom: 10, lineHeight: 1.6 }}>
+          custody signs, never surrenders — the private key never leaves; every
+          sign request is an audited operator action. pubkeys stay pinned in
+          adapter config, never fetched from here.
+        </div>
+        {(keys.data ?? []).length === 0 ? (
+          <div style={{ fontFamily: MONO, fontSize: 11, color: C.dim }}>no keys under custody</div>
+        ) : (
+          (keys.data ?? []).map((k) => (
+            <div key={k.key_id} className="py-1" style={{ fontFamily: MONO, fontSize: 11 }}>
+              <span style={{ color: C.text }}>{k.key_id}</span>
+              <span style={{ color: C.dim, fontSize: 10 }}> · {k.public_key_hex.slice(0, 16)}… · signers: {k.operators.join(", ")}</span>
+            </div>
+          ))
+        )}
+        {(audit.data ?? []).length > 0 && (
+          <div className="mt-2 pt-2" style={{ borderTop: `1px solid ${C.line}` }}>
+            <div style={{ fontFamily: MONO, fontSize: 9.5, color: C.dim, letterSpacing: "0.08em", marginBottom: 4 }}>SIGN-REQUEST AUDIT</div>
+            {(audit.data ?? []).slice(-5).reverse().map((a, i) => (
+              <div key={i} className="flex items-center gap-2 py-0.5" style={{ fontFamily: MONO, fontSize: 10 }}>
+                <span style={{ color: a.granted ? C.green : C.red }}>{a.granted ? "signed" : "refused"}</span>
+                <span style={{ color: C.text }}>{a.operator}</span>
+                <span style={{ color: C.dim }}>{a.key_id} · {a.payload_sha256.slice(0, 12)}…</span>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
     </div>
   );
 }

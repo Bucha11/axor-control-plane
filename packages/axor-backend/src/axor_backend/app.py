@@ -65,6 +65,8 @@ def create_app(
     allow_unsigned: bool | None = None,
     api_token: str | None = None,
     retention_days: float | None = None,
+    vault_creds_token: str | None = None,
+    vault_signing_token: str | None = None,
 ) -> FastAPI:
     @contextlib.asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -188,6 +190,15 @@ def create_app(
     app.state.license = None  # set by _load_license / a verified paste
     app.state.shares = ShareRegistry()
     app.state.api_token = api_token
+    # THE WALL (spec v2 Ch.5 §3): the two vault subsystems are reached with
+    # SEPARATE credentials — the ability to dispense tool creds must not grant
+    # the ability to request signatures, and vice versa. No shared admin role.
+    app.state.vault_creds_token = (
+        vault_creds_token or os.environ.get("AXOR_VAULT_CREDS_TOKEN") or None
+    )
+    app.state.vault_signing_token = (
+        vault_signing_token or os.environ.get("AXOR_VAULT_SIGNING_TOKEN") or None
+    )
     # Taint/provenance graph (spec decision 6). In-memory by default — the same
     # dev posture as SQLite; a hosted deployment swaps in KuzuGraphStore (per-tenant
     # DB) behind the GraphStore Protocol. Ingested traces fold their arg_refs →
@@ -442,6 +453,123 @@ def create_app(
                 events, config, anchor_node, anchor_seq, refs
             ),
         }
+
+    # ── Federation vault (spec v2 Ch.5): two subsystems, one wall ────────────
+
+    def _vault_gate(request: Request, which: str) -> None:
+        """Per-subsystem bearer check. A configured token is required exactly
+        for its own subsystem; in the open dev posture (no token configured)
+        the subsystem follows the app's global posture."""
+        expected = getattr(request.app.state, f"vault_{which}_token")
+        if expected is None:
+            return  # open posture — loud in logs at startup, like api_token
+        got = request.headers.get(f"x-vault-{which}-token", "")
+        if got != expected:
+            raise HTTPException(403, f"vault {which}: missing or wrong token")
+
+    @app.post("/v1/vault/creds/enroll")
+    async def vault_enroll(body: dict, request: Request) -> dict:
+        _vault_gate(request, "creds")
+        from axor_backend.vault_creds import ToolCredentialVault
+
+        vault = ToolCredentialVault(request.app.state.store)
+        return await vault.enroll(
+            str(body.get("tool", "")), str(body.get("endpoint", "")),
+            str(body.get("secret", "")), list(body.get("scope_nodes", [])),
+        )
+
+    @app.post("/v1/vault/creds/dispense")
+    async def vault_dispense(body: dict, request: Request) -> dict:
+        _vault_gate(request, "creds")
+        from axor_backend.vault_creds import DispenseDenied, ToolCredentialVault
+
+        vault = ToolCredentialVault(request.app.state.store)
+        try:
+            return await vault.dispense(
+                str(body.get("node_id", "")), str(body.get("tool", "")),
+                str(body.get("endpoint", "")),
+            )
+        except DispenseDenied as exc:
+            raise HTTPException(403, exc.reason) from exc
+
+    @app.post("/v1/vault/creds/rotate")
+    async def vault_rotate(body: dict, request: Request) -> dict:
+        _vault_gate(request, "creds")
+        from axor_backend.vault_creds import DispenseDenied, ToolCredentialVault
+
+        vault = ToolCredentialVault(request.app.state.store)
+        try:
+            return await vault.rotate(
+                str(body.get("tool", "")), str(body.get("endpoint", "")),
+                str(body.get("secret", "")),
+            )
+        except DispenseDenied as exc:
+            raise HTTPException(404, exc.reason) from exc
+
+    @app.post("/v1/vault/creds/revoke")
+    async def vault_revoke(body: dict, request: Request) -> dict:
+        """Narrowing only: revoke is available over the plane in an incident;
+        granting is enrollment config, never a command."""
+        _vault_gate(request, "creds")
+        from axor_backend.vault_creds import DispenseDenied, ToolCredentialVault
+
+        vault = ToolCredentialVault(request.app.state.store)
+        try:
+            return await vault.revoke(
+                str(body.get("tool", "")), str(body.get("endpoint", "")),
+            )
+        except DispenseDenied as exc:
+            raise HTTPException(404, exc.reason) from exc
+
+    @app.get("/v1/vault/creds/health")
+    async def vault_health(request: Request) -> dict:
+        _vault_gate(request, "creds")
+        from axor_backend.vault_creds import ToolCredentialVault
+
+        return await ToolCredentialVault(request.app.state.store).health()
+
+    @app.post("/v1/vault/signing/keys")
+    async def vault_create_key(body: dict, request: Request) -> dict:
+        _vault_gate(request, "signing")
+        from axor_backend.vault_signing import SigningCustody, SignRefused
+
+        custody = SigningCustody(request.app.state.store)
+        try:
+            return await custody.create_key(
+                str(body.get("key_id", "")), list(body.get("operators", [])),
+            )
+        except SignRefused as exc:
+            raise HTTPException(409, exc.reason) from exc
+
+    @app.get("/v1/vault/signing/keys")
+    async def vault_list_keys(request: Request) -> list[dict]:
+        _vault_gate(request, "signing")
+        from axor_backend.vault_signing import SigningCustody
+
+        return await SigningCustody(request.app.state.store).keys_public()
+
+    @app.post("/v1/vault/signing/sign")
+    async def vault_sign(body: dict, request: Request) -> dict:
+        _vault_gate(request, "signing")
+        import base64
+
+        from axor_backend.vault_signing import SigningCustody, SignRefused
+
+        custody = SigningCustody(request.app.state.store)
+        try:
+            return await custody.sign(
+                str(body.get("operator", "")), str(body.get("key_id", "")),
+                base64.b64decode(str(body.get("payload_b64", ""))),
+            )
+        except SignRefused as exc:
+            raise HTTPException(403, exc.reason) from exc
+
+    @app.get("/v1/vault/signing/audit")
+    async def vault_audit(request: Request) -> list[dict]:
+        _vault_gate(request, "signing")
+        from axor_backend.vault_signing import SigningCustody
+
+        return await SigningCustody(request.app.state.store).audit()
 
     @app.get("/v1/replay/{run_id}")
     async def replay_scrubber(run_id: str, request: Request) -> dict:
