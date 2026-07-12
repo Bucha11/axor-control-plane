@@ -18,6 +18,47 @@ def parse_trace(lines: list[str]) -> list[Event]:
     return [event_from_json_line(line) for line in lines]
 
 
+def influence_ranking(
+    events: list[Event],
+    config: KernelConfig,
+    anchor_node: str,
+    anchor_seq: int,
+    refs: list[str],
+) -> list[dict[str, Any]]:
+    """Cross-node influence via subgraph ablation (spec v2 Ch.3 §7): replay
+    the anchor node's local sequence with each upstream ref excised; a ref
+    whose removal flips the anchor's verdict drove the discrepancy. Bounded by
+    causal-chain length, deterministic, reuses the kernel fold (Rule 0)."""
+    local = sorted(
+        (e for e in events if e.node_id == anchor_node), key=lambda e: e.seq
+    )
+
+    def anchor_verdict(evs: list[Event]) -> str | None:
+        result = replay(evs, config)
+        for step in result.steps:
+            if step.event.seq == anchor_seq:
+                v = step.reevaluated_verdict or step.recorded_verdict
+                return v.value if v else None
+        return None
+
+    baseline = anchor_verdict(local)
+    ranked: list[dict[str, Any]] = []
+    for ref in refs:
+        excision = Event(
+            seq=-1, node_id=anchor_node, kind=EventKind.CONTEXT_EXCISION,
+            ts="ablation", payload={"refs": [ref], "reason": "ablation"},
+        )
+        ablated = anchor_verdict([excision, *local])
+        ranked.append({
+            "ref": ref,
+            "influence": 1.0 if ablated != baseline else 0.0,
+            "baseline_verdict": baseline,
+            "ablated_verdict": ablated,
+        })
+    ranked.sort(key=lambda r: (-r["influence"], r["ref"]))
+    return ranked
+
+
 def kernel_config_from_json(d: dict[str, Any]) -> KernelConfig:
     """Accepts either the Config Builder shape ({"sinks": {...}}) or the
     direct kernel shape ({"allowed_tools": [...], ...})."""

@@ -24,6 +24,42 @@ export interface RunSummary {
   created_ts: string;
 }
 
+export interface CaseAnchor {
+  node_id: string;
+  seq: number;
+}
+
+export interface SubgraphNode {
+  node_id: string;
+  roles: string[];
+  seqs: number[];
+}
+
+export interface SubgraphEdge {
+  from: string;
+  to: string;
+  kind: string;
+  carried: { root?: { sources: string[]; sensitive: boolean } };
+  gate_verdict: string | null;
+  msg_id: string | null;
+}
+
+export interface SubgraphPayload {
+  anchor: CaseAnchor;
+  nodes: SubgraphNode[];
+  edges: SubgraphEdge[];
+  fault_origin: CaseAnchor | null;
+  contained_at: { from: string; to: string; kind: string; gate: string | null }[] | null;
+  federation_scope: "intra" | "inter";
+}
+
+export interface InfluenceEntry {
+  ref: string;
+  influence: number;
+  baseline_verdict: string | null;
+  ablated_verdict: string | null;
+}
+
 export interface EvidenceCaseDto {
   scenario: string;
   deviation: string | null;
@@ -32,6 +68,10 @@ export interface EvidenceCaseDto {
   observed_reality: unknown;
   agent_claim: unknown;
   fault_attribution: { fault_mode: string; tool_name: string; influence: string }[];
+  // Multi-agent (spec v2 Ch.3): present => the case has a causal subgraph to
+  // derive on open. Absent on every size-1 case — the v0.13 render is used.
+  anchor?: CaseAnchor | null;
+  twin_ref?: { trace_id: string } | null;
 }
 
 export interface ScrubberStep {
@@ -203,6 +243,17 @@ export const api = {
   nodes: () => af("/v1/plane/nodes").then((r) => j<NodeInfo[]>(r)),
 
   topology: () => af("/v1/plane/topology").then((r) => j<TopologyPayload>(r)),
+
+  subgraph: (runId: string, anchor: CaseAnchor) =>
+    af(`/v1/runs/${runId}/subgraph?anchor_node=${encodeURIComponent(anchor.node_id)}&anchor_seq=${anchor.seq}`)
+      .then((r) => j<SubgraphPayload>(r)),
+
+  influence: (runId: string, anchor: CaseAnchor, config: Record<string, unknown>) =>
+    af(`/v1/runs/${runId}/influence`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ anchor_node: anchor.node_id, anchor_seq: anchor.seq, config }),
+    }).then((r) => j<{ ranking: InfluenceEntry[] }>(r)),
 
   seedTreeRun: () =>
     af("/v1/demo/seed-tree-run", { method: "POST" }).then((r) => j<unknown>(r)),

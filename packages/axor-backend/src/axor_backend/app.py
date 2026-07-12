@@ -36,7 +36,10 @@ from axor_backend.graph import (
 )
 from axor_backend.monitor import running_stale_monitor
 from axor_backend.notifications import Notifier
+from axor_core.kernel.subgraph import causal_subgraph
+
 from axor_backend.replay_api import (
+    influence_ranking,
     kernel_config_from_json,
     parse_trace,
     regression_row,
@@ -317,6 +320,7 @@ def create_app(
             "ex_tree", demo.TREE_ORCH, demo.TREE_EVENTS, "seed-ex_tree"
         )
         await register_trace_derivations(graph, "ex_tree", demo.TREE_EVENTS)
+        await store.set_evidence("ex_tree", demo.TREE_EVIDENCE)
         return {"seeded": ["ex_tree"], "config": demo.TREE_CONFIG}
 
     @app.get("/v1/runs")
@@ -364,6 +368,65 @@ def create_app(
         return EventSourceResponse(stream())
 
     # ── replay & regression (spec section 13) ─────────────────────────────────
+
+    # Derive-on-open cache (decision v2-12): keyed by (run_id, anchor), never
+    # invalidated — traces are append-only.
+    _subgraph_cache: dict[tuple, dict] = {}
+
+    @app.get("/v1/runs/{run_id}/subgraph")
+    async def run_subgraph(
+        run_id: str, anchor_node: str, anchor_seq: int, request: Request
+    ) -> dict:
+        """The causal subgraph for a case (spec v2 Ch.3): computed on open by
+        the pure kernel walk, cached, never stored redundantly."""
+        key = (run_id, anchor_node, anchor_seq)
+        if key not in _subgraph_cache:
+            events = await _events_for(request.app.state.store, run_id)
+            try:
+                _subgraph_cache[key] = causal_subgraph(
+                    events, anchor_node, anchor_seq
+                )
+            except ValueError as exc:
+                raise HTTPException(404, str(exc)) from exc
+        return _subgraph_cache[key]
+
+    @app.post("/v1/runs/{run_id}/influence")
+    async def run_influence(run_id: str, body: dict, request: Request) -> dict:
+        """Influence ranking by subgraph ablation (spec v2 Ch.3 §7): which
+        upstream value most drove the anchor's claim. Deterministic; bounded
+        by causal-chain length."""
+        anchor_node = body.get("anchor_node", "")
+        anchor_seq = int(body.get("anchor_seq", -1))
+        events = await _events_for(request.app.state.store, run_id)
+        try:
+            sub = causal_subgraph(events, anchor_node, anchor_seq)
+        except ValueError as exc:
+            raise HTTPException(404, str(exc)) from exc
+        case_nodes = {n["node_id"] for n in sub["nodes"]}
+        refs = sorted({
+            str(e.payload.get("value_ref"))
+            for e in events
+            if e.node_id in case_nodes and e.payload.get("value_ref")
+        })
+        cfg_json = body.get("config") or {}
+        if not cfg_json:
+            # Default ablation config: the anchor's own denied sink declared as
+            # egress — the minimal config under which the recorded containment
+            # reproduces, so ablation measures exactly "did this value drive
+            # the denial".
+            anchor_ev = next(
+                e for e in events
+                if e.node_id == anchor_node and e.seq == anchor_seq
+            )
+            tool = str(anchor_ev.payload.get("tool", ""))
+            cfg_json = {"egress_sinks": [tool] if tool else []}
+        config = kernel_config_from_json(cfg_json)
+        return {
+            "anchor": sub["anchor"],
+            "ranking": influence_ranking(
+                events, config, anchor_node, anchor_seq, refs
+            ),
+        }
 
     @app.get("/v1/replay/{run_id}")
     async def replay_scrubber(run_id: str, request: Request) -> dict:
