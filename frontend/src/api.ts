@@ -280,6 +280,10 @@ export const api = {
     af("/v1/vault/signing/audit").then((r) =>
       j<{ operator: string; key_id: string; payload_sha256: string; granted: boolean; ts: string }[]>(r)),
 
+  spawnGovernedTree: () =>
+    af("/axor/governed/spawn-tree", { method: "POST" }).then((r) =>
+      j<{ run_id: string; nodes: Record<string, string>; denials: number; events: number }>(r)),
+
   seedTreeRun: () =>
     af("/v1/demo/seed-tree-run", { method: "POST" }).then((r) => j<unknown>(r)),
   command: (nodeId: string, version: number, state: Record<string, unknown>) =>

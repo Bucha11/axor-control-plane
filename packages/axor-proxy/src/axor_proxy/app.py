@@ -419,6 +419,28 @@ def create_app(state: ProxyState) -> Starlette:
             "tools": results,
         })
 
+    async def spawn_governed_tree_route(request: Request) -> Response:
+        """Spawn the REAL governed tree (spec v2 Ch.4): three IntentLoop nodes
+        over the axor-core message bus — authentic per-node verdicts, labels
+        carried in envelopes, export denied at the orchestrator. Uploads the
+        multi-node trace + the CONTAINED case. Requires --backend-url."""
+        if state.backend_url is None:
+            return JSONResponse(
+                {"error": "no_backend",
+                 "detail": "governed tree needs the proxy started with --backend-url"},
+                status_code=409,
+            )
+        from axor_proxy.governed import spawn_governed_tree
+
+        try:
+            result = await spawn_governed_tree(state.backend_url, state.ingest_key)
+        except httpx.HTTPError as exc:
+            return JSONResponse(
+                {"error": "backend_upload_failed", "detail": str(exc)},
+                status_code=502,
+            )
+        return JSONResponse(result)
+
     async def spawn_governed(request: Request) -> Response:
         """Spawn a REAL governed node (axor-core IntentLoop): it runs a governed
         session (recorded taint denial), uploads the adapter-fidelity trace, and
@@ -561,6 +583,7 @@ def create_app(state: ProxyState) -> Starlette:
         Route("/axor/preflight", preflight),
         Route("/axor/mcp/discover", mcp_discover, methods=["POST"]),
         Route("/axor/governed/spawn", spawn_governed, methods=["POST"]),
+        Route("/axor/governed/spawn-tree", spawn_governed_tree_route, methods=["POST"]),
         Route("/axor/runs", start_run, methods=["POST"]),
         Route("/axor/runs/{run_id}/simulate", simulate, methods=["POST"]),
         Route("/axor/runs/{run_id}/claim", submit_claim, methods=["POST"]),

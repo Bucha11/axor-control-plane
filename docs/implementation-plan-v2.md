@@ -361,7 +361,7 @@ in `axor-control-plane` and `axor-core`:
 | M2 | done | events unique per (run,node,seq) (migration 0004); `GET /v1/plane/topology` derived from traced events only; signed cascade = one root command; TopologyGraph lens + opaque PeerCard |
 | M3 | done | kernel `causal_subgraph` walk (7 tests); derive-on-open + cache; influence via excision-ablation; ex_tree CONTAINED case; renderer branches on anchor (size-1 path untouched) |
 | M4 | done | `containment_report` (pure-A held/reached, carried rows informational); systemic outcome label pair; TwoTreeContainment hero view |
-| M5 | partially done | kernel ladder `federation.ladder` (L0/L1/L2+attested, bounded discount never-to-clean, forged→L0 evidenced, critical sinks ignore discounts); gateway restore scoped to own keyset in docs; Config Builder peer declarations; opaque peer + denied edge in demo/graph. **Remaining:** wiring `receive_foreign` into the live inbound path, per-peer Sentinel reputation, peer-channel establishment |
+| M5 | done | kernel ladder `federation.ladder` (L0/L1/L2+attested, bounded discount never-to-clean, forged→L0 evidenced, critical sinks ignore discounts); gateway restore scoped to own keyset; Config Builder peer declarations; opaque peer + denied edge in demo/graph; **ladder wired into the live inbound path** (peer-edge delivery re-derives via `receive_foreign`, foreign root kept as opaque forensic ref); **peer-channel establishment** (`establish_channel`: MCP pinned L0/L1, governance attestation verified, failures evidenced); **per-peer Sentinel reputation** (axor-sentinel `PeerReputation`: heat to authenticated identity only, sentinel invariants A-1/A-3) |
 | M6 | done | `vault_creds` (dispense/scope/fail-closed/rotate/revoke-narrowing) + `vault_signing` (sign-not-surrender, per-request auth, audit) + wall (separate tokens, AST import test); Settings two panes |
 | Final | done | axor-core 1016 passed; platform 155 unit + 13 backend-e2e + 49 Playwright passed; ruff clean on the platform |
 
@@ -369,7 +369,31 @@ in `axor-control-plane` and `axor-core`:
 (pins bumped; `uv.lock` still resolves 0.9.1 — regenerate after the release).
 Local dev/CI in this session ran against the branch build via editable install.
 
-Deferred (unchanged from the plan's scope notes): proxy governed node still
-spawns a single node (the multi-node source is the seeded tree run); axor-eval
-twin-fold generalization; axor-probe/axor-sentinel work items; multi-operator
-keyset (parked, v2-17); SSE fan-out 100-node experiment.
+### 7.1 Follow-through pass (2026-07-12, same session)
+
+- **Real multi-node runtime path**: `axor-proxy` `spawn_governed_tree` /
+  `POST /axor/governed/spawn-tree` — three REAL IntentLoop nodes over the
+  axor-core message bus (authentic per-node verdicts, labels in envelopes,
+  export denied at the orchestrator's own loop); trace + CONTAINED case
+  uploaded; `governed-tree.spec.ts` drives spawn → topology graph → causal
+  subgraph end-to-end. No canned verdicts anywhere in this path.
+- **Ladder in the live inbound path** (axor-core): peer-edge delivery
+  re-derives through `receive_foreign`; foreign root kept as opaque forensic
+  ref beside the minted local root in MESSAGE_RECEIVED.
+- **Peer-channel establishment** (axor-core): `establish_channel` — MCP
+  pinned L0/L1 (v2-4), governance attestation verified/evidenced (v2-6).
+- **Per-peer reputation** (axor-sentinel): heat accrues to authenticated
+  identity only; sentinel scoring invariants reused. 185 passed there.
+- **Ch.4 SSE/scale experiment, first data point**: 100-node tree ingest +
+  topology derivation through one backend instance under 5s, pinned in CI
+  (`test_100_node_tree_within_one_instance_budget`). The live-fleet
+  heartbeat-cadence half still needs a real adapter fleet.
+- Final: axor-core 1025 · sentinel 185 · platform 158 unit + 13 backend-e2e
+  + 50 Playwright — all green.
+
+Deferred (out of scope by decision): axor-eval twin-fold as a separate module
+(the two-tree twin is derived in the backend from ONE recorded trace, which is
+what the spec's determinism constraint actually requires); axor-probe items;
+multi-operator keyset (parked, v2-17); **release gate** — axor-core 0.9.2 to
+PyPI, then regenerate `uv.lock` (local dev runs `uv run --no-sync` against the
+branch build).

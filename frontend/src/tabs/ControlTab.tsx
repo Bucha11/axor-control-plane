@@ -24,6 +24,16 @@ function SpawnGoverned({ switchToAdapter }: { switchToAdapter?: boolean }) {
   const qc = useQueryClient();
   const connect = useApp((s) => s.connect);
   const [err, setErr] = useState<string | null>(null);
+  const spawnTree = useMutation({
+    mutationFn: () => api.spawnGovernedTree(),
+    onSuccess: async () => {
+      setErr(null);
+      if (switchToAdapter) connect("adapter");
+      await qc.invalidateQueries({ queryKey: ["nodes"] });
+      await qc.invalidateQueries({ queryKey: ["topology"] });
+    },
+    onError: (e: Error) => setErr(e.message),
+  });
   const spawn = useMutation({
     mutationFn: () => api.spawnGoverned(),
     onSuccess: async () => {
@@ -42,6 +52,15 @@ function SpawnGoverned({ switchToAdapter }: { switchToAdapter?: boolean }) {
           style={btn({ color: C.bg, background: C.green, border: `1px solid ${C.green}`, fontSize: 12, fontWeight: 700, padding: "8px 14px" })}
         >
           {spawn.isPending ? "spawning…" : "Spawn a governed demo node"}
+        </button>
+      </Tooltip>
+      <Tooltip content="Runs a REAL 3-node governed tree (axor-core IntentLoops over the message bus): the scraper's web taint is carried up two delegation hops and the orchestrator's export is denied — containment, live.">
+        <button
+          onClick={() => spawnTree.mutate()}
+          disabled={spawnTree.isPending}
+          style={{ ...btn({ color: C.text, borderColor: C.steel, fontSize: 12, padding: "8px 14px" }), marginTop: 8 }}
+        >
+          {spawnTree.isPending ? "spawning tree…" : "Spawn a governed demo TREE"}
         </button>
       </Tooltip>
       {err && (

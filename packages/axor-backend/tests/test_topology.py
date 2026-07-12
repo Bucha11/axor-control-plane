@@ -170,3 +170,34 @@ async def test_per_line_node_id_wins_over_batch(open_client: httpx.AsyncClient) 
     topo = (await open_client.get("/v1/plane/topology")).json()
     edges = {(e["from"], e["to"], e["kind"]) for e in topo["edges"]}
     assert ("n-a", "n-b", "delegation") in edges
+
+
+async def test_100_node_tree_within_one_instance_budget(
+    open_client: httpx.AsyncClient,
+) -> None:
+    """The Ch.4 open experiment, first data point: a 100-node tree's telemetry
+    ingests through one backend instance and the topology derives promptly.
+    (The full SSE-cadence experiment needs a live adapter fleet; this pins the
+    ingest+derive half so a regression is caught in CI.)"""
+    import time
+
+    lines = []
+    for i in range(1, 100):
+        parent = f"big-{(i - 1) // 3}"  # branching factor 3
+        lines.append({
+            "schema_version": "1.0", "seq": i, "node_id": parent,
+            "kind": "node_spawned", "ts": f"t{i}", "causal_root": None,
+            "gate": None, "verdict": None,
+            "payload": {"child_id": f"big-{i}", "parent_id": parent,
+                        "depth": 1, "edge_kind": "delegation"},
+        })
+    t0 = time.monotonic()
+    r = await open_client.post("/v1/plane/big-0/telemetry",
+                               json={"run_id": "r_big", "events": lines})
+    assert r.status_code in (200, 202)
+    topo = (await open_client.get("/v1/plane/topology")).json()
+    elapsed = time.monotonic() - t0
+    big = [n for n in topo["nodes"] if n["node_id"].startswith("big-")]
+    assert len(big) == 100
+    assert len([e for e in topo["edges"] if e["from"].startswith("big-")]) == 99
+    assert elapsed < 5.0, f"100-node ingest+derive took {elapsed:.1f}s"
