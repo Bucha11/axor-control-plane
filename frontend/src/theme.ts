@@ -3,7 +3,7 @@ export const C = {
   bg: "#12161A", panel: "#191F26", panel2: "#141920", line: "#262E37",
   text: "#D2DAE1", mut: "#78848F", dim: "#4C5760",
   red: "#E5484D", amber: "#F2A33C", yellow: "#D9BC3A", green: "#46A758",
-  steel: "#7FA8CC",
+  steel: "#7FA8CC", violet: "#9B8CCC",
 } as const;
 
 export const MONO = "ui-monospace, SFMono-Regular, Menlo, monospace";

@@ -91,6 +91,29 @@ export interface NodeInfo {
   facts: Record<string, unknown>[];
 }
 
+// Topology (spec v2 Ch.4 §6): derived from traced spawn/message events only.
+export interface TopologyNode {
+  node_id: string;
+  kind: "self" | "peer";
+  desired?: { version: number; state: Record<string, unknown> } | null;
+  reported?: NodeInfo["reported"];
+}
+
+export interface TopologyEdge {
+  from: string;
+  to: string;
+  kind: "delegation" | "lateral" | "peer";
+  messages: number;
+  denied: number;
+  last_gate: string | null;
+  spawned?: boolean;
+}
+
+export interface TopologyPayload {
+  nodes: TopologyNode[];
+  edges: TopologyEdge[];
+}
+
 export interface RegressionRow {
   run_id: string;
   side: string;
@@ -178,6 +201,11 @@ export const api = {
       body: JSON.stringify({ config }),
     }).then((r) => j<ScrubberPayload>(r)),
   nodes: () => af("/v1/plane/nodes").then((r) => j<NodeInfo[]>(r)),
+
+  topology: () => af("/v1/plane/topology").then((r) => j<TopologyPayload>(r)),
+
+  seedTreeRun: () =>
+    af("/v1/demo/seed-tree-run", { method: "POST" }).then((r) => j<unknown>(r)),
   command: (nodeId: string, version: number, state: Record<string, unknown>) =>
     af(`/v1/plane/${nodeId}/command`, {
       method: "POST",

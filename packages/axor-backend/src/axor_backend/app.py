@@ -302,6 +302,23 @@ def create_app(
             await store.pin(run_id, pin_side, "adapter-demo")
         return {"seeded": ["ex_block", "ex_pass"], "config": demo.EX_CONFIG}
 
+    @app.post("/v1/demo/seed-tree-run")
+    async def seed_tree_run(request: Request) -> dict:
+        """Ingest the canned multi-agent tree run (spec v2): 4 nodes, carried
+        taint up two delegation hops, one lateral edge, export denied at the
+        orchestrator — the topology graph, the causal subgraph and the
+        two-tree containment story all read from this one trace. Idempotent."""
+        from axor_backend import demo
+
+        store: Store = request.app.state.store
+        graph = request.app.state.graph
+        await store.upsert_run("ex_tree", demo.TREE_ORCH, "multi-agent-demo", _now())
+        await store.ingest_events(
+            "ex_tree", demo.TREE_ORCH, demo.TREE_EVENTS, "seed-ex_tree"
+        )
+        await register_trace_derivations(graph, "ex_tree", demo.TREE_EVENTS)
+        return {"seeded": ["ex_tree"], "config": demo.TREE_CONFIG}
+
     @app.get("/v1/runs")
     async def list_runs(request: Request) -> list[dict]:
         return await request.app.state.store.list_runs()

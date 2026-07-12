@@ -30,7 +30,7 @@ async def test_fresh_db_reaches_head_with_all_tables(db_url: str) -> None:
             "alembic_version"} <= tables
     async with engine.connect() as conn:
         rev = (await conn.execute(text("SELECT version_num FROM alembic_version"))).scalar()
-    assert rev == "0003"
+    assert rev == "0004"
     await engine.dispose()
 
 
