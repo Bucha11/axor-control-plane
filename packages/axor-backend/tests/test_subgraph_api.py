@@ -86,3 +86,24 @@ async def test_tree_evidence_carries_anchor_for_derive_on_open(
     for k in ("scenario", "verdict_source", "confidence",
               "observed_reality", "agent_claim", "fault_attribution"):
         assert k in case
+
+
+async def test_containment_report_for_the_tree_case(
+    client: httpx.AsyncClient,
+) -> None:
+    out = (await client.get(
+        "/v1/runs/ex_tree/containment",
+        params={"anchor_node": "tree-orch", "anchor_seq": 4},
+    )).json()
+    # event-grounded, headline-safe: one gated consequence, one denial
+    assert out["held"] == 1 and out["reached"] == 1
+    assert out["containment"] == "1/1"
+    # intra hops render as informational carried rows, never in the ratio
+    carried = [r for r in out["rows"] if r["status"] == "carried"]
+    assert len(carried) == 2
+    held_rows = [r for r in out["rows"] if r["status"] == "held"]
+    assert held_rows and held_rows[0]["edge"] == "tree-orch → slack_post"
+    # systemic outcome is a LABEL pair: governance converts fabricated_failure
+    # into honest_failure — it does not manufacture success (Ch.2 §2)
+    assert out["governed_outcome"] == "honest_failure"
+    assert out["ungoverned_outcome"] == "fabricated_failure"

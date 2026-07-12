@@ -39,6 +39,7 @@ from axor_backend.notifications import Notifier
 from axor_core.kernel.subgraph import causal_subgraph
 
 from axor_backend.replay_api import (
+    containment_report,
     influence_ranking,
     kernel_config_from_json,
     parse_trace,
@@ -389,6 +390,20 @@ def create_app(
             except ValueError as exc:
                 raise HTTPException(404, str(exc)) from exc
         return _subgraph_cache[key]
+
+    @app.get("/v1/runs/{run_id}/containment")
+    async def run_containment(
+        run_id: str, anchor_node: str, anchor_seq: int, request: Request
+    ) -> dict:
+        """Containment metric + systemic outcome for a case (spec v2 Ch.2):
+        event-grounded (headline-safe) ratio, outcome as a label — never a
+        governance-attributed score."""
+        events = await _events_for(request.app.state.store, run_id)
+        try:
+            sub = causal_subgraph(events, anchor_node, anchor_seq)
+        except ValueError as exc:
+            raise HTTPException(404, str(exc)) from exc
+        return containment_report(events, sub)
 
     @app.post("/v1/runs/{run_id}/influence")
     async def run_influence(run_id: str, body: dict, request: Request) -> dict:

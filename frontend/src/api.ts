@@ -53,6 +53,15 @@ export interface SubgraphPayload {
   federation_scope: "intra" | "inter";
 }
 
+export interface ContainmentReport {
+  rows: { edge: string; note: string; status: "carried" | "held" | "escaped"; gate?: string | null }[];
+  held: number;
+  reached: number;
+  containment: string | null;
+  governed_outcome: string;
+  ungoverned_outcome: string;
+}
+
 export interface InfluenceEntry {
   ref: string;
   influence: number;
@@ -247,6 +256,10 @@ export const api = {
   subgraph: (runId: string, anchor: CaseAnchor) =>
     af(`/v1/runs/${runId}/subgraph?anchor_node=${encodeURIComponent(anchor.node_id)}&anchor_seq=${anchor.seq}`)
       .then((r) => j<SubgraphPayload>(r)),
+
+  containment: (runId: string, anchor: CaseAnchor) =>
+    af(`/v1/runs/${runId}/containment?anchor_node=${encodeURIComponent(anchor.node_id)}&anchor_seq=${anchor.seq}`)
+      .then((r) => j<ContainmentReport>(r)),
 
   influence: (runId: string, anchor: CaseAnchor, config: Record<string, unknown>) =>
     af(`/v1/runs/${runId}/influence`, {
