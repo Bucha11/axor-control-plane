@@ -21,9 +21,10 @@ from typing import Any
 
 
 def _ev(seq: int, node: str, kind: str, verdict: str | None, **payload: Any) -> dict:  # noqa: ANN401
+    gate = payload.pop("gate", None)
     return {
         "schema_version": "1.0", "seq": seq, "node_id": node, "kind": kind,
-        "ts": "2026-07-06T00:00:00Z", "causal_root": None, "gate": None,
+        "ts": "2026-07-06T00:00:00Z", "causal_root": None, "gate": gate,
         "verdict": verdict, "payload": payload,
     }
 
@@ -143,6 +144,12 @@ TREE_EVENTS: list[dict] = [
     _ev(4, TREE_ORCH, "tool_call", "deny", tool="slack_post",
         args={"text": "…"}, arg_refs={"text": "v_sum"},
         normalized={"destination_kind": "external_domain"}),
+    # an UNDECLARED foreign peer: the send gate fails closed (L0, Ch.1 §2) —
+    # the peer renders as an opaque diamond, the denial flashes on the edge
+    _ev(1, TREE_WRITER, "message_sent", "deny", to="partner-agent",
+        edge_kind="peer", msg_id="m_peer", value_ref="v_style",
+        carried={"root": _CLEAN}, gate="message_gate",
+        reason="peer edge to an undeclared peer (undeclared = L0, denied)"),
 ]
 
 # One case per discrepancy, anchored at the consequence (v2-10): the export

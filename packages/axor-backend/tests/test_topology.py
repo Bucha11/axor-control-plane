@@ -71,8 +71,13 @@ async def test_topology_derives_from_tree_run(open_client: httpx.AsyncClient) ->
     assert ("tree-research", "tree-scraper", "delegation") in edges
     # the lateral edge from message events
     assert ("tree-research", "tree-writer", "lateral") in edges
-    # every locally traced node is ours (no phantom peers)
-    assert all(n["kind"] == "self" for n in topo["nodes"])
+    # the undeclared peer target renders as an opaque peer node
+    peer = next(n for n in topo["nodes"] if n["node_id"] == "partner-agent")
+    assert peer["kind"] == "peer"
+    peer_edge = next(e for e in topo["edges"] if e["kind"] == "peer")
+    assert peer_edge["denied"] == 1 and peer_edge["last_gate"] == "message_gate"
+    assert all(n["kind"] == "self" for n in topo["nodes"]
+               if n["node_id"] != "partner-agent")
 
 
 async def test_topology_counts_messages_per_edge(open_client: httpx.AsyncClient) -> None:
