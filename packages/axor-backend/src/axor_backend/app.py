@@ -15,6 +15,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from axor_core.kernel.replay import replay
+from axor_core.kernel.subgraph import causal_subgraph
 from fastapi import FastAPI, Header, HTTPException, Request, Response
 from fastapi.responses import HTMLResponse, JSONResponse
 from sse_starlette.sse import EventSourceResponse
@@ -36,8 +37,6 @@ from axor_backend.graph import (
 )
 from axor_backend.monitor import running_stale_monitor
 from axor_backend.notifications import Notifier
-from axor_core.kernel.subgraph import causal_subgraph
-
 from axor_backend.replay_api import (
     containment_report,
     influence_ranking,

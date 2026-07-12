@@ -346,3 +346,30 @@ construction; HSM-vs-KMS → M6 pluggable backend).
 - Parsing foreign configs into local trust decisions (v2-6: fact-of-governance only).
 - Foreign-agent integrity scoring of any kind (v2-9).
 - Live re-execution fork, hosted multi-tenant scaling work beyond the SSE experiment.
+
+---
+
+## 7. Execution log (2026-07-12)
+
+Executed in one pass, branches `claude/control-plane-implementation-64ld8u`
+in `axor-control-plane` and `axor-core`:
+
+| Phase | Status | Proof |
+|---|---|---|
+| M0 | done | `test-vectors/jcs-signing.json` (7 triples, verified through OperatorKeyring); size-1 golden fixtures + `test_size1_gate.py` (byte-diff, never regenerated to pass); `golden-receipt.spec.ts` render gate; protocol §6a peer hooks |
+| M1 | done (axor-core 0.9.2) | NODE_SPAWNED/MESSAGE_SENT/MESSAGE_RECEIVED kinds; pure send gate + carried-root fold in `kernel.messaging`; `replay_tree()` per-node fold; `node.messaging` envelope/bus (signed, tamper-rejected); spawn `inherit_degradation` (narrow-or-preserve, opt-in `per_node_degradation`); crash → CHILD_STALE → FACT node_stale; bridge mappings. 1016 passed |
+| M2 | done | events unique per (run,node,seq) (migration 0004); `GET /v1/plane/topology` derived from traced events only; signed cascade = one root command; TopologyGraph lens + opaque PeerCard |
+| M3 | done | kernel `causal_subgraph` walk (7 tests); derive-on-open + cache; influence via excision-ablation; ex_tree CONTAINED case; renderer branches on anchor (size-1 path untouched) |
+| M4 | done | `containment_report` (pure-A held/reached, carried rows informational); systemic outcome label pair; TwoTreeContainment hero view |
+| M5 | partially done | kernel ladder `federation.ladder` (L0/L1/L2+attested, bounded discount never-to-clean, forged→L0 evidenced, critical sinks ignore discounts); gateway restore scoped to own keyset in docs; Config Builder peer declarations; opaque peer + denied edge in demo/graph. **Remaining:** wiring `receive_foreign` into the live inbound path, per-peer Sentinel reputation, peer-channel establishment |
+| M6 | done | `vault_creds` (dispense/scope/fail-closed/rotate/revoke-narrowing) + `vault_signing` (sign-not-surrender, per-request auth, audit) + wall (separate tokens, AST import test); Settings two panes |
+| Final | done | axor-core 1016 passed; platform 155 unit + 13 backend-e2e + 49 Playwright passed; ruff clean on the platform |
+
+**Release gate:** the platform branch now requires **axor-core 0.9.2 on PyPI**
+(pins bumped; `uv.lock` still resolves 0.9.1 — regenerate after the release).
+Local dev/CI in this session ran against the branch build via editable install.
+
+Deferred (unchanged from the plan's scope notes): proxy governed node still
+spawns a single node (the multi-node source is the seeded tree run); axor-eval
+twin-fold generalization; axor-probe/axor-sentinel work items; multi-operator
+keyset (parked, v2-17); SSE fan-out 100-node experiment.

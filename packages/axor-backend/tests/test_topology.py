@@ -23,7 +23,7 @@ def signing_key() -> SigningKey:
     return SigningKey(b"\x02" * 32)
 
 
-def _app(tmp_path: pathlib.Path, keys: dict, allow_unsigned: bool):
+def _app(tmp_path: pathlib.Path, keys: dict, allow_unsigned: bool) -> object:
     return create_app(
         database_url=f"sqlite+aiosqlite:///{tmp_path}/axor.db",
         operator_keys=keys,
@@ -31,7 +31,7 @@ def _app(tmp_path: pathlib.Path, keys: dict, allow_unsigned: bool):
     )
 
 
-async def _client(app) -> httpx.AsyncClient:
+async def _client(app: object) -> httpx.AsyncClient:
     return httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app), base_url="http://backend.test"
     )
