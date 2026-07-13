@@ -7,11 +7,13 @@ import { useState } from "react";
 import { useMutation } from "@tanstack/react-query";
 import { Check, ExternalLink, Play, Share2 } from "lucide-react";
 import { api, EvidenceCaseDto } from "../api";
+import CausalSubgraph from "./CausalSubgraph";
 import { navigate } from "../router";
 import { C, MONO } from "../theme";
 import Tooltip from "./Tooltip";
 
 const HEADLINE: Record<string, string> = {
+  fabrication_contained: "contained a fabrication at the boundary",
   fabricated_tool_result: "fabricated a tool result",
   corrupted_retrieval_used: "surfaced poisoned retrieval",
   direct_policy_violation: "executed an injected instruction",
@@ -102,6 +104,9 @@ export default function EvidenceCase({
           </Tooltip>
         </div>
       </div>
+      {/* Multi-agent case (spec v2 Ch.3): the causal subgraph derives on open.
+          Renders nothing for size-1 — the receipt above IS the v0.13 case. */}
+      {c.anchor && <CausalSubgraph runId={runId} anchor={c.anchor} />}
       {shareUrl && (
         <div className="px-4 py-2" style={{ borderTop: `1px solid ${C.line}` }}>
           <span style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim }}>

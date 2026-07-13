@@ -1,0 +1,130 @@
+{
+  "_comment": "spec-v2 Ch.6 deliverable: payload -> JCS canonical bytes -> ed25519 signature triples. TEST KEY ONLY (seed is public by design). Both the adapter and the plane service must reproduce these in CI. Regenerate with scripts/gen_jcs_signing_vectors.py",
+  "algorithm": "ed25519",
+  "seed_sha256_of": "axor-control-plane jcs-signing test vectors v1",
+  "seed_hex": "769367dc0cd3367e4ad998749b0b2f58ae84598d1fc314d5e04dd9e282e5ed2b",
+  "public_key_hex": "54e8f160d98c266a307ad6d6ca2c66c9d69bda5d9d45e03520c684e27df1f861",
+  "envelope": "jcs({body, node_id, timestamp, version})",
+  "vectors": [
+    {
+      "name": "pause",
+      "payload": {
+        "node_id": "node-a",
+        "version": 7,
+        "body": {
+          "paused": true
+        },
+        "timestamp": "2026-07-12T00:00:00Z"
+      },
+      "canonical": "{\"body\":{\"paused\":true},\"node_id\":\"node-a\",\"timestamp\":\"2026-07-12T00:00:00Z\",\"version\":7}",
+      "signature_hex": "ed0718268d3e81349baa404d2be5da6390bd5c5f2d3d1d32080390a71b6b714b10a55f52eadb1debef110efb7afd4b7ea7d38a567a1b0841ea94b6dbee1ea605"
+    },
+    {
+      "name": "stop_absorbing",
+      "payload": {
+        "node_id": "node-a",
+        "version": 8,
+        "body": {
+          "stopped": true
+        },
+        "timestamp": "2026-07-12T00:00:01Z"
+      },
+      "canonical": "{\"body\":{\"stopped\":true},\"node_id\":\"node-a\",\"timestamp\":\"2026-07-12T00:00:01Z\",\"version\":8}",
+      "signature_hex": "7058a704f262e375232a0c39d8463dce7409343790e8419d59adccdd78617ec71d3c9ccf759c7d7be8f6ddc5f69372f68ef6669dbd6e1f44d02ff3c50c88830c"
+    },
+    {
+      "name": "budget_cap",
+      "payload": {
+        "node_id": "node-b",
+        "version": 3,
+        "body": {
+          "budget_cap": {
+            "calls": 200,
+            "cost": 14
+          }
+        },
+        "timestamp": "2026-07-12T00:00:02Z"
+      },
+      "canonical": "{\"body\":{\"budget_cap\":{\"calls\":200,\"cost\":14}},\"node_id\":\"node-b\",\"timestamp\":\"2026-07-12T00:00:02Z\",\"version\":3}",
+      "signature_hex": "ebaafe1f0b20919037ed09a2e116f881824fda376723cd72e936960e077bc50f531a2efd35890106823e634c37e03f19d72705a529a6a040587939ca6efb8008"
+    },
+    {
+      "name": "pending_injection",
+      "payload": {
+        "node_id": "node-c",
+        "version": 12,
+        "body": {
+          "pending_injection": {
+            "id": "inj_9f2c",
+            "text": "operator-authored",
+            "reason": "probing recovery",
+            "operator": "op_test"
+          }
+        },
+        "timestamp": "2026-07-12T00:00:03Z"
+      },
+      "canonical": "{\"body\":{\"pending_injection\":{\"id\":\"inj_9f2c\",\"operator\":\"op_test\",\"reason\":\"probing recovery\",\"text\":\"operator-authored\"}},\"node_id\":\"node-c\",\"timestamp\":\"2026-07-12T00:00:03Z\",\"version\":12}",
+      "signature_hex": "d35f056655cfb0b4b0b4fc6d99b64a463bdd8ed37b4ad86a9566dae57ee2fe068dc6c03c01a63dbb944e49874af3961f7f116decf53689677f174d35f8d77b09"
+    },
+    {
+      "name": "pending_excision",
+      "payload": {
+        "node_id": "node-c",
+        "version": 13,
+        "body": {
+          "pending_excision": {
+            "id": "exc_4b09",
+            "segment_refs": [
+              "cr_8a12",
+              "cr_77e0"
+            ],
+            "reason": "refusal drift, re-anchoring",
+            "operator": "op_test"
+          }
+        },
+        "timestamp": "2026-07-12T00:00:04Z"
+      },
+      "canonical": "{\"body\":{\"pending_excision\":{\"id\":\"exc_4b09\",\"operator\":\"op_test\",\"reason\":\"refusal drift, re-anchoring\",\"segment_refs\":[\"cr_8a12\",\"cr_77e0\"]}},\"node_id\":\"node-c\",\"timestamp\":\"2026-07-12T00:00:04Z\",\"version\":13}",
+      "signature_hex": "692c4796d5cd32372ae1b693dc77edcf21c8acf0e8c51d0ed074a0db8790ffc40001cef9845dea1b0c212205fd3f6d103c6b8faef06384b55238e48ed5ba1203"
+    },
+    {
+      "name": "attestation_fact",
+      "payload": {
+        "node_id": "node-d",
+        "version": 0,
+        "body": {
+          "fact_id": "f_301",
+          "kind": "operator_attestation",
+          "causal_root": "cr_11aa",
+          "reason": "reviewed, benign",
+          "operator": "op_test"
+        },
+        "timestamp": "2026-07-12T00:00:05Z"
+      },
+      "canonical": "{\"body\":{\"causal_root\":\"cr_11aa\",\"fact_id\":\"f_301\",\"kind\":\"operator_attestation\",\"operator\":\"op_test\",\"reason\":\"reviewed, benign\"},\"node_id\":\"node-d\",\"timestamp\":\"2026-07-12T00:00:05Z\",\"version\":0}",
+      "signature_hex": "349778e1275a1db650e5972ccc51036db8d08ce1c8b01e95d423572f47897582a58f1d15ac94d66574afb59bf959ec62b4906e7177225e25de0b2ced66aca009"
+    },
+    {
+      "name": "unicode_and_order",
+      "payload": {
+        "node_id": "node-é",
+        "version": 1,
+        "body": {
+          "z": [
+            3,
+            2,
+            1
+          ],
+          "a": {
+            "β": "χ",
+            "A": "Z"
+          },
+          "n": null
+        },
+        "timestamp": "2026-07-12T00:00:06Z"
+      },
+      "canonical": "{\"body\":{\"a\":{\"A\":\"Z\",\"β\":\"χ\"},\"n\":null,\"z\":[3,2,1]},\"node_id\":\"node-é\",\"timestamp\":\"2026-07-12T00:00:06Z\",\"version\":1}",
+      "signature_hex": "c1ae856138dd6e9db380b5a6e842a150cd98b2c47ba63f26a5f6353148bc9704929b0486343c2ebdd494a218354126e94b43524f2176c303d43e13f7a5aa4b0c"
+    }
+  ]
+}

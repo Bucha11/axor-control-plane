@@ -15,6 +15,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from axor_core.kernel.replay import replay
+from axor_core.kernel.subgraph import causal_subgraph
 from fastapi import FastAPI, Header, HTTPException, Request, Response
 from fastapi.responses import HTMLResponse, JSONResponse
 from sse_starlette.sse import EventSourceResponse
@@ -37,6 +38,8 @@ from axor_backend.graph import (
 from axor_backend.monitor import running_stale_monitor
 from axor_backend.notifications import Notifier
 from axor_backend.replay_api import (
+    containment_report,
+    influence_ranking,
     kernel_config_from_json,
     parse_trace,
     regression_row,
@@ -61,6 +64,8 @@ def create_app(
     allow_unsigned: bool | None = None,
     api_token: str | None = None,
     retention_days: float | None = None,
+    vault_creds_token: str | None = None,
+    vault_signing_token: str | None = None,
 ) -> FastAPI:
     @contextlib.asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -184,6 +189,15 @@ def create_app(
     app.state.license = None  # set by _load_license / a verified paste
     app.state.shares = ShareRegistry()
     app.state.api_token = api_token
+    # THE WALL (spec v2 Ch.5 §3): the two vault subsystems are reached with
+    # SEPARATE credentials — the ability to dispense tool creds must not grant
+    # the ability to request signatures, and vice versa. No shared admin role.
+    app.state.vault_creds_token = (
+        vault_creds_token or os.environ.get("AXOR_VAULT_CREDS_TOKEN") or None
+    )
+    app.state.vault_signing_token = (
+        vault_signing_token or os.environ.get("AXOR_VAULT_SIGNING_TOKEN") or None
+    )
     # Taint/provenance graph (spec decision 6). In-memory by default — the same
     # dev posture as SQLite; a hosted deployment swaps in KuzuGraphStore (per-tenant
     # DB) behind the GraphStore Protocol. Ingested traces fold their arg_refs →
@@ -302,6 +316,24 @@ def create_app(
             await store.pin(run_id, pin_side, "adapter-demo")
         return {"seeded": ["ex_block", "ex_pass"], "config": demo.EX_CONFIG}
 
+    @app.post("/v1/demo/seed-tree-run")
+    async def seed_tree_run(request: Request) -> dict:
+        """Ingest the canned multi-agent tree run (spec v2): 4 nodes, carried
+        taint up two delegation hops, one lateral edge, export denied at the
+        orchestrator — the topology graph, the causal subgraph and the
+        two-tree containment story all read from this one trace. Idempotent."""
+        from axor_backend import demo
+
+        store: Store = request.app.state.store
+        graph = request.app.state.graph
+        await store.upsert_run("ex_tree", demo.TREE_ORCH, "multi-agent-demo", _now())
+        await store.ingest_events(
+            "ex_tree", demo.TREE_ORCH, demo.TREE_EVENTS, "seed-ex_tree"
+        )
+        await register_trace_derivations(graph, "ex_tree", demo.TREE_EVENTS)
+        await store.set_evidence("ex_tree", demo.TREE_EVIDENCE)
+        return {"seeded": ["ex_tree"], "config": demo.TREE_CONFIG}
+
     @app.get("/v1/runs")
     async def list_runs(request: Request) -> list[dict]:
         return await request.app.state.store.list_runs()
@@ -347,6 +379,196 @@ def create_app(
         return EventSourceResponse(stream())
 
     # ── replay & regression (spec section 13) ─────────────────────────────────
+
+    # Derive-on-open cache (decision v2-12): keyed by (run_id, anchor), never
+    # invalidated — traces are append-only.
+    _subgraph_cache: dict[tuple, dict] = {}
+
+    @app.get("/v1/runs/{run_id}/subgraph")
+    async def run_subgraph(
+        run_id: str, anchor_node: str, anchor_seq: int, request: Request
+    ) -> dict:
+        """The causal subgraph for a case (spec v2 Ch.3): computed on open by
+        the pure kernel walk, cached, never stored redundantly."""
+        key = (run_id, anchor_node, anchor_seq)
+        if key not in _subgraph_cache:
+            events = await _events_for(request.app.state.store, run_id)
+            try:
+                _subgraph_cache[key] = causal_subgraph(
+                    events, anchor_node, anchor_seq
+                )
+            except ValueError as exc:
+                raise HTTPException(404, str(exc)) from exc
+        return _subgraph_cache[key]
+
+    @app.get("/v1/runs/{run_id}/containment")
+    async def run_containment(
+        run_id: str, anchor_node: str, anchor_seq: int, request: Request
+    ) -> dict:
+        """Containment metric + systemic outcome for a case (spec v2 Ch.2):
+        event-grounded (headline-safe) ratio, outcome as a label — never a
+        governance-attributed score."""
+        events = await _events_for(request.app.state.store, run_id)
+        try:
+            sub = causal_subgraph(events, anchor_node, anchor_seq)
+        except ValueError as exc:
+            raise HTTPException(404, str(exc)) from exc
+        return containment_report(events, sub)
+
+    @app.post("/v1/runs/{run_id}/influence")
+    async def run_influence(run_id: str, body: dict, request: Request) -> dict:
+        """Influence ranking by subgraph ablation (spec v2 Ch.3 §7): which
+        upstream value most drove the anchor's claim. Deterministic; bounded
+        by causal-chain length."""
+        anchor_node = body.get("anchor_node", "")
+        anchor_seq = int(body.get("anchor_seq", -1))
+        events = await _events_for(request.app.state.store, run_id)
+        try:
+            sub = causal_subgraph(events, anchor_node, anchor_seq)
+        except ValueError as exc:
+            raise HTTPException(404, str(exc)) from exc
+        case_nodes = {n["node_id"] for n in sub["nodes"]}
+        refs = sorted({
+            str(e.payload.get("value_ref"))
+            for e in events
+            if e.node_id in case_nodes and e.payload.get("value_ref")
+        })
+        cfg_json = body.get("config") or {}
+        if not cfg_json:
+            # Default ablation config: the anchor's own denied sink declared as
+            # egress — the minimal config under which the recorded containment
+            # reproduces, so ablation measures exactly "did this value drive
+            # the denial".
+            anchor_ev = next(
+                e for e in events
+                if e.node_id == anchor_node and e.seq == anchor_seq
+            )
+            tool = str(anchor_ev.payload.get("tool", ""))
+            cfg_json = {"egress_sinks": [tool] if tool else []}
+        config = kernel_config_from_json(cfg_json)
+        return {
+            "anchor": sub["anchor"],
+            "ranking": influence_ranking(
+                events, config, anchor_node, anchor_seq, refs
+            ),
+        }
+
+    # ── Federation vault (spec v2 Ch.5): two subsystems, one wall ────────────
+
+    def _vault_gate(request: Request, which: str) -> None:
+        """Per-subsystem bearer check. A configured token is required exactly
+        for its own subsystem; in the open dev posture (no token configured)
+        the subsystem follows the app's global posture."""
+        expected = getattr(request.app.state, f"vault_{which}_token")
+        if expected is None:
+            return  # open posture — loud in logs at startup, like api_token
+        got = request.headers.get(f"x-vault-{which}-token", "")
+        if got != expected:
+            raise HTTPException(403, f"vault {which}: missing or wrong token")
+
+    @app.post("/v1/vault/creds/enroll")
+    async def vault_enroll(body: dict, request: Request) -> dict:
+        _vault_gate(request, "creds")
+        from axor_backend.vault_creds import ToolCredentialVault
+
+        vault = ToolCredentialVault(request.app.state.store)
+        return await vault.enroll(
+            str(body.get("tool", "")), str(body.get("endpoint", "")),
+            str(body.get("secret", "")), list(body.get("scope_nodes", [])),
+        )
+
+    @app.post("/v1/vault/creds/dispense")
+    async def vault_dispense(body: dict, request: Request) -> dict:
+        _vault_gate(request, "creds")
+        from axor_backend.vault_creds import DispenseDenied, ToolCredentialVault
+
+        vault = ToolCredentialVault(request.app.state.store)
+        try:
+            return await vault.dispense(
+                str(body.get("node_id", "")), str(body.get("tool", "")),
+                str(body.get("endpoint", "")),
+            )
+        except DispenseDenied as exc:
+            raise HTTPException(403, exc.reason) from exc
+
+    @app.post("/v1/vault/creds/rotate")
+    async def vault_rotate(body: dict, request: Request) -> dict:
+        _vault_gate(request, "creds")
+        from axor_backend.vault_creds import DispenseDenied, ToolCredentialVault
+
+        vault = ToolCredentialVault(request.app.state.store)
+        try:
+            return await vault.rotate(
+                str(body.get("tool", "")), str(body.get("endpoint", "")),
+                str(body.get("secret", "")),
+            )
+        except DispenseDenied as exc:
+            raise HTTPException(404, exc.reason) from exc
+
+    @app.post("/v1/vault/creds/revoke")
+    async def vault_revoke(body: dict, request: Request) -> dict:
+        """Narrowing only: revoke is available over the plane in an incident;
+        granting is enrollment config, never a command."""
+        _vault_gate(request, "creds")
+        from axor_backend.vault_creds import DispenseDenied, ToolCredentialVault
+
+        vault = ToolCredentialVault(request.app.state.store)
+        try:
+            return await vault.revoke(
+                str(body.get("tool", "")), str(body.get("endpoint", "")),
+            )
+        except DispenseDenied as exc:
+            raise HTTPException(404, exc.reason) from exc
+
+    @app.get("/v1/vault/creds/health")
+    async def vault_health(request: Request) -> dict:
+        _vault_gate(request, "creds")
+        from axor_backend.vault_creds import ToolCredentialVault
+
+        return await ToolCredentialVault(request.app.state.store).health()
+
+    @app.post("/v1/vault/signing/keys")
+    async def vault_create_key(body: dict, request: Request) -> dict:
+        _vault_gate(request, "signing")
+        from axor_backend.vault_signing import SigningCustody, SignRefused
+
+        custody = SigningCustody(request.app.state.store)
+        try:
+            return await custody.create_key(
+                str(body.get("key_id", "")), list(body.get("operators", [])),
+            )
+        except SignRefused as exc:
+            raise HTTPException(409, exc.reason) from exc
+
+    @app.get("/v1/vault/signing/keys")
+    async def vault_list_keys(request: Request) -> list[dict]:
+        _vault_gate(request, "signing")
+        from axor_backend.vault_signing import SigningCustody
+
+        return await SigningCustody(request.app.state.store).keys_public()
+
+    @app.post("/v1/vault/signing/sign")
+    async def vault_sign(body: dict, request: Request) -> dict:
+        _vault_gate(request, "signing")
+        import base64
+
+        from axor_backend.vault_signing import SigningCustody, SignRefused
+
+        custody = SigningCustody(request.app.state.store)
+        try:
+            return await custody.sign(
+                str(body.get("operator", "")), str(body.get("key_id", "")),
+                base64.b64decode(str(body.get("payload_b64", ""))),
+            )
+        except SignRefused as exc:
+            raise HTTPException(403, exc.reason) from exc
+
+    @app.get("/v1/vault/signing/audit")
+    async def vault_audit(request: Request) -> list[dict]:
+        _vault_gate(request, "signing")
+        from axor_backend.vault_signing import SigningCustody
+
+        return await SigningCustody(request.app.state.store).audit()
 
     @app.get("/v1/replay/{run_id}")
     async def replay_scrubber(run_id: str, request: Request) -> dict:

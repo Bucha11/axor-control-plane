@@ -55,7 +55,9 @@ events = Table(
     Column("seq", Integer, nullable=False),
     Column("kind", String(40), nullable=False),
     Column("line", _JSON, nullable=False),  # full kernel-schema JSON line
-    UniqueConstraint("run_id", "seq", name="uq_events_run_seq"),
+    # Per-node sequences (spec v2 Ch.4 §5): seq is monotonic PER NODE, so a
+    # multi-node run legitimately repeats seq across nodes.
+    UniqueConstraint("run_id", "node_id", "seq", name="uq_events_run_node_seq"),
 )
 
 ingest_keys = Table(
@@ -240,17 +242,20 @@ class Store:
                     return 0
                 await conn.execute(insert(ingest_keys).values(key=idempotency_key))
             seen = {
-                row.seq for row in (await conn.execute(
-                    select(events.c.seq).where(events.c.run_id == run_id)
+                (row.node_id, row.seq) for row in (await conn.execute(
+                    select(events.c.node_id, events.c.seq)
+                    .where(events.c.run_id == run_id)
                 )).all()
             }
             stored = 0
             for line in lines:
-                if line["seq"] in seen:
+                if (line.get("node_id", node_id), line["seq"]) in seen:
                     continue
                 await conn.execute(insert(events).values(
                     run_id=run_id,
-                    node_id=node_id,
+                    # Multi-node runs carry per-line node identity (spec v2
+                    # Ch.4); fall back to the batch's node for legacy lines.
+                    node_id=line.get("node_id", node_id),
                     seq=line["seq"],
                     kind=line["kind"],
                     line=line,
@@ -397,6 +402,19 @@ class Store:
             {"node_id": r.node_id, "level": r.level, "updated_ts": r.updated_ts}
             for r in rows
         ]
+
+    async def topology_events(self) -> list[dict[str, Any]]:
+        """All structure-bearing trace lines (spec v2 Ch.4 §6): spawn and
+        message events, in ingest order. Topology derives from these only."""
+        async with self.engine.connect() as conn:
+            rows = (await conn.execute(
+                select(events.c.line)
+                .where(events.c.kind.in_(
+                    ("node_spawned", "message_sent", "message_received")
+                ))
+                .order_by(events.c.run_id, events.c.node_id, events.c.seq)
+            )).all()
+        return [r.line for r in rows]
 
     async def list_nodes(self) -> list[str]:
         async with self.engine.connect() as conn:

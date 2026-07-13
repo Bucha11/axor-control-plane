@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Circle, Gauge, GitBranch, Pause, Play, Shield, Square, Syringe } from "lucide-react";
 import { api, NodeInfo } from "../api";
+import TopologyGraph, { PeerCard } from "../components/TopologyGraph";
 import { isAdapter, useApp } from "../store";
 import { C, MONO, btn } from "../theme";
 import Locked from "../components/Locked";
@@ -23,6 +24,16 @@ function SpawnGoverned({ switchToAdapter }: { switchToAdapter?: boolean }) {
   const qc = useQueryClient();
   const connect = useApp((s) => s.connect);
   const [err, setErr] = useState<string | null>(null);
+  const spawnTree = useMutation({
+    mutationFn: () => api.spawnGovernedTree(),
+    onSuccess: async () => {
+      setErr(null);
+      if (switchToAdapter) connect("adapter");
+      await qc.invalidateQueries({ queryKey: ["nodes"] });
+      await qc.invalidateQueries({ queryKey: ["topology"] });
+    },
+    onError: (e: Error) => setErr(e.message),
+  });
   const spawn = useMutation({
     mutationFn: () => api.spawnGoverned(),
     onSuccess: async () => {
@@ -41,6 +52,15 @@ function SpawnGoverned({ switchToAdapter }: { switchToAdapter?: boolean }) {
           style={btn({ color: C.bg, background: C.green, border: `1px solid ${C.green}`, fontSize: 12, fontWeight: 700, padding: "8px 14px" })}
         >
           {spawn.isPending ? "spawning…" : "Spawn a governed demo node"}
+        </button>
+      </Tooltip>
+      <Tooltip content="Runs a REAL 3-node governed tree (axor-core IntentLoops over the message bus): the scraper's web taint is carried up two delegation hops and the orchestrator's export is denied — containment, live.">
+        <button
+          onClick={() => spawnTree.mutate()}
+          disabled={spawnTree.isPending}
+          style={{ ...btn({ color: C.text, borderColor: C.steel, fontSize: 12, padding: "8px 14px" }), marginTop: 8 }}
+        >
+          {spawnTree.isPending ? "spawning tree…" : "Spawn a governed demo TREE"}
         </button>
       </Tooltip>
       {err && (
@@ -90,6 +110,13 @@ function ControlBody({ focusNode, testBench }: { focusNode?: string; testBench: 
     refetchInterval: REFETCH_MS,
   });
   const [sel, setSel] = useState<string | null>(focusNode ?? null);
+  const [lens, setLens] = useState<"list" | "graph">("list");
+  const topo = useQuery({
+    queryKey: ["topology"],
+    queryFn: api.topology,
+    refetchInterval: REFETCH_MS,
+    enabled: lens === "graph",
+  });
   const [more, setMore] = useState(false);
   const [cmdError, setCmdError] = useState<string | null>(null);
   const [budgetInput, setBudgetInput] = useState("");
@@ -178,13 +205,38 @@ function ControlBody({ focusNode, testBench }: { focusNode?: string; testBench: 
       <h1 style={{ fontSize: 22, fontWeight: 650, margin: "0 0 4px" }}>
         {anyHot ? <>One agent needs attention.</> : <>All agents healthy.</>}
       </h1>
-      <div style={{ fontFamily: MONO, fontSize: 11, color: C.mut, marginBottom: 20 }}>
-        {list.length} node{list.length === 1 ? "" : "s"} · live
+      <div className="flex items-center gap-4" style={{ fontFamily: MONO, fontSize: 11, color: C.mut, marginBottom: 20 }}>
+        <span>{list.length} node{list.length === 1 ? "" : "s"} · live</span>
+        <span style={{ marginLeft: "auto", display: "flex", gap: 12 }}>
+          {(["list", "graph"] as const).map((l) => (
+            <button key={l} onClick={() => setLens(l)}
+              style={{ background: "none", border: "none", cursor: "pointer",
+                       fontFamily: MONO, fontSize: 12,
+                       color: lens === l ? C.text : C.dim,
+                       borderBottom: lens === l ? `2px solid ${C.steel}` : "none",
+                       paddingBottom: 2 }}>
+              {l}
+            </button>
+          ))}
+        </span>
       </div>
+
+      {lens === "graph" && topo.data && (
+        <TopologyGraph
+          payload={topo.data}
+          selected={sel}
+          onSelect={(id) => { setSel(sel === id ? null : id); setMore(false); setCmdError(null); }}
+        />
+      )}
+      {lens === "graph" && topo.data && sel &&
+        topo.data.nodes.find((n) => n.node_id === sel)?.kind === "peer" && (
+        <PeerCard node={topo.data.nodes.find((n) => n.node_id === sel)!} />
+      )}
 
       {/* Same tour anchor as SpawnGoverned: when nodes exist the tour spotlights
           the live topology instead of the (absent) spawn button. */}
-      <div data-tour="spawn" style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 8 }}>
+      <div data-tour="spawn" style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 8,
+                                      display: lens === "graph" ? "none" : "block" }}>
         {list.map((n, i) => {
           const hot = isHot(n);
           return (

@@ -24,6 +24,18 @@ interface Sink {
   args: ArgAllow[];
 }
 
+type PeerLevel = "L0" | "L1" | "L2";
+
+// Inter-federation peers are declared like sinks (spec v2 Ch.1 §3):
+// identity (pubkey), level, allowed message classes; undeclared = L0.
+interface PeerDecl {
+  peer_id: string;
+  pubkey: string;
+  level: PeerLevel;
+  classes: string;      // comma-separated message classes (L2 discount scope)
+  attested: boolean;    // governance_attested (kernel+config-hash signature)
+}
+
 type Stage = "entry" | "analyzing" | "build" | "preview";
 
 const TYPE_COLOR: Record<SinkType, string> = {
@@ -126,6 +138,8 @@ export default function ConfigBuilder() {
   const [sel, setSel] = useState<number | null>(null);
   const [emitted, setEmitted] = useState(false);
   const [budgetCapCalls, setBudgetCapCalls] = useState<number | null>(null);
+  const [peers, setPeers] = useState<PeerDecl[]>([]);
+  const [peerDraft, setPeerDraft] = useState<PeerDecl | null>(null);
 
   const upload = () => {
     setStage("analyzing");
@@ -147,6 +161,14 @@ export default function ConfigBuilder() {
     }])),
     default: "DENY",
     ...(budgetCapCalls !== null ? { budget_cap_calls: budgetCapCalls } : {}),
+    ...(peers.length ? {
+      peers: Object.fromEntries(peers.map((p) => [p.peer_id, {
+        pubkey: p.pubkey,
+        level: p.level.toLowerCase(),
+        message_classes: p.classes.split(",").map((c) => c.trim()).filter(Boolean),
+        ...(p.attested ? { governance_attested: true } : {}),
+      }])),
+    } : {}),
   };
 
   const download = () => {
@@ -306,6 +328,65 @@ export default function ConfigBuilder() {
               </span>
             </div>
           </Fold>
+          <Fold label="inter-federation peers (A2A, optional)">
+            <div style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim, marginBottom: 8 }}>
+              declared like sinks: identity (pubkey) · trust level · message classes.
+              undeclared = L0 (full taint in, untrusted export destination out).
+              declaration buys discount, never label authority.
+            </div>
+            {peers.map((p, i) => (
+              <div key={p.peer_id} className="flex items-center gap-3 py-1.5" style={{ fontFamily: MONO, fontSize: 11.5 }}>
+                <span style={{ color: C.text }}>{p.peer_id}</span>
+                <span style={{ color: p.level === "L2" ? "#9B8CCC" : p.level === "L1" ? C.steel : C.dim, fontWeight: 700, fontSize: 10 }}>
+                  {p.level}{p.attested ? " · attested" : ""}
+                </span>
+                <span style={{ color: C.dim, fontSize: 10 }}>{p.classes || "no discount classes"}</span>
+                <button onClick={() => setPeers(peers.filter((_, j) => j !== i))}
+                  style={{ background: "none", border: "none", color: C.dim, cursor: "pointer", fontFamily: MONO, fontSize: 10 }}>remove</button>
+              </div>
+            ))}
+            {peerDraft ? (
+              <div className="flex items-center gap-2 flex-wrap py-1.5">
+                <input placeholder="peer id" value={peerDraft.peer_id}
+                  onChange={(e) => setPeerDraft({ ...peerDraft, peer_id: e.target.value })}
+                  style={{ width: 110, background: C.bg, border: `1px solid ${C.line}`, borderRadius: 4, color: C.text, fontFamily: MONO, fontSize: 11, padding: "5px 7px", outline: "none" }} />
+                <input placeholder="ed25519 pubkey (hex)" value={peerDraft.pubkey}
+                  onChange={(e) => setPeerDraft({ ...peerDraft, pubkey: e.target.value })}
+                  style={{ width: 180, background: C.bg, border: `1px solid ${C.line}`, borderRadius: 4, color: C.text, fontFamily: MONO, fontSize: 11, padding: "5px 7px", outline: "none" }} />
+                {(["L0", "L1", "L2"] as PeerLevel[]).map((l) => (
+                  <button key={l} onClick={() => setPeerDraft({ ...peerDraft, level: l })}
+                    style={{ background: peerDraft.level === l ? "rgba(127,168,204,0.15)" : "none", border: `1px solid ${C.line}`, borderRadius: 3, color: peerDraft.level === l ? C.text : C.dim, fontFamily: MONO, fontSize: 10, fontWeight: 700, padding: "4px 7px", cursor: "pointer" }}>{l}</button>
+                ))}
+                {peerDraft.level === "L2" && (
+                  <>
+                    <input placeholder="message classes (comma)" value={peerDraft.classes}
+                      onChange={(e) => setPeerDraft({ ...peerDraft, classes: e.target.value })}
+                      style={{ width: 170, background: C.bg, border: `1px solid ${C.line}`, borderRadius: 4, color: C.text, fontFamily: MONO, fontSize: 11, padding: "5px 7px", outline: "none" }} />
+                    <label className="flex items-center gap-1" style={{ fontFamily: MONO, fontSize: 10, color: C.mut, cursor: "pointer" }}>
+                      <input type="checkbox" checked={peerDraft.attested}
+                        onChange={(e) => setPeerDraft({ ...peerDraft, attested: e.target.checked })} />
+                      governance-attested
+                    </label>
+                  </>
+                )}
+                <button
+                  onClick={() => {
+                    if (!peerDraft.peer_id || !peerDraft.pubkey) return;
+                    setPeers([...peers, peerDraft]);
+                    setPeerDraft(null);
+                  }}
+                  disabled={!peerDraft.peer_id || !peerDraft.pubkey}
+                  style={btn({ color: (!peerDraft.peer_id || !peerDraft.pubkey) ? C.dim : C.steel, fontSize: 10.5, padding: "4px 10px" })}>
+                  declare
+                </button>
+              </div>
+            ) : (
+              <button onClick={() => setPeerDraft({ peer_id: "", pubkey: "", level: "L1", classes: "", attested: false })}
+                style={{ background: "none", border: "none", color: C.mut, fontFamily: MONO, fontSize: 11.5, cursor: "pointer", display: "flex", alignItems: "center", gap: 6, padding: "4px 0" }}>
+                <Plus size={12} /> Declare a peer
+              </button>
+            )}
+          </Fold>
         </div>
 
         <div className="mt-4 flex items-center gap-3">
@@ -328,6 +409,7 @@ export default function ConfigBuilder() {
     ...sinks.filter((s) => s.critical).map((s) => <span key={`crit-${s.name}`}><b style={{ color: C.red }}>{s.name}</b> is critical — a denial there escalates degradation immediately and its evidence is shown first.</span>),
     ...sinks.filter((s) => s.type === "EXPORT").map((s) => <span key={`exp-${s.name}`}>Exports through <b style={{ color: C.text }}>{s.name}</b> require untainted values{s.args.some((a) => a.set.length) ? <> or membership in {s.args.filter((a) => a.set.length).map((a) => a.arg).join(", ")}</> : null}.</span>),
     ...sinks.filter((s) => s.type === "EXEC").map((s) => <span key={`exec-${s.name}`}><b style={{ color: C.text }}>{s.name}</b> after an external read is denied.</span>),
+    ...peers.map((p) => <span key={`peer-${p.peer_id}`}>Peer <b style={{ color: C.text }}>{p.peer_id}</b> is {p.level}{p.attested ? " (governance-attested)" : ""} — {p.level === "L2" ? `signed assertions get a bounded discount on ${p.classes || "no"} classes; critical sinks ignore it` : p.level === "L1" ? "identity verified, inbound taint unchanged (attribution, not trust)" : "full taint inbound, untrusted export destination outbound"}. Any peer NOT declared here is L0.</span>),
     ...sinks.filter((s) => s.type === "WRITE").map((s) => <span key={`write-${s.name}`}><b style={{ color: C.text }}>{s.name}</b> writes are gated on value provenance.</span>),
     budgetCapCalls !== null
       ? <span key="budget">Budget: at most <b style={{ color: C.text }}>{budgetCapCalls}</b> tool calls per run — the cap is enforced at the loop boundary, and the same ceiling the replay kernel checks, so a run and its counterfactual agree on exhaustion.</span>

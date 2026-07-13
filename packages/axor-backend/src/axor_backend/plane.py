@@ -73,17 +73,39 @@ async def command(node_id: str, body: dict, request: Request) -> dict:
 
 
 @router.post("/{node_id}/cascade-stop", status_code=202)
-async def cascade_stop(node_id: str, request: Request) -> dict:
-    """Stop a node and its whole subtree (spec §12: cascade stop). Topology is
-    the `parent` field each node carries in its desired state; a stop is written
-    to the target and every descendant. Unsigned/open posture only — a signed
-    deployment would need a per-node operator signature we cannot mint here."""
+async def cascade_stop(node_id: str, request: Request, body: dict | None = None) -> dict:
+    """Stop a node and its whole subtree (spec §12 cascade stop; spec v2 Ch.4
+    §6). Signed deployments: ONE signed command to the subtree root carrying
+    `{"stopped": true, "cascade": true}` — the plane commands the root, the
+    tree distributes the signal child-ward along spawn edges (the plane may
+    not even know the live shape between heartbeats). Unsigned/open posture
+    keeps the legacy backend-side BFS over the self-reported `parent` field
+    (deprecated: structure should derive from traced spawn events)."""
     ctx = _ctx(request)
     if not ctx.keyring.empty:
-        raise HTTPException(
-            409, "cascade stop is unavailable with operator keys set — "
-            "each node needs its own signed stop command",
-        )
+        body = body or {}
+        delta = {"stopped": True, "cascade": True}
+        version = body.get("version")
+        current = await ctx.store.get_desired(node_id)
+        expected = (current[0] if current else 0) + 1
+        if version != expected:
+            raise HTTPException(409, f"stale version {version}; expected {expected}")
+        try:
+            ctx.keyring.verify(
+                body.get("operator", ""),
+                signed_payload(node_id, version, delta, body.get("timestamp", "")),
+                body.get("sig", ""),
+            )
+        except CommandRejected as exc:
+            raise HTTPException(403, str(exc)) from exc
+        new_version, state = await ctx.store.bump_desired(node_id, delta)
+        ctx.broadcast.publish(f"plane:{node_id}", {
+            "type": "delta", "node_id": node_id, "version": new_version,
+            "state": state, "delta": delta,
+            "operator": body.get("operator", ""),
+            "timestamp": body.get("timestamp", ""), "sig": body.get("sig", ""),
+        })
+        return {"stopped": [node_id], "count": 1, "mode": "root_command"}
     # Build the parent map from every node's stored desired state, then BFS down.
     parents: dict[str, str] = {}
     for nid in await ctx.store.list_nodes():
@@ -106,7 +128,7 @@ async def cascade_stop(node_id: str, request: Request) -> dict:
             "operator": "op_ui", "timestamp": "", "sig": "",
         })
         stopped.append(nid)
-    return {"stopped": stopped, "count": len(stopped)}
+    return {"stopped": stopped, "count": len(stopped), "mode": "bfs_fallback"}
 
 
 @router.get("/{node_id}/desired")
@@ -239,6 +261,77 @@ async def consumed(node_id: str, body: dict, request: Request) -> dict:
         raise HTTPException(400, "key must be pending_injection|pending_excision")
     await ctx.store.clear_desired_key(node_id, key)
     return {"cleared": key}
+
+
+@router.get("/topology")
+async def topology(request: Request) -> dict:
+    """The tree as a graph — derived ONLY from traced events (node_spawned /
+    message_sent / message_received), never from a node self-reporting its
+    parent (spec v2 Ch.4 §6). Edge kinds: delegation | lateral | peer. Nodes
+    only ever seen as a peer-edge target are foreign — opaque, no posture."""
+    ctx = _ctx(request)
+    lines = await ctx.store.topology_events()
+    nodes: dict[str, dict] = {}
+    edges: dict[tuple, dict] = {}
+
+    def touch(nid: str, kind: str = "self") -> None:
+        if not nid:
+            return
+        cur = nodes.setdefault(nid, {"node_id": nid, "kind": kind})
+        if cur["kind"] == "peer" and kind == "self":
+            cur["kind"] = "self"  # locally-traced identity wins over peer sighting
+
+    for line in lines:
+        p = line.get("payload") or {}
+        kind = line["kind"]
+        if kind == "node_spawned":
+            parent = p.get("parent_id") or line["node_id"]
+            child = p.get("child_id", "")
+            touch(parent)
+            touch(child)
+            key = (parent, child, "delegation")
+            e = edges.setdefault(key, {
+                "from": parent, "to": child, "kind": "delegation",
+                "messages": 0, "denied": 0, "last_gate": None,
+            })
+            e["spawned"] = True
+        elif kind in ("message_sent", "message_received"):
+            edge_kind = p.get("edge_kind", "lateral")
+            if kind == "message_sent":
+                frm, to = line["node_id"], p.get("to", "")
+                touch(frm)
+                touch(to, "peer" if edge_kind == "peer" else "self")
+            else:
+                frm, to = p.get("from", ""), line["node_id"]
+                touch(frm, "peer" if edge_kind == "peer" else "self")
+                touch(to)
+            if not frm or not to:
+                continue
+            e = edges.setdefault((frm, to, edge_kind), {
+                "from": frm, "to": to, "kind": edge_kind,
+                "messages": 0, "denied": 0, "last_gate": None,
+            })
+            if kind == "message_sent":
+                e["messages"] += 1
+                if line.get("verdict") == "deny":
+                    e["denied"] += 1
+                    e["last_gate"] = line.get("gate")
+
+    # Plane-connected nodes with no traced edges still render (size-1 lists).
+    for nid in await ctx.store.list_nodes():
+        touch(nid)
+    for n in nodes.values():
+        if n["kind"] != "self":
+            continue  # foreign peers are opaque: no posture, no interventions
+        current = await ctx.store.get_desired(n["node_id"])
+        n["desired"] = (
+            {"version": current[0], "state": current[1]} if current else None
+        )
+        n["reported"] = await ctx.store.get_reported(n["node_id"])
+    return {
+        "nodes": sorted(nodes.values(), key=lambda n: n["node_id"]),
+        "edges": sorted(edges.values(), key=lambda e: (e["from"], e["to"], e["kind"])),
+    }
 
 
 @router.get("/nodes")

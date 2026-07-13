@@ -22,6 +22,7 @@ import { navigate } from "../router";
 import { isConnected, useApp } from "../store";
 import { C, MONO, btn, sevColor } from "../theme";
 import EvidenceCase, { deviationHeadline } from "../components/EvidenceCase";
+import TwoTreeContainment from "../components/TwoTreeContainment";
 import ScenarioDelta from "../components/ScenarioDelta";
 import Coach from "../components/Coach";
 import Tooltip from "../components/Tooltip";
@@ -214,6 +215,9 @@ export default function Experiment({ runId, autostart }: { runId?: string; autos
               </label>
               {showDelta && <ScenarioDelta c={caught} />}
               <EvidenceCase runId={focusRun.run_id} caseIndex={caseIndex} c={caught} />
+              {caught.anchor && (
+                <TwoTreeContainment runId={focusRun.run_id} anchor={caught.anchor} />
+              )}
             </>
           )}
         </>

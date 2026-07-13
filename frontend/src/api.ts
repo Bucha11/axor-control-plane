@@ -24,6 +24,51 @@ export interface RunSummary {
   created_ts: string;
 }
 
+export interface CaseAnchor {
+  node_id: string;
+  seq: number;
+}
+
+export interface SubgraphNode {
+  node_id: string;
+  roles: string[];
+  seqs: number[];
+}
+
+export interface SubgraphEdge {
+  from: string;
+  to: string;
+  kind: string;
+  carried: { root?: { sources: string[]; sensitive: boolean } };
+  gate_verdict: string | null;
+  msg_id: string | null;
+}
+
+export interface SubgraphPayload {
+  anchor: CaseAnchor;
+  nodes: SubgraphNode[];
+  edges: SubgraphEdge[];
+  fault_origin: CaseAnchor | null;
+  contained_at: { from: string; to: string; kind: string; gate: string | null }[] | null;
+  federation_scope: "intra" | "inter";
+}
+
+export interface ContainmentReport {
+  rows: { edge: string; note: string; status: "carried" | "held" | "escaped"; gate?: string | null }[];
+  held: number;
+  reached: number;
+  containment: string | null;
+  governed_outcome: string;
+  ungoverned_outcome: string;
+}
+
+export interface InfluenceEntry {
+  ref: string;
+  influence: number;
+  baseline_verdict: string | null;
+  ablated_verdict: string | null;
+}
+
 export interface EvidenceCaseDto {
   scenario: string;
   deviation: string | null;
@@ -32,6 +77,10 @@ export interface EvidenceCaseDto {
   observed_reality: unknown;
   agent_claim: unknown;
   fault_attribution: { fault_mode: string; tool_name: string; influence: string }[];
+  // Multi-agent (spec v2 Ch.3): present => the case has a causal subgraph to
+  // derive on open. Absent on every size-1 case — the v0.13 render is used.
+  anchor?: CaseAnchor | null;
+  twin_ref?: { trace_id: string } | null;
 }
 
 export interface ScrubberStep {
@@ -89,6 +138,29 @@ export interface NodeInfo {
     updated_ts: string;
   } | null;
   facts: Record<string, unknown>[];
+}
+
+// Topology (spec v2 Ch.4 §6): derived from traced spawn/message events only.
+export interface TopologyNode {
+  node_id: string;
+  kind: "self" | "peer";
+  desired?: { version: number; state: Record<string, unknown> } | null;
+  reported?: NodeInfo["reported"];
+}
+
+export interface TopologyEdge {
+  from: string;
+  to: string;
+  kind: "delegation" | "lateral" | "peer";
+  messages: number;
+  denied: number;
+  last_gate: string | null;
+  spawned?: boolean;
+}
+
+export interface TopologyPayload {
+  nodes: TopologyNode[];
+  edges: TopologyEdge[];
 }
 
 export interface RegressionRow {
@@ -178,6 +250,42 @@ export const api = {
       body: JSON.stringify({ config }),
     }).then((r) => j<ScrubberPayload>(r)),
   nodes: () => af("/v1/plane/nodes").then((r) => j<NodeInfo[]>(r)),
+
+  topology: () => af("/v1/plane/topology").then((r) => j<TopologyPayload>(r)),
+
+  subgraph: (runId: string, anchor: CaseAnchor) =>
+    af(`/v1/runs/${runId}/subgraph?anchor_node=${encodeURIComponent(anchor.node_id)}&anchor_seq=${anchor.seq}`)
+      .then((r) => j<SubgraphPayload>(r)),
+
+  containment: (runId: string, anchor: CaseAnchor) =>
+    af(`/v1/runs/${runId}/containment?anchor_node=${encodeURIComponent(anchor.node_id)}&anchor_seq=${anchor.seq}`)
+      .then((r) => j<ContainmentReport>(r)),
+
+  influence: (runId: string, anchor: CaseAnchor, config: Record<string, unknown>) =>
+    af(`/v1/runs/${runId}/influence`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ anchor_node: anchor.node_id, anchor_seq: anchor.seq, config }),
+    }).then((r) => j<{ ranking: InfluenceEntry[] }>(r)),
+
+  vaultCredsHealth: () =>
+    af("/v1/vault/creds/health").then((r) =>
+      j<{ enrolled: { tool: string; endpoint: string; version: number; revoked: boolean; scope_nodes: string[] }[] }>(r)),
+
+  vaultSigningKeys: () =>
+    af("/v1/vault/signing/keys").then((r) =>
+      j<{ key_id: string; public_key_hex: string; operators: string[]; created_ts: string }[]>(r)),
+
+  vaultSigningAudit: () =>
+    af("/v1/vault/signing/audit").then((r) =>
+      j<{ operator: string; key_id: string; payload_sha256: string; granted: boolean; ts: string }[]>(r)),
+
+  spawnGovernedTree: () =>
+    af("/axor/governed/spawn-tree", { method: "POST" }).then((r) =>
+      j<{ run_id: string; nodes: Record<string, string>; denials: number; events: number }>(r)),
+
+  seedTreeRun: () =>
+    af("/v1/demo/seed-tree-run", { method: "POST" }).then((r) => j<unknown>(r)),
   command: (nodeId: string, version: number, state: Record<string, unknown>) =>
     af(`/v1/plane/${nodeId}/command`, {
       method: "POST",

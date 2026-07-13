@@ -100,6 +100,26 @@ Channel security (TLS + per-connection token) authenticates *the plane*. It does
 - Consequence: a fully compromised backend can withhold or delay commands (liveness) but cannot forge a pause, stop, injection, or attestation (integrity). Advisory overlay, enforced cryptographically.
 - Facts (attestations) additionally embed the signature into the fact log entry itself — the Sentinel graph stores who signed, and revocation requires a signature from the same org's keyset.
 
+## 6a. Peer channel hooks (forward declaration, inter-federation)
+
+Not implemented in v0.2; shapes reserved so nothing here has to move when
+inter-federation A2A ships (spec v2 Ch.1):
+
+- **Channel establishment verifies the peer declaration from local config** —
+  identity (pubkey), trust level, allowed message classes. Undeclared peer = L0
+  (fail-closed, same posture as an undeclared sink).
+- **`governance_attested`** additionally verifies the peer's signed attestation
+  of kernel version + config hash at channel establishment, and re-verifies on
+  any config-hash change. The attestation pins accountability (fact of
+  governance), never semantics — foreign configs are not parsed into local
+  trust decisions (spec v2 decision v2-6).
+- **L2 assertion envelope is native-protocol-only** (spec v2 decision v2-4):
+  signed label assertions ride the peer channel's own envelope. MCP-as-A2A
+  channels are pinned L0/L1 at establishment — retrofitting assertions into MCP
+  metadata would fragment verification.
+- Peer pubkeys live in local config beside operator pubkeys (§6) and are never
+  delivered over any channel or fetched from any vault.
+
 ## 7. Disconnect behavior
 
 - Default: fail-continue under local config (spec §12.0). Adapter-local option `hold_on_disconnect: {after: 120s}` → node sets itself `paused` locally; this is adapter config, not backend state — the backend cannot cause or prevent it.
@@ -117,6 +137,6 @@ Channel security (TLS + per-connection token) authenticates *the plane*. It does
 
 ## 9. Open
 
-- ~~Canonicalization for signed payloads~~ **resolved v0.2: JCS (RFC 8785)**; test-vector file ships with the plane service implementation (`packages/axor-backend/tests/vectors/`).
+- ~~Canonicalization for signed payloads~~ **resolved v0.2: JCS (RFC 8785)**; canonicalization vectors ship with the plane service (`packages/axor-backend/tests/vectors/`), and the cross-side payload → canonical-bytes → ed25519-signature triples live at repo root as **`test-vectors/jcs-signing.json`** (spec v2 Ch.6 deliverable) — both the adapter and the plane service verify them in CI.
 - ~~Heartbeat period T and stale threshold~~ **resolved v0.2: static, T=10s, stale=3T.** Adaptive tuning only on evidence.
 - Multi-operator orgs: keyset format in adapter config (list of pubkeys + roles) — align with team-features policy hook (spec decision #8) when it lands.
