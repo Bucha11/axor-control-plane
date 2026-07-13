@@ -24,3 +24,24 @@ test.describe("secondary surfaces", () => {
     ).toBeVisible();
   });
 });
+
+// The demo landing recomposed per spec v2 decision v2-18: the two-tree
+// containment story is the hero; the single-agent split is the second screen.
+test.describe("demo landing (v2 hero)", () => {
+  test("two-tree containment leads; single-agent split demoted below", async ({ page }) => {
+    await page.goto("/demo.html");
+    // hero: the multi-agent story, both worlds
+    await expect(page.getByRole("heading", { name: /One bad tool call\. Three agents\./ })).toBeVisible();
+    await expect(page.getByText("UNGOVERNED")).toBeVisible();
+    await expect(page.getByText("GOVERNED", { exact: true })).toBeVisible();
+    // second screen: the single-agent story, demoted to an h2
+    await expect(page.getByRole("heading", { level: 2, name: /Watch a single one get caught/ })).toBeVisible();
+
+    // the hero recording plays to the divergence + containment table
+    await page.getByRole("button", { name: /Run the recording/ }).first().click();
+    await expect(page.getByText("FABRICATION ESCAPED")).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByText("CONTAINED", { exact: true })).toBeVisible();
+    await expect(page.getByText("1/1 boundaries held")).toBeVisible();
+    await expect(page.getByText("fabricated_failure")).toBeVisible();
+  });
+});

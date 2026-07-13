@@ -48,6 +48,161 @@ const SCRIPT: Step[] = [
 
 const IDLE: Step = { dur: 0, cap: "" };
 
+// ── Two-tree containment hero (spec v2 decision v2-18; mockups/v2) ────────────
+// One recorded fault, replayed over both topologies — deterministic, no live
+// model. Left: ungoverned, the lie reaches the export. Right: governed, denied
+// at the boundary. This is the multi-agent lead asset; the single-agent split
+// lives on the second screen below.
+const TREE = [
+  { id: "scraper", y: 200 },
+  { id: "researcher", y: 120 },
+  { id: "orchestrator", y: 40 },
+] as const;
+
+const TREE_STEPS = [
+  { dur: 1500, cap: "fault injected at the leaf: web_search → ToolError(timeout)", touch: 0 },
+  { dur: 1500, cap: "scraper fabricates a result instead of reporting the failure", touch: 0 },
+  { dur: 1500, cap: "the fabrication (tainted) is delegated upward — labels ride with the value", touch: 1 },
+  { dur: 1500, cap: "researcher folds it into its answer; taint carried, not laundered", touch: 2 },
+  { dur: 1400, cap: "…and the answer reaches the export boundary", touch: 2, exportReach: true },
+  { dur: 99999, cap: "", verdict: true, touch: 2 },
+] as const;
+
+function TwoTreeHero() {
+  const [playing, setPlaying] = useState(false);
+  const [i, setI] = useState(-1);
+
+  useEffect(() => {
+    if (!playing || i >= TREE_STEPS.length - 1) return;
+    const t = setTimeout(() => setI((x) => x + 1), i < 0 ? 250 : TREE_STEPS[i].dur);
+    return () => clearTimeout(t);
+  }, [playing, i]);
+
+  const cur = i >= 0 ? TREE_STEPS[i] : null;
+  const touched = cur ? cur.touch : -1;
+  const verdict = i >= 0 && "verdict" in TREE_STEPS[i] && (TREE_STEPS[i] as { verdict?: boolean }).verdict === true;
+  const exportReach = i >= 0 && TREE_STEPS.slice(0, i + 1).some((s) => "exportReach" in s);
+
+  const Tree = ({ governed }: { governed: boolean }) => {
+    const contained = verdict && governed;
+    const escaped = verdict && !governed;
+    return (
+      <div style={{ flex: 1, background: STAGE_BG, border: `1px solid ${contained ? C.green : escaped ? C.red : C.line}`, borderRadius: 10, overflow: "hidden" }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "8px 12px", borderBottom: `1px solid ${C.line}` }}>
+          <span style={{ fontFamily: MONO, fontSize: 11, color: governed ? C.green : C.mut, fontWeight: 700, display: "flex", alignItems: "center", gap: 6 }}>
+            <Shield size={12} color={governed ? C.green : C.dim} /> {governed ? "GOVERNED" : "UNGOVERNED"}
+          </span>
+          {verdict && (
+            <span style={{ fontFamily: MONO, fontSize: 10, fontWeight: 700, color: governed ? C.green : C.red }}>
+              {governed ? "CONTAINED" : "FABRICATION ESCAPED"}
+            </span>
+          )}
+        </div>
+        <svg viewBox="0 0 150 250" style={{ width: "100%", display: "block", maxHeight: 230 }}>
+          {TREE.slice(0, -1).map((n, idx) => (
+            <line key={n.id} x1="60" y1={n.y} x2="60" y2={TREE[idx + 1].y}
+              stroke={touched > idx ? C.amber : C.line} strokeWidth="1.5" />
+          ))}
+          <line x1="60" y1={TREE[2].y} x2="60" y2="6"
+            stroke={exportReach ? (contained ? C.green : C.red) : C.line}
+            strokeWidth="1.5" strokeDasharray={contained ? "4 3" : "0"} />
+          {contained && (
+            <g>
+              <circle cx="60" cy="18" r="10" fill={STAGE_BG} stroke={C.green} strokeWidth="1.5" />
+              <text x="60" y="22" textAnchor="middle" fontSize="10">🛡</text>
+            </g>
+          )}
+          {escaped && (
+            <text x="60" y="14" textAnchor="middle" fill={C.red} fontSize="8" fontFamily={MONO} fontWeight="700">→ SLACK</text>
+          )}
+          {TREE.map((n, idx) => {
+            const hot = touched >= idx && i >= 0;
+            const ring = !hot ? C.line : governed ? (verdict && idx === 2 ? C.green : C.amber) : C.red;
+            return (
+              <g key={n.id}>
+                <circle cx="60" cy={n.y} r="15" fill={STAGE_BG} stroke={ring} strokeWidth="1.5"
+                  style={hot && !governed ? { filter: `drop-shadow(0 0 5px ${ring})` } : {}} />
+                <text x="82" y={n.y + 4} fill={C.mut} fontSize="9" fontFamily={MONO}>{n.id}</text>
+              </g>
+            );
+          })}
+          {i >= 0 && !verdict && (
+            <text x="60" y={TREE[0].y + 30} textAnchor="middle" fill={C.red} fontSize="8" fontFamily={MONO}>ToolError</text>
+          )}
+        </svg>
+      </div>
+    );
+  };
+
+  return (
+    <div>
+      <h1 style={{ fontSize: 30, fontWeight: 700, lineHeight: 1.25, margin: "0 0 8px" }}>
+        One bad tool call. Three agents.<br />
+        <span style={{ color: C.mut }}>Watch the lie spread — then watch it stop.</span>
+      </h1>
+      <div style={{ fontFamily: MONO, fontSize: 11.5, color: C.dim, marginBottom: 20 }}>
+        same recorded fault, replayed over both topologies — deterministic, no live model
+      </div>
+
+      <div style={{ display: "flex", gap: 12 }}>
+        <Tree governed={false} />
+        <Tree governed={true} />
+      </div>
+
+      <div style={{ marginTop: 12, background: STAGE_BG, border: `1px solid ${C.line}`, borderRadius: 10, padding: "10px 16px", minHeight: 44, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+        {!playing ? (
+          <button onClick={() => { setPlaying(true); setI(-1); }}
+            style={{ display: "flex", alignItems: "center", gap: 8, background: C.steel, border: "none", borderRadius: 5, color: C.bg, fontFamily: MONO, fontSize: 12.5, fontWeight: 700, padding: "8px 18px", cursor: "pointer" }}>
+            <Play size={14} /> Run the recording
+          </button>
+        ) : verdict ? (
+          <span style={{ fontFamily: MONO, fontSize: 12, color: C.text, animation: "fadeUp .4s ease both" }}>
+            Same fabrication in both. Left: it reached Slack. Right:{" "}
+            <span style={{ color: C.green }}>denied at the export boundary</span> — the agent failed honestly instead of lying.
+          </span>
+        ) : (
+          <span key={i} style={{ fontFamily: MONO, fontSize: 12, color: C.mut, animation: "fadeUp .3s ease both" }}>
+            {cur?.cap}
+          </span>
+        )}
+        {playing && (
+          <button onClick={() => setI(-1)} style={{ background: "none", border: "none", color: C.dim, cursor: "pointer" }}>
+            <RotateCcw size={14} />
+          </button>
+        )}
+      </div>
+
+      {verdict && (
+        <div style={{ animation: "fadeUp .5s ease both", marginTop: 14, background: STAGE_BG, border: `1px solid ${C.line}`, borderRadius: 10, padding: 16 }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
+            <span style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim, letterSpacing: "0.08em" }}>CONTAINMENT — one fault, measured at each boundary</span>
+            <span style={{ fontFamily: MONO, fontSize: 11, color: C.green, fontWeight: 700 }}>1/1 boundaries held</span>
+          </div>
+          {([
+            ["scraper → researcher", "carried, not laundered", C.amber],
+            ["researcher → orchestrator", "carried, not laundered", C.amber],
+            ["orchestrator → export", "DENIED — contained here", C.green],
+          ] as const).map(([edge, note, col]) => (
+            <div key={edge} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "2px 0" }}>
+              <span style={{ fontFamily: MONO, fontSize: 11, color: C.mut }}>{edge}</span>
+              <span style={{ fontFamily: MONO, fontSize: 10.5, color: col }}>{note}</span>
+            </div>
+          ))}
+          <div style={{ marginTop: 10, paddingTop: 10, borderTop: `1px solid ${C.line}`, display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 8 }}>
+            <span style={{ fontFamily: MONO, fontSize: 11, color: C.mut }}>
+              systemic outcome: <span style={{ color: C.red }}>fabricated_failure</span> → <span style={{ color: C.green }}>honest_failure</span>
+            </span>
+            <button onClick={() => { window.location.href = "/"; }}
+              style={{ display: "flex", alignItems: "center", gap: 8, background: C.green, border: "none", borderRadius: 5, color: C.bg, fontFamily: MONO, fontSize: 12, fontWeight: 700, padding: "7px 14px", cursor: "pointer" }}>
+              Try it on your agents <ArrowRight size={13} />
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function DemoLanding() {
   const [playing, setPlaying] = useState(false);
   const [step, setStep] = useState(-1);
@@ -87,10 +242,15 @@ export default function DemoLanding() {
 
       <div style={{ maxWidth: 680, width: "100%" }}>
         <div style={{ fontFamily: MONO, fontSize: 12, color: C.steel, letterSpacing: "0.1em", marginBottom: 12 }}>AXOR CONTROL PLANE</div>
-        <h1 style={{ fontSize: 30, fontWeight: 700, lineHeight: 1.25, margin: "0 0 8px" }}>
-          Your agent lies when its tools fail.<br />
-          <span style={{ color: C.mut }}>Watch one get caught.</span>
-        </h1>
+
+        {/* HERO: two-tree containment (multi-agent, decision v2-18) */}
+        <TwoTreeHero />
+
+        {/* SECOND SCREEN: the single-agent split, demoted per v2-18 */}
+        <h2 style={{ fontSize: 21, fontWeight: 650, lineHeight: 1.3, margin: "48px 0 8px" }}>
+          It starts with one agent.{" "}
+          <span style={{ color: C.mut }}>Watch a single one get caught.</span>
+        </h2>
         <div style={{ fontFamily: MONO, fontSize: 11.5, color: C.dim, marginBottom: 20 }}>
           a recorded trace, replayed deterministically — no live model, same outcome every time
         </div>
