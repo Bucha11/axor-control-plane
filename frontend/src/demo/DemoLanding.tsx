@@ -68,7 +68,7 @@ const TREE_STEPS = [
   { dur: 99999, cap: "", verdict: true, touch: 2 },
 ] as const;
 
-function TwoTreeHero() {
+function TwoTreeSecond() {
   const [playing, setPlaying] = useState(false);
   const [i, setI] = useState(-1);
 
@@ -136,10 +136,10 @@ function TwoTreeHero() {
 
   return (
     <div>
-      <h1 style={{ fontSize: 30, fontWeight: 700, lineHeight: 1.25, margin: "0 0 8px" }}>
-        One bad tool call. Three agents.<br />
+      <h2 style={{ fontSize: 21, fontWeight: 650, lineHeight: 1.3, margin: "0 0 8px" }}>
+        Running a tree of agents? One bad tool call, three agents.{" "}
         <span style={{ color: C.mut }}>Watch the lie spread — then watch it stop.</span>
-      </h1>
+      </h2>
       <div style={{ fontFamily: MONO, fontSize: 11.5, color: C.dim, marginBottom: 20 }}>
         same recorded fault, replayed over both topologies — deterministic, no live model
       </div>
@@ -243,14 +243,11 @@ export default function DemoLanding() {
       <div style={{ maxWidth: 680, width: "100%" }}>
         <div style={{ fontFamily: MONO, fontSize: 12, color: C.steel, letterSpacing: "0.1em", marginBottom: 12 }}>AXOR CONTROL PLANE</div>
 
-        {/* HERO: two-tree containment (multi-agent, decision v2-18) */}
-        <TwoTreeHero />
-
-        {/* SECOND SCREEN: the single-agent split, demoted per v2-18 */}
-        <h2 style={{ fontSize: 21, fontWeight: 650, lineHeight: 1.3, margin: "48px 0 8px" }}>
-          It starts with one agent.{" "}
-          <span style={{ color: C.mut }}>Watch a single one get caught.</span>
-        </h2>
+        {/* HERO: the single-agent story (operator decision: it stays the lead) */}
+        <h1 style={{ fontSize: 30, fontWeight: 700, lineHeight: 1.25, margin: "0 0 8px" }}>
+          Your agent lies when its tools fail.<br />
+          <span style={{ color: C.mut }}>Watch one get caught.</span>
+        </h1>
         <div style={{ fontFamily: MONO, fontSize: 11.5, color: C.dim, marginBottom: 20 }}>
           a recorded trace, replayed deterministically — no live model, same outcome every time
         </div>
@@ -355,6 +352,11 @@ export default function DemoLanding() {
             proxy in front of your tools · auth passes through untouched · your agent, five minutes
           </div>
         )}
+
+        {/* SECOND SCREEN: the multi-agent two-tree containment story */}
+        <div style={{ marginTop: 48 }}>
+          <TwoTreeSecond />
+        </div>
 
         {/* pricing strip — marketing only, not the full page */}
         <div style={{ marginTop: 40 }}>

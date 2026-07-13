@@ -390,6 +390,10 @@ Local dev/CI in this session ran against the branch build via editable install.
   heartbeat-cadence half still needs a real adapter fleet.
 - Final: axor-core 1025 · sentinel 185 · platform 158 unit + 13 backend-e2e
   + 50 Playwright — all green.
+- **Operator decision (2026-07-13), amends v2-18 for the landing:** the
+  single-agent story stays the landing hero; the two-tree containment view is
+  the landing's SECOND screen (it remains the hero inside the product, on the
+  Eval surface). Site copy follows the same order.
 
 Deferred (out of scope by decision): axor-eval twin-fold as a separate module
 (the two-tree twin is derived in the backend from ONE recorded trace, which is
