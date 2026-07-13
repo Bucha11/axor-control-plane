@@ -74,6 +74,7 @@
 <header><div class="wrap">
   <div class="brand mono">AXOR <span>CONTROL PLANE</span></div>
   <nav class="mono">
+    <a href="#multiagent">multi-agent</a>
     <a href="#proof">proof</a>
     <a href="#pricing">pricing</a>
     <a href="#faq">faq</a>
@@ -138,6 +139,28 @@
 <b>cp</b> .env.example .env   <b>&&</b>   <b>docker compose</b> up --build
 <b>open</b> http://localhost:8080   →   Run demo-mode (mock tools, zero credentials)</div>
   <div class="under-cta mono">MCP-native: paste the mcpServers config you already have — tools discovered, proxied, done.</div>
+</div></section>
+
+<!-- ── MULTI-AGENT: the tree story ───────────────────────────────────────── -->
+<section id="multiagent"><div class="wrap">
+  <h2>Running a tree of agents? The lie travels. Axor stops it at the boundary.</h2>
+  <p class="h2sub">One bad tool call at a leaf becomes the orchestrator's confident answer three hops later.
+  Multi-agent Axor makes that propagation visible, contained, and provable.</p>
+  <div class="grid">
+    <div class="card"><span class="tag mono">CARRIED, NOT LAUNDERED</span><h3>Taint rides in the message.</h3>
+      <p>Labels travel with values in every envelope between agents — a fabrication delegated through two siblings arrives still tainted. Hop count cleans nothing; the export gate denies at the boundary.</p>
+      <span class="outcome mono">→ containment, counted per boundary: 1/1 held, fabricated_failure → honest_failure</span></div>
+    <div class="card"><span class="tag mono">TOPOLOGY, LIVE</span><h3>The tree as a graph.</h3>
+      <p>Control's graph lens draws your federation from traced spawn events (never self-reported): delegation and lateral edges, denials flashing where they happened, cascade-stop as one signed command to the root.</p>
+      <span class="outcome mono">→ the kill switch scales to the whole subtree</span></div>
+    <div class="card"><span class="tag mono">ONE CASE, THREE NODES</span><h3>The receipt grows a causal subgraph.</h3>
+      <p>A fabrication at the root caused by a fault at a leaf is <b>one</b> EvidenceCase — anchored at the consequence, with the minimal chain of nodes that produced it: origin, conduit, container. Derived from the trace on open, deterministic.</p>
+      <span class="outcome mono">→ "who lied first" is a diagram, not a debate</span></div>
+    <div class="card"><span class="tag mono">FOREIGN AGENTS</span><h3>Peers are claims, not colleagues.</h3>
+      <p>Agents under someone else's keys are declared like sinks: L0 by default, identity buys attribution, signed agreements buy a bounded discount — never label authority. Critical sinks ignore discounts entirely.</p>
+      <span class="outcome mono">→ a compromised partner can't launder taint into your tree</span></div>
+  </div>
+  <p style="margin-top:14px"><a class="btn ghost mono" href="demo.html">Watch the lie spread — then stop → (recorded two-tree demo)</a></p>
 </div></section>
 
 <!-- ── PROOF: numbers instead of testimonials ────────────────────────────── -->
