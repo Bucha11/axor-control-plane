@@ -2,7 +2,7 @@
 
 ## Reporting a vulnerability
 
-Email **security@axor.dev** (PGP on request). Please include a reproduction;
+Email **security@useaxor.net** (PGP on request). Please include a reproduction;
 we aim to acknowledge within 48 hours and to fix or publish a mitigation
 within 14 days for high-severity issues. No bug bounty yet — credit given.
 

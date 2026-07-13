@@ -227,6 +227,6 @@ _TEMPLATE = """<!doctype html>
   <p class="mono dim">observations only — no raw request/response bodies are
   exported (spec section 8.3).</p>
   <p class="mono dim">Caught by
-  <a href="https://axor.dev" style="color:#7FA8CC;text-decoration:none">Axor</a>
+  <a href="https://useaxor.net" style="color:#7FA8CC;text-decoration:none">Axor</a>
   — runtime governance for LLM agents. Catch the lie, replay it, govern the fleet.</p>
 </body></html>"""

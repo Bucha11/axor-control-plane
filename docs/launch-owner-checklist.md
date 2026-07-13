@@ -46,7 +46,7 @@ those FIRST or installs won't resolve. Current versions: axor-core 0.8.0
 
 ## 4. Domain + mailboxes (30 min)
 
-The repo already points at `axor.dev`: `sales@` (site CTAs, Pricing mailto)
+The repo already points at `useaxor.net`: `sales@` (site CTAs, Pricing mailto)
 and `security@` (SECURITY.md). Either register that domain or grep-replace
 the addresses. Cheapest working setup: Cloudflare Registrar + free Email
 Routing (`security@` and `sales@` → your inbox). Send yourself a test mail

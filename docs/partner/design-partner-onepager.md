@@ -52,4 +52,4 @@ You get both before your auditors ask; we get proof it works outside our lab.
 *Demo video: [LINK] · Docs & threat model: [LINK] · security posture:
 SECURITY.md + security-controls in the repo.*
 
-**Contact: sales@axor.dev — subject "Design partner".**
+**Contact: sales@useaxor.net — subject "Design partner".**

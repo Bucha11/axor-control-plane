@@ -98,7 +98,7 @@ export default function App() {
             <div style={{ fontFamily: MONO, fontSize: 11.5, color: C.mut, marginBottom: 20 }}>Replace each base URL in your agent config. Nothing else changes.</div>
             <div style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 8 }}>
               {tools.map((t, i) => {
-                const proxied = `https://p-7c31.axor.dev/${t.name}`;
+                const proxied = `https://p-7c31.useaxor.net/${t.name}`;
                 return (
                   <div key={t.name} className="flex items-center gap-3 px-4 py-3" style={{ borderTop: i ? `1px solid ${C.line}` : "none" }}>
                     <span style={{ fontFamily: MONO, fontSize: 12, color: C.mut, width: 130 }}>{t.name}</span>

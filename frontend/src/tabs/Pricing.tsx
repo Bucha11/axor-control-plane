@@ -95,7 +95,7 @@ function ctaHref(tier: string): string {
   const body = encodeURIComponent(
     "Org:\nNodes (approx):\nSelf-hosted or hosted preference:\nAnything else:",
   );
-  return `mailto:sales@axor.dev?subject=${subject}&body=${body}`;
+  return `mailto:sales@useaxor.net?subject=${subject}&body=${body}`;
 }
 
 export default function Pricing() {
