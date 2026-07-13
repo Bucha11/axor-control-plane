@@ -398,6 +398,9 @@ Local dev/CI in this session ran against the branch build via editable install.
 Deferred (out of scope by decision): axor-eval twin-fold as a separate module
 (the two-tree twin is derived in the backend from ONE recorded trace, which is
 what the spec's determinism constraint actually requires); axor-probe items;
-multi-operator keyset (parked, v2-17); **release gate** — axor-core 0.9.2 to
-PyPI, then regenerate `uv.lock` (local dev runs `uv run --no-sync` against the
-branch build).
+multi-operator keyset (parked, v2-17).
+
+**Release gate closed (2026-07-13):** axor-core 0.9.2 published to PyPI;
+`uv.lock` regenerated against the release (0.9.1 → 0.9.2) and the full stack
+re-verified on the published wheel — 171 unit+e2e backend tests and 51
+Playwright specs green. The git-ref/editable era stays over.

@@ -126,7 +126,7 @@ requires-dist = [
     { name = "aiosqlite", specifier = ">=0.20" },
     { name = "alembic", specifier = ">=1.13" },
     { name = "asyncpg", specifier = ">=0.29" },
-    { name = "axor-core", specifier = ">=0.9.1,<0.10" },
+    { name = "axor-core", specifier = ">=0.9.2,<0.10" },
     { name = "axor-eval", specifier = ">=0.1.0,<0.2" },
     { name = "fastapi", specifier = ">=0.111" },
     { name = "kuzu", specifier = ">=0.4" },
@@ -159,11 +159,11 @@ dev = [
 
 [[package]]
 name = "axor-core"
-version = "0.9.1"
+version = "0.9.2"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/42/8a/59e7b6f6a8aa469861dfab7c6d9b0c99dc55c3d88f41b8a68bd62b598c6c/axor_core-0.9.1.tar.gz", hash = "sha256:4e1697072faadc0babb575711a0b47833a51881d4d157843b1dd2d85e9fe61ea", size = 577118, upload-time = "2026-07-10T15:46:08.746Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/1e/4f/c756329105d742ca68cc063ba3091a3527fa6eea9a29a21d2f3c5144f36a/axor_core-0.9.2.tar.gz", hash = "sha256:ff905fbc0482b15892f6d07b7e8a748ba030ef69268b7bcaf22d1e4dba5e06f0", size = 598248, upload-time = "2026-07-13T04:16:07.499Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/b0/5e/c43b82007614c9cd93e5bdd9eda662b59d9e4fd3331a26e47a4df4993eed/axor_core-0.9.1-py3-none-any.whl", hash = "sha256:3dc1f1f70b079432ce68de7d83f72ee0a4801539aae229cf1f5eae960ac595ec", size = 286281, upload-time = "2026-07-10T15:46:06.313Z" },
+    { url = "https://files.pythonhosted.org/packages/e8/65/f5aaef4a41ac8902a3efde52a1ceb410a8ddabd814384bb5672e09c75baf/axor_core-0.9.2-py3-none-any.whl", hash = "sha256:0fa85f3de63fe0bb3b5d4da3e14b1fcdbc45868325db55d54153c13118ee04b3", size = 301568, upload-time = "2026-07-13T04:16:05.943Z" },
 ]
 
 [[package]]
@@ -199,7 +199,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "anyio", specifier = ">=4.0" },
-    { name = "axor-core", specifier = ">=0.9.1,<0.10" },
+    { name = "axor-core", specifier = ">=0.9.2,<0.10" },
     { name = "axor-eval", specifier = ">=0.1.0,<0.2" },
     { name = "httpx", specifier = ">=0.27" },
     { name = "starlette", specifier = ">=0.37" },

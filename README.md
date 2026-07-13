@@ -105,7 +105,3 @@ Dependency direction is one-way: ecosystem -> never depends on -> platform. Cost
 Licensing: Apache-2.0, except `packages/axor-backend/src/axor_backend/ee/` (source-visible, commercial — see its `LICENSE`). Security: threat model + disclosure in `SECURITY.md`.
 
 Specs: `docs/` — UI v0.14 · **spec v2 (multi-agent)** · architecture v0.1 · control-plane protocol v0.2 (+ §6a peer channel hooks) · monetization v0.1 · implementation plans v0.1 / **v2** · launch readiness v0.1. Mockups: `mockups/` (+ `mockups/v2/`). Cross-side signing vectors: `test-vectors/jcs-signing.json`.
-
-Note (until axor-core 0.9.2 ships to PyPI): the platform pins `axor-core>=0.9.2`;
-for local dev install the branch build editable (`uv pip install -e ../axor-core`)
-and run tools with `uv run --no-sync`.
