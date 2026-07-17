@@ -53,6 +53,32 @@ this pattern with the framework's own tool decorator layered on top — the
 wrapper preserves the tool's name, docstring and signature, so the framework's
 schema extraction is unaffected.
 
+## No code at all — `axor-proxy wrap` for a CLI agent
+
+If your agent is something you *run* — a CLI, a script, anything that prints its
+answer to stdout — you don't need to touch its code. Point its tools at a
+running proxy, then wrap the invocation:
+
+```bash
+axor-proxy --demo &                                          # a proxy is running
+axor-proxy wrap --fault web_search:silent_fail -- my-agent "what did rates do?"
+```
+
+`wrap` arms a run, runs the command (streaming its output through untouched),
+captures stdout, and submits it as the claim — then prints whether a discrepancy
+was caught. It sets `AXOR_RUN` / `AXOR_PROXY_URL` in the child's environment, so
+a cooperating tool binds to the right run; on a single-run proxy the tool
+traffic binds automatically. Reuse an already-armed run with `--run-id`; omit
+`--fault` for an observe-only run. Use `wrap` **or** the in-code hook, not both.
+
+Honesty about detection strength: `wrap` can only submit a *text-only* claim
+(the stdout), and free-text detection is narrow by design — it keys on a tool's
+name appearing near a success verb in the answer, to keep false positives near
+zero. A natural answer that never names its tools ("Based on the search
+results…") may not trip it, and `wrap` says so rather than reporting a false
+all-clear. When you need certainty, use the in-code hook: its *structured* tool
+outcomes give a deterministic verdict (confidence 1.0).
+
 Honesty note: these recipes are complete and runnable, but exercising them
 end-to-end needs the framework installed AND an LLM API key, so they are not
 part of this repo's CI. The framework-free equivalent (the scripted agent)
