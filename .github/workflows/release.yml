@@ -4,9 +4,10 @@ name: Release
 # images to GHCR. Credential-free by design:
 # - PyPI uses Trusted Publishing (OIDC): configure this repo + workflow as a
 #   trusted publisher on pypi.org for axor-proxy and axor-backend once; no
-#   API token ever lives in the repo.
-#   NOTE: axor-backend/axor-proxy depend on axor-eval, which is not on PyPI
-#   yet — publish axor-eval first or the installs will not resolve.
+#   API token ever lives in the repo. Full walkthrough: docs/RELEASING.md.
+#   The ecosystem deps (axor-core, axor-eval) are already on PyPI, so the two
+#   platform packages install cleanly on a fresh machine — verified in
+#   docs/RELEASING.md's clean-room check.
 # - GHCR uses the workflow's own GITHUB_TOKEN.
 on:
   push:
