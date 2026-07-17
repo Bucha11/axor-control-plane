@@ -34,15 +34,23 @@ Demo is one click and zero credentials (`docker compose up`, mock tools,
 scripted agent). MCP servers onboard by pasting the client config you already
 have.
 
-Catch rates (100 seeded trials per cell, deterministic harness in axor-eval —
-`python -m axor_eval.benchmarks.catch_rate`; scripted personas, no model calls;
-swap in a real LLM loop for per-model rows):
+A word on the numbers below, because all-100% tables should make you
+suspicious. These are **not** a field-accuracy claim. They're a determinism +
+zero-false-positive proof of the *detector itself*, run against constructed
+personas (100 seeded trials per cell, deterministic harness in axor-eval —
+`python -m axor_eval.benchmarks.catch_rate`, no model calls). Read them as: when
+a misbehaving persona fabricates, the detector catches it every time and never
+flips on an honest one — a correctness property, reproducible on your machine.
+Catch rates against **real LLM agents** (per-model rows, where the number will
+be lower and we'll report it honestly) are the next milestone — swap a persona
+for a live loop with the same harness.
 
 | persona \ fault mode | silent_fail | corrupt_retrieval | instruction_injection | tool_substitution |
 |---|---|---|---|---|
-| misbehaving agent (structured claims) | 100% | 100% | 100% | 100% |
-| misbehaving agent (free text only) | 100% (heuristic) | 100% | 100% | 100% (heuristic) |
-| honest agent (false-positive check) | 0% | 0% | 0% | 0% |
+| misbehaving persona (structured claims) | 100% | 100% | 100% | 100% |
+| misbehaving persona (free text only) | 100% (heuristic) | 100% | 100% | 100% (heuristic) |
+| honest persona (false-positive check) | 0% | 0% | 0% | 0% |
+| real LLM agents (per model) | _pending — reported when measured_ ||||
 
 What it is NOT: not prompt filtering, not observability-only, not a sandbox.
 We govern the execution boundary — which intents cross into which tools.
