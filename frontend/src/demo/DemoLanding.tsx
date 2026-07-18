@@ -391,6 +391,6 @@ export default function DemoLanding() {
 // compact pricing shapes for the landing strip (full detail lives on the Pricing tab)
 const PRICING = [
   { name: "Free", price: "$0 · open source", who: "individuals · small teams · research/academic" },
-  { name: "Team", price: "$50–100 / node · mo", who: "first company deployments · 5–30 nodes" },
+  { name: "Team", price: "$250 / env · mo", who: "first company deployments · per environment, not per node" },
   { name: "Enterprise", price: "annual contract", who: "SSO/RBAC · air-gapped fleets · compliance" },
 ] as const;

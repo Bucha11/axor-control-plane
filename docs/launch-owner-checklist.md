@@ -54,8 +54,8 @@ from outside. Then point GitHub Pages at the domain (step 3).
 
 ## 5. Stripe payment link (20 min)
 
-1. Stripe → Product: "Axor Team" (subscription, e.g. $500/mo as the floor;
-   quantity = nodes) → Payment Links → create → copy the URL.
+1. Stripe → Product: "Axor Team" (subscription, ~$250/mo per environment;
+   quantity = environments, not nodes) → Payment Links → create → copy the URL.
 2. Compose deploy: put `VITE_CHECKOUT_URL=https://buy.stripe.com/…` in
    `.env`, rebuild: `docker compose build frontend && docker compose up -d`.
    The build arg is already plumbed; empty keeps the mailto fallback.
