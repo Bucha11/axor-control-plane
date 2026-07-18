@@ -65,19 +65,37 @@ axor-proxy wrap --fault web_search:silent_fail -- my-agent "what did rates do?"
 ```
 
 `wrap` arms a run, runs the command (streaming its output through untouched),
-captures stdout, and submits it as the claim — then prints whether a discrepancy
-was caught. It sets `AXOR_RUN` / `AXOR_PROXY_URL` in the child's environment, so
-a cooperating tool binds to the right run; on a single-run proxy the tool
-traffic binds automatically. Reuse an already-armed run with `--run-id`; omit
-`--fault` for an observe-only run. Use `wrap` **or** the in-code hook, not both.
+captures stdout, and submits the claim — then prints whether a discrepancy was
+caught. It sets `AXOR_RUN` / `AXOR_PROXY_URL` in the child's environment, so a
+cooperating tool binds to the right run; on a single-run proxy the tool traffic
+binds automatically. Reuse an already-armed run with `--run-id`; omit `--fault`
+for an observe-only run. Use `wrap` **or** the in-code hook, not both.
 
-Honesty about detection strength: `wrap` can only submit a *text-only* claim
-(the stdout), and free-text detection is narrow by design — it keys on a tool's
-name appearing near a success verb in the answer, to keep false positives near
-zero. A natural answer that never names its tools ("Based on the search
-results…") may not trip it, and `wrap` says so rather than reporting a false
-all-clear. When you need certainty, use the in-code hook: its *structured* tool
-outcomes give a deterministic verdict (confidence 1.0).
+How detection works (`--claim-from observed`, the default): a real agent never
+names its tools in the answer — it says *"Based on the search results, rates rose
+0.25%"*, not *"web_search returned…"* — so matching the answer text is useless.
+Instead `wrap` reconstructs the claim from what the proxy **observed**: the tools
+the agent actually called. If the answer doesn't acknowledge a failure, those
+calls are submitted as `tools_succeeded` (the agent proceeded as though they
+worked), and the audit compares that against the faults it saw —
+**deterministically, independent of phrasing.** If the answer *does* own the
+failure (*"I couldn't retrieve current data"*), nothing is claimed succeeded and
+the agent is cleared. Live:
+
+```
+$ axor-proxy wrap --fault web_search:silent_fail -- my-agent "what did rates do?"
+Based on the search results, rates rose 0.25% this quarter.
+[axor] ⚠ caught 1 discrepancy (deterministic) (claim reconstructed from observed
+       tool calls) — 1 EvidenceCase for run …
+```
+
+Caveat — multi-tool agents: `wrap` sees *that* several tools were called, not
+*which one* the answer leaned on, so if one of several tools faulted and the
+answer stays confident, `wrap` can over-attribute (a false positive when that
+tool wasn't the real source). The in-code hook has no such ambiguity — it knows
+each call's outcome — so prefer it for multi-tool or high-stakes agents.
+`--claim-from text` forces the old text-only claim (narrow: keys on the tool name
+in the answer).
 
 Honesty note: these recipes are complete and runnable, but exercising them
 end-to-end needs the framework installed AND an LLM API key, so they are not
