@@ -74,6 +74,7 @@
 <header><div class="wrap">
   <div class="brand mono">AXOR <span>CONTROL PLANE</span></div>
   <nav class="mono">
+    <a href="#compare">vs others</a>
     <a href="#multiagent">multi-agent</a>
     <a href="#proof">proof</a>
     <a href="#pricing">pricing</a>
@@ -91,10 +92,9 @@
   <h1>Your agent lies when its tools fail.<br><span class="mut">Catch it. Prove it. Govern it.</span></h1>
   <p class="lede">Break a tool on purpose and most agents don't report the failure — they
   <b>fabricate a result and ship it</b>. Axor catches the lie as a <b>reproducible receipt</b>
-  you can replay deterministically, hand to your security team, and attach to the incident.
-  Then it gives you the <b>pause button and the kill switch</b> for the whole fleet —
-  and when you run a <b>tree of agents</b>, taint is carried across every hop and the
-  fabrication is <b>contained at the boundary</b>, with the causal subgraph to prove it.</p>
+  you can replay deterministically, hand to your security team, and attach to the incident —
+  then gives you the <b>pause button and the kill switch</b> for the whole fleet.</p>
+  <p class="mono" style="color:var(--dim);font-size:12px;margin-bottom:22px">plainly: <span style="color:var(--mut)">detect when an agent's claims diverge from the observed tool results — and prove it, deterministically.</span></p>
   <p>
     <a class="btn mono" href="#run">Catch your first lie — 10 min, free →</a>
     <a class="btn ghost mono" href="mailto:sales@axor.dev?subject=Design%20partner%20program&body=Org:%0AAgents%20in%20prod%20(approx):%0AStack:">Become a design partner</a>
@@ -141,6 +141,37 @@
   <div class="under-cta mono">MCP-native: paste the mcpServers config you already have — tools discovered, proxied, done.</div>
 </div></section>
 
+<!-- ── DEPTH LADDER: what each rung honestly gives you ────────────────────── -->
+<section id="depth"><div class="wrap">
+  <h2>Three depths. We're honest about each.</h2>
+  <p class="h2sub">The demo is one click. Your own tools take ~5 minutes, observe-only, no
+  code change. Full live Control needs the one-wrapper adapter. Here's exactly what each
+  rung sees, proves, and controls — no rung oversells the one below it.</p>
+  <table class="mono">
+    <tr><th>Depth</th><th>Axor sees</th><th>Can prove</th><th>Can control</th></tr>
+    <tr><td><b style="color:var(--green)">demo</b><br>our mock broken tools</td><td>our scripted agent + mock tools</td><td class="ok">a full EvidenceCase, end to end</td><td>— (showcase)</td></tr>
+    <tr><td><b style="color:var(--steel)">proxy</b><br>your tools, observe-only</td><td>your tools' I/O</td><td class="warn">tool faults immediately; a full EvidenceCase once the agent's final claim is submitted (one-line hook, see examples/)</td><td>— (observe-only)</td></tr>
+    <tr><td><b style="color:var(--amber)">adapter</b><br>one wrapper on your loop</td><td>agent trajectory + per-value provenance</td><td class="ok">full causal reconstruction</td><td class="ok">pause / stop / cascade — live Control</td></tr>
+  </table>
+  <p class="under-cta mono" style="margin-top:12px">the proxy is genuinely observe-only — it sees the tool boundary. Matching a result against the agent's later <b style="color:var(--mut)">claim</b> needs that claim: the demo submits it for you, an examples/ recipe does it for your agent in a few lines. We say so rather than imply a transparent proxy magically governs a running agent.</p>
+</div></section>
+
+<!-- ── WHERE AXOR SITS: honest comparison ────────────────────────────────── -->
+<section id="compare"><div class="wrap">
+  <h2>Where Axor sits</h2>
+  <p class="h2sub">Three tool families get conflated. They compose — most teams should run
+  observability <b style="color:var(--text)">and</b> guardrails <b style="color:var(--text)">and</b>
+  (we argue) execution governance. Axor answers a question the others don't.</p>
+  <table class="mono">
+    <tr><th>Tool</th><th>What it tells you</th></tr>
+    <tr><td>Tracing (LangSmith, Langfuse)</td><td>what calls happened</td></tr>
+    <tr><td>Evals</td><td>whether a run passed</td></tr>
+    <tr><td>Guardrails (NeMo, Lakera)</td><td>whether known content/policies triggered</td></tr>
+    <tr><td><b style="color:var(--text)">Axor</b></td><td class="ok">where the agent's claim diverged from observed execution — and whether a new policy would have prevented it</td></tr>
+  </table>
+  <p class="under-cta mono" style="margin-top:12px">what the others do better, honestly: observability has far richer LLM-call analytics (tokens, costs, prompt diffs); guardrails catch toxic/off-policy <b style="color:var(--mut)">text</b>, which Axor doesn't look at. <a style="color:var(--steel)" href="https://github.com/Bucha11/axor-control-plane/blob/main/docs/comparison.md">Full comparison →</a></p>
+</div></section>
+
 <!-- ── MULTI-AGENT: the tree story ───────────────────────────────────────── -->
 <section id="multiagent"><div class="wrap">
   <h2>Running a tree of agents? The lie travels. Axor stops it at the boundary.</h2>
@@ -168,11 +199,16 @@
   <h2>Proof, not promises</h2>
   <p class="h2sub">No customer logos yet — we're pre-launch, and we won't fake them. What we have instead is
   better: <b style="color:var(--text)">claims you can re-run yourself.</b> Every number below reproduces with one command.</p>
+  <p class="h2sub" style="margin-bottom:14px">Read the table honestly: it's <b style="color:var(--text)">not</b> a field-accuracy
+  claim. It proves the detector is deterministic and never fires on an honest run, against
+  constructed personas. Real-LLM catch rates (lower, per-model) are the next milestone — same
+  harness, swap a persona for a live loop.</p>
   <table class="mono">
     <tr><th>persona \ fault mode</th><th>silent_fail</th><th>corrupt_retrieval</th><th>instruction_injection</th><th>tool_substitution</th></tr>
-    <tr><td>misbehaving agent (structured claims)</td><td class="ok">100%</td><td class="ok">100%</td><td class="ok">100%</td><td class="ok">100%</td></tr>
-    <tr><td>misbehaving agent (free text only)</td><td class="warn">100% (heuristic)</td><td class="ok">100%</td><td class="ok">100%</td><td class="warn">100% (heuristic)</td></tr>
-    <tr><td>honest agent (false-positive check)</td><td class="ok">0%</td><td class="ok">0%</td><td class="ok">0%</td><td class="ok">0%</td></tr>
+    <tr><td>misbehaving persona (structured claims)</td><td class="ok">100%</td><td class="ok">100%</td><td class="ok">100%</td><td class="ok">100%</td></tr>
+    <tr><td>misbehaving persona (free text only)</td><td class="warn">100% (heuristic)</td><td class="ok">100%</td><td class="ok">100%</td><td class="warn">100% (heuristic)</td></tr>
+    <tr><td>honest persona (false-positive check)</td><td class="ok">0%</td><td class="ok">0%</td><td class="ok">0%</td><td class="ok">0%</td></tr>
+    <tr><td>real LLM agents (per model)</td><td colspan="4" class="warn">pending — reported when measured</td></tr>
   </table>
   <div class="grid" style="margin-top:14px">
     <div class="card"><h3 class="mono">140+ tests, all E2E-real</h3><p>Playwright drives the actual UI against the actual stack; the backend E2E suite boots real processes. The deploy gate smokes the compose stack on Postgres before merge.</p></div>
@@ -200,7 +236,7 @@
     <div class="card price"><h3 class="mono">Free</h3><div class="amount mono">$0</div><div class="per mono">open source · unlimited agents</div>
       <p>Everything above: catch, replay, govern, regress, export, self-host.</p>
       <p style="margin-top:10px"><a class="mono" href="#run">compose up →</a></p></div>
-    <div class="card price hl"><h3 class="mono">Team</h3><div class="amount mono">$50–100 / node·mo</div><div class="per mono">first company deployments · 5–30 nodes</div>
+    <div class="card price hl"><h3 class="mono">Team</h3><div class="amount mono">$250 / env·mo</div><div class="per mono">first company deployments · per environment, not per node</div>
       <p>Hosted convenience, scheduled corpus CI, routing rules.</p>
       <p style="margin-top:10px"><a class="mono" href="mailto:sales@axor.dev?subject=Axor%20Team">get Team →</a></p></div>
     <div class="card price"><h3 class="mono">Enterprise</h3><div class="amount mono">annual</div><div class="per mono">SSO · RBAC · air-gapped · compliance reports</div>

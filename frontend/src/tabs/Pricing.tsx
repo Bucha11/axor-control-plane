@@ -49,9 +49,9 @@ const TIERS: Tier[] = [
   },
   {
     name: "Team",
-    price: "$50–100 / node · mo",
-    priceNote: "floor ~$500/mo · hosted or self-hosted, same price",
-    who: "first company deployments · 5–30 nodes",
+    price: "$250 / env · mo",
+    priceNote: "per environment (dev / staging / prod), not per node · hosted or self-hosted, same price",
+    who: "first company deployments",
     features: [
       { text: "everything in Free, plus:", plus: true },
       { text: "scheduled corpus CI + run history" },
@@ -93,7 +93,7 @@ function ctaHref(tier: string): string {
   if (CHECKOUT_URL) return CHECKOUT_URL;
   const subject = encodeURIComponent(`Axor ${tier} — get started`);
   const body = encodeURIComponent(
-    "Org:\nNodes (approx):\nSelf-hosted or hosted preference:\nAnything else:",
+    "Org:\nEnvironments (dev/staging/prod):\nSelf-hosted or hosted preference:\nAnything else:",
   );
   return `mailto:sales@axor.dev?subject=${subject}&body=${body}`;
 }
@@ -217,7 +217,9 @@ export default function Pricing() {
       </div>
 
       <div style={{ fontFamily: MONO, fontSize: 11, color: C.dim, marginTop: 24, lineHeight: 1.6 }}>
-        priced per governed node — ephemeral nodes count by concurrent peak, not by spawn.
+        Team is priced per <span style={{ color: C.mut }}>environment</span> — a stable, countable unit (a deployment of the plane), so you never
+        argue about what an ephemeral agent "node" is. Per-node bands appear only at Enterprise, where fleet topology is modeled
+        (there ephemeral nodes count by concurrent peak, not by spawn).
         <br />
         items marked <span style={{ border: `1px solid ${C.line}`, borderRadius: 20, padding: "1px 6px", fontSize: 8.5 }}>planned</span> are on the roadmap, not yet shipped — everything else runs today.
       </div>

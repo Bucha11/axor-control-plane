@@ -4,9 +4,10 @@ name: Release
 # images to GHCR. Credential-free by design:
 # - PyPI uses Trusted Publishing (OIDC): configure this repo + workflow as a
 #   trusted publisher on pypi.org for axor-proxy and axor-backend once; no
-#   API token ever lives in the repo.
-#   NOTE: axor-backend/axor-proxy depend on axor-eval, which is not on PyPI
-#   yet — publish axor-eval first or the installs will not resolve.
+#   API token ever lives in the repo. Full walkthrough: docs/RELEASING.md.
+#   The ecosystem deps (axor-core, axor-eval) are already on PyPI, so the two
+#   platform packages install cleanly on a fresh machine — verified in
+#   docs/RELEASING.md's clean-room check.
 # - GHCR uses the workflow's own GITHUB_TOKEN.
 on:
   push:
@@ -14,9 +15,22 @@ on:
   workflow_dispatch:
 
 jobs:
+  # One leg per package. PyPI Trusted Publishing keys on
+  # (owner, repo, workflow-file, environment); a *pending* publisher config must
+  # be unique, so two packages published from the same workflow need a DISTINCT
+  # environment each — otherwise the second registration collides with the first
+  # ("already registered for a different project name"). Each leg builds only its
+  # own package into dist/ and publishes just that.
   pypi:
     runs-on: ubuntu-latest
-    environment: release
+    strategy:
+      matrix:
+        include:
+          - pkg: axor-proxy
+            environment: pypi-proxy
+          - pkg: axor-backend
+            environment: pypi-backend
+    environment: ${{ matrix.environment }}
     permissions:
       id-token: write   # PyPI Trusted Publishing (OIDC)
       contents: read
@@ -25,11 +39,9 @@ jobs:
       - uses: astral-sh/setup-uv@v4
         with:
           python-version: "3.12"
-      - name: Build sdists + wheels
-        run: |
-          uv build --package axor-proxy -o dist/
-          uv build --package axor-backend -o dist/
-      - name: Publish to PyPI (trusted publishing)
+      - name: Build ${{ matrix.pkg }} (sdist + wheel)
+        run: uv build --package ${{ matrix.pkg }} -o dist/
+      - name: Publish ${{ matrix.pkg }} to PyPI (trusted publishing)
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           packages-dir: dist/

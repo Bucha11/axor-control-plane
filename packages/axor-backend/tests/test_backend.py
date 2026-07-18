@@ -250,6 +250,13 @@ async def test_regression_report_both_sides(client: httpx.AsyncClient) -> None:
     await client.post("/v1/pins/run_legit",
                       json={"side": "must_pass", "label": "weekly report"})
 
+    # The North-star surface: the corpus as counts (GET /v1/pins).
+    corpus = (await client.get("/v1/pins")).json()
+    assert corpus["total"] == 2
+    assert corpus["must_block"] == 1
+    assert corpus["must_pass"] == 1
+    assert {p["run_id"] for p in corpus["pins"]} == {"run_attack", "run_legit"}
+
     good = (await client.post("/v1/regression", json={"config": CONFIG})).json()
     assert good["safe_to_ship"] is True
     assert {r["result"] for r in good["rows"]} == {"held", "passed"}

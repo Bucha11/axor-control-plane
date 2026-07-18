@@ -4,10 +4,10 @@
 // are addressable. Quiet-until-wrong holds: three primary tabs, everything else
 // behind "more", and adapter-only surfaces greyed with the honest upsell.
 import { useEffect } from "react";
-import { Circle, GraduationCap, Settings as SettingsIcon } from "lucide-react";
+import { Circle, GraduationCap, Lock, Settings as SettingsIcon } from "lucide-react";
 import { C, MONO } from "./theme";
 import { navigate, useRoute } from "./router";
-import { MODE_LABEL, isConnected, useApp } from "./store";
+import { ConnectionMode, MODE_LABEL, isAdapter, isConnected, useApp } from "./store";
 import Tooltip from "./components/Tooltip";
 import Tour from "./components/Tour";
 import Home from "./tabs/Home";
@@ -22,8 +22,12 @@ import ExpertView from "./tabs/ExpertView";
 import Settings from "./tabs/Settings";
 import Pricing from "./tabs/Pricing";
 
-const PRIMARY = ["eval", "control", "replay"] as const;
-const MORE = ["get started", "config builder", "health", "regression", "expert", "pricing", "settings"] as const;
+// Primary is the loop a first-time user actually runs: catch (eval) → explain
+// (replay) → prevent (regression). Control is the fourth, adapter-only rung —
+// shown so the destination is visible, greyed with an honest upsell until an
+// adapter connection unlocks it. Everything else lives behind "more".
+const PRIMARY = ["eval", "replay", "regression"] as const;
+const MORE = ["get started", "config builder", "health", "expert", "pricing", "settings"] as const;
 
 function NavLink({ id, active }: { id: string; active: boolean }) {
   return (
@@ -37,6 +41,35 @@ function NavLink({ id, active }: { id: string; active: boolean }) {
     >
       {id}
     </button>
+  );
+}
+
+// Control is adapter-only by construction (the proxy has no handle on internal
+// topology). Kept in the primary row so the destination reads as "next rung",
+// but greyed with a lock + tooltip until adapter; clicking still lands on the
+// tab's own upsell rather than pretending it's ready.
+function ControlNavLink({ active, mode }: { active: boolean; mode: ConnectionMode }) {
+  const unlocked = isAdapter(mode);
+  const link = (
+    <button
+      onClick={() => navigate("control")}
+      style={{
+        display: "flex", alignItems: "center", gap: 4,
+        background: "none", border: "none", padding: "2px 0", cursor: "pointer",
+        color: active ? C.text : unlocked ? C.dim : C.line,
+        fontSize: 13, fontFamily: MONO,
+        borderBottom: `2px solid ${active ? C.steel : "transparent"}`,
+      }}
+    >
+      {!unlocked && <Lock size={11} />}
+      control
+    </button>
+  );
+  if (unlocked) return link;
+  return (
+    <Tooltip content="Live topology + per-node interventions — unlocks at adapter depth (wrap your agent as an axor-core Invokable)." side="bottom">
+      {link}
+    </Tooltip>
   );
 }
 
@@ -73,6 +106,7 @@ export default function App() {
             {PRIMARY.map((id) => (
               <NavLink key={id} id={id} active={key === id} />
             ))}
+            <ControlNavLink active={key === "control"} mode={mode} />
             <MoreMenu activeKey={key} />
           </div>
         </div>

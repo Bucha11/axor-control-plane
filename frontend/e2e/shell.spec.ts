@@ -23,11 +23,13 @@ test.describe("shell", () => {
     await expect(page.getByText("not connected")).toBeVisible();
   });
 
-  test("primary nav is eval / control / replay", async ({ page }) => {
+  test("primary nav is the loop: eval / replay / regression, with control greyed until adapter", async ({ page }) => {
     await goHash(page, "home");
-    for (const id of ["eval", "control", "replay"]) {
+    for (const id of ["eval", "replay", "regression"]) {
       await expect(page.getByRole("button", { name: id, exact: true })).toBeVisible();
     }
+    // Control is shown as the fourth rung but locked until an adapter connection.
+    await expect(page.getByRole("button", { name: "control", exact: true })).toBeVisible();
   });
 
   test("the more… menu reaches a secondary surface (pricing)", async ({ page }) => {

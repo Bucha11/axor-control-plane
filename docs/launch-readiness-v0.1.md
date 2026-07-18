@@ -34,7 +34,7 @@ Status legend: ☐ open · ◐ partial exists · ☑ done.
 
 | P | Item | Done-when | Status |
 |---|---|---|---|
-| P0 | **Publish to PyPI**: `axor-proxy` (uvx path is quoted all over the UI/docs and currently 404s), `axor-backend`. Compose images to GHCR. | `uvx axor-proxy --demo` works on a clean machine. | ◐ (ecosystem deps published — core 0.9.1, eval 0.1.0 — and pinned from PyPI; remaining: trusted-publisher config for the two platform packages + tag v0.1.0) |
+| P0 | **Publish to PyPI**: `axor-proxy` (uvx path is quoted all over the UI/docs and currently 404s), `axor-backend`. Compose images to GHCR. | `uvx axor-proxy --demo` works on a clean machine. | ◐ **NOT published yet** — the packages are not on PyPI, so `uvx axor-proxy` still 404s. Everything up to the publish button is done and verified clean-room (both wheels build; install against PyPI-resolved core 0.9.2 / eval 0.1.0; `--demo` serves healthz; release.yml + **docs/RELEASING.md** ready). The publish itself is the remaining human-only step: register the two trusted publishers on pypi.org, then push tag v0.1.0. |
 | P0 | **Public landing + docs site** | The in-app Home is not a website. Static site: hero = demo GIF (have) + "Run demo-mode" → hosted sandbox or 2-command local start; docs = quickstart, depth ladder, protocol, FAQ. | ◐ (site/ + Pages workflow ready; enable Pages + domain) |
 | P0 | **Launch post** | "Your agent lies when its tools fail — here's the receipt": narrative + GIF + benchmark table (catch rates by fault mode). HN + r/LocalLLaMA + X thread. | ◐ (draft in docs/launch-post-draft.md; needs benchmark table) |
 | P1 | **EvidenceCase link unfurl** | Share permalink gets OG tags + "Caught by Axor" footer — every shared receipt is an ad. (Revocability already done.) | ☑ |

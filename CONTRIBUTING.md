@@ -12,6 +12,10 @@ Thanks for looking. Ground rules keep reviews fast:
 - **Tests**: behaviour changes come with a test that fails without the change.
   E2E for anything a user sees; lint (`uv run ruff check .`) and `tsc` clean.
 - **Schema changes**: new alembic revision — never edit `0001_baseline.py`.
+- **Naming**: "control plane" is both this platform and one of its subsystems
+  (the SSE+POST advisory channel). In code and docs the subsystem is always
+  the **plane service** (`axor_backend.plane`); "control plane" unqualified
+  means the platform.
 - **Security issues**: never as public issues — see SECURITY.md.
 - **License**: Apache-2.0 (except `axor_backend/ee/`); contributions are
   accepted under the repo license. EE contributions need a maintainer thumbs-up

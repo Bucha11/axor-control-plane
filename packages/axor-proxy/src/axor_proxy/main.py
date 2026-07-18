@@ -12,10 +12,17 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import sys
 from pathlib import Path
 
 
 def cli() -> None:
+    # `axor-proxy wrap …` is a subcommand (run a CLI agent + submit its claim);
+    # everything else is the server, whose flat flag parser is kept unchanged.
+    if sys.argv[1:2] == ["wrap"]:
+        from axor_proxy.wrap import wrap_cli
+        raise SystemExit(wrap_cli(sys.argv[2:]))
+
     parser = argparse.ArgumentParser(prog="axor-proxy")
     parser.add_argument("--config", type=Path, help="tools.json")
     parser.add_argument("--demo", action="store_true",

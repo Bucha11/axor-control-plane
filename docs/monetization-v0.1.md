@@ -49,10 +49,28 @@ Two deliberately strong paid anchors: **compliance reports** (EvidenceCase + app
 | Tier | Price shape | For |
 |---|---|---|
 | **Free** | $0, OSS | individuals, small teams, research/academic (explicit carve-out: research use of everything incl. EE, aligned with §7 neutrality) |
-| **Team** | per governed node/mo (order of $50–100/node), floor ~$500/mo; hosted or self-hosted, same price | first company deployments, 5–30 nodes |
+| **Team** | per environment/mo (order of ~$250/env: dev / staging / prod); hosted or self-hosted, same price | first company deployments |
 | **Enterprise** | annual contract, node bands + support; realistic entry $20–50k/yr | SSO, compliance reports, fleet view, air-gapped, SLA |
 
-Metric: **per governed node** — counted by the topology the plane already maintains; value-aligned (more agents governed = more value), zero new instrumentation. Ephemeral nodes count by concurrent peak, not by spawn (else delegation trees get taxed — same amplification problem budget caps solved, same fix).
+Metric — split by tier, deliberately:
+
+- **Team is priced per environment** (a stable, countable unit — a deployment of
+  the plane: dev / staging / prod). This is the credit-card tier, so the metric
+  must be un-arguable at signup. "Per governed node" fails that test *early*: a
+  buyer with delegation trees and ephemeral workers cannot predict the bill, and
+  "what counts as a node / concurrent vs registered / dev vs prod" becomes a
+  sales conversation before the first dollar. An environment is something they
+  already know they have.
+- **Per-node bands are reserved for Enterprise**, where fleet topology is
+  actually modeled and the buyer thinks in nodes. There, ephemeral nodes count
+  by concurrent peak, not by spawn (else delegation trees get taxed — same
+  amplification problem budget caps solved, same fix).
+
+Rejected: **per-EvidenceCase / per-run** metrics. Charging for each caught
+discrepancy is a perverse incentive — it taxes the product working, tempts
+tolerance of false positives, and gives the user a reason not to open cases.
+For a product whose whole trust rests on "we only flag real fabrications," that
+is exactly the wrong thing to meter.
 
 ## 6. Motion (solo-founder realistic)
 
