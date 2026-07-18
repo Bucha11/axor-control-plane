@@ -45,6 +45,9 @@ jobs:
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           packages-dir: dist/
+          # A re-run (e.g. re-tag to pick up an images fix) then skips an
+          # already-published version instead of failing the whole workflow.
+          skip-existing: true
 
   images:
     runs-on: ubuntu-latest
@@ -53,6 +56,11 @@ jobs:
       packages: write   # push to GHCR with GITHUB_TOKEN
     steps:
       - uses: actions/checkout@v4
+      # GHCR repository names must be lowercase; the owner login (e.g. "Bucha11")
+      # is not, so lowercase it before it lands in an image tag.
+      - name: Lowercase image owner
+        id: repo
+        run: echo "owner=${GITHUB_REPOSITORY_OWNER,,}" >> "$GITHUB_OUTPUT"
       - uses: docker/login-action@v3
         with:
           registry: ghcr.io
@@ -64,8 +72,8 @@ jobs:
           context: .
           push: true
           tags: |
-            ghcr.io/${{ github.repository_owner }}/axor-platform:${{ github.ref_name }}
-            ghcr.io/${{ github.repository_owner }}/axor-platform:latest
+            ghcr.io/${{ steps.repo.outputs.owner }}/axor-platform:${{ github.ref_name }}
+            ghcr.io/${{ steps.repo.outputs.owner }}/axor-platform:latest
           secrets: |
             github_token=${{ secrets.AXOR_ECOSYSTEM_TOKEN || secrets.GITHUB_TOKEN }}
       - name: Push frontend image
@@ -75,5 +83,5 @@ jobs:
           file: frontend/Dockerfile
           push: true
           tags: |
-            ghcr.io/${{ github.repository_owner }}/axor-frontend:${{ github.ref_name }}
-            ghcr.io/${{ github.repository_owner }}/axor-frontend:latest
+            ghcr.io/${{ steps.repo.outputs.owner }}/axor-frontend:${{ github.ref_name }}
+            ghcr.io/${{ steps.repo.outputs.owner }}/axor-frontend:latest
