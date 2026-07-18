@@ -21,32 +21,38 @@ works on a clean machine.**
 
 ## One-time setup
 
-### 1. Create the `release` GitHub environment
+### 1. Create the two GitHub environments
 
-`release.yml`'s `pypi` job runs in `environment: release`. In the repo:
-**Settings → Environments → New environment → `release`**. Optionally add a
-required reviewer so a tag can't publish without a human approving the run.
+The `pypi` job runs one matrix leg per package, each in its **own** environment:
+`axor-proxy` → `pypi-proxy`, `axor-backend` → `pypi-backend`. This is required,
+not cosmetic — PyPI keys a Trusted Publisher on (owner, repo, workflow-file,
+environment), and a *pending* publisher config must be unique. Two packages
+sharing one environment collide: the second registration is rejected with
+"a pending trusted publisher matching this configuration has already been
+registered for a different project name."
+
+In the repo: **Settings → Environments → New environment** → create both
+`pypi-proxy` and `pypi-backend`. Optionally add a required reviewer to each so a
+tag can't publish without a human approving the run.
 
 ### 2. Register the Trusted Publisher on PyPI — once per package
 
-For **each** of `axor-proxy` and `axor-backend`, on pypi.org:
+On pypi.org, **Publishing → Add a pending publisher** (creates the project on
+first publish). Register **two**, identical except for the project name **and**
+the environment:
 
-- If the project does not exist yet, use **Publishing → Add a pending
-  publisher** (creates the project on first publish). If it exists, open the
-  project's **Settings → Publishing → Add a new publisher**.
-- Fill in exactly:
+  | Field | axor-proxy | axor-backend |
+  |---|---|---|
+  | PyPI Project Name | `axor-proxy` | `axor-backend` |
+  | Owner | `Bucha11` | `Bucha11` |
+  | Repository name | `axor-control-plane` | `axor-control-plane` |
+  | Workflow name | `release.yml` | `release.yml` |
+  | Environment name | `pypi-proxy` | `pypi-backend` |
 
-  | Field | Value |
-  |---|---|
-  | PyPI Project Name | `axor-proxy` (then repeat for `axor-backend`) |
-  | Owner | `Bucha11` |
-  | Repository name | `axor-control-plane` |
-  | Workflow name | `release.yml` |
-  | Environment name | `release` |
-
-The `Workflow name` is the filename, not the `name:` field — it must be
-`release.yml`. The `Environment name` must match step 1 (`release`) or PyPI
-rejects the OIDC token.
+`Workflow name` is the **filename** (`release.yml`), not the workflow's `name:`
+field (`Release`). Each `Environment name` must match the matrix leg above
+exactly, or PyPI rejects the OIDC token. Because the environments differ, the
+two pending configs are distinct and neither collides.
 
 Do the same on **test.pypi.org** first if you want a dry run (see below).
 
@@ -66,9 +72,10 @@ git tag v0.1.0
 git push origin v0.1.0
 ```
 
-The `Release` workflow then: builds sdists+wheels for both packages, publishes
-to PyPI via OIDC, and pushes `axor-platform` / `axor-frontend` images to GHCR.
-If you added a required reviewer to the `release` environment, approve the run.
+The `Release` workflow then: builds sdists+wheels for both packages (one matrix
+leg each), publishes to PyPI via OIDC, and pushes `axor-platform` /
+`axor-frontend` images to GHCR. If you added required reviewers to the
+`pypi-proxy` / `pypi-backend` environments, approve each leg's run.
 
 `workflow_dispatch` is also enabled, so you can re-run the publish from the
 Actions tab without moving the tag (useful if GHCR succeeds but PyPI needs a
