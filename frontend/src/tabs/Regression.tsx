@@ -151,17 +151,26 @@ export default function Regression({ initialConfig }: { initialConfig?: string }
   const [raw, setRaw] = useState(initialConfig ?? DEFAULT_CONFIG);
   const [parseError, setParseError] = useState<string | null>(null);
   const [open, setOpen] = useState<string | null>(null);
+  const qc = useQueryClient();
 
   const regression = useMutation({
     mutationFn: (config: Record<string, unknown>) => api.regression(config),
   });
+
+  // The North-star: how many caught EvidenceCases the operator committed to
+  // permanent checks. A growing corpus is the signal the loop closed — Axor's
+  // findings were trusted enough to guard against forever.
+  const corpus = useQuery({ queryKey: ["pins"], queryFn: api.getPins });
 
   // Seed a two-sided corpus (must-block attack + must-pass legit flow) and drop
   // its matching config into the editor, so a fresh install can demonstrate the
   // regression CI with real data instead of an empty corpus.
   const seed = useMutation({
     mutationFn: () => api.seedAdapterRuns(),
-    onSuccess: (r) => setRaw(JSON.stringify(r.config, null, 2)),
+    onSuccess: (r) => {
+      setRaw(JSON.stringify(r.config, null, 2));
+      void qc.invalidateQueries({ queryKey: ["pins"] });
+    },
   });
 
   const run = () => {
@@ -197,6 +206,16 @@ export default function Regression({ initialConfig }: { initialConfig?: string }
       <div style={{ fontFamily: MONO, fontSize: 11, color: C.mut, marginBottom: 6 }}>
         axor.config <span style={{ color: C.text }}>candidate</span> vs pinned corpus · deterministic replay, no model calls
       </div>
+      {corpus.data && (
+        <div style={{ fontFamily: MONO, fontSize: 11, marginBottom: 10 }}>
+          <span style={{ color: corpus.data.total ? C.green : C.dim }}>
+            corpus: {corpus.data.total} case{corpus.data.total === 1 ? "" : "s"} pinned
+          </span>
+          <span style={{ color: C.dim }}>
+            {" "}· {corpus.data.must_block} must-block · {corpus.data.must_pass} must-pass
+          </span>
+        </div>
+      )}
 
       <textarea
         value={raw}

@@ -16,6 +16,9 @@ test.describe("regression", () => {
     await page.getByRole("button", { name: /load example corpus/ }).click();
     // The seed drops its matching config into the editor.
     await expect(page.locator("textarea")).toContainText("allowed_tools");
+    // North-star surface: the seeded corpus is counted in the header.
+    await expect(page.getByText(/corpus: \d+ cases? pinned/)).toBeVisible();
+    await expect(page.getByText(/must-block · .*must-pass/)).toBeVisible();
     await page.getByRole("button", { name: /Run regression/ }).click();
 
     await expect(page.getByText(/Safe to ship/)).toBeVisible();

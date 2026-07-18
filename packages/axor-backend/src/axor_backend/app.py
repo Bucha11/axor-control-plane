@@ -589,6 +589,19 @@ def create_app(
         await request.app.state.store.pin(run_id, side, body.get("label", ""))
         return {"pinned": run_id, "side": side}
 
+    @app.get("/v1/pins")
+    async def list_pins(request: Request) -> dict:
+        """The regression corpus as a flat list + side counts. This is the
+        North-star surface: how many caught EvidenceCases the operator committed
+        to permanent checks (must_block auto-pins on evidence, must_pass by
+        hand). A growing corpus means Axor's findings were trusted enough to
+        guard against forever — the signal that the loop closed."""
+        pins = await request.app.state.store.pinned()
+        must_block = sum(1 for p in pins if p["side"] == "must_block")
+        must_pass = sum(1 for p in pins if p["side"] == "must_pass")
+        return {"pins": pins, "must_block": must_block,
+                "must_pass": must_pass, "total": len(pins)}
+
     @app.post("/v1/regression")
     async def regression(body: dict, request: Request) -> dict:
         """Config CI over the pinned corpus (decision 11): a corpus needs both

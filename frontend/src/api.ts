@@ -304,6 +304,16 @@ export const api = {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ side, label }),
     }).then((r) => j<{ pinned: string }>(r)),
+  // The North-star surface: the regression corpus as counts (see GET /v1/pins).
+  getPins: () =>
+    af("/v1/pins").then((r) =>
+      j<{
+        pins: { run_id: string; side: string; label: string }[];
+        must_block: number;
+        must_pass: number;
+        total: number;
+      }>(r),
+    ),
   regression: (config: Record<string, unknown>) =>
     af("/v1/regression", {
       method: "POST",
