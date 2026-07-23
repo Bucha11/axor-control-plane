@@ -146,6 +146,23 @@ regression_reports = Table(
     Column("report_json", _JSON, nullable=False),
 )
 
+# Accepted Lab deploy packages (axor-cp-deploy/v1, migration 0005): the record
+# of every finalized Lab handoff — validated policy + manifests stored verbatim
+# (package_json), plus the summary columns the list surface reads. The pins the
+# package created live in `pins` (labelled lab:{package_id}); this table is the
+# provenance of where they came from.
+lab_deploys = Table(
+    "lab_deploys", metadata,
+    Column("package_id", String(64), primary_key=True),
+    Column("created_ts", String(40), nullable=False),
+    Column("kernel", String(120), nullable=False),
+    Column("config_hash", String(80), nullable=False),
+    Column("parametric_config_hash", String(80), nullable=False),
+    Column("pins_created", Integer, nullable=False, default=0),
+    Column("manifest_count", Integer, nullable=False, default=0),
+    Column("package_json", _JSON, nullable=False),
+)
+
 # Dead letters are the honesty ledger of the notification channel: a webhook
 # that never arrived. They persist (capped) so a restart doesn't erase the
 # evidence that deliveries were lost — the exact failure mode the dead-letter
@@ -663,6 +680,54 @@ class Store:
              "safe_to_ship": r.safe_to_ship}
             for r in rows
         ]
+
+    # ── Lab deploys (axor-cp-deploy/v1 packages accepted from Axor Lab) ──────
+
+    async def add_lab_deploy(
+        self, package_id: str, package: dict[str, Any], pins_created: int, ts: str,
+    ) -> bool:
+        """Store an accepted package; idempotent on package_id (a re-upload of
+        the same bytes is acknowledged, never duplicated). Returns True when
+        the row is new."""
+        async with self.engine.begin() as conn:
+            dup = (await conn.execute(
+                select(lab_deploys.c.package_id)
+                .where(lab_deploys.c.package_id == package_id)
+            )).first()
+            if dup is not None:
+                return False
+            await conn.execute(insert(lab_deploys).values(
+                package_id=package_id, created_ts=ts,
+                kernel=str(package.get("kernel", "")),
+                config_hash=str(package.get("config_hash", "")),
+                parametric_config_hash=str(package.get("parametric_config_hash", "")),
+                pins_created=pins_created,
+                manifest_count=len(package.get("tool_manifests", [])),
+                package_json=package,
+            ))
+            return True
+
+    async def list_lab_deploys(self) -> list[dict[str, Any]]:
+        async with self.engine.connect() as conn:
+            rows = (await conn.execute(
+                select(lab_deploys).order_by(lab_deploys.c.created_ts.desc())
+            )).all()
+        return [
+            {"package_id": r.package_id, "created_ts": r.created_ts,
+             "kernel": r.kernel, "config_hash": r.config_hash,
+             "parametric_config_hash": r.parametric_config_hash,
+             "pins_created": r.pins_created, "manifest_count": r.manifest_count,
+             "source": (r.package_json or {}).get("source", {})}
+            for r in rows
+        ]
+
+    async def get_lab_deploy(self, package_id: str) -> dict[str, Any] | None:
+        async with self.engine.connect() as conn:
+            row = (await conn.execute(
+                select(lab_deploys.c.package_json)
+                .where(lab_deploys.c.package_id == package_id)
+            )).first()
+        return row.package_json if row is not None else None
 
     # ── notification dead letters (persist: a restart must not erase the
     # evidence that deliveries were lost) ─────────────────────────────────────

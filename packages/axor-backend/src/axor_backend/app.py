@@ -582,6 +582,63 @@ def create_app(
         config = kernel_config_from_json(body.get("config", {}))
         return scrubber_payload(replay(events, config))
 
+    # ── Axor Lab cross-links (CP → Lab incident export, Lab → CP deploy) ─────
+
+    @app.get("/v1/runs/{run_id}/lab-package")
+    async def run_lab_package(run_id: str, request: Request) -> dict:
+        """The run as an axor-lab-incident/v1 package (trace + scenario +
+        manifests + recorded condition) — the input of `axor-lab
+        import-incident`. 422 with the full reason list when the run is not
+        convertible (proxy-depth events, unreproducible verdicts, no vector)."""
+        from axor_backend.lab_export import LabExportError, build_incident_package
+
+        store: Store = request.app.state.store
+        runs = {r["run_id"]: r for r in await store.list_runs()}
+        run = runs.get(run_id)
+        if run is None:
+            raise HTTPException(404, f"no such run {run_id}")
+        events = [json.loads(line) for line in await store.run_events(run_id)]
+        try:
+            return build_incident_package(events, run)
+        except LabExportError as exc:
+            raise HTTPException(
+                422, {"error": "run is not convertible to a Lab incident package",
+                      "reasons": list(exc.reasons)},
+            ) from exc
+
+    @app.post("/v1/lab/deploy")
+    async def lab_deploy(body: dict, request: Request) -> dict:
+        """Accept a cp-deploy.json produced by `axor-lab export-cp`: validate
+        (finalized evidence-backed packages only), store the package record,
+        and fold its regression pins into the corpus with source lab:{id}."""
+        from axor_backend.lab_import import (
+            package_id_of,
+            pin_plans,
+            validate_cp_deploy,
+        )
+
+        problems = validate_cp_deploy(body)
+        if problems:
+            raise HTTPException(
+                422, {"error": "cp-deploy package rejected", "reasons": problems},
+            )
+        store: Store = request.app.state.store
+        package_id = package_id_of(body)
+        plans = pin_plans(body, package_id)
+        stored_new = await store.add_lab_deploy(package_id, body, len(plans), _now())
+        for plan in plans:  # idempotent per run_id — a re-upload re-asserts them
+            await store.pin(plan.run_id, plan.side, plan.label)
+        return {
+            "package_id": package_id,
+            "pins_created": len(plans),
+            "policy_stored": True,
+            "already_deployed": not stored_new,
+        }
+
+    @app.get("/v1/lab/deploys")
+    async def lab_deploys_list(request: Request) -> list[dict]:
+        return await request.app.state.store.list_lab_deploys()
+
     @app.post("/v1/pins/{run_id}")
     async def pin_run(run_id: str, body: dict, request: Request) -> dict:
         side = body.get("side")

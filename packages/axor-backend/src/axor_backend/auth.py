@@ -41,6 +41,7 @@ _WRITE_POLICY: tuple[tuple[str, str], ...] = (
     ("/v1/regression", "read"),       # replay-only, no state change
     ("/v1/replay/", "read"),          # counterfactual POST is read-only
     ("/v1/notifications/", "operate"),
+    ("/v1/lab/", "operate"),          # accepting a Lab deploy changes the corpus
 )
 
 # Paths served without auth even when enabled: liveness, the deliberately

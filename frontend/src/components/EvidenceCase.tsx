@@ -5,7 +5,7 @@
 // 8.3. Wherever a case is shown, it is shown through this component.
 import { useState } from "react";
 import { useMutation } from "@tanstack/react-query";
-import { Check, ExternalLink, Play, Share2 } from "lucide-react";
+import { Check, ExternalLink, FlaskConical, Play, Share2 } from "lucide-react";
 import { api, EvidenceCaseDto } from "../api";
 import CausalSubgraph from "./CausalSubgraph";
 import { navigate } from "../router";
@@ -29,6 +29,21 @@ function render(value: unknown): string {
   return typeof value === "string" ? value : JSON.stringify(value);
 }
 
+// Optional deep link to a running Axor Lab instance (VITE_LAB_URL) — shown
+// next to the downloaded incident package so the funnel is one click.
+const LAB_URL =
+  (import.meta as unknown as { env?: Record<string, string> }).env?.VITE_LAB_URL;
+
+function downloadJson(name: string, value: unknown): void {
+  const blob = new Blob([JSON.stringify(value, null, 2)], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = name;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
 export default function EvidenceCase({
   runId,
   caseIndex,
@@ -43,6 +58,24 @@ export default function EvidenceCase({
 }) {
   const [shareUrl, setShareUrl] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  // CP → Lab funnel state: null = untouched, [] = exported OK, else the honest
+  // list of reasons the run is not convertible to a Lab incident package.
+  const [labReasons, setLabReasons] = useState<string[] | null>(null);
+  const [labExported, setLabExported] = useState(false);
+
+  const labExport = useMutation({
+    mutationFn: () => api.labPackage(runId),
+    onSuccess: (r) => {
+      if (r.ok) {
+        downloadJson(`axor-lab-incident-${runId}.json`, r.pkg);
+        setLabReasons(null);
+        setLabExported(true);
+      } else {
+        setLabExported(false);
+        setLabReasons(r.reasons);
+      }
+    },
+  });
 
   const share = useMutation({
     mutationFn: () => api.shareCase(runId, caseIndex),
@@ -102,8 +135,47 @@ export default function EvidenceCase({
               <ExternalLink size={11} /> PDF
             </a>
           </Tooltip>
+          <Tooltip content="Download this run as an axor-lab-incident/v1 package (trace + scenario + manifests + recorded condition) — import it with `axor-lab import-incident` to replay, pin and test policies against the incident.">
+            <button
+              onClick={() => labExport.mutate()}
+              disabled={labExport.isPending}
+              style={action(labExported ? C.green : C.mut)}
+            >
+              <FlaskConical size={11} />{" "}
+              {labExport.isPending ? "exporting…" : labExported ? "exported" : "Export for Lab"}
+            </button>
+          </Tooltip>
+          {LAB_URL && (
+            <a
+              href={`${LAB_URL.replace(/\/$/, "")}/#/import`}
+              target="_blank"
+              rel="noreferrer"
+              style={{ ...action(C.steel), textDecoration: "none" }}
+            >
+              Open in Axor Lab →
+            </a>
+          )}
         </div>
       </div>
+      {labExport.isError && (
+        <div className="px-4 py-2" style={{ borderTop: `1px solid ${C.line}` }}>
+          <span style={{ fontFamily: MONO, fontSize: 11, color: C.red }}>
+            lab export failed: {(labExport.error as Error).message}
+          </span>
+        </div>
+      )}
+      {labReasons && (
+        <div className="px-4 py-3" style={{ borderTop: `1px solid ${C.line}` }}>
+          <div style={{ fontFamily: MONO, fontSize: 10, color: C.dim, letterSpacing: "0.1em", marginBottom: 6 }}>
+            NOT CONVERTIBLE TO A LAB INCIDENT
+          </div>
+          {labReasons.map((reason, i) => (
+            <div key={i} style={{ fontFamily: MONO, fontSize: 11.5, color: C.mut, lineHeight: 1.6 }}>
+              · {reason}
+            </div>
+          ))}
+        </div>
+      )}
       {/* Multi-agent case (spec v2 Ch.3): the causal subgraph derives on open.
           Renders nothing for size-1 — the receipt above IS the v0.13 case. */}
       {c.anchor && <CausalSubgraph runId={runId} anchor={c.anchor} />}

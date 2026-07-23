@@ -243,6 +243,28 @@ export interface WrapManifestsBundle {
   wrap: Record<string, unknown>;
 }
 
+// ── Axor Lab cross-links ─────────────────────────────────────────────────────
+// CP → Lab: a run exported as an axor-lab-incident/v1 package, or the honest
+// list of reasons it cannot be. Lab → CP: an accepted cp-deploy package.
+export type LabPackageResult =
+  | { ok: true; pkg: Record<string, unknown> }
+  | { ok: false; reasons: string[] };
+
+export type LabDeployResult =
+  | { ok: true; package_id: string; pins_created: number; policy_stored: boolean; already_deployed: boolean }
+  | { ok: false; reasons: string[] };
+
+export interface LabDeploySummary {
+  package_id: string;
+  created_ts: string;
+  kernel: string;
+  config_hash: string;
+  parametric_config_hash: string;
+  pins_created: number;
+  manifest_count: number;
+  source: { bundle_id?: string; condition_id?: string };
+}
+
 async function j<T>(resp: Response): Promise<T> {
   if (!resp.ok) throw new Error(`${resp.status} ${await resp.text()}`);
   return resp.json() as Promise<T>;
@@ -399,6 +421,31 @@ export const api = {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ tools }),
     }).then((r) => j<WrapManifestsBundle>(r)),
+
+  // ── Axor Lab cross-links (CP → Lab incident export, Lab → CP deploy) ──────
+  labPackage: async (runId: string): Promise<LabPackageResult> => {
+    const r = await af(`/v1/runs/${runId}/lab-package`);
+    if (r.status === 422) {
+      const body = (await r.json()) as { detail?: { reasons?: string[] } };
+      return { ok: false, reasons: body.detail?.reasons ?? ["run is not convertible"] };
+    }
+    if (!r.ok) throw new Error(`${r.status} ${await r.text()}`);
+    return { ok: true, pkg: (await r.json()) as Record<string, unknown> };
+  },
+  labDeploy: async (pkg: Record<string, unknown>): Promise<LabDeployResult> => {
+    const r = await af("/v1/lab/deploy", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(pkg),
+    });
+    if (r.status === 422) {
+      const body = (await r.json()) as { detail?: { reasons?: string[] } };
+      return { ok: false, reasons: body.detail?.reasons ?? ["package rejected"] };
+    }
+    if (!r.ok) throw new Error(`${r.status} ${await r.text()}`);
+    return { ok: true, ...(await r.json()) as { package_id: string; pins_created: number; policy_stored: boolean; already_deployed: boolean } };
+  },
+  labDeploys: () => af("/v1/lab/deploys").then((r) => j<LabDeploySummary[]>(r)),
 
   // ── EvidenceCase share / export (spec 8.3) ─────────────────────────────────
   shareCase: (runId: string, caseIndex: number) =>
