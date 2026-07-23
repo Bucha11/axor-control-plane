@@ -21,7 +21,7 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from sse_starlette.sse import EventSourceResponse
 
 from axor_backend import auth as auth_mod
-from axor_backend import plane
+from axor_backend import plane, wrap_api
 from axor_backend.auth import (
     Principal,
     hash_secret,
@@ -245,6 +245,7 @@ def create_app(
         return await call_next(request)
 
     app.include_router(plane.router)
+    app.include_router(wrap_api.router)
 
     # ── run ingest & read (the proxy's upload path) ───────────────────────────
 

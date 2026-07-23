@@ -21,6 +21,12 @@ dependencies = [
   "pynacl>=1.5",
 ]
 
+[project.optional-dependencies]
+# Wrap engine for /v1/wrap (scan agent code -> tool manifests / governance).
+# Not yet on PyPI; install locally with `uv pip install -e ../axor-wrap` (the
+# routes answer 501 when it is absent).
+wrap = ["axor-wrap>=0.1"]
+
 [project.urls]
 Homepage = "https://github.com/Bucha11/axor-control-plane"
 Documentation = "https://github.com/Bucha11/axor-control-plane#readme"

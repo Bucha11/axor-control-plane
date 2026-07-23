@@ -210,6 +210,39 @@ export interface LicenseInfo {
   over_ceiling?: boolean;
 }
 
+// Wrap engine (/v1/wrap): real code scan for the Config Builder. The engine is
+// an optional backend extra — both routes answer 501 when it is not installed.
+export interface WrapGuess {
+  default_class: "READ" | "WRITE" | "EXPORT" | "EXEC" | "UNKNOWN";
+  confidence: "high" | "medium" | "low";
+  reason: string;
+  driving_args: string[];
+  untrusted_fields: string[];
+}
+
+export interface WrapTool {
+  id: string;
+  source: string;
+  description: string;
+  args_schema: Record<string, unknown>;
+  framework: string;
+  schema_confidence: string;
+  guess: WrapGuess;
+}
+
+export interface WrapEffect {
+  default_class: "READ" | "WRITE" | "EXPORT" | "EXEC";
+  driving_args: string[];
+  untrusted_fields?: string[];
+  sensitive_fields?: string[];
+}
+
+export interface WrapManifestsBundle {
+  manifests: Record<string, unknown>[];
+  governance_yaml: string;
+  wrap: Record<string, unknown>;
+}
+
 async function j<T>(resp: Response): Promise<T> {
   if (!resp.ok) throw new Error(`${resp.status} ${await resp.text()}`);
   return resp.json() as Promise<T>;
@@ -352,6 +385,20 @@ export const api = {
       headers: { "content-type": "application/json" },
       body: JSON.stringify(body),
     }).then((r) => j<SimulateResult>(r)),
+
+  // ── wrap engine: scan uploaded code, compile tool manifests ───────────────
+  wrapScan: (files: { path: string; content: string }[]) =>
+    af("/v1/wrap/scan", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ files }),
+    }).then((r) => j<{ tools: WrapTool[] }>(r)),
+  wrapManifests: (tools: (Omit<Partial<WrapTool>, "guess"> & { id: string; effect: WrapEffect })[]) =>
+    af("/v1/wrap/manifests", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ tools }),
+    }).then((r) => j<WrapManifestsBundle>(r)),
 
   // ── EvidenceCase share / export (spec 8.3) ─────────────────────────────────
   shareCase: (runId: string, caseIndex: number) =>

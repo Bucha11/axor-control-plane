@@ -32,6 +32,7 @@ SCOPES = frozenset({"read", "ingest", "operate", "admin"})
 # Open paths (no auth even when enabled) are handled separately below.
 _WRITE_POLICY: tuple[tuple[str, str], ...] = (
     ("/v1/ingest/", "ingest"),
+    ("/v1/wrap/", "ingest"),          # code analysis, not an operational command
     ("/v1/runs/", "ingest"),          # POST .../evidence
     ("/v1/pins/", "ingest"),
     ("/v1/plane/", "operate"),        # command / facts / consumed / telemetry

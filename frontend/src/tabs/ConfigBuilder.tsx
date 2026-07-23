@@ -1,7 +1,13 @@
 // Config builder: entry → build → preview (config-builder mockup). The code
-// upload is simulated; the config download is real (Blob + anchor click).
-import { useState } from "react";
+// upload is real: selected .py files go to the backend wrap engine (axor-wrap,
+// POST /v1/wrap/scan) which statically detects tools and guesses effect
+// classes — classification stays a human decision. Downloads are real too:
+// axor.config.json from the classified sinks, and tool-manifest/v1 files via
+// POST /v1/wrap/manifests (both Blob + anchor click). A backend without the
+// wrap extra answers 501 → an honest "engine not installed" panel.
+import { useRef, useState } from "react";
 import { Plus, ChevronDown, ChevronRight, Download, Check, X, ArrowRight, Upload, FileCode, Terminal, AlertTriangle } from "lucide-react";
+import { api, WrapTool } from "../api";
 import { C, MONO, btn } from "../theme";
 import Coach from "../components/Coach";
 import Tooltip from "../components/Tooltip";
@@ -22,6 +28,8 @@ interface Sink {
   type: SinkType;
   critical: boolean;
   args: ArgAllow[];
+  // The scanner's effect guess (shown under the name): heuristic, never final.
+  guess?: { confidence: string; reason: string };
 }
 
 type PeerLevel = "L0" | "L1" | "L2";
@@ -57,12 +65,30 @@ function Fold({ label, children, openDefault }: {
   );
 }
 
-const DETECTED: Sink[] = [
-  { name: "web_search", src: "tools.py:14 · @tool", endpoint: "https://api.search.example/v1", type: "?", critical: false, args: [] },
-  { name: "send_report", src: "tools.py:31 · @tool", endpoint: "https://slack.example/api/post", type: "?", critical: false, args: [{ arg: "channel", set: ["#reports", "#alerts"] }] },
-  { name: "run_query", src: "db.py:8 · langchain Tool()", endpoint: "postgres://…", type: "?", critical: false, args: [] },
-  { name: "shell", src: "agent.py:52 · subprocess", endpoint: "local://bash", type: "?", critical: false, args: [] },
-];
+// A scanned tool becomes a sink row: the guess pre-fills the class (UNKNOWN
+// stays "?" — the existing classify-by-hand UX was designed for exactly that),
+// and the guessed driving args seed the allowlist editor (empty sets = still
+// fully tainted, the safe default).
+const toSink = (t: WrapTool): Sink => ({
+  name: t.id,
+  src: t.source,
+  type: t.guess.default_class === "UNKNOWN" ? "?" : t.guess.default_class,
+  critical: false,
+  args: t.guess.driving_args.map((a) => ({ arg: a, set: [] })),
+  guess: { confidence: t.guess.confidence, reason: t.guess.reason },
+});
+
+const saveBlob = (filename: string, text: string) => {
+  const blob = new Blob([text], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+};
 
 // ---- per-sink allowlist editor ----
 function ArgEditor({ sink, update }: { sink: Sink; update: (p: Partial<Sink>) => void }) {
@@ -140,13 +166,37 @@ export default function ConfigBuilder() {
   const [budgetCapCalls, setBudgetCapCalls] = useState<number | null>(null);
   const [peers, setPeers] = useState<PeerDecl[]>([]);
   const [peerDraft, setPeerDraft] = useState<PeerDecl | null>(null);
+  const [wrapTools, setWrapTools] = useState<WrapTool[]>([]);
+  const [wrapMissing, setWrapMissing] = useState(false);
+  const [scanError, setScanError] = useState<string | null>(null);
+  const fileInput = useRef<HTMLInputElement>(null);
 
-  const upload = () => {
+  // Real upload: read the picked/dropped .py files in the browser, send them to
+  // the wrap engine, and turn detected tools into sink rows.
+  const analyze = async (picked: FileList | File[] | null) => {
+    const files: { path: string; content: string }[] = [];
+    for (const f of Array.from(picked ?? [])) {
+      if (!f.name.endsWith(".py")) continue;
+      files.push({ path: f.webkitRelativePath || f.name, content: await f.text() });
+    }
+    if (files.length === 0) {
+      setScanError("no .py files selected — the scanner reads Python sources only");
+      return;
+    }
+    setScanError(null);
+    setWrapMissing(false);
     setStage("analyzing");
-    setTimeout(() => {
-      setSinks(DETECTED.map((d) => ({ ...d, args: d.args.map((a) => ({ ...a, set: [...a.set] })) })));
+    try {
+      const { tools } = await api.wrapScan(files);
+      setWrapTools(tools);
+      setSinks(tools.map(toSink));
       setStage("build");
-    }, 1100);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      if (msg.startsWith("501")) setWrapMissing(true);
+      else setScanError(msg);
+      setStage("entry");
+    }
   };
   const patch = (i: number, p: Partial<Sink>) => setSinks(sinks.map((s, j) => (j === i ? { ...s, ...p } : s)));
   const unclassified = sinks.filter((s) => s.type === "?").length;
@@ -172,16 +222,45 @@ export default function ConfigBuilder() {
   };
 
   const download = () => {
-    const blob = new Blob([JSON.stringify(config, null, 2)], { type: "application/json" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = "axor.config.json";
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    URL.revokeObjectURL(url);
+    saveBlob("axor.config.json", JSON.stringify(config, null, 2));
     setEmitted(true);
+  };
+
+  // Second artifact: tool-manifest/v1 files (+ governance YAML + wrap sidecar)
+  // compiled by the wrap engine from the classified sinks.
+  const [manifestsErr, setManifestsErr] = useState<string | null>(null);
+  const [manifestsSaved, setManifestsSaved] = useState(false);
+  const downloadManifests = async () => {
+    setManifestsErr(null);
+    setWrapMissing(false);
+    try {
+      const bundle = await api.wrapManifests(
+        sinks.filter((s) => s.type !== "?").map((s) => {
+          const t = wrapTools.find((w) => w.id === s.name);
+          return {
+            id: s.name,
+            source: t?.source ?? "",
+            description: t?.description ?? "",
+            args_schema: t?.args_schema ?? { type: "object" },
+            framework: t?.framework,
+            schema_confidence: t?.schema_confidence,
+            effect: {
+              default_class: s.type as ToolType,
+              // the allowlist editor's argument keys are the carrier args the
+              // gate checks — exactly the manifest's driving_args
+              driving_args: s.args.map((a) => a.arg),
+              untrusted_fields: t?.guess.untrusted_fields ?? [],
+            },
+          };
+        }),
+      );
+      saveBlob("manifests.json", JSON.stringify(bundle, null, 2));
+      setManifestsSaved(true);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      if (msg.startsWith("501")) setWrapMissing(true);
+      else setManifestsErr(msg);
+    }
   };
 
   if (stage === "entry" || stage === "analyzing") {
@@ -199,18 +278,38 @@ export default function ConfigBuilder() {
         <div style={{ fontFamily: MONO, fontSize: 11.5, color: C.mut, marginBottom: 24 }}>
           Drop the code — we find its tools, you tell us what they can do, you download the wrapped package.
         </div>
-        <div onClick={stage === "entry" ? upload : undefined} className="p-8 flex flex-col items-center gap-3"
+        <input ref={fileInput} type="file" multiple accept=".py" style={{ display: "none" }}
+          onChange={(e) => { void analyze(e.target.files); e.target.value = ""; }} />
+        <div onClick={stage === "entry" ? () => fileInput.current?.click() : undefined}
+          onDragOver={(e) => e.preventDefault()}
+          onDrop={(e) => { e.preventDefault(); if (stage === "entry") void analyze(e.dataTransfer.files); }}
+          className="p-8 flex flex-col items-center gap-3"
           style={{ background: C.panel, border: `1px dashed ${stage === "analyzing" ? C.steel : C.line}`, borderRadius: 8, cursor: stage === "entry" ? "pointer" : "default" }}>
           {stage === "analyzing" ? (
             <><FileCode size={22} color={C.steel} />
-              <span style={{ fontFamily: MONO, fontSize: 12, color: C.steel }}>analyzing my_agent/ — extracting tool signatures…</span>
-              <span style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim }}>names and signatures only — classes are yours to assign</span></>
+              <span style={{ fontFamily: MONO, fontSize: 12, color: C.steel }}>analyzing — the wrap engine is extracting tool signatures…</span>
+              <span style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim }}>static scan (nothing is executed) — classes are yours to assign</span></>
           ) : (
             <><Upload size={22} color={C.mut} />
               <span style={{ fontFamily: MONO, fontSize: 12.5, color: C.text }}>Drop your agent folder or tools file</span>
-              <span style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim }}>.py · MCP manifest · LangChain project (click to simulate)</span></>
+              <span style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim }}>.py files · LangChain / MCP / plain Python (click to choose)</span></>
           )}
         </div>
+        {stage === "entry" && wrapMissing && (
+          <div className="flex items-start gap-2 mt-4 p-3" style={{ background: C.panel2, border: `1px solid ${C.amber}`, borderRadius: 6 }}>
+            <AlertTriangle size={13} color={C.amber} style={{ marginTop: 1 }} />
+            <div style={{ fontFamily: MONO, fontSize: 11, color: C.mut, lineHeight: 1.6 }}>
+              wrap engine not installed on the backend — the scan needs the{" "}
+              <span style={{ color: C.text }}>axor-backend[wrap]</span> extra (axor-wrap).
+              Install it and restart, or declare sinks by hand below.
+            </div>
+          </div>
+        )}
+        {stage === "entry" && scanError && !wrapMissing && (
+          <div className="mt-4 p-3" style={{ background: C.panel2, border: `1px solid ${C.red}`, borderRadius: 6, fontFamily: MONO, fontSize: 11, color: C.mut, lineHeight: 1.6 }}>
+            scan failed: {scanError}
+          </div>
+        )}
         {stage === "entry" && (
           <>
             <Tooltip content="Skip detection: start from an empty sink list and add each tool by name yourself.">
@@ -258,7 +357,14 @@ export default function ConfigBuilder() {
                   <span onClick={(e) => { e.stopPropagation(); patch(i, { type: "?" }); }}
                     style={{ fontFamily: MONO, fontSize: 10, fontWeight: 700, color: typeColor(s.type), width: 168 }}>{s.type}</span>
                 )}
-                <span style={{ fontFamily: MONO, fontSize: 13, color: s.type === "?" ? C.amber : C.text }}>{s.name}</span>
+                <span className="flex flex-col" style={{ minWidth: 0 }}>
+                  <span style={{ fontFamily: MONO, fontSize: 13, color: s.type === "?" ? C.amber : C.text }}>{s.name}</span>
+                  {s.guess && (
+                    <span style={{ fontFamily: MONO, fontSize: 9.5, color: C.dim }}>
+                      guess · {s.guess.confidence} — {s.guess.reason}
+                    </span>
+                  )}
+                </span>
                 {s.critical && <AlertTriangle size={12} color={C.red} />}
                 <span style={{ flex: 1 }} />
                 {s.args.some((a) => a.set.length) && <span style={{ fontFamily: MONO, fontSize: 10, color: C.green }}>{s.args.filter((a) => a.set.length).length} allowlist</span>}
@@ -440,10 +546,15 @@ export default function ConfigBuilder() {
       <Fold label="generated config (axor.config.json)">
         <pre style={{ background: C.panel2, border: `1px solid ${C.line}`, borderRadius: 6, padding: 12, fontFamily: MONO, fontSize: 11, color: C.mut, overflow: "auto", margin: 0 }}>{JSON.stringify(config, null, 2)}</pre>
       </Fold>
-      <div className="flex items-center gap-3 mt-5">
+      <div className="flex items-center gap-3 mt-5 flex-wrap">
         <Tooltip content="Downloads axor.config.json — drop it next to your agent and run it governed. The same file drives Replay counterfactuals and Regression.">
           <button onClick={download} style={btn({ color: C.text, borderColor: C.steel, padding: "9px 18px", fontSize: 12.5 })}>
             <Download size={14} /> {fromCode ? "Download wrapped package" : "Download config + scaffold"}
+          </button>
+        </Tooltip>
+        <Tooltip content="Downloads manifests.json — tool-manifest/v1 per classified tool plus the compiled governance YAML, built by the backend wrap engine.">
+          <button onClick={() => void downloadManifests()} style={btn({ color: C.text, padding: "9px 18px", fontSize: 12.5 })}>
+            <Download size={14} /> download tool manifests
           </button>
         </Tooltip>
         {emitted && (
@@ -451,7 +562,27 @@ export default function ConfigBuilder() {
             <Check size={13} /> saved · <span style={{ color: C.steel, cursor: "pointer" }}>run first governed experiment →</span>
           </span>
         )}
+        {manifestsSaved && !wrapMissing && !manifestsErr && (
+          <span style={{ fontFamily: MONO, fontSize: 12, color: C.green, display: "flex", alignItems: "center", gap: 6 }}>
+            <Check size={13} /> manifests saved
+          </span>
+        )}
       </div>
+      {wrapMissing && (
+        <div className="flex items-start gap-2 mt-3 p-3" style={{ background: C.panel2, border: `1px solid ${C.amber}`, borderRadius: 6 }}>
+          <AlertTriangle size={13} color={C.amber} style={{ marginTop: 1 }} />
+          <div style={{ fontFamily: MONO, fontSize: 11, color: C.mut, lineHeight: 1.6 }}>
+            wrap engine not installed on the backend — tool manifests need the{" "}
+            <span style={{ color: C.text }}>axor-backend[wrap]</span> extra (axor-wrap).
+            The config download above still works.
+          </div>
+        </div>
+      )}
+      {manifestsErr && !wrapMissing && (
+        <div className="mt-3 p-3" style={{ background: C.panel2, border: `1px solid ${C.red}`, borderRadius: 6, fontFamily: MONO, fontSize: 11, color: C.mut, lineHeight: 1.6 }}>
+          manifest build failed: {manifestsErr}
+        </div>
+      )}
     </Container>
   );
 }

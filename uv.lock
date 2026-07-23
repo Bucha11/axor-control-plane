@@ -121,6 +121,11 @@ dependencies = [
     { name = "uvicorn" },
 ]
 
+[package.optional-dependencies]
+wrap = [
+    { name = "axor-wrap" },
+]
+
 [package.metadata]
 requires-dist = [
     { name = "aiosqlite", specifier = ">=0.20" },
@@ -128,6 +133,7 @@ requires-dist = [
     { name = "asyncpg", specifier = ">=0.29" },
     { name = "axor-core", specifier = ">=0.9.2,<0.10" },
     { name = "axor-eval", specifier = ">=0.1.0,<0.2" },
+    { name = "axor-wrap", marker = "extra == 'wrap'", editable = "../axor-wrap" },
     { name = "fastapi", specifier = ">=0.111" },
     { name = "kuzu", specifier = ">=0.4" },
     { name = "pynacl", specifier = ">=1.5" },
@@ -135,6 +141,7 @@ requires-dist = [
     { name = "sse-starlette", specifier = ">=2.1" },
     { name = "uvicorn", specifier = ">=0.29" },
 ]
+provides-extras = ["wrap"]
 
 [[package]]
 name = "axor-control-plane"
@@ -208,6 +215,18 @@ requires-dist = [
 
 [package.metadata.requires-dev]
 dev = [{ name = "axor-backend", editable = "packages/axor-backend" }]
+
+[[package]]
+name = "axor-wrap"
+version = "0.1.0"
+source = { editable = "../axor-wrap" }
+
+[package.metadata]
+requires-dist = [
+    { name = "axor-core", marker = "extra == 'kernel'", specifier = ">=0.9.2,<0.10" },
+    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.5" },
+]
+provides-extras = ["kernel", "dev"]
 
 [[package]]
 name = "certifi"
