@@ -12,7 +12,7 @@ test.describe("secondary surfaces", () => {
       page.getByText("anything that makes an agent safer is free forever", { exact: false }),
     ).toBeVisible();
     await expect(
-      page.getByText("you pay only for how YOUR ORG runs it", { exact: false }),
+      page.getByText("you pay for capabilities and organizational maturity", { exact: false }),
     ).toBeVisible();
   });
 
