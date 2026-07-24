@@ -1033,13 +1033,29 @@ def _active_license(app: FastAPI) -> Any | None:  # noqa: ANN401 - License
     return lic
 
 
-def _require_ee(app: FastAPI, what: str) -> None:
-    if _active_license(app) is None:
-        # 402: honest and machine-readable — this is a paid org feature.
+def _require_ee(
+    app: FastAPI, what: str, *, min_tier: str = "team", module: str | None = None
+) -> None:
+    """Gate a paid org feature by the license's workspace tier (and optionally a
+    module), not merely by a license being present (axor-packaging.md §1). A
+    community-tier license does not unlock a team feature; the 402 names what is
+    needed. Safety features never call this."""
+    lic = _active_license(app)
+    if lic is None:
         raise HTTPException(
             402,
-            f"{what} is an org feature (Team tier) — add a license in "
-            "Settings → ENTERPRISE LICENSE. Safety features never require one.",
+            f"{what} is a paid org feature ({min_tier} tier) — add a license in "
+            "Settings → LICENSE. Safety features never require one.",
+        )
+    if not lic.tier_at_least(min_tier):
+        raise HTTPException(
+            402,
+            f"{what} needs the {min_tier} workspace tier or higher; this license is "
+            f"'{lic.workspace_tier}'.",
+        )
+    if module is not None and not lic.has_module(module):
+        raise HTTPException(
+            402, f"{what} needs the {module} module, which this license does not enable."
         )
 
 

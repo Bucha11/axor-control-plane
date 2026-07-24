@@ -28,7 +28,7 @@ def vendor(monkeypatch) -> dict:  # noqa: ANN001
          "expires_at": "2999-01-01", "features": []},
         bytes(key).hex(),
     )
-    return {"pub": pub, "license_json": lic}
+    return {"pub": pub, "priv": bytes(key).hex(), "license_json": lic}
 
 
 @pytest.fixture
@@ -82,6 +82,27 @@ async def test_free_shapes_stay_free_without_a_license(
         "enabled": False, "interval_hours": None, "last_run_ts": None,
         "ee_active": False,
     }
+
+
+async def test_community_tier_license_does_not_unlock_team_features(
+    client: httpx.AsyncClient, vendor: dict,
+) -> None:
+    """Tier-aware gating (axor-packaging.md §1): a community-tier license is a
+    valid, verified license but below the team tier — so it must NOT unlock the
+    paid org features, and the 402 names the tier."""
+    from axor_backend.ee.license import sign_license
+    community = sign_license(
+        {"organization": "T", "workspace_tier": "community",
+         "modules": {"private_lab": True, "control_plane": False},
+         "governed_node_ceiling": 0, "self_hosted_runner": False,
+         "expires_at": "2999-01-01", "features": []},
+        vendor["priv"],
+    )
+    r = await client.post("/v1/license/verify", json={"license_json": community})
+    assert r.status_code == 200 and r.json()["activated"] is True
+    hist = await client.get("/v1/regression/history")
+    assert hist.status_code == 402
+    assert "team" in hist.json()["detail"] and "community" in hist.json()["detail"]
 
 
 async def test_license_activation_unlocks_and_persists(
