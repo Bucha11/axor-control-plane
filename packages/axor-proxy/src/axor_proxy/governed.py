@@ -7,7 +7,8 @@ produces adapter-fidelity governance verdicts — including a recorded taint den
 when a web-tainted value is pushed at an egress sink. The trace is bridged to the
 kernel event schema (the same one Replay/Regression consume) and uploaded.
 
-A PlaneClient then keeps the node live: it heartbeats to the backend (so Control's
+A PlaneClient (axor-wrap's `axor_wrap.plane` — the kernel does not ship a plane
+client) then keeps the node live: it heartbeats to the backend (so Control's
 topology shows a real node with its level/budget) and subscribes to desired state
 (so an operator's pause / stop / replan / inject actually reaches this node —
 admission holds or winds the loop down at the intent boundary).
@@ -32,10 +33,16 @@ from axor_core.contracts.policy import ExecutionPolicy, ExportMode, ToolPolicy
 from axor_core.contracts.result import ExecutorEvent, ExecutorEventKind
 from axor_core.contracts.trace import TraceEventKind
 from axor_core.node.intent_loop import IntentLoop
-from axor_core.plane.admission import PlaneAdmission
-from axor_core.plane.client import PlaneClient
-from axor_core.plane.session import PlaneSession
 from axor_core.taint.engine import TaintEngine
+
+# The plane client lives in axor-wrap, not in the kernel: axor-core keeps only
+# the primitives the plane steers through (the desired-state lattice, JCS
+# canonical bytes, the event schema, the AdmissionController contract), so it
+# cannot depend on a plane client at all. Same protocol code as before, one
+# package over.
+from axor_wrap.plane.admission import PlaneAdmission
+from axor_wrap.plane.client import PlaneClient
+from axor_wrap.plane.session import PlaneSession
 
 # The governed flow, single source of truth: (tool, {arg: value}, output|None).
 # web_search reads external (untrusted) content; summarize derives a value FROM
