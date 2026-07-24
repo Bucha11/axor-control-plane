@@ -44,10 +44,22 @@ async def test_package_shape_and_source(client: httpx.AsyncClient) -> None:
     pkg = await _seeded_package(client)
     assert pkg["schema_version"] == "axor-lab-incident/v1"
     assert set(pkg) == {"schema_version", "trace", "scenario", "manifests",
-                        "condition", "source"}
+                        "condition", "replay_fidelity", "source"}
     assert pkg["source"]["product"] == "control-plane"
     assert pkg["source"]["run_id"] == "ex_block"
     assert pkg["source"]["url"] == "/v1/runs/ex_block"
+
+
+async def test_replay_fidelity_is_honest_per_gate(client: httpx.AsyncClient) -> None:
+    """The incident carries an explicit per-gate fidelity statement: taint_floor
+    reproduces faithfully, content-inspecting gates do not (the Control Plane
+    records observations, not payload bodies)."""
+    fidelity = (await _seeded_package(client))["replay_fidelity"]
+    assert fidelity["reproducible_gates"] == ["taint_floor"]
+    assert "ssrf" in fidelity["not_reproducible_gates"]
+    assert "value_policy" in fidelity["not_reproducible_gates"]
+    assert str(fidelity["recorded_kernel"]).startswith("axor-core@")
+    assert "observation-only" in fidelity["note"]
 
 
 async def test_artifacts_valid_against_installed_lab_contracts(

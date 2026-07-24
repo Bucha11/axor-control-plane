@@ -211,6 +211,7 @@ def build_incident_package(
         "scenario": scenario,
         "manifests": manifests,
         "condition": condition,
+        "replay_fidelity": _replay_fidelity(),
         "source": {
             "product": "control-plane",
             "run_id": run_id,
@@ -383,6 +384,32 @@ def _axor_core_pin() -> str:
     import axor_core
 
     return f"axor-core@{getattr(axor_core, '__version__', 'unknown')}"
+
+
+def _replay_fidelity() -> dict[str, Any]:
+    """The honest per-gate replay-fidelity statement carried with the incident.
+
+    The exported condition pins Lab's reference taint_floor kernel. That verdict
+    reproduces faithfully — it is a pure function of the value provenance the
+    Control Plane records. Content-inspecting gates (ssrf on a URL, value_policy
+    enum/range) need the payload bodies the Control Plane does not record
+    (observations only), so they are not reproducible from this trace; an
+    incident whose live verdict turned on such a gate is refused at export
+    (``_decide_all``), never silently downgraded."""
+    return {
+        "backend": REFERENCE_KERNEL,
+        "recorded_kernel": _axor_core_pin(),
+        "reproducible_gates": [GATE_TAINT_FLOOR],
+        "not_reproducible_gates": ["ssrf", "value_policy"],
+        "note": (
+            "Replayed under Lab's reference taint_floor kernel. The taint_floor "
+            "verdict reproduces faithfully — it is a pure function of the value "
+            "provenance the Control Plane records. Content-inspecting gates "
+            "(ssrf, value_policy) are not reproducible from observation-only "
+            "traces; an incident whose live verdict turned on such a gate is "
+            "refused at export, never downgraded silently."
+        ),
+    }
 
 
 def _condition(run_id: str) -> dict[str, Any]:
