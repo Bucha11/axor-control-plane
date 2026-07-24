@@ -1,3 +1,4 @@
+import { canonicalize } from "./jcs";
 import { useApp } from "./store";
 
 // Backend client. Vite dev-proxies /v1 -> backend :8400 and /axor -> proxy :8401.
@@ -308,6 +309,42 @@ function withToken(url: string): string {
   return url + (url.includes("?") ? "&" : "?") + "token=" + encodeURIComponent(token);
 }
 
+// base64 of the UTF-8 bytes of a string (btoa is latin1-only, so encode first).
+function b64utf8(s: string): string {
+  const bytes = new TextEncoder().encode(s);
+  let bin = "";
+  for (const b of bytes) bin += String.fromCharCode(b);
+  return btoa(bin);
+}
+
+// Signed command posture (protocol §6): the browser canonicalizes the payload
+// itself (byte-identical to the adapter's kernel), then asks the vault signing
+// custody to sign exactly those bytes. The operator key never enters the
+// browser — only the vault signing-token, which authorizes an audited sign
+// request. Returns the signature hex to attach to the command/fact.
+async function vaultSign(payloadObj: unknown): Promise<string> {
+  const { signingKeyId, vaultSigningToken } = useApp.getState();
+  const payload_b64 = b64utf8(canonicalize(payloadObj));
+  const r = await fetch("/v1/vault/signing/sign", {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "X-Vault-Signing-Token": vaultSigningToken,
+      ...(apiToken() ? { Authorization: `Bearer ${apiToken()}` } : {}),
+    },
+    body: JSON.stringify({ operator: "op_ui", key_id: signingKeyId, payload_b64 }),
+  });
+  const { signature_hex } = await j<{ signature_hex: string; key_id: string }>(r);
+  return signature_hex;
+}
+
+// True when the signed posture is armed: a signing key is selected, so the
+// browser signs via the vault. The signing-token is sent alongside and is only
+// required when the backend has configured a signing gate (open in dev).
+function signingArmed(): boolean {
+  return Boolean(useApp.getState().signingKeyId);
+}
+
 export const api = {
   listRuns: () => af("/v1/runs").then((r) => j<RunSummary[]>(r)),
   runEvents: (runId: string) =>
@@ -347,6 +384,20 @@ export const api = {
     af("/v1/vault/signing/keys").then((r) =>
       j<{ key_id: string; public_key_hex: string; operators: string[]; created_ts: string }[]>(r)),
 
+  // Put a new operator signing key under vault custody. The private half stays
+  // in the vault; the response carries only the public half (pinned in adapter
+  // config, never trusted from here). Needs the signing-token when gated.
+  createSigningKey: (keyId: string, operators: string[]) =>
+    fetch("/v1/vault/signing/keys", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "X-Vault-Signing-Token": useApp.getState().vaultSigningToken,
+        ...(apiToken() ? { Authorization: `Bearer ${apiToken()}` } : {}),
+      },
+      body: JSON.stringify({ key_id: keyId, operators }),
+    }).then((r) => j<{ key_id: string; public_key_hex: string; operators: string[] }>(r)),
+
   vaultSigningAudit: () =>
     af("/v1/vault/signing/audit").then((r) =>
       j<{ operator: string; key_id: string; payload_sha256: string; granted: boolean; ts: string }[]>(r)),
@@ -357,18 +408,20 @@ export const api = {
 
   seedTreeRun: () =>
     af("/v1/demo/seed-tree-run", { method: "POST" }).then((r) => j<unknown>(r)),
-  command: (nodeId: string, version: number, state: Record<string, unknown>) =>
-    af(`/v1/plane/${nodeId}/command`, {
+  command: async (nodeId: string, version: number, state: Record<string, unknown>) => {
+    // One timestamp, signed and sent — the adapter reconstructs the exact bytes
+    // from (node_id, version, body=state, timestamp), so they must match.
+    const timestamp = new Date().toISOString();
+    const sig = signingArmed()
+      ? await vaultSign({ node_id: nodeId, version, body: state, timestamp })
+      : "";
+    const r = await af(`/v1/plane/${nodeId}/command`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        version,
-        state,
-        operator: "op_ui",
-        timestamp: new Date().toISOString(),
-        sig: "",
-      }),
-    }).then((r) => j<{ node_id: string; version: number; state: Record<string, unknown> }>(r)),
+      body: JSON.stringify({ version, state, operator: "op_ui", timestamp, sig }),
+    });
+    return j<{ node_id: string; version: number; state: Record<string, unknown> }>(r);
+  },
   pin: (runId: string, side: "must_block" | "must_pass", label: string) =>
     af(`/v1/pins/${runId}`, {
       method: "POST",
@@ -536,14 +589,20 @@ export const api = {
     ),
 
   // ── operator interventions over the plane (spec §12) ───────────────────────
-  appendFact: (nodeId: string, fact: Record<string, unknown>) =>
-    af(`/v1/plane/${nodeId}/facts`, {
+  appendFact: async (nodeId: string, fact: Record<string, unknown>) => {
+    // Facts are signed with version=0 (they carry no optimistic version — the
+    // adapter signs (node_id, 0, body=fact, timestamp)).
+    const timestamp = new Date().toISOString();
+    const sig = signingArmed()
+      ? await vaultSign({ node_id: nodeId, version: 0, body: fact, timestamp })
+      : "";
+    const r = await af(`/v1/plane/${nodeId}/facts`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        fact, operator: "op_ui", timestamp: new Date().toISOString(), sig: "",
-      }),
-    }).then((r) => j<{ appended: boolean }>(r)),
+      body: JSON.stringify({ fact, operator: "op_ui", timestamp, sig }),
+    });
+    return j<{ appended: boolean }>(r);
+  },
   cascadeStop: (nodeId: string) =>
     af(`/v1/plane/${nodeId}/cascade-stop`, { method: "POST" }).then(
       (r) => j<{ stopped: string[]; count: number }>(r),
