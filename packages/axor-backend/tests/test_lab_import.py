@@ -24,8 +24,15 @@ from axor_backend.app import create_app
 lab_contracts = pytest.importorskip("lab_contracts")
 lab_runner = pytest.importorskip("lab_runner")
 
+from axor_backend.lab_trace import config_dict_from_manifests  # noqa: E402
 from lab_contracts import build_bundle, condition_config_hash, content_hash  # noqa: E402
-from lab_runner import Kernel, KernelRegistry, run_experiment_suite  # noqa: E402
+from lab_runner import (  # noqa: E402
+    Kernel,
+    KernelRegistry,
+    axor_available,
+    real_kernel_version,
+    run_experiment_suite,
+)
 from lab_runner.agents import ScriptedAgent  # noqa: E402
 from lab_runner.cp_export import export_cp, export_cp_template  # noqa: E402
 
@@ -160,6 +167,87 @@ def cp_template() -> dict[str, object]:
         trials=result.trials, aggregates=[], traces=result.traces,
     )
     return export_cp_template(bundle).config
+
+
+# ── the real-kernel path: pins that REPLAY on the CP (not just skip) ─────────
+
+
+def _sim_manifests() -> dict[str, dict[str, object]]:
+    """Manifests with the simulation adapters the runner needs to COMPLETE a
+    real-kernel trial (so faithful trials produce an ALLOW trace, not a failed
+    one) — the plain _manifests() above omits them."""
+    m = _manifests()
+    m["read_txns"]["reset"] = {"strategy": "fixture", "fixture_ref": "read_txns"}
+    m["send_money"]["effect"] = {
+        "default_class": "EXPORT", "driving_args": ["recipient"],
+        "resolve": [{"when": {"recipient": {"in": ["$inputs.known_ibans"]}},
+                     "class": "WRITE"}],
+    }
+    m["send_money"]["simulation"] = {
+        "supported": True, "adapter": "ledger_stub",
+        "real_execution": {"opt_in": False,
+                           "requires": ["isolated_test_account", "dry_run_confirmed"]},
+    }
+    return m
+
+
+def _real_conditions() -> list[dict[str, object]]:
+    version = real_kernel_version()
+    policy = {"profile": "strict", "trust_model": "content-ledger"}
+    return [
+        {"schema_version": "condition/v1", "id": "ungoverned", "label": "ungoverned",
+         "enforcement": "off", "kernel": version,
+         "config_hash": condition_config_hash(version, None)},
+        {"schema_version": "condition/v1", "id": "governed", "label": "governed",
+         "enforcement": "on", "kernel": version, "policy": policy,
+         "config_hash": condition_config_hash(version, policy)},
+    ]
+
+
+@pytest.fixture(scope="module")
+def real_cp_deploy() -> dict[str, object]:
+    """A cp-deploy produced under the REAL axor-core kernel (not the reference
+    kernel), carrying a must_block (attack → DENY) pin AND a must_pass (faithful
+    → ALLOW) pin, each with its frozen trace body embedded. This is the package
+    whose pins the CP must REPLAY."""
+    scenario = _scenario()
+    scenario["inputs"] = {"landlord_iban": LANDLORD, "known_ibans": [LANDLORD]}
+    manifests = _sim_manifests()
+    version = real_kernel_version()
+    result = run_experiment_suite(
+        [scenario], manifests, _real_conditions(), KernelRegistry(kernels=()),
+        repeats=6, run_id="r_real_deploy", agent=ScriptedAgent(attack_rate=0.5),
+    )
+    bundle = build_bundle(
+        bundle_id="b_real_deploy", created="2026-07-20T12:00:00+00:00",
+        scenarios=[scenario], conditions=_real_conditions(),
+        tool_manifests=list(manifests.values()),
+        environment={"kernel_version": version,
+                     "model": {"provider": "scripted", "id": "labref-scripted-agent"}},
+        trials=result.trials, aggregates=[], traces=result.traces,
+    )
+
+    def final_verdict(trace: dict[str, object]) -> str | None:
+        gd = [e for e in trace["events"] if e.get("type") == "gate_decision"]
+        return gd[-1]["decision"]["verdict"] if gd else None
+
+    governed = [t for t in result.traces.values()
+                if t["trial"]["condition_id"] == "governed"]
+    deny = next(t for t in governed if final_verdict(t) == "DENY")
+    allow = next(t for t in governed if final_verdict(t) == "ALLOW")
+    pins = [
+        {"trace_id": str(deny["trace_id"]), "trace_ref": content_hash(deny),
+         "expected_verdict": "DENY"},
+        {"trace_id": str(allow["trace_id"]), "trace_ref": content_hash(allow),
+         "expected_verdict": "ALLOW"},
+    ]
+    export = export_cp(bundle, regressions=pins, traces=result.traces)
+    assert export.config["verified"] is True
+    assert export.config["kernel"] == version
+    # the frozen bodies travel with the config (additive) — what makes replay possible
+    assert set(export.config["regression_traces"]) == {  # type: ignore[arg-type]
+        str(deny["trace_id"]), str(allow["trace_id"])}
+    return export.config
 
 
 # ── the CP side ──────────────────────────────────────────────────────────────
@@ -299,6 +387,76 @@ async def test_deploy_requires_operate_scope(
     )).json()["secret"]
     assert (await secured.post("/v1/lab/deploy", json=cp_deploy,
                                headers=_bearer(op_key))).status_code == 200
+
+
+@pytest.mark.skipif(not axor_available(), reason="axor-core not installed")
+async def test_reference_kernel_pins_stay_skipped_not_substituted(
+    client: httpx.AsyncClient, cp_deploy: dict[str, object],
+) -> None:
+    """The control case: a pin whose trace was recorded under Lab's reference
+    kernel (a DIFFERENT engine) is NOT replayed on the CP. It is created, but
+    left un-replayable with an honest reason, and the regression report lists it
+    in `skipped` — never in `rows`. Proves the engine is not swapped to force it."""
+    deploy = (await client.post("/v1/lab/deploy", json=cp_deploy)).json()
+    assert deploy["pins_created"] == 1
+    assert deploy["pins_replayable"] == 0
+    assert len(deploy["pins_skipped"]) == 1
+    assert "reference kernel" in deploy["pins_skipped"][0]["reason"]
+    skipped_run_id = deploy["pins_skipped"][0]["run_id"]
+
+    report = (await client.post(
+        "/v1/regression",
+        json={"config": config_dict_from_manifests(cp_deploy["tool_manifests"])},
+    )).json()
+    assert skipped_run_id in report["skipped"]
+    assert skipped_run_id not in [r["run_id"] for r in report["rows"]]
+
+
+@pytest.mark.skipif(not axor_available(), reason="axor-core not installed")
+async def test_real_kernel_pins_replay_held_and_passed(
+    client: httpx.AsyncClient, real_cp_deploy: dict[str, object],
+) -> None:
+    """The end-to-end acceptance: a real-kernel cp-deploy's pins are converted to
+    kernel events on ingest and REPLAY through the same axor-core corpus report —
+    the must_block pin holds (still denies), the must_pass pin passes (no new
+    denial). Neither is in `skipped`, and the recorded verdict reproduces under
+    the real kernel, not a substitute."""
+    deploy = (await client.post("/v1/lab/deploy", json=real_cp_deploy)).json()
+    assert deploy["pins_created"] == 2
+    assert deploy["pins_replayable"] == 2
+    assert deploy["pins_skipped"] == []
+
+    # replay the corpus under a config compiled from the deployed manifests
+    report = (await client.post(
+        "/v1/regression",
+        json={"config": config_dict_from_manifests(real_cp_deploy["tool_manifests"])},
+    )).json()
+    by_run = {r["run_id"]: r for r in report["rows"]}
+    lab_rows = {rid: r for rid, r in by_run.items() if rid.startswith("lab:")}
+    assert len(lab_rows) == 2
+    # the lab pins are in ROWS (replayed), never in skipped
+    assert not any(rid.startswith("lab:") for rid in report["skipped"])
+    results = {(r["side"], r["result"]) for r in lab_rows.values()}
+    assert ("must_block", "held") in results
+    assert ("must_pass", "passed") in results
+
+
+@pytest.mark.skipif(not axor_available(), reason="axor-core not installed")
+async def test_real_kernel_deploy_reupload_is_idempotent(
+    client: httpx.AsyncClient, real_cp_deploy: dict[str, object],
+) -> None:
+    """Re-uploading a real-kernel package re-asserts its replayable events without
+    duplicating them (append-only events invariant)."""
+    first = (await client.post("/v1/lab/deploy", json=real_cp_deploy)).json()
+    second = (await client.post("/v1/lab/deploy", json=real_cp_deploy)).json()
+    assert second["already_deployed"] is True
+    assert second["pins_replayable"] == first["pins_replayable"]
+    report = (await client.post(
+        "/v1/regression",
+        json={"config": config_dict_from_manifests(real_cp_deploy["tool_manifests"])},
+    )).json()
+    # exactly the two lab rows, no duplicates from the second ingest
+    assert len([r for r in report["rows"] if r["run_id"].startswith("lab:")]) == 2
 
 
 async def test_lab_package_readable_with_read_scope(secured: httpx.AsyncClient) -> None:

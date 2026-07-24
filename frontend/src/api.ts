@@ -250,8 +250,22 @@ export type LabPackageResult =
   | { ok: true; pkg: Record<string, unknown> }
   | { ok: false; reasons: string[] };
 
+export interface LabSkippedPin {
+  run_id: string;
+  trace_id: string;
+  reason: string;
+}
+
 export type LabDeployResult =
-  | { ok: true; package_id: string; pins_created: number; policy_stored: boolean; already_deployed: boolean }
+  | {
+      ok: true;
+      package_id: string;
+      pins_created: number;
+      pins_replayable: number;
+      pins_skipped: LabSkippedPin[];
+      policy_stored: boolean;
+      already_deployed: boolean;
+    }
   | { ok: false; reasons: string[] };
 
 export interface LabDeploySummary {
@@ -443,7 +457,17 @@ export const api = {
       return { ok: false, reasons: body.detail?.reasons ?? ["package rejected"] };
     }
     if (!r.ok) throw new Error(`${r.status} ${await r.text()}`);
-    return { ok: true, ...(await r.json()) as { package_id: string; pins_created: number; policy_stored: boolean; already_deployed: boolean } };
+    return {
+      ok: true,
+      ...(await r.json()) as {
+        package_id: string;
+        pins_created: number;
+        pins_replayable: number;
+        pins_skipped: LabSkippedPin[];
+        policy_stored: boolean;
+        already_deployed: boolean;
+      },
+    };
   },
   labDeploys: () => af("/v1/lab/deploys").then((r) => j<LabDeploySummary[]>(r)),
 

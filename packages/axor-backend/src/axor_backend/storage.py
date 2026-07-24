@@ -291,6 +291,39 @@ class Store:
         # kernel-schema line as a string, so re-serialise on the way out.
         return [json.dumps(r.line) for r in rows]
 
+    async def add_lab_trace_events(
+        self, run_id: str, lines: list[dict[str, Any]],
+    ) -> int:
+        """Store the kernel-schema events converted from a Lab regression pin's
+        trace under ``run_id`` (``lab:{trace_id}``), so ``run_events`` returns
+        them and the regression corpus replays the pin instead of skipping it.
+
+        Idempotent on (run_id, node_id, seq) — a package re-upload re-asserts the
+        same events without duplicating them, preserving the append-only events
+        invariant. The stored lines are converted-from-Lab kernel events; their
+        ``lab:`` run_id prefix marks the provenance (a Lab handoff, not plane
+        telemetry ingested from a governed node)."""
+        async with self.engine.begin() as conn:
+            seen = {
+                (row.node_id, row.seq) for row in (await conn.execute(
+                    select(events.c.node_id, events.c.seq)
+                    .where(events.c.run_id == run_id)
+                )).all()
+            }
+            stored = 0
+            for line in lines:
+                node_id = str(line.get("node_id", "root"))
+                seq = int(line["seq"])
+                if (node_id, seq) in seen:
+                    continue
+                await conn.execute(insert(events).values(
+                    run_id=run_id, node_id=node_id, seq=seq,
+                    kind=str(line["kind"]), line=line,
+                ))
+                seen.add((node_id, seq))
+                stored += 1
+            return stored
+
     async def list_runs(self) -> list[dict[str, Any]]:
         async with self.engine.connect() as conn:
             rows = (await conn.execute(

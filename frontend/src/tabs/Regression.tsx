@@ -216,9 +216,30 @@ function LabDeploys() {
           <span style={{ fontFamily: MONO, fontSize: 11, color: C.green }}>
             {result.already_deployed ? "already deployed" : "accepted"} · {result.package_id} ·{" "}
             {result.pins_created} pin{result.pins_created === 1 ? "" : "s"} → corpus
+            {" · "}
+            <span style={{ color: C.steel }}>
+              {result.pins_replayable} replayable
+            </span>
+            {result.pins_skipped.length > 0 && (
+              <span style={{ color: C.mut }}>
+                {" · "}{result.pins_skipped.length} skipped
+              </span>
+            )}
           </span>
         )}
       </div>
+      {result?.ok && result.pins_skipped.length > 0 && (
+        <div className="p-3 mb-3" style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 8 }}>
+          <div style={{ fontFamily: MONO, fontSize: 10, color: C.mut, letterSpacing: "0.1em", marginBottom: 6 }}>
+            PINS LEFT SKIPPED (not replayed — recorded under a kernel this CP will not substitute)
+          </div>
+          {result.pins_skipped.map((p) => (
+            <div key={p.run_id} style={{ fontFamily: MONO, fontSize: 11.5, color: C.mut, lineHeight: 1.6 }}>
+              · {p.trace_id}: {p.reason}
+            </div>
+          ))}
+        </div>
+      )}
       {result && !result.ok && (
         <div className="p-3 mb-3" style={{ background: C.panel, border: `1px solid ${C.red}`, borderRadius: 8 }}>
           <div style={{ fontFamily: MONO, fontSize: 10, color: C.red, letterSpacing: "0.1em", marginBottom: 6 }}>

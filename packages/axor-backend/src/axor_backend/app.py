@@ -612,8 +612,8 @@ def create_app(
         (finalized evidence-backed packages only), store the package record,
         and fold its regression pins into the corpus with source lab:{id}."""
         from axor_backend.lab_import import (
+            deploy_plans,
             package_id_of,
-            pin_plans,
             validate_cp_deploy,
         )
 
@@ -624,13 +624,25 @@ def create_app(
             )
         store: Store = request.app.state.store
         package_id = package_id_of(body)
-        plans = pin_plans(body, package_id)
+        plans = deploy_plans(body, package_id)
         stored_new = await store.add_lab_deploy(package_id, body, len(plans), _now())
         for plan in plans:  # idempotent per run_id — a re-upload re-asserts them
             await store.pin(plan.run_id, plan.side, plan.label)
+            # a pin whose carried trace was recorded under the real axor-core
+            # kernel and reproduces here is stored as replayable corpus events —
+            # the regression report folds them instead of skipping the pin
+            if plan.replayable:
+                await store.add_lab_trace_events(plan.run_id, plan.event_lines)
         return {
             "package_id": package_id,
             "pins_created": len(plans),
+            # how many Lab pins are now REPLAYABLE corpus traces (real-kernel,
+            # build-matched, verdict reproduces) vs left skipped with a reason
+            "pins_replayable": sum(1 for p in plans if p.replayable),
+            "pins_skipped": [
+                {"run_id": p.run_id, "trace_id": p.trace_id, "reason": p.reason}
+                for p in plans if not p.replayable
+            ],
             "policy_stored": True,
             "already_deployed": not stored_new,
         }

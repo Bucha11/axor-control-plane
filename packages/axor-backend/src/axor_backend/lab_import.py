@@ -48,6 +48,21 @@ class PinPlan:
     label: str
 
 
+@dataclass(frozen=True)
+class PinDeployPlan:
+    """One corpus pin a package creates, plus whether its carried trace can be
+    faithfully replayed on this CP (real axor-core kernel, build-matched, verdict
+    reproduces) or must stay ``skipped`` with an honest reason."""
+
+    run_id: str
+    side: str  # must_block | must_pass
+    label: str
+    trace_id: str
+    replayable: bool
+    reason: str  # "" when replayable, else the skip reason
+    event_lines: list[dict[str, Any]]  # kernel-schema lines when replayable, else []
+
+
 def package_id_of(package: dict[str, Any]) -> str:
     """Deterministic id for a deploy package.
 
@@ -104,6 +119,9 @@ def validate_cp_deploy(package: Any) -> list[str]:  # noqa: ANN401 - untrusted u
         errors.append("parametric_config_hash must be a non-empty string")
     errors += _manifest_errors(package.get("tool_manifests"))
     errors += _regression_errors(package.get("regressions"))
+    errors += _regression_traces_errors(
+        package.get("regression_traces"), package.get("regressions")
+    )
     source = package.get("source")
     if not isinstance(source, dict) or not source.get("bundle_id") or not source.get(
         "condition_id"
@@ -184,6 +202,30 @@ def _regression_errors(regressions: Any) -> list[str]:  # noqa: ANN401 - untrust
     return errors
 
 
+def _regression_traces_errors(
+    regression_traces: Any,  # noqa: ANN401 - untrusted upload
+    regressions: Any,  # noqa: ANN401 - untrusted upload
+) -> list[str]:
+    """``regression_traces`` is an ADDITIVE map {trace_id: trace body} the Lab
+    export embeds so the CP can REPLAY the pins (not merely record their hashes).
+    It is optional for backward compatibility — a package without it is valid, its
+    pins simply stay skipped — but when present it must be a JSON object, and every
+    body must be an object naming its own trace_id."""
+    if regression_traces is None:
+        return []
+    if not isinstance(regression_traces, dict):
+        return ["regression_traces must be an object mapping trace_id -> trace body"]
+    errors: list[str] = []
+    for trace_id, body in regression_traces.items():
+        where = f"regression_traces[{trace_id!r}]"
+        if not isinstance(body, dict):
+            errors.append(f"{where} is not an object")
+            continue
+        if str(body.get("trace_id", "")) != str(trace_id):
+            errors.append(f"{where}: body trace_id does not match its key")
+    return errors
+
+
 def pin_plans(package: dict[str, Any], package_id: str) -> list[PinPlan]:
     """The corpus pins a validated package creates: must_block for DENY pins,
     must_pass for ALLOW, keyed ``lab:{trace_id}`` and labelled with the source
@@ -195,5 +237,79 @@ def pin_plans(package: dict[str, Any], package_id: str) -> list[PinPlan]:
             run_id=f"lab:{pin['trace_id']}"[:_PIN_RUN_ID_MAX],
             side=side,
             label=f"lab:{package_id}",
+        ))
+    return plans
+
+
+def deploy_plans(package: dict[str, Any], package_id: str) -> list[PinDeployPlan]:
+    """Plan the corpus pins a validated package creates AND decide, per pin,
+    whether its carried trace can be faithfully replayed on this CP.
+
+    A pin is REPLAYABLE only when the package embeds the pin's trace body, the
+    body content-hashes to the pin's ``trace_ref``, the trace was recorded under
+    the REAL axor-core kernel matching THIS backend's installed build, the trace
+    converts to kernel events, AND replaying those events under a config compiled
+    from the package manifests reproduces the pinned verdict.  Otherwise the pin
+    is created exactly as before and left ``skipped`` with an honest reason — the
+    engine is never substituted to force a replay."""
+    from axor_backend.lab_trace import (
+        events_to_lines,
+        installed_kernel_pin,
+        is_real_kernel_version,
+        lab_trace_to_events,
+        recorded_kernel_of,
+        reproduces_recorded_verdict,
+        trace_matches_ref,
+    )
+
+    traces: dict[str, Any] = package.get("regression_traces") or {}
+    manifests: list[dict[str, Any]] = package.get("tool_manifests") or []
+    installed = installed_kernel_pin()
+    plans: list[PinDeployPlan] = []
+    for pin in package.get("regressions", []):
+        trace_id = str(pin["trace_id"])
+        side = "must_block" if pin["expected_verdict"] == "DENY" else "must_pass"
+        run_id = f"lab:{trace_id}"[:_PIN_RUN_ID_MAX]
+        label = f"lab:{package_id}"
+
+        def skip(reason: str) -> PinDeployPlan:
+            return PinDeployPlan(run_id=run_id, side=side, label=label,
+                                 trace_id=trace_id, replayable=False,
+                                 reason=reason, event_lines=[])
+
+        trace = traces.get(trace_id)
+        if not isinstance(trace, dict):
+            plans.append(skip("package carries no trace body for this pin"))
+            continue
+        if not trace_matches_ref(trace, str(pin.get("trace_ref", ""))):
+            plans.append(skip("embedded trace body does not match the pin trace_ref"))
+            continue
+        recorded_kernel = recorded_kernel_of(trace)
+        if not is_real_kernel_version(recorded_kernel):
+            plans.append(skip(
+                f"recorded under reference kernel ({recorded_kernel!r}); CP replays "
+                "the real axor-core kernel and will not substitute it"
+            ))
+            continue
+        if recorded_kernel != installed:
+            plans.append(skip(
+                f"kernel build mismatch (recorded {recorded_kernel!r}, this CP runs "
+                f"{installed!r}); refusing to claim reproduction under a different build"
+            ))
+            continue
+        try:
+            events = lab_trace_to_events(trace)
+        except Exception as exc:  # noqa: BLE001 - untrusted embedded body
+            plans.append(skip(f"trace did not convert to kernel events: {exc}"))
+            continue
+        if not reproduces_recorded_verdict(events, str(pin["expected_verdict"]), manifests):
+            plans.append(skip(
+                "recorded verdict would not reproduce under axor-core replay with the "
+                "package's manifests (leaving skipped rather than faking reproduction)"
+            ))
+            continue
+        plans.append(PinDeployPlan(
+            run_id=run_id, side=side, label=label, trace_id=trace_id,
+            replayable=True, reason="", event_lines=events_to_lines(events),
         ))
     return plans
