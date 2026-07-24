@@ -141,6 +141,47 @@ export interface NodeInfo {
   facts: Record<string, unknown>[];
 }
 
+// Behavioral health check (axor-probe, ui-spec 8.2). A family's state is
+// deterministic: `escaped` iff a directional residual escaped on at least one
+// probe of that type. `unprobed` is its own state — a family the battery never
+// reached has no verdict, which is not a clean one. max_drift_score carries its
+// UNCALIBRATED caveat in the field name so nothing here thresholds it.
+export interface ProbeFamily {
+  family: string;
+  state: "clean" | "escaped" | "unprobed";
+  escapes: number;
+  probes: number;
+}
+
+export interface ProbeHealth {
+  id: number;
+  created_ts: string;
+  session_id: string;
+  agent_id: string;
+  model: string;
+  probe_library_version: string;
+  overall_verdict: "CONSISTENT" | "DRIFT_DETECTED" | "INCONCLUSIVE" | "CONSISTENCY_ANOMALY";
+  families: ProbeFamily[];
+  probes_sent: number;
+  probes_invalid: number;
+  probes_triangulated: number;
+  structural_failures: number;
+  escape_count: number;
+  escape_rate: number;
+  escape_rate_ci: [number, number];
+  calibration_status: string;
+  max_drift_score_uncalibrated: number;
+}
+
+export interface ProbeCheck {
+  id: number;
+  created_ts: string;
+  session_id: string;
+  overall_verdict: string;
+  escape_count: number;
+  probes_sent: number;
+}
+
 // Topology (spec v2 Ch.4 §6): derived from traced spawn/message events only.
 export interface TopologyNode {
   node_id: string;
@@ -607,6 +648,13 @@ export const api = {
     af(`/v1/plane/${nodeId}/cascade-stop`, { method: "POST" }).then(
       (r) => j<{ stopped: string[]; count: number }>(r),
     ),
+
+  // The node's last behavioral health check, plus the series behind it. `latest`
+  // is null until a node has posted one — "no check yet", which is not the same
+  // as a healthy agent. This is drift, never an Eval metric (ui-spec 8.2).
+  probeReport: (nodeId: string) =>
+    af(`/v1/plane/${nodeId}/probe-report`).then((r) =>
+      j<{ latest: ProbeHealth | null; history: ProbeCheck[] }>(r)),
 
   // ── governed node: a real axor-core IntentLoop wired to the plane ──────────
   spawnGoverned: () =>

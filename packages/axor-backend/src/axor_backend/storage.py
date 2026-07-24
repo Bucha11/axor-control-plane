@@ -177,6 +177,25 @@ dead_letters = Table(
     Column("created_ts", String(40), nullable=False),
 )
 
+# Behavioral health checks (axor-probe, migration 0006). One row per battery a
+# node ran and posted; history is kept because the panel's drift sparkline only
+# appears once ≥2 checks exist (ui-spec 8.2). This is DRIFT evidence and lives
+# apart from the eval corpus on purpose: drift answers "has my agent changed?",
+# eval answers "does my agent lie under fault?", and the two must never be
+# blended into one score (ui-spec 8.2). The summary columns are what the list
+# surface reads; payload_json is axor-probe's health_payload verbatim.
+probe_reports = Table(
+    "probe_reports", metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("node_id", String(128), nullable=False, index=True),
+    Column("created_ts", String(40), nullable=False),
+    Column("session_id", String(128), nullable=False, default=""),
+    Column("overall_verdict", String(32), nullable=False),
+    Column("escape_count", Integer, nullable=False, default=0),
+    Column("probes_sent", Integer, nullable=False, default=0),
+    Column("payload_json", _JSON, nullable=False),
+)
+
 api_keys = Table(
     "api_keys", metadata,
     Column("key_id", String(32), primary_key=True),
@@ -712,6 +731,56 @@ class Store:
              "skipped": r.skipped, "total": r.total,
              "safe_to_ship": r.safe_to_ship}
             for r in rows
+        ]
+
+    # ── behavioral health checks (axor-probe batteries posted by a node) ─────
+
+    async def add_probe_report(
+        self, node_id: str, payload: dict[str, Any], ts: str,
+    ) -> int:
+        """Append one health check. Returns the new row id.
+
+        Append-only by design: a re-probe after a heal is a NEW check, never an
+        overwrite of the one that showed the drift. The heal→verify pair is only
+        readable as a pair if both halves survive (ui-spec 8.2.1).
+        """
+        async with self.engine.begin() as conn:
+            result = await conn.execute(insert(probe_reports).values(
+                node_id=node_id, created_ts=ts,
+                session_id=str(payload.get("session_id", "")),
+                overall_verdict=str(payload.get("overall_verdict", "INCONCLUSIVE")),
+                escape_count=int(payload.get("escape_count", 0)),
+                probes_sent=int(payload.get("probes_sent", 0)),
+                payload_json=payload,
+            ))
+            return int(result.inserted_primary_key[0])
+
+    async def latest_probe_report(self, node_id: str) -> dict[str, Any] | None:
+        async with self.engine.connect() as conn:
+            row = (await conn.execute(
+                select(probe_reports)
+                .where(probe_reports.c.node_id == node_id)
+                .order_by(probe_reports.c.id.desc()).limit(1)
+            )).first()
+        if row is None:
+            return None
+        return {"id": row.id, "created_ts": row.created_ts, **row.payload_json}
+
+    async def probe_report_history(
+        self, node_id: str, limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        """Oldest-first summaries — the series the drift sparkline plots."""
+        async with self.engine.connect() as conn:
+            rows = (await conn.execute(
+                select(probe_reports)
+                .where(probe_reports.c.node_id == node_id)
+                .order_by(probe_reports.c.id.desc()).limit(limit)
+            )).all()
+        return [
+            {"id": r.id, "created_ts": r.created_ts, "session_id": r.session_id,
+             "overall_verdict": r.overall_verdict, "escape_count": r.escape_count,
+             "probes_sent": r.probes_sent}
+            for r in reversed(rows)
         ]
 
     # ── Lab deploys (axor-cp-deploy/v1 packages accepted from Axor Lab) ──────
