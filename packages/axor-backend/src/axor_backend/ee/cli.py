@@ -15,7 +15,7 @@ import json
 import sys
 from datetime import UTC, datetime
 
-from axor_backend.ee.license import LicenseError, sign_license, verify_license
+from axor_backend.ee.license import KNOWN_MODULES, LicenseError, sign_license, verify_license
 
 
 def _keygen(_args: argparse.Namespace) -> int:
@@ -51,10 +51,15 @@ def _issue(args: argparse.Namespace) -> int:
         )
         return 2
     lic = {
-        "org": args.org,
-        "tier": args.tier,
-        "node_ceiling": args.nodes,
-        "expiry": args.expiry,
+        "organization": args.org,
+        "workspace_tier": args.workspace_tier,
+        "modules": {
+            "private_lab": args.private_lab,
+            "control_plane": args.control_plane,
+        },
+        "governed_node_ceiling": args.governed_nodes,
+        "self_hosted_runner": args.self_hosted,
+        "expires_at": args.expires_at,
         "features": args.features or [],
     }
     print(sign_license(lic, key))
@@ -71,8 +76,13 @@ def _verify(args: argparse.Namespace) -> int:
     today = datetime.now(UTC).date().isoformat()
     status = "EXPIRED (EE read-only; safety unaffected)" if lic.is_expired(today) else "VALID"
     print(json.dumps({
-        "status": status, "org": lic.org, "tier": lic.tier,
-        "node_ceiling": lic.node_ceiling, "expiry": lic.expiry,
+        "status": status,
+        "organization": lic.organization,
+        "workspace_tier": lic.workspace_tier,
+        "modules": {m: lic.has_module(m) for m in KNOWN_MODULES},
+        "governed_node_ceiling": lic.governed_node_ceiling,
+        "self_hosted_runner": lic.self_hosted_runner,
+        "expires_at": lic.expires_at,
         "features": list(lic.features),
     }, indent=2))
     return 0 if status == "VALID" else 2
@@ -94,11 +104,32 @@ def main(argv: list[str] | None = None) -> int:
         help="vendor private key (hex) on argv — lands in shell history; "
              "prefer --key-file or the AXOR_VENDOR_KEY env var",
     )
-    issue.add_argument("--org", required=True)
-    issue.add_argument("--tier", default="team", choices=["team", "enterprise"])
-    issue.add_argument("--nodes", type=int, default=10, help="node ceiling")
-    issue.add_argument("--expiry", required=True, help="ISO date, e.g. 2027-01-01")
-    issue.add_argument("--features", nargs="*", default=[])
+    issue.add_argument("--org", required=True, help="organization name")
+    issue.add_argument(
+        "--workspace-tier", default="team", choices=["community", "team", "security"],
+        help="Private Lab workspace tier (axor-packaging.md §1)",
+    )
+    issue.add_argument(
+        "--private-lab", action=argparse.BooleanOptionalAction, default=True,
+        help="enable the Private Lab module (on by default for paid tiers)",
+    )
+    issue.add_argument(
+        "--control-plane", action=argparse.BooleanOptionalAction, default=False,
+        help="enable the Control Plane production-governance module (add-on)",
+    )
+    issue.add_argument(
+        "--governed-nodes", type=int, default=0,
+        help="governed-node ceiling (Control Plane); 0 when the module is off",
+    )
+    issue.add_argument(
+        "--self-hosted", action=argparse.BooleanOptionalAction, default=False,
+        help="license a self-hosted / VPC runner",
+    )
+    issue.add_argument("--expires-at", required=True, help="ISO date, e.g. 2027-01-01")
+    issue.add_argument(
+        "--features", nargs="*", default=[],
+        help="granular EE flags (e.g. sso rbac compliance_exports)",
+    )
     issue.set_defaults(fn=_issue)
 
     verify = sub.add_parser("verify", help="verify a license file")

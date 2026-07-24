@@ -22,8 +22,10 @@ def vendor(monkeypatch) -> dict:  # noqa: ANN001
     pub = key.verify_key.encode().hex()
     monkeypatch.setenv("AXOR_VENDOR_PUBKEY", pub)
     lic = sign_license(
-        {"org": "T", "tier": "team", "node_ceiling": 10,
-         "expiry": "2999-01-01", "features": []},
+        {"organization": "T", "workspace_tier": "team",
+         "modules": {"private_lab": True, "control_plane": False},
+         "governed_node_ceiling": 10, "self_hosted_runner": False,
+         "expires_at": "2999-01-01", "features": []},
         bytes(key).hex(),
     )
     return {"pub": pub, "license_json": lic}
@@ -87,11 +89,12 @@ async def test_license_activation_unlocks_and_persists(
 ) -> None:
     await _activate(client, vendor)
     status = (await client.get("/v1/license/status")).json()
-    assert status["active"] is True and status["org"] == "T"
+    assert status["active"] is True and status["organization"] == "T"
+    assert status["workspace_tier"] == "team"
     assert (await client.get("/v1/regression/history")).status_code == 200
     # The license landed in the settings KV — the boot rehydrate reads it.
     stored = await client._app.state.store.get_setting("license_json")  # type: ignore[attr-defined]
-    assert json.loads(stored)["license"]["org"] == "T"
+    assert json.loads(stored)["license"]["organization"] == "T"
 
 
 # ── scheduled corpus CI ───────────────────────────────────────────────────────

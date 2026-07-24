@@ -345,13 +345,21 @@ export default function Settings() {
         {license.data && (
           <>
             <div className="mt-2" style={{ fontFamily: MONO, fontSize: 11, color: C.green }}>
-              {license.data.org} · {license.data.tier} · up to {license.data.node_ceiling} nodes ·
-              expires {license.data.expiry} · {license.data.features.join(", ") || "no EE features"}
+              {license.data.organization} · {license.data.workspace_tier} workspace ·{" "}
+              {[
+                license.data.modules?.private_lab && "Private Lab",
+                license.data.modules?.control_plane &&
+                  `Control Plane (up to ${license.data.governed_node_ceiling} nodes)`,
+              ]
+                .filter(Boolean)
+                .join(" + ") || "no modules"}
+              {license.data.self_hosted_runner ? " · self-hosted" : ""} · expires{" "}
+              {license.data.expires_at} · {license.data.features.join(", ") || "no EE features"}
             </div>
             {license.data.over_ceiling && (
               <div className="mt-1" style={{ fontFamily: MONO, fontSize: 11, color: C.amber }}>
                 {license.data.live_nodes} live nodes exceed the licensed ceiling of{" "}
-                {license.data.node_ceiling} — a warning, never a block (safety never
+                {license.data.governed_node_ceiling} — a warning, never a block (safety never
                 checks a license). Contact us to raise the ceiling.
               </div>
             )}

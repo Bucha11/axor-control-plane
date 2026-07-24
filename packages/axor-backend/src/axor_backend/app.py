@@ -874,11 +874,17 @@ def create_app(
         # against the license and WARN — never block; safety never checks a
         # license (monetization Line 1).
         live_nodes = len(await request.app.state.store.list_nodes())
+        from axor_backend.ee.license import KNOWN_MODULES
         return {
-            "org": lic.org, "tier": lic.tier, "node_ceiling": lic.node_ceiling,
-            "expiry": lic.expiry, "features": list(lic.features),
+            "organization": lic.organization,
+            "workspace_tier": lic.workspace_tier,
+            "modules": {m: lic.has_module(m) for m in KNOWN_MODULES},
+            "governed_node_ceiling": lic.governed_node_ceiling,
+            "self_hosted_runner": lic.self_hosted_runner,
+            "expires_at": lic.expires_at,
+            "features": list(lic.features),
             "live_nodes": live_nodes,
-            "over_ceiling": live_nodes > lic.node_ceiling,
+            "over_ceiling": live_nodes > lic.governed_node_ceiling,
             "activated": request.app.state.license is lic,
         }
 
@@ -889,9 +895,15 @@ def create_app(
         lic = _active_license(request.app)
         if lic is None:
             return {"active": False}
+        from axor_backend.ee.license import KNOWN_MODULES
         return {
-            "active": True, "org": lic.org, "tier": lic.tier,
-            "expiry": lic.expiry, "node_ceiling": lic.node_ceiling,
+            "active": True,
+            "organization": lic.organization,
+            "workspace_tier": lic.workspace_tier,
+            "modules": {m: lic.has_module(m) for m in KNOWN_MODULES},
+            "governed_node_ceiling": lic.governed_node_ceiling,
+            "self_hosted_runner": lic.self_hosted_runner,
+            "expires_at": lic.expires_at,
             "features": list(lic.features),
         }
 

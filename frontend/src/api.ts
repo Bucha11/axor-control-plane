@@ -201,10 +201,12 @@ export interface DeadLetter {
 }
 
 export interface LicenseInfo {
-  org: string;
-  tier: string;
-  node_ceiling: number;
-  expiry: string;
+  organization: string;
+  workspace_tier: string; // "community" | "team" | "security"
+  modules: { private_lab: boolean; control_plane: boolean };
+  governed_node_ceiling: number;
+  self_hosted_runner: boolean;
+  expires_at: string;
   features: string[];
   live_nodes?: number;
   over_ceiling?: boolean;
@@ -522,7 +524,15 @@ export const api = {
     }).then((r) => j<{ enabled: boolean; interval_hours: number }>(r)),
   licenseStatus: () =>
     af("/v1/license/status").then((r) =>
-      j<{ active: boolean; org?: string; tier?: string; expiry?: string }>(r),
+      j<{
+        active: boolean;
+        organization?: string;
+        workspace_tier?: string;
+        modules?: { private_lab: boolean; control_plane: boolean };
+        governed_node_ceiling?: number;
+        self_hosted_runner?: boolean;
+        expires_at?: string;
+      }>(r),
     ),
 
   // ── operator interventions over the plane (spec §12) ───────────────────────
