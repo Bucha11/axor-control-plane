@@ -9,21 +9,9 @@ members = ["packages/*"]
 [tool.uv.sources]
 axor-proxy = { workspace = true }
 axor-backend = { workspace = true }
-# TEMPORARY local-dev override: axor-wrap (the axor-backend[wrap] extra) is not
-# on PyPI yet, so resolution points at the sibling checkout. Replace with the
-# PyPI release (and drop this line) before this can run in CI.
-axor-wrap = { path = "../axor-wrap", editable = true }
-# TEMPORARY local-dev override: axor-proxy needs axor-core 0.10 (the release that
-# drops axor_core.plane, moving the plane client to axor-wrap), which is not on
-# PyPI yet. Drop this line once 0.10 is published.
-axor-core = { path = "../axor-core", editable = true }
-# TEMPORARY local-dev override: the published axor-eval 0.1.0 still pins
-# axor-core<0.10, so it is unresolvable against the core above. The sibling
-# checkout carries the widened pin (<0.11). Drop this line once axor-eval is
-# re-released.
-axor-eval = { path = "../axor-eval", editable = true }
-# The remaining ecosystem deps come from PyPI;
-# the version ranges live in the packages' own dependency lists.
+# Ecosystem deps come from PyPI (axor-core 0.10.0, axor-eval 0.1.1, axor-wrap
+# 0.1.0 are published); the version ranges live in the packages' own
+# dependency lists.
 # The git-ref era (plan decision 5.1) is over — no tokens, no insteadOf.
 
 [dependency-groups]

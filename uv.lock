@@ -131,9 +131,9 @@ requires-dist = [
     { name = "aiosqlite", specifier = ">=0.20" },
     { name = "alembic", specifier = ">=1.13" },
     { name = "asyncpg", specifier = ">=0.29" },
-    { name = "axor-core", editable = "../axor-core" },
-    { name = "axor-eval", editable = "../axor-eval" },
-    { name = "axor-wrap", marker = "extra == 'wrap'", editable = "../axor-wrap" },
+    { name = "axor-core", specifier = ">=0.10,<0.11" },
+    { name = "axor-eval", specifier = ">=0.1.1,<0.2" },
+    { name = "axor-wrap", marker = "extra == 'wrap'", specifier = ">=0.1,<0.2" },
     { name = "fastapi", specifier = ">=0.111" },
     { name = "kuzu", specifier = ">=0.4" },
     { name = "pynacl", specifier = ">=1.5" },
@@ -167,39 +167,23 @@ dev = [
 [[package]]
 name = "axor-core"
 version = "0.10.0"
-source = { editable = "../axor-core" }
-
-[package.metadata]
-requires-dist = [
-    { name = "cryptography", marker = "extra == 'federation'", specifier = ">=42.0" },
-    { name = "hypothesis", marker = "extra == 'dev'", specifier = ">=6.100" },
-    { name = "import-linter", marker = "extra == 'dev'", specifier = ">=2.0" },
-    { name = "mutmut", marker = "extra == 'mutation'", specifier = ">=2.4" },
-    { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
-    { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.23" },
-    { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=5.0" },
-    { name = "pyyaml", marker = "extra == 'config'", specifier = ">=6.0" },
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/b4/33/55eb534cca2acf657b4f6fbe55078825f281dcbf145f7f08714f6ac7d7d4/axor_core-0.10.0.tar.gz", hash = "sha256:2796a5f3cf1acd2a02499711aeeab3330a6614214e7e0d56a19abcaa3c0d7616", size = 603881, upload-time = "2026-07-27T17:21:43.978Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/80/f2/bd1869b41e95b1b12da01e858b3b2fcf4eb1e7c5cb632346068b84f23efd/axor_core-0.10.0-py3-none-any.whl", hash = "sha256:fa6475fb046918ddab31ebd4caf6b47875b2b13f1da8f39b308606e254239eba", size = 304169, upload-time = "2026-07-27T17:21:42.142Z" },
 ]
-provides-extras = ["federation", "config", "dev", "mutation"]
 
 [[package]]
 name = "axor-eval"
-version = "0.1.0"
-source = { editable = "../axor-eval" }
+version = "0.1.1"
+source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "axor-core" },
 ]
-
-[package.metadata]
-requires-dist = [
-    { name = "axor-core", specifier = ">=0.8,<0.11" },
-    { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.10" },
-    { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
-    { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.23" },
-    { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=5.0" },
-    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.4" },
+sdist = { url = "https://files.pythonhosted.org/packages/59/49/5d6e0fb219ce5c57bb4b32eb0c23546a2c80762b7668c5a6043d4e26ef52/axor_eval-0.1.1.tar.gz", hash = "sha256:a95e295502a4e04738ee9cb68409cb8ca3a6480f133d7701648994acf363adff", size = 110076, upload-time = "2026-07-27T17:08:26.709Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/6f/60/cd1a94fd902041bf479076db97e0814c1af7408feb5707c34d1124b78fd7/axor_eval-0.1.1-py3-none-any.whl", hash = "sha256:e0096dc1e7b1e1505f057bedf6fe7893ddb5f08cc040122d7a33cd8eee26fc5b", size = 36110, upload-time = "2026-07-27T17:08:25.582Z" },
 ]
-provides-extras = ["dev"]
 
 [[package]]
 name = "axor-proxy"
@@ -223,9 +207,9 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "anyio", specifier = ">=4.0" },
-    { name = "axor-core", editable = "../axor-core" },
-    { name = "axor-eval", editable = "../axor-eval" },
-    { name = "axor-wrap", extras = ["plane"], editable = "../axor-wrap" },
+    { name = "axor-core", specifier = ">=0.10,<0.11" },
+    { name = "axor-eval", specifier = ">=0.1.1,<0.2" },
+    { name = "axor-wrap", extras = ["plane"], specifier = ">=0.1.0,<0.2" },
     { name = "httpx", specifier = ">=0.27" },
     { name = "starlette", specifier = ">=0.37" },
     { name = "uvicorn", specifier = ">=0.29" },
@@ -237,7 +221,11 @@ dev = [{ name = "axor-backend", editable = "packages/axor-backend" }]
 [[package]]
 name = "axor-wrap"
 version = "0.1.0"
-source = { editable = "../axor-wrap" }
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/f0/14/645a3542a1794ee7570886b1cf2c4bcc67769b0e9625d576ce4a11f9a369/axor_wrap-0.1.0.tar.gz", hash = "sha256:f851ce3d7833d0e52b2caf5f20d9ec4918f3333ae9ebb93896ebd5197fe49daa", size = 80347, upload-time = "2026-07-27T16:05:13.419Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/55/c1/a7ec3e4b797b3e381443745e29d54c5fea7d30661e390252d179d25dc86a/axor_wrap-0.1.0-py3-none-any.whl", hash = "sha256:fa6861482444af899ff4c822cabb8154beef7c17633fb8391412719b6165571f", size = 48172, upload-time = "2026-07-27T16:05:12.024Z" },
+]
 
 [package.optional-dependencies]
 plane = [
@@ -245,18 +233,6 @@ plane = [
     { name = "cryptography" },
     { name = "httpx" },
 ]
-
-[package.metadata]
-requires-dist = [
-    { name = "axor-core", marker = "extra == 'kernel'", editable = "../axor-core" },
-    { name = "axor-core", marker = "extra == 'plane'", editable = "../axor-core" },
-    { name = "cryptography", marker = "extra == 'plane'", specifier = ">=42.0" },
-    { name = "httpx", marker = "extra == 'plane'", specifier = ">=0.27" },
-    { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
-    { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.23" },
-    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.5" },
-]
-provides-extras = ["kernel", "plane", "dev"]
 
 [[package]]
 name = "certifi"
