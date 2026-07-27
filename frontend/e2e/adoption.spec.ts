@@ -53,7 +53,7 @@ test.describe("adoption", () => {
       ["health", "re-anchors"],
       ["settings", "dead-letter"],
       ["expert", "one screen"],
-      ["pricing", "free forever"],
+      ["pricing", "two modules"],
     ];
     for (const [hash, expected] of cases) {
       await goHash(page, hash);
