@@ -1,3 +1,4 @@
+import { canonicalize } from "./jcs";
 import { useApp } from "./store";
 
 // Backend client. Vite dev-proxies /v1 -> backend :8400 and /axor -> proxy :8401.
@@ -140,6 +141,47 @@ export interface NodeInfo {
   facts: Record<string, unknown>[];
 }
 
+// Behavioral health check (axor-probe, ui-spec 8.2). A family's state is
+// deterministic: `escaped` iff a directional residual escaped on at least one
+// probe of that type. `unprobed` is its own state — a family the battery never
+// reached has no verdict, which is not a clean one. max_drift_score carries its
+// UNCALIBRATED caveat in the field name so nothing here thresholds it.
+export interface ProbeFamily {
+  family: string;
+  state: "clean" | "escaped" | "unprobed";
+  escapes: number;
+  probes: number;
+}
+
+export interface ProbeHealth {
+  id: number;
+  created_ts: string;
+  session_id: string;
+  agent_id: string;
+  model: string;
+  probe_library_version: string;
+  overall_verdict: "CONSISTENT" | "DRIFT_DETECTED" | "INCONCLUSIVE" | "CONSISTENCY_ANOMALY";
+  families: ProbeFamily[];
+  probes_sent: number;
+  probes_invalid: number;
+  probes_triangulated: number;
+  structural_failures: number;
+  escape_count: number;
+  escape_rate: number;
+  escape_rate_ci: [number, number];
+  calibration_status: string;
+  max_drift_score_uncalibrated: number;
+}
+
+export interface ProbeCheck {
+  id: number;
+  created_ts: string;
+  session_id: string;
+  overall_verdict: string;
+  escape_count: number;
+  probes_sent: number;
+}
+
 // Topology (spec v2 Ch.4 §6): derived from traced spawn/message events only.
 export interface TopologyNode {
   node_id: string;
@@ -201,13 +243,84 @@ export interface DeadLetter {
 }
 
 export interface LicenseInfo {
-  org: string;
-  tier: string;
-  node_ceiling: number;
-  expiry: string;
+  organization: string;
+  workspace_tier: string; // "community" | "team" | "security"
+  modules: { private_lab: boolean; control_plane: boolean };
+  governed_node_ceiling: number;
+  self_hosted_runner: boolean;
+  expires_at: string;
   features: string[];
   live_nodes?: number;
   over_ceiling?: boolean;
+}
+
+// Wrap engine (/v1/wrap): real code scan for the Config Builder. The engine is
+// an optional backend extra — both routes answer 501 when it is not installed.
+export interface WrapGuess {
+  default_class: "READ" | "WRITE" | "EXPORT" | "EXEC" | "UNKNOWN";
+  confidence: "high" | "medium" | "low";
+  reason: string;
+  driving_args: string[];
+  untrusted_fields: string[];
+}
+
+export interface WrapTool {
+  id: string;
+  source: string;
+  description: string;
+  args_schema: Record<string, unknown>;
+  framework: string;
+  schema_confidence: string;
+  guess: WrapGuess;
+}
+
+export interface WrapEffect {
+  default_class: "READ" | "WRITE" | "EXPORT" | "EXEC";
+  driving_args: string[];
+  untrusted_fields?: string[];
+  sensitive_fields?: string[];
+}
+
+export interface WrapManifestsBundle {
+  manifests: Record<string, unknown>[];
+  governance_yaml: string;
+  wrap: Record<string, unknown>;
+}
+
+// ── Axor Lab cross-links ─────────────────────────────────────────────────────
+// CP → Lab: a run exported as an axor-lab-incident/v1 package, or the honest
+// list of reasons it cannot be. Lab → CP: an accepted cp-deploy package.
+export type LabPackageResult =
+  | { ok: true; pkg: Record<string, unknown> }
+  | { ok: false; reasons: string[] };
+
+export interface LabSkippedPin {
+  run_id: string;
+  trace_id: string;
+  reason: string;
+}
+
+export type LabDeployResult =
+  | {
+      ok: true;
+      package_id: string;
+      pins_created: number;
+      pins_replayable: number;
+      pins_skipped: LabSkippedPin[];
+      policy_stored: boolean;
+      already_deployed: boolean;
+    }
+  | { ok: false; reasons: string[] };
+
+export interface LabDeploySummary {
+  package_id: string;
+  created_ts: string;
+  kernel: string;
+  config_hash: string;
+  parametric_config_hash: string;
+  pins_created: number;
+  manifest_count: number;
+  source: { bundle_id?: string; condition_id?: string };
 }
 
 async function j<T>(resp: Response): Promise<T> {
@@ -235,6 +348,42 @@ function withToken(url: string): string {
   const token = apiToken();
   if (!token) return url;
   return url + (url.includes("?") ? "&" : "?") + "token=" + encodeURIComponent(token);
+}
+
+// base64 of the UTF-8 bytes of a string (btoa is latin1-only, so encode first).
+function b64utf8(s: string): string {
+  const bytes = new TextEncoder().encode(s);
+  let bin = "";
+  for (const b of bytes) bin += String.fromCharCode(b);
+  return btoa(bin);
+}
+
+// Signed command posture (protocol §6): the browser canonicalizes the payload
+// itself (byte-identical to the adapter's kernel), then asks the vault signing
+// custody to sign exactly those bytes. The operator key never enters the
+// browser — only the vault signing-token, which authorizes an audited sign
+// request. Returns the signature hex to attach to the command/fact.
+async function vaultSign(payloadObj: unknown): Promise<string> {
+  const { signingKeyId, vaultSigningToken } = useApp.getState();
+  const payload_b64 = b64utf8(canonicalize(payloadObj));
+  const r = await fetch("/v1/vault/signing/sign", {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "X-Vault-Signing-Token": vaultSigningToken,
+      ...(apiToken() ? { Authorization: `Bearer ${apiToken()}` } : {}),
+    },
+    body: JSON.stringify({ operator: "op_ui", key_id: signingKeyId, payload_b64 }),
+  });
+  const { signature_hex } = await j<{ signature_hex: string; key_id: string }>(r);
+  return signature_hex;
+}
+
+// True when the signed posture is armed: a signing key is selected, so the
+// browser signs via the vault. The signing-token is sent alongside and is only
+// required when the backend has configured a signing gate (open in dev).
+function signingArmed(): boolean {
+  return Boolean(useApp.getState().signingKeyId);
 }
 
 export const api = {
@@ -276,6 +425,20 @@ export const api = {
     af("/v1/vault/signing/keys").then((r) =>
       j<{ key_id: string; public_key_hex: string; operators: string[]; created_ts: string }[]>(r)),
 
+  // Put a new operator signing key under vault custody. The private half stays
+  // in the vault; the response carries only the public half (pinned in adapter
+  // config, never trusted from here). Needs the signing-token when gated.
+  createSigningKey: (keyId: string, operators: string[]) =>
+    fetch("/v1/vault/signing/keys", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "X-Vault-Signing-Token": useApp.getState().vaultSigningToken,
+        ...(apiToken() ? { Authorization: `Bearer ${apiToken()}` } : {}),
+      },
+      body: JSON.stringify({ key_id: keyId, operators }),
+    }).then((r) => j<{ key_id: string; public_key_hex: string; operators: string[] }>(r)),
+
   vaultSigningAudit: () =>
     af("/v1/vault/signing/audit").then((r) =>
       j<{ operator: string; key_id: string; payload_sha256: string; granted: boolean; ts: string }[]>(r)),
@@ -286,18 +449,20 @@ export const api = {
 
   seedTreeRun: () =>
     af("/v1/demo/seed-tree-run", { method: "POST" }).then((r) => j<unknown>(r)),
-  command: (nodeId: string, version: number, state: Record<string, unknown>) =>
-    af(`/v1/plane/${nodeId}/command`, {
+  command: async (nodeId: string, version: number, state: Record<string, unknown>) => {
+    // One timestamp, signed and sent — the adapter reconstructs the exact bytes
+    // from (node_id, version, body=state, timestamp), so they must match.
+    const timestamp = new Date().toISOString();
+    const sig = signingArmed()
+      ? await vaultSign({ node_id: nodeId, version, body: state, timestamp })
+      : "";
+    const r = await af(`/v1/plane/${nodeId}/command`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        version,
-        state,
-        operator: "op_ui",
-        timestamp: new Date().toISOString(),
-        sig: "",
-      }),
-    }).then((r) => j<{ node_id: string; version: number; state: Record<string, unknown> }>(r)),
+      body: JSON.stringify({ version, state, operator: "op_ui", timestamp, sig }),
+    });
+    return j<{ node_id: string; version: number; state: Record<string, unknown> }>(r);
+  },
   pin: (runId: string, side: "must_block" | "must_pass", label: string) =>
     af(`/v1/pins/${runId}`, {
       method: "POST",
@@ -353,6 +518,55 @@ export const api = {
       body: JSON.stringify(body),
     }).then((r) => j<SimulateResult>(r)),
 
+  // ── wrap engine: scan uploaded code, compile tool manifests ───────────────
+  wrapScan: (files: { path: string; content: string }[]) =>
+    af("/v1/wrap/scan", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ files }),
+    }).then((r) => j<{ tools: WrapTool[] }>(r)),
+  wrapManifests: (tools: (Omit<Partial<WrapTool>, "guess"> & { id: string; effect: WrapEffect })[]) =>
+    af("/v1/wrap/manifests", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ tools }),
+    }).then((r) => j<WrapManifestsBundle>(r)),
+
+  // ── Axor Lab cross-links (CP → Lab incident export, Lab → CP deploy) ──────
+  labPackage: async (runId: string): Promise<LabPackageResult> => {
+    const r = await af(`/v1/runs/${runId}/lab-package`);
+    if (r.status === 422) {
+      const body = (await r.json()) as { detail?: { reasons?: string[] } };
+      return { ok: false, reasons: body.detail?.reasons ?? ["run is not convertible"] };
+    }
+    if (!r.ok) throw new Error(`${r.status} ${await r.text()}`);
+    return { ok: true, pkg: (await r.json()) as Record<string, unknown> };
+  },
+  labDeploy: async (pkg: Record<string, unknown>): Promise<LabDeployResult> => {
+    const r = await af("/v1/lab/deploy", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(pkg),
+    });
+    if (r.status === 422) {
+      const body = (await r.json()) as { detail?: { reasons?: string[] } };
+      return { ok: false, reasons: body.detail?.reasons ?? ["package rejected"] };
+    }
+    if (!r.ok) throw new Error(`${r.status} ${await r.text()}`);
+    return {
+      ok: true,
+      ...(await r.json()) as {
+        package_id: string;
+        pins_created: number;
+        pins_replayable: number;
+        pins_skipped: LabSkippedPin[];
+        policy_stored: boolean;
+        already_deployed: boolean;
+      },
+    };
+  },
+  labDeploys: () => af("/v1/lab/deploys").then((r) => j<LabDeploySummary[]>(r)),
+
   // ── EvidenceCase share / export (spec 8.3) ─────────────────────────────────
   shareCase: (runId: string, caseIndex: number) =>
     af(`/v1/runs/${runId}/cases/${caseIndex}/share`, { method: "POST" }).then(
@@ -404,22 +618,43 @@ export const api = {
     }).then((r) => j<{ enabled: boolean; interval_hours: number }>(r)),
   licenseStatus: () =>
     af("/v1/license/status").then((r) =>
-      j<{ active: boolean; org?: string; tier?: string; expiry?: string }>(r),
+      j<{
+        active: boolean;
+        organization?: string;
+        workspace_tier?: string;
+        modules?: { private_lab: boolean; control_plane: boolean };
+        governed_node_ceiling?: number;
+        self_hosted_runner?: boolean;
+        expires_at?: string;
+      }>(r),
     ),
 
   // ── operator interventions over the plane (spec §12) ───────────────────────
-  appendFact: (nodeId: string, fact: Record<string, unknown>) =>
-    af(`/v1/plane/${nodeId}/facts`, {
+  appendFact: async (nodeId: string, fact: Record<string, unknown>) => {
+    // Facts are signed with version=0 (they carry no optimistic version — the
+    // adapter signs (node_id, 0, body=fact, timestamp)).
+    const timestamp = new Date().toISOString();
+    const sig = signingArmed()
+      ? await vaultSign({ node_id: nodeId, version: 0, body: fact, timestamp })
+      : "";
+    const r = await af(`/v1/plane/${nodeId}/facts`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        fact, operator: "op_ui", timestamp: new Date().toISOString(), sig: "",
-      }),
-    }).then((r) => j<{ appended: boolean }>(r)),
+      body: JSON.stringify({ fact, operator: "op_ui", timestamp, sig }),
+    });
+    return j<{ appended: boolean }>(r);
+  },
   cascadeStop: (nodeId: string) =>
     af(`/v1/plane/${nodeId}/cascade-stop`, { method: "POST" }).then(
       (r) => j<{ stopped: string[]; count: number }>(r),
     ),
+
+  // The node's last behavioral health check, plus the series behind it. `latest`
+  // is null until a node has posted one — "no check yet", which is not the same
+  // as a healthy agent. This is drift, never an Eval metric (ui-spec 8.2).
+  probeReport: (nodeId: string) =>
+    af(`/v1/plane/${nodeId}/probe-report`).then((r) =>
+      j<{ latest: ProbeHealth | null; history: ProbeCheck[] }>(r)),
 
   // ── governed node: a real axor-core IntentLoop wired to the plane ──────────
   spawnGoverned: () =>

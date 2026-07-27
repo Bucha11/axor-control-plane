@@ -1,10 +1,10 @@
 // Config regression: replay the pinned corpus under a candidate config
 // (regression-report mockup). Wired to /v1/regression — deterministic replay,
 // no model calls.
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { CalendarClock, ChevronDown, ChevronRight, Circle, ExternalLink, Loader2, Lock, Play } from "lucide-react";
-import { api, RegressionReport, RegressionRow } from "../api";
+import { CalendarClock, ChevronDown, ChevronRight, Circle, ExternalLink, FlaskConical, Loader2, Lock, Play, Upload } from "lucide-react";
+import { api, LabDeployResult, RegressionReport, RegressionRow } from "../api";
 import { C, MONO, btn } from "../theme";
 import { navigate } from "../router";
 import Coach from "../components/Coach";
@@ -147,6 +147,133 @@ function ScheduleAndHistory({ parseConfig }: { parseConfig: () => Record<string,
   );
 }
 
+// Lab → CP: accept a cp-deploy.json produced by `axor-lab export-cp`. The
+// package's validated regression pins fold into THIS corpus (source-labelled
+// lab:{package_id}); the list below is the record of every accepted handoff.
+function LabDeploys() {
+  const qc = useQueryClient();
+  const fileRef = useRef<HTMLInputElement | null>(null);
+  const [result, setResult] = useState<LabDeployResult | { ok: false; reasons: string[] } | null>(null);
+
+  const deploys = useQuery({ queryKey: ["lab-deploys"], queryFn: api.labDeploys });
+
+  const upload = useMutation({
+    mutationFn: async (file: File) => {
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(await file.text());
+      } catch {
+        throw new Error(`${file.name} is not valid JSON`);
+      }
+      if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+        throw new Error("cp-deploy.json must be a JSON object");
+      }
+      return api.labDeploy(parsed as Record<string, unknown>);
+    },
+    onSuccess: (r) => {
+      setResult(r);
+      if (r.ok) {
+        void qc.invalidateQueries({ queryKey: ["lab-deploys"] });
+        void qc.invalidateQueries({ queryKey: ["pins"] });
+      }
+    },
+    onError: () => setResult(null),
+  });
+
+  return (
+    <div className="mb-8">
+      <div style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim, letterSpacing: "0.08em", marginBottom: 8 }}>
+        LAB DEPLOYS · CP-DEPLOY PACKAGES FROM AXOR LAB
+      </div>
+      <div className="flex items-center gap-3 mb-3">
+        <input
+          ref={fileRef}
+          type="file"
+          accept=".json,application/json"
+          style={{ display: "none" }}
+          onChange={(e) => {
+            const file = e.target.files?.[0];
+            if (file) upload.mutate(file);
+            e.target.value = "";
+          }}
+        />
+        <Tooltip content="Upload the cp-deploy.json that `axor-lab export-cp` produced: the validated policy + manifests are stored, and its validated regression pins join this corpus marked lab:{package_id}. Only finalized (verified) exports are accepted.">
+          <button
+            onClick={() => fileRef.current?.click()}
+            disabled={upload.isPending}
+            style={btn({ color: C.steel, fontSize: 11, padding: "7px 12px" })}
+          >
+            {upload.isPending ? <Loader2 size={12} className="animate-spin" /> : <Upload size={12} />}
+            {" "}upload cp-deploy.json
+          </button>
+        </Tooltip>
+        {upload.isError && (
+          <span style={{ fontFamily: MONO, fontSize: 11, color: C.red }}>
+            {(upload.error as Error).message}
+          </span>
+        )}
+        {result?.ok && (
+          <span style={{ fontFamily: MONO, fontSize: 11, color: C.green }}>
+            {result.already_deployed ? "already deployed" : "accepted"} · {result.package_id} ·{" "}
+            {result.pins_created} pin{result.pins_created === 1 ? "" : "s"} → corpus
+            {" · "}
+            <span style={{ color: C.steel }}>
+              {result.pins_replayable} replayable
+            </span>
+            {result.pins_skipped.length > 0 && (
+              <span style={{ color: C.mut }}>
+                {" · "}{result.pins_skipped.length} skipped
+              </span>
+            )}
+          </span>
+        )}
+      </div>
+      {result?.ok && result.pins_skipped.length > 0 && (
+        <div className="p-3 mb-3" style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 8 }}>
+          <div style={{ fontFamily: MONO, fontSize: 10, color: C.mut, letterSpacing: "0.1em", marginBottom: 6 }}>
+            PINS LEFT SKIPPED (not replayed — recorded under a kernel this CP will not substitute)
+          </div>
+          {result.pins_skipped.map((p) => (
+            <div key={p.run_id} style={{ fontFamily: MONO, fontSize: 11.5, color: C.mut, lineHeight: 1.6 }}>
+              · {p.trace_id}: {p.reason}
+            </div>
+          ))}
+        </div>
+      )}
+      {result && !result.ok && (
+        <div className="p-3 mb-3" style={{ background: C.panel, border: `1px solid ${C.red}`, borderRadius: 8 }}>
+          <div style={{ fontFamily: MONO, fontSize: 10, color: C.red, letterSpacing: "0.1em", marginBottom: 6 }}>
+            PACKAGE REJECTED
+          </div>
+          {result.reasons.map((reason, i) => (
+            <div key={i} style={{ fontFamily: MONO, fontSize: 11.5, color: C.mut, lineHeight: 1.6 }}>
+              · {reason}
+            </div>
+          ))}
+        </div>
+      )}
+      {(deploys.data ?? []).length > 0 && (
+        <div style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 8 }}>
+          {(deploys.data ?? []).map((d, i) => (
+            <div key={d.package_id} className="flex items-center gap-3 px-4 py-2"
+              style={{ borderTop: i ? `1px solid ${C.line}` : "none", fontFamily: MONO, fontSize: 11 }}>
+              <FlaskConical size={11} color={C.steel} />
+              <span style={{ color: C.text }}>{d.package_id}</span>
+              <span style={{ color: C.dim, width: 122 }}>{d.created_ts.slice(0, 16)}</span>
+              <span style={{ color: C.dim, flex: 1 }}>
+                {d.kernel} · bundle {d.source.bundle_id ?? "?"} · condition {d.source.condition_id ?? "?"}
+              </span>
+              <span style={{ color: C.mut }}>
+                {d.pins_created} pin{d.pins_created === 1 ? "" : "s"} · {d.manifest_count} manifest{d.manifest_count === 1 ? "" : "s"}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function Regression({ initialConfig }: { initialConfig?: string } = {}) {
   const [raw, setRaw] = useState(initialConfig ?? DEFAULT_CONFIG);
   const [parseError, setParseError] = useState<string | null>(null);
@@ -256,6 +383,8 @@ export default function Regression({ initialConfig }: { initialConfig?: string }
           </span>
         )}
       </div>
+
+      <LabDeploys />
 
       <ScheduleAndHistory
         parseConfig={() => {

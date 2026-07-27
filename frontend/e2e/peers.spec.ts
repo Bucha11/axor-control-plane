@@ -5,10 +5,33 @@
 import { expect, request, test } from "@playwright/test";
 import { BACKEND, goHash, setConnection, uniqueNode } from "./helpers";
 
+const AGENT_PY = [
+  "from langchain_core.tools import tool",
+  "",
+  "",
+  "@tool",
+  "def read_inbox(folder: str) -> str:",
+  '    """Read the user\'s email inbox."""',
+  "    return folder",
+  "",
+  "",
+  "@tool",
+  "def send_email(to: str, body: str) -> str:",
+  '    """Send an email to a recipient."""',
+  "    return to",
+  "",
+].join("\n");
+
 test.describe("inter-federation peers", () => {
   test("config builder declares a peer; the preview states the ceiling", async ({ page }) => {
     await goHash(page, "config-builder");
-    await page.getByText("Drop your agent folder or tools file").click();
+    // The drop zone opens a native file chooser; drive the hidden input
+    // directly, the same way config-builder.spec.ts feeds the scanner.
+    await page.locator('input[type="file"]').setInputFiles({
+      name: "tools.py",
+      mimeType: "text/x-python",
+      buffer: Buffer.from(AGENT_PY),
+    });
     await expect(page.getByRole("heading", { name: /Found \d+ tools/ })).toBeVisible({ timeout: 15_000 });
     for (let i = 0; i < 6; i++) {
       const readBtn = page.getByRole("button", { name: "READ", exact: true }).first();

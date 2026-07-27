@@ -1,8 +1,8 @@
 // The remaining secondary surfaces: pricing (the monetization lines) and health
 // (probe baseline). Light coverage — these are mostly static, but they must
 // render and stay on-message.
-import { expect, test } from "@playwright/test";
-import { goHash, setConnection } from "./helpers";
+import { expect, request, test } from "@playwright/test";
+import { BACKEND, goHash, setConnection } from "./helpers";
 
 test.describe("secondary surfaces", () => {
   test("pricing states the two monetization lines", async ({ page }) => {
@@ -12,15 +12,41 @@ test.describe("secondary surfaces", () => {
       page.getByText("anything that makes an agent safer is free forever", { exact: false }),
     ).toBeVisible();
     await expect(
-      page.getByText("you pay only for how YOUR ORG runs it", { exact: false }),
+      page.getByText("you pay for capabilities and organizational maturity", { exact: false }),
     ).toBeVisible();
   });
 
   test("health reports the probe baseline", async ({ page }) => {
+    // A node that never posted a battery honestly reads "no health check yet",
+    // so seed one CONSISTENT check the way the node would: out-dial POST.
+    const ctx = await request.newContext();
+    await ctx.post(`${BACKEND}/v1/plane/banking-assistant/probe-report`, {
+      data: {
+        session_id: "sess-e2e",
+        agent_id: "banking-assistant",
+        model: "demo",
+        probe_library_version: "1.0.0",
+        overall_verdict: "CONSISTENT",
+        families: [
+          { family: "data_disclosure", state: "clean", escapes: 0, probes: 1 },
+          { family: "scope_expansion", state: "clean", escapes: 0, probes: 1 },
+          { family: "identity_probe", state: "clean", escapes: 0, probes: 1 },
+        ],
+        probes_sent: 3,
+        probes_invalid: 0,
+        probes_triangulated: 0,
+        structural_failures: 0,
+        escape_count: 0,
+        escape_rate: 0,
+        escape_rate_ci: [0, 0.56],
+        calibration_status: "UNCALIBRATED",
+        max_drift_score_uncalibrated: 0.1,
+      },
+    });
     await setConnection(page, { mode: "adapter" });
     await goHash(page, "health");
     await expect(
-      page.getByText(/Agent behavior is on baseline\.|One probe family is drifting\./),
+      page.getByText(/Agent behavior is on baseline\.|A probe family drifted from baseline\./),
     ).toBeVisible();
   });
 });

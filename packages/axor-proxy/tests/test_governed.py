@@ -4,8 +4,8 @@ bridges to the kernel event schema with the recorded verdict."""
 from __future__ import annotations
 
 import pytest
-from axor_core.plane.session import PlaneSession
 from axor_proxy.governed import run_governed_session
+from axor_wrap.plane.session import PlaneSession
 
 
 @pytest.mark.anyio

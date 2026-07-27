@@ -21,7 +21,7 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from sse_starlette.sse import EventSourceResponse
 
 from axor_backend import auth as auth_mod
-from axor_backend import plane
+from axor_backend import plane, wrap_api
 from axor_backend.auth import (
     Principal,
     hash_secret,
@@ -245,6 +245,7 @@ def create_app(
         return await call_next(request)
 
     app.include_router(plane.router)
+    app.include_router(wrap_api.router)
 
     # ── run ingest & read (the proxy's upload path) ───────────────────────────
 
@@ -581,6 +582,75 @@ def create_app(
         config = kernel_config_from_json(body.get("config", {}))
         return scrubber_payload(replay(events, config))
 
+    # ── Axor Lab cross-links (CP → Lab incident export, Lab → CP deploy) ─────
+
+    @app.get("/v1/runs/{run_id}/lab-package")
+    async def run_lab_package(run_id: str, request: Request) -> dict:
+        """The run as an axor-lab-incident/v1 package (trace + scenario +
+        manifests + recorded condition) — the input of `axor-lab
+        import-incident`. 422 with the full reason list when the run is not
+        convertible (proxy-depth events, unreproducible verdicts, no vector)."""
+        from axor_backend.lab_export import LabExportError, build_incident_package
+
+        store: Store = request.app.state.store
+        runs = {r["run_id"]: r for r in await store.list_runs()}
+        run = runs.get(run_id)
+        if run is None:
+            raise HTTPException(404, f"no such run {run_id}")
+        events = [json.loads(line) for line in await store.run_events(run_id)]
+        try:
+            return build_incident_package(events, run)
+        except LabExportError as exc:
+            raise HTTPException(
+                422, {"error": "run is not convertible to a Lab incident package",
+                      "reasons": list(exc.reasons)},
+            ) from exc
+
+    @app.post("/v1/lab/deploy")
+    async def lab_deploy(body: dict, request: Request) -> dict:
+        """Accept a cp-deploy.json produced by `axor-lab export-cp`: validate
+        (finalized evidence-backed packages only), store the package record,
+        and fold its regression pins into the corpus with source lab:{id}."""
+        from axor_backend.lab_import import (
+            deploy_plans,
+            package_id_of,
+            validate_cp_deploy,
+        )
+
+        problems = validate_cp_deploy(body)
+        if problems:
+            raise HTTPException(
+                422, {"error": "cp-deploy package rejected", "reasons": problems},
+            )
+        store: Store = request.app.state.store
+        package_id = package_id_of(body)
+        plans = deploy_plans(body, package_id)
+        stored_new = await store.add_lab_deploy(package_id, body, len(plans), _now())
+        for plan in plans:  # idempotent per run_id — a re-upload re-asserts them
+            await store.pin(plan.run_id, plan.side, plan.label)
+            # a pin whose carried trace was recorded under the real axor-core
+            # kernel and reproduces here is stored as replayable corpus events —
+            # the regression report folds them instead of skipping the pin
+            if plan.replayable:
+                await store.add_lab_trace_events(plan.run_id, plan.event_lines)
+        return {
+            "package_id": package_id,
+            "pins_created": len(plans),
+            # how many Lab pins are now REPLAYABLE corpus traces (real-kernel,
+            # build-matched, verdict reproduces) vs left skipped with a reason
+            "pins_replayable": sum(1 for p in plans if p.replayable),
+            "pins_skipped": [
+                {"run_id": p.run_id, "trace_id": p.trace_id, "reason": p.reason}
+                for p in plans if not p.replayable
+            ],
+            "policy_stored": True,
+            "already_deployed": not stored_new,
+        }
+
+    @app.get("/v1/lab/deploys")
+    async def lab_deploys_list(request: Request) -> list[dict]:
+        return await request.app.state.store.list_lab_deploys()
+
     @app.post("/v1/pins/{run_id}")
     async def pin_run(run_id: str, body: dict, request: Request) -> dict:
         side = body.get("side")
@@ -804,11 +874,17 @@ def create_app(
         # against the license and WARN — never block; safety never checks a
         # license (monetization Line 1).
         live_nodes = len(await request.app.state.store.list_nodes())
+        from axor_backend.ee.license import KNOWN_MODULES
         return {
-            "org": lic.org, "tier": lic.tier, "node_ceiling": lic.node_ceiling,
-            "expiry": lic.expiry, "features": list(lic.features),
+            "organization": lic.organization,
+            "workspace_tier": lic.workspace_tier,
+            "modules": {m: lic.has_module(m) for m in KNOWN_MODULES},
+            "governed_node_ceiling": lic.governed_node_ceiling,
+            "self_hosted_runner": lic.self_hosted_runner,
+            "expires_at": lic.expires_at,
+            "features": list(lic.features),
             "live_nodes": live_nodes,
-            "over_ceiling": live_nodes > lic.node_ceiling,
+            "over_ceiling": live_nodes > lic.governed_node_ceiling,
             "activated": request.app.state.license is lic,
         }
 
@@ -819,9 +895,15 @@ def create_app(
         lic = _active_license(request.app)
         if lic is None:
             return {"active": False}
+        from axor_backend.ee.license import KNOWN_MODULES
         return {
-            "active": True, "org": lic.org, "tier": lic.tier,
-            "expiry": lic.expiry, "node_ceiling": lic.node_ceiling,
+            "active": True,
+            "organization": lic.organization,
+            "workspace_tier": lic.workspace_tier,
+            "modules": {m: lic.has_module(m) for m in KNOWN_MODULES},
+            "governed_node_ceiling": lic.governed_node_ceiling,
+            "self_hosted_runner": lic.self_hosted_runner,
+            "expires_at": lic.expires_at,
             "features": list(lic.features),
         }
 
@@ -951,13 +1033,29 @@ def _active_license(app: FastAPI) -> Any | None:  # noqa: ANN401 - License
     return lic
 
 
-def _require_ee(app: FastAPI, what: str) -> None:
-    if _active_license(app) is None:
-        # 402: honest and machine-readable — this is a paid org feature.
+def _require_ee(
+    app: FastAPI, what: str, *, min_tier: str = "team", module: str | None = None
+) -> None:
+    """Gate a paid org feature by the license's workspace tier (and optionally a
+    module), not merely by a license being present (axor-packaging.md §1). A
+    community-tier license does not unlock a team feature; the 402 names what is
+    needed. Safety features never call this."""
+    lic = _active_license(app)
+    if lic is None:
         raise HTTPException(
             402,
-            f"{what} is an org feature (Team tier) — add a license in "
-            "Settings → ENTERPRISE LICENSE. Safety features never require one.",
+            f"{what} is a paid org feature ({min_tier} tier) — add a license in "
+            "Settings → LICENSE. Safety features never require one.",
+        )
+    if not lic.tier_at_least(min_tier):
+        raise HTTPException(
+            402,
+            f"{what} needs the {min_tier} workspace tier or higher; this license is "
+            f"'{lic.workspace_tier}'.",
+        )
+    if module is not None and not lic.has_module(module):
+        raise HTTPException(
+            402, f"{what} needs the {module} module, which this license does not enable."
         )
 
 

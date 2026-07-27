@@ -345,13 +345,21 @@ export default function Settings() {
         {license.data && (
           <>
             <div className="mt-2" style={{ fontFamily: MONO, fontSize: 11, color: C.green }}>
-              {license.data.org} · {license.data.tier} · up to {license.data.node_ceiling} nodes ·
-              expires {license.data.expiry} · {license.data.features.join(", ") || "no EE features"}
+              {license.data.organization} · {license.data.workspace_tier} workspace ·{" "}
+              {[
+                license.data.modules?.private_lab && "Private Lab",
+                license.data.modules?.control_plane &&
+                  `Control Plane (up to ${license.data.governed_node_ceiling} nodes)`,
+              ]
+                .filter(Boolean)
+                .join(" + ") || "no modules"}
+              {license.data.self_hosted_runner ? " · self-hosted" : ""} · expires{" "}
+              {license.data.expires_at} · {license.data.features.join(", ") || "no EE features"}
             </div>
             {license.data.over_ceiling && (
               <div className="mt-1" style={{ fontFamily: MONO, fontSize: 11, color: C.amber }}>
                 {license.data.live_nodes} live nodes exceed the licensed ceiling of{" "}
-                {license.data.node_ceiling} — a warning, never a block (safety never
+                {license.data.governed_node_ceiling} — a warning, never a block (safety never
                 checks a license). Contact us to raise the ceiling.
               </div>
             )}
@@ -372,6 +380,32 @@ function FederationVault() {
   const creds = useQuery({ queryKey: ["vault-creds"], queryFn: api.vaultCredsHealth });
   const keys = useQuery({ queryKey: ["vault-keys"], queryFn: api.vaultSigningKeys });
   const audit = useQuery({ queryKey: ["vault-audit"], queryFn: api.vaultSigningAudit });
+  const qc = useQueryClient();
+
+  // Signed command posture (protocol §6). The token authorizes sign requests;
+  // the key_id selects which custody key signs. Both persist in the store so the
+  // command path (api.command / api.appendFact) can sign without prompting.
+  const signingKeyId = useApp((s) => s.signingKeyId);
+  const setSigningKeyId = useApp((s) => s.setSigningKeyId);
+  const vaultSigningToken = useApp((s) => s.vaultSigningToken);
+  const setVaultSigningToken = useApp((s) => s.setVaultSigningToken);
+  const [newKeyId, setNewKeyId] = useState("");
+  const [newKeyOps, setNewKeyOps] = useState("op_ui");
+
+  const createKey = useMutation({
+    mutationFn: () =>
+      api.createSigningKey(
+        newKeyId.trim(),
+        newKeyOps.split(",").map((s) => s.trim()).filter(Boolean),
+      ),
+    onSuccess: (r) => {
+      setSigningKeyId(r.key_id);
+      setNewKeyId("");
+      void qc.invalidateQueries({ queryKey: ["vault-keys"] });
+    },
+  });
+
+  const signedPosture = Boolean(signingKeyId);
   return (
     <div className="flex gap-4 mb-4" data-testid="federation-vault" style={{ alignItems: "stretch" }}>
       <div className="p-4 flex-1" style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 8 }}>
@@ -426,6 +460,70 @@ function FederationVault() {
             ))}
           </div>
         )}
+
+        {/* Operator command posture: arm signing without the key ever touching
+            the browser — the vault signs, the browser holds only the token. */}
+        <div className="mt-3 pt-3" style={{ borderTop: `1px solid ${C.line}` }}>
+          <div style={{ fontFamily: MONO, fontSize: 9.5, color: C.dim, letterSpacing: "0.08em", marginBottom: 6 }}>
+            OPERATOR COMMAND SIGNING
+          </div>
+          <div className="flex flex-col gap-2" data-testid="signing-controls">
+            <input
+              type="password"
+              value={vaultSigningToken}
+              onChange={(e) => setVaultSigningToken(e.target.value)}
+              placeholder="vault signing-token (X-Vault-Signing-Token)"
+              aria-label="vault signing-token"
+              style={{ background: C.bg, border: `1px solid ${C.line}`, borderRadius: 4, color: C.text, fontFamily: MONO, fontSize: 11, padding: "5px 8px", outline: "none" }}
+            />
+            <div className="flex items-center gap-2">
+              <select
+                value={signingKeyId}
+                onChange={(e) => setSigningKeyId(e.target.value)}
+                aria-label="signing key id"
+                style={{ background: C.bg, border: `1px solid ${C.line}`, borderRadius: 4, color: C.text, fontFamily: MONO, fontSize: 11, padding: "5px 8px", outline: "none", flex: 1 }}
+              >
+                <option value="">— unsigned (dev only) —</option>
+                {(keys.data ?? []).map((k) => (
+                  <option key={k.key_id} value={k.key_id}>{k.key_id}</option>
+                ))}
+              </select>
+            </div>
+            <div className="flex items-center gap-2">
+              <input
+                value={newKeyId}
+                onChange={(e) => setNewKeyId(e.target.value)}
+                placeholder="new key_id"
+                aria-label="new signing key id"
+                style={{ background: C.bg, border: `1px solid ${C.line}`, borderRadius: 4, color: C.text, fontFamily: MONO, fontSize: 11, padding: "5px 8px", width: 130, outline: "none" }}
+              />
+              <input
+                value={newKeyOps}
+                onChange={(e) => setNewKeyOps(e.target.value)}
+                placeholder="operators (comma-sep)"
+                aria-label="signing key operators"
+                style={{ background: C.bg, border: `1px solid ${C.line}`, borderRadius: 4, color: C.text, fontFamily: MONO, fontSize: 11, padding: "5px 8px", flex: 1, outline: "none" }}
+              />
+              <button
+                onClick={() => createKey.mutate()}
+                disabled={!newKeyId.trim() || createKey.isPending}
+                style={btn({ color: C.steel, fontSize: 10.5, padding: "4px 10px" })}
+              >
+                {createKey.isPending ? <Loader2 size={11} className="animate-spin" /> : null} create signing key
+              </button>
+            </div>
+            {createKey.isError && (
+              <div style={{ fontFamily: MONO, fontSize: 10.5, color: C.red }}>
+                {(createKey.error as Error).message}
+              </div>
+            )}
+            <div style={{ fontFamily: MONO, fontSize: 10, color: signedPosture ? C.green : C.amber, lineHeight: 1.6 }}>
+              {signedPosture
+                ? `● signed — Control commands are canonicalized in the browser and signed by the vault under ${signingKeyId}; the operator key never enters the browser.`
+                : "○ unsigned — no signing key selected; commands go out with an empty signature and are accepted only by a dev backend (AXOR_ALLOW_UNSIGNED=1). Select or create a key to sign for real."}
+            </div>
+          </div>
+        </div>
       </div>
     </div>
   );

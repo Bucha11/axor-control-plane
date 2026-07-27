@@ -29,7 +29,7 @@ from typing import Any
 
 TRIGGERS = frozenset({
     "level_transition_up", "heat_threshold", "evidence_run", "node_stale",
-    "regression_failed",
+    "regression_failed", "behavioral_drift",
 })
 
 

@@ -385,25 +385,36 @@ async def test_valid_license_verifies_offline(client: httpx.AsyncClient) -> None
     from axor_backend.ee.license import sign_license
 
     priv, pub = _vendor_keypair()
-    lic = {"org": "Acme", "tier": "enterprise", "node_ceiling": 50,
-           "expiry": "2027-01-01", "features": ["fleet_view", "compliance_reports"]}
+    # Enterprise Platform = Security workspace + both modules + self-hosted
+    # (axor-packaging.md §5); it is a security workspace_tier, not its own tier.
+    lic = {"organization": "Acme", "workspace_tier": "security",
+           "modules": {"private_lab": True, "control_plane": True},
+           "governed_node_ceiling": 50, "self_hosted_runner": True,
+           "expires_at": "2027-01-01", "features": ["sso", "compliance_exports"]}
     license_json = sign_license(lic, priv)
     resp = await client.post("/v1/license/verify", json={
         "license_json": license_json, "vendor_pubkey": pub,
     })
     assert resp.status_code == 200
-    assert resp.json()["org"] == "Acme"
-    assert "fleet_view" in resp.json()["features"]
+    body = resp.json()
+    assert body["organization"] == "Acme"
+    assert body["workspace_tier"] == "security"
+    assert body["modules"] == {"private_lab": True, "control_plane": True}
+    assert body["governed_node_ceiling"] == 50
+    assert "sso" in body["features"]
 
 
 async def test_tampered_license_rejected(client: httpx.AsyncClient) -> None:
     from axor_backend.ee.license import sign_license
 
     priv, pub = _vendor_keypair()
-    lic = {"org": "Acme", "tier": "team", "node_ceiling": 5,
-           "expiry": "2027-01-01", "features": []}
+    lic = {"organization": "Acme", "workspace_tier": "team",
+           "modules": {"private_lab": True, "control_plane": False},
+           "governed_node_ceiling": 5, "self_hosted_runner": False,
+           "expires_at": "2027-01-01", "features": []}
     license_json = sign_license(lic, priv)
-    tampered = license_json.replace('"node_ceiling": 5', '"node_ceiling": 9999')
+    tampered = license_json.replace('"governed_node_ceiling": 5',
+                                    '"governed_node_ceiling": 9999')
     resp = await client.post("/v1/license/verify", json={
         "license_json": tampered, "vendor_pubkey": pub,
     })
@@ -413,10 +424,11 @@ async def test_tampered_license_rejected(client: httpx.AsyncClient) -> None:
 def test_license_expiry_degrades_to_readonly() -> None:
     from axor_backend.ee.license import License
 
-    lic = License(org="A", tier="team", node_ceiling=5, expiry="2026-01-01",
-                  features=("fleet_view",))
-    assert lic.enables("fleet_view", today="2025-06-01") is True
-    assert lic.enables("fleet_view", today="2026-06-01") is False  # expired
+    lic = License(organization="A", workspace_tier="team", modules=(),
+                  governed_node_ceiling=5, expires_at="2026-01-01",
+                  features=("sso",))
+    assert lic.enables("sso", today="2025-06-01") is True
+    assert lic.enables("sso", today="2026-06-01") is False  # expired
     assert lic.is_expired("2026-06-01") is True
 
 
@@ -427,8 +439,10 @@ async def test_license_verify_reports_node_ceiling_telemetry(
     from axor_backend.ee.license import sign_license
 
     priv, pub = _vendor_keypair()
-    lic = sign_license({"org": "A", "tier": "team", "node_ceiling": 1,
-                        "expiry": "2999-01-01", "features": []}, priv)
+    lic = sign_license({"organization": "A", "workspace_tier": "team",
+                        "modules": {"private_lab": True, "control_plane": True},
+                        "governed_node_ceiling": 1, "self_hosted_runner": False,
+                        "expires_at": "2999-01-01", "features": []}, priv)
     # Two live nodes vs a ceiling of 1.
     for node in ("ce_n1", "ce_n2"):
         await client.post(f"/v1/plane/{node}/telemetry", json={
@@ -450,7 +464,7 @@ def test_license_cli_roundtrip(tmp_path, capsys) -> None:  # noqa: ANN001
     assert main(["keygen"]) == 0
     keys = _json.loads(capsys.readouterr().out)
     assert main(["issue", "--key", keys["vendor_private_key"], "--org", "T",
-                 "--expiry", "2999-01-01"]) == 0
+                 "--expires-at", "2999-01-01"]) == 0
     lic_file = tmp_path / "l.json"
     lic_file.write_text(capsys.readouterr().out)
     assert main(["verify", "--pubkey", keys["vendor_public_key"],
@@ -473,13 +487,13 @@ def test_license_cli_reads_key_from_file_and_env(
     key_file = tmp_path / "vendor.key"
     key_file.write_text(keys["vendor_private_key"] + "\n")
     assert main(["issue", "--key-file", str(key_file), "--org", "F",
-                 "--expiry", "2999-01-01"]) == 0
-    assert '"org"' in capsys.readouterr().out
+                 "--expires-at", "2999-01-01"]) == 0
+    assert '"organization"' in capsys.readouterr().out
 
     monkeypatch.setenv("AXOR_VENDOR_KEY", keys["vendor_private_key"])
-    assert main(["issue", "--org", "E", "--expiry", "2999-01-01"]) == 0
-    assert '"org"' in capsys.readouterr().out
+    assert main(["issue", "--org", "E", "--expires-at", "2999-01-01"]) == 0
+    assert '"organization"' in capsys.readouterr().out
 
     monkeypatch.delenv("AXOR_VENDOR_KEY")
-    assert main(["issue", "--org", "N", "--expiry", "2999-01-01"]) == 2
+    assert main(["issue", "--org", "N", "--expires-at", "2999-01-01"]) == 2
     assert "no signing key" in capsys.readouterr().err

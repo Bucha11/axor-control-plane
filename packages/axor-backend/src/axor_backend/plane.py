@@ -5,6 +5,8 @@ POST /v1/plane/{node_id}/telemetry  batched kernel events, Idempotency-Key dedup
 POST /v1/plane/{node_id}/command    declarative desired-state write, version++
 POST /v1/plane/{node_id}/facts      append-only facts (attestations)
 POST /v1/plane/{node_id}/consumed   one-shot consumption ack (injection/excision)
+POST /v1/plane/{node_id}/probe-report  behavioral health check posted by the node
+GET  /v1/plane/{node_id}/probe-report  last check + the series behind it
 
 Merge/absorb semantics live in axor_core.kernel.state.DesiredState — the
 backend persists and fans out; it does not interpret. Signature verification
@@ -261,6 +263,76 @@ async def consumed(node_id: str, body: dict, request: Request) -> dict:
         raise HTTPException(400, "key must be pending_injection|pending_excision")
     await ctx.store.clear_desired_key(node_id, key)
     return {"cleared": key}
+
+
+# Verdict constants mirrored from axor-probe (the backend never imports it —
+# the payload shape is the whole contract, same posture as everywhere else).
+_PROBE_VERDICTS = frozenset({
+    "CONSISTENT", "DRIFT_DETECTED", "INCONCLUSIVE", "CONSISTENCY_ANOMALY",
+})
+_FAMILY_STATES = frozenset({"clean", "escaped", "unprobed"})
+
+
+@router.post("/{node_id}/probe-report", status_code=201)
+async def post_probe_report(node_id: str, body: dict, request: Request) -> dict:
+    """Ingest one behavioral health check (ui-spec 8.2).
+
+    The node runs the battery and posts the result out-dial, exactly like
+    telemetry: the plane never reaches into a customer runtime to invoke their
+    agent, and a health check is no exception. The body is axor-probe's
+    ``integration.plane.health_payload``.
+
+    This is drift, and it stays drift. It is stored apart from the eval corpus
+    and must never be folded into Scenario Delta or a Core score — a drift-red
+    agent with a green integrity score is a legitimate, informative combination
+    (ui-spec 8.2).
+    """
+    ctx = _ctx(request)
+    verdict = body.get("overall_verdict")
+    if verdict not in _PROBE_VERDICTS:
+        raise HTTPException(
+            400, f"overall_verdict must be one of {sorted(_PROBE_VERDICTS)}"
+        )
+    families = body.get("families", [])
+    if not isinstance(families, list):
+        raise HTTPException(400, "`families` must be a list")
+    for fam in families:
+        if not isinstance(fam, dict) or fam.get("state") not in _FAMILY_STATES:
+            raise HTTPException(
+                400, f"each family needs a state in {sorted(_FAMILY_STATES)}"
+            )
+    report_id = await ctx.store.add_probe_report(node_id, body, _now())
+    ctx.broadcast.publish(
+        f"plane:{node_id}",
+        {"type": "probe_report", "node_id": node_id, "report": body},
+    )
+    notifier = getattr(ctx, "notifier", None)
+    if notifier is not None and verdict == "DRIFT_DETECTED":
+        await notifier.emit(
+            "behavioral_drift", node_id,
+            {"escape_count": int(body.get("escape_count", 0)),
+             "probes_sent": int(body.get("probes_sent", 0)),
+             "families": [f["family"] for f in families
+                          if f.get("state") == "escaped"],
+             "permalink": f"/v1/plane/nodes#{node_id}"},
+        )
+    return {"stored": True, "id": report_id}
+
+
+@router.get("/{node_id}/probe-report")
+async def get_probe_report(node_id: str, request: Request) -> dict:
+    """The last health check plus the check series behind it.
+
+    `latest` is null when the node has never posted one — the panel renders
+    that as "no check yet", which is not the same as a healthy agent. `history`
+    is oldest-first; the drift sparkline only appears once it holds ≥2 entries
+    (ui-spec 8.2).
+    """
+    ctx = _ctx(request)
+    return {
+        "latest": await ctx.store.latest_probe_report(node_id),
+        "history": await ctx.store.probe_report_history(node_id),
+    }
 
 
 @router.get("/topology")

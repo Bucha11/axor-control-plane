@@ -146,6 +146,23 @@ regression_reports = Table(
     Column("report_json", _JSON, nullable=False),
 )
 
+# Accepted Lab deploy packages (axor-cp-deploy/v1, migration 0005): the record
+# of every finalized Lab handoff — validated policy + manifests stored verbatim
+# (package_json), plus the summary columns the list surface reads. The pins the
+# package created live in `pins` (labelled lab:{package_id}); this table is the
+# provenance of where they came from.
+lab_deploys = Table(
+    "lab_deploys", metadata,
+    Column("package_id", String(64), primary_key=True),
+    Column("created_ts", String(40), nullable=False),
+    Column("kernel", String(120), nullable=False),
+    Column("config_hash", String(80), nullable=False),
+    Column("parametric_config_hash", String(80), nullable=False),
+    Column("pins_created", Integer, nullable=False, default=0),
+    Column("manifest_count", Integer, nullable=False, default=0),
+    Column("package_json", _JSON, nullable=False),
+)
+
 # Dead letters are the honesty ledger of the notification channel: a webhook
 # that never arrived. They persist (capped) so a restart doesn't erase the
 # evidence that deliveries were lost — the exact failure mode the dead-letter
@@ -158,6 +175,25 @@ dead_letters = Table(
     Column("error", String(500), nullable=False),
     Column("attempts", Integer, nullable=False),
     Column("created_ts", String(40), nullable=False),
+)
+
+# Behavioral health checks (axor-probe, migration 0006). One row per battery a
+# node ran and posted; history is kept because the panel's drift sparkline only
+# appears once ≥2 checks exist (ui-spec 8.2). This is DRIFT evidence and lives
+# apart from the eval corpus on purpose: drift answers "has my agent changed?",
+# eval answers "does my agent lie under fault?", and the two must never be
+# blended into one score (ui-spec 8.2). The summary columns are what the list
+# surface reads; payload_json is axor-probe's health_payload verbatim.
+probe_reports = Table(
+    "probe_reports", metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("node_id", String(128), nullable=False, index=True),
+    Column("created_ts", String(40), nullable=False),
+    Column("session_id", String(128), nullable=False, default=""),
+    Column("overall_verdict", String(32), nullable=False),
+    Column("escape_count", Integer, nullable=False, default=0),
+    Column("probes_sent", Integer, nullable=False, default=0),
+    Column("payload_json", _JSON, nullable=False),
 )
 
 api_keys = Table(
@@ -273,6 +309,39 @@ class Store:
         # The column is native JSON; callers of this method still expect the raw
         # kernel-schema line as a string, so re-serialise on the way out.
         return [json.dumps(r.line) for r in rows]
+
+    async def add_lab_trace_events(
+        self, run_id: str, lines: list[dict[str, Any]],
+    ) -> int:
+        """Store the kernel-schema events converted from a Lab regression pin's
+        trace under ``run_id`` (``lab:{trace_id}``), so ``run_events`` returns
+        them and the regression corpus replays the pin instead of skipping it.
+
+        Idempotent on (run_id, node_id, seq) — a package re-upload re-asserts the
+        same events without duplicating them, preserving the append-only events
+        invariant. The stored lines are converted-from-Lab kernel events; their
+        ``lab:`` run_id prefix marks the provenance (a Lab handoff, not plane
+        telemetry ingested from a governed node)."""
+        async with self.engine.begin() as conn:
+            seen = {
+                (row.node_id, row.seq) for row in (await conn.execute(
+                    select(events.c.node_id, events.c.seq)
+                    .where(events.c.run_id == run_id)
+                )).all()
+            }
+            stored = 0
+            for line in lines:
+                node_id = str(line.get("node_id", "root"))
+                seq = int(line["seq"])
+                if (node_id, seq) in seen:
+                    continue
+                await conn.execute(insert(events).values(
+                    run_id=run_id, node_id=node_id, seq=seq,
+                    kind=str(line["kind"]), line=line,
+                ))
+                seen.add((node_id, seq))
+                stored += 1
+            return stored
 
     async def list_runs(self) -> list[dict[str, Any]]:
         async with self.engine.connect() as conn:
@@ -663,6 +732,104 @@ class Store:
              "safe_to_ship": r.safe_to_ship}
             for r in rows
         ]
+
+    # ── behavioral health checks (axor-probe batteries posted by a node) ─────
+
+    async def add_probe_report(
+        self, node_id: str, payload: dict[str, Any], ts: str,
+    ) -> int:
+        """Append one health check. Returns the new row id.
+
+        Append-only by design: a re-probe after a heal is a NEW check, never an
+        overwrite of the one that showed the drift. The heal→verify pair is only
+        readable as a pair if both halves survive (ui-spec 8.2.1).
+        """
+        async with self.engine.begin() as conn:
+            result = await conn.execute(insert(probe_reports).values(
+                node_id=node_id, created_ts=ts,
+                session_id=str(payload.get("session_id", "")),
+                overall_verdict=str(payload.get("overall_verdict", "INCONCLUSIVE")),
+                escape_count=int(payload.get("escape_count", 0)),
+                probes_sent=int(payload.get("probes_sent", 0)),
+                payload_json=payload,
+            ))
+            return int(result.inserted_primary_key[0])
+
+    async def latest_probe_report(self, node_id: str) -> dict[str, Any] | None:
+        async with self.engine.connect() as conn:
+            row = (await conn.execute(
+                select(probe_reports)
+                .where(probe_reports.c.node_id == node_id)
+                .order_by(probe_reports.c.id.desc()).limit(1)
+            )).first()
+        if row is None:
+            return None
+        return {"id": row.id, "created_ts": row.created_ts, **row.payload_json}
+
+    async def probe_report_history(
+        self, node_id: str, limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        """Oldest-first summaries — the series the drift sparkline plots."""
+        async with self.engine.connect() as conn:
+            rows = (await conn.execute(
+                select(probe_reports)
+                .where(probe_reports.c.node_id == node_id)
+                .order_by(probe_reports.c.id.desc()).limit(limit)
+            )).all()
+        return [
+            {"id": r.id, "created_ts": r.created_ts, "session_id": r.session_id,
+             "overall_verdict": r.overall_verdict, "escape_count": r.escape_count,
+             "probes_sent": r.probes_sent}
+            for r in reversed(rows)
+        ]
+
+    # ── Lab deploys (axor-cp-deploy/v1 packages accepted from Axor Lab) ──────
+
+    async def add_lab_deploy(
+        self, package_id: str, package: dict[str, Any], pins_created: int, ts: str,
+    ) -> bool:
+        """Store an accepted package; idempotent on package_id (a re-upload of
+        the same bytes is acknowledged, never duplicated). Returns True when
+        the row is new."""
+        async with self.engine.begin() as conn:
+            dup = (await conn.execute(
+                select(lab_deploys.c.package_id)
+                .where(lab_deploys.c.package_id == package_id)
+            )).first()
+            if dup is not None:
+                return False
+            await conn.execute(insert(lab_deploys).values(
+                package_id=package_id, created_ts=ts,
+                kernel=str(package.get("kernel", "")),
+                config_hash=str(package.get("config_hash", "")),
+                parametric_config_hash=str(package.get("parametric_config_hash", "")),
+                pins_created=pins_created,
+                manifest_count=len(package.get("tool_manifests", [])),
+                package_json=package,
+            ))
+            return True
+
+    async def list_lab_deploys(self) -> list[dict[str, Any]]:
+        async with self.engine.connect() as conn:
+            rows = (await conn.execute(
+                select(lab_deploys).order_by(lab_deploys.c.created_ts.desc())
+            )).all()
+        return [
+            {"package_id": r.package_id, "created_ts": r.created_ts,
+             "kernel": r.kernel, "config_hash": r.config_hash,
+             "parametric_config_hash": r.parametric_config_hash,
+             "pins_created": r.pins_created, "manifest_count": r.manifest_count,
+             "source": (r.package_json or {}).get("source", {})}
+            for r in rows
+        ]
+
+    async def get_lab_deploy(self, package_id: str) -> dict[str, Any] | None:
+        async with self.engine.connect() as conn:
+            row = (await conn.execute(
+                select(lab_deploys.c.package_json)
+                .where(lab_deploys.c.package_id == package_id)
+            )).first()
+        return row.package_json if row is not None else None
 
     # ── notification dead letters (persist: a restart must not erase the
     # evidence that deliveries were lost) ─────────────────────────────────────

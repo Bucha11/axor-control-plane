@@ -1,5 +1,7 @@
 # Axor Control Plane — Monetization (v0.1): Open Core + Enterprise License
 
+> Canonical packaging, tiers, and prices are defined in **axor-packaging.md** (in the axor-lab repo, `docs/design/`). If this document conflicts with it, axor-packaging.md wins. This doc is the open-core reasoning; packaging is the price list.
+
 Model: everything an individual needs is open source; organizations pay for a license that unlocks organizational features — on our hosting or theirs. Payment is for the license, support, and compliance surface, never for hosting per se and never for safety.
 
 ---
