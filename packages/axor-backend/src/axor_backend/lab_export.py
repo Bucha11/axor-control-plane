@@ -105,6 +105,9 @@ class _Call:
     arg_refs: dict[str, str]
     verdict: str
     egress: bool
+    # the driving args the producing kernel DECLARED for this sink, when it
+    # recorded them; empty for a proxy-depth trace that carries no declaration.
+    declared_driving: list[str] = field(default_factory=list)
     decision: dict[str, Any] | None = None
 
 
@@ -220,6 +223,56 @@ def build_incident_package(
     }
 
 
+def _model_values(
+    node: str,
+    seq: int,
+    declared: list[str],
+    arg_refs: dict[str, str],
+    args: dict[str, Any],
+    payload: dict[str, Any],
+    values: dict[str, _Value],
+) -> dict[str, str]:
+    """Ledger entries for driving arguments the MODEL produced, not a tool.
+
+    The label-based replay resolves a driving argument through its value ref and
+    fails closed when there is none. That is right for a proxy-depth trace: the
+    proxy mints a ref for every value it sees, so a missing one really does mean
+    "we never observed where this came from".
+
+    It is wrong for a content-derivation kernel (`axor_core.ToolCallGovernor`,
+    and the IntentLoop). That kernel mints a ref only for a value some tool
+    RETURNED; an argument the model composed from its own context — a recipient
+    the user named, a constant — has no ref and never will. Failing closed there
+    turned every recorded ALLOW on a clean egress into a recomputed DENY, and the
+    converter refused the whole run for a verdict mismatch it had manufactured.
+
+    The kernel does record what it derived for that argument: ``arg_provenance``
+    states, per argument, the sources it carries and whether it is sensitive, and
+    an empty ``sources`` list means CLEAN — the kernel derived it and found
+    nothing — not "unrecorded". So a value is minted from that statement. An
+    argument with no ref AND no recorded provenance still gets nothing, and the
+    fail-closed path below still fires: this uses evidence, it does not invent
+    any.
+    """
+    provenance: dict[str, Any] = payload.get("arg_provenance") or {}
+    minted: dict[str, str] = {}
+    for arg in declared:
+        if arg in arg_refs or arg not in provenance:
+            continue
+        recorded = provenance[arg] or {}
+        value_id = f"m_{node}_{seq}_{arg}"
+        values[value_id] = _Value(
+            value_id=value_id,
+            tool="",  # no producing tool — it did not come out of one
+            sources=[str(x) for x in (recorded.get("sources") or [])],
+            sensitive=bool(recorded.get("sensitive")),
+            decision_value=args.get(arg),
+            bound=True,
+        )
+        minted[arg] = value_id
+    return minted
+
+
 # ── pass 1: recorded events → calls / values / trace-event plan ──────────────
 
 
@@ -266,11 +319,26 @@ def _scan(
                     # the value's content — the replay-authoritative decision_value
                     value.decision_value = args.get(name)
                     value.bound = True
+            declared = [str(a) for a in (payload.get("driving_args") or ())]
+            arg_refs.update(
+                _model_values(node, seq, declared, arg_refs, args, payload, values)
+            )
             normalized: dict[str, Any] = payload.get("normalized") or {}
+            roles: dict[str, Any] = payload.get("roles") or {}
             call = _Call(
                 node=node, seq=seq, tool=tool, args=dict(args), arg_refs=arg_refs,
                 verdict=str(verdict),
-                egress=str(normalized.get("destination_kind", "")) in _EGRESS_DESTINATIONS,
+                # A tool is an egress sink because the OPERATOR declared it one —
+                # that is what axor-core's taint gate keys on. `destination_kind`
+                # is the normalizer's structural guess from the tool's name, and
+                # it does not know a deployment's vocabulary: `send_email`
+                # normalises to `none`, so a run whose entire content was a
+                # blocked exfiltration was refused here for containing "no
+                # recorded egress consequence". A proxy-depth trace carries no
+                # declared roles, so the structural signal still stands in.
+                egress=bool(roles.get("egress_sink"))
+                or str(normalized.get("destination_kind", "")) in _EGRESS_DESTINATIONS,
+                declared_driving=declared,
             )
             calls.append(call)
             last_call[node] = call
@@ -335,8 +403,15 @@ def _tool_table(calls: list[_Call], values: dict[str, _Value]) -> dict[str, _Too
             t.arg_types.setdefault(str(name), "string")
         if call.egress:
             t.egress = True
-            t.driving_args.update(call.arg_refs.keys())
+            # Prefer what the kernel DECLARED it gated on. Falling back to "every
+            # argument that happens to be bound to a value ref" is a guess that
+            # happens to hold only when the producer mints a ref per argument;
+            # for a content-derivation producer it silently names whichever args
+            # were tainted, which is the answer, not the question.
+            t.driving_args.update(call.declared_driving or call.arg_refs.keys())
     for value in values.values():
+        if not value.tool:
+            continue  # model-composed, not produced by any tool (see _model_values)
         t = entry(value.tool)
         t.has_result = True
         # an untrusted value with no derivation edge entered the run HERE — the
