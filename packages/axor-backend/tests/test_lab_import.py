@@ -23,18 +23,25 @@ from axor_backend.app import create_app
 
 lab_contracts = pytest.importorskip("lab_contracts")
 lab_runner = pytest.importorskip("lab_runner")
+# axor-lab moved the kernel, replay, verdict pinning and the Control Plane
+# bridge out of `lab_runner` and into `lab_capabilities.governance`: governance
+# is a capability there now, not the spine (Suite Platform RFC §10).
+lab_governance = pytest.importorskip("lab_capabilities.governance")
 
 from axor_backend.lab_trace import config_dict_from_manifests  # noqa: E402
 from lab_contracts import build_bundle, condition_config_hash, content_hash  # noqa: E402
-from lab_runner import (  # noqa: E402
+from lab_capabilities.governance import (  # noqa: E402
     Kernel,
     KernelRegistry,
     axor_available,
     real_kernel_version,
     run_experiment_suite,
 )
+from lab_capabilities.governance.cp_export import (  # noqa: E402
+    export_cp,
+    export_cp_template,
+)
 from lab_runner.agents import ScriptedAgent  # noqa: E402
-from lab_runner.cp_export import export_cp, export_cp_template  # noqa: E402
 
 TOKEN = "master-secret-lab"
 KERNEL = "reference_taint_floor_kernel"
