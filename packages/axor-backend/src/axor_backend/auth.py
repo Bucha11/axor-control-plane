@@ -87,15 +87,36 @@ def generate_key() -> tuple[str, str]:
 
 @dataclass(frozen=True)
 class Principal:
-    kind: str  # "master" | "key"
+    kind: str  # "master" | "key" | "user"
     key_id: str
     scopes: frozenset[str]
+    # set only for kind == "user" (an axor-identity login): who and which org.
+    # `org` is the tenant the token is scoped to; a hosted deployment uses it to
+    # partition data. None for master/key principals (operator credentials).
+    org: str | None = None
+    role: str | None = None
+    tier: str | None = None
+    user_id: str | None = None
+    email: str | None = None
 
     def may(self, scope: str) -> bool:
         return scope in self.scopes
 
 
 MASTER = "master"
+
+# An axor-identity role grants a SET of scopes (least-privilege ladder). A human
+# who logs in never mints API keys unless they own/administer the org.
+ROLE_SCOPES: dict[str, frozenset[str]] = {
+    "viewer": frozenset({"read"}),
+    "member": frozenset({"read", "ingest"}),
+    "admin": frozenset({"read", "ingest", "operate"}),
+    "owner": frozenset({"read", "ingest", "operate", "admin"}),
+}
+
+
+def scopes_for_role(role: str) -> frozenset[str]:
+    return ROLE_SCOPES.get(role, frozenset())
 
 
 def master_principal() -> Principal:

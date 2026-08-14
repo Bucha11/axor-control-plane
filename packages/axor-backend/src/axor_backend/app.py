@@ -66,6 +66,8 @@ def create_app(
     retention_days: float | None = None,
     vault_creds_token: str | None = None,
     vault_signing_token: str | None = None,
+    identity_jwks: dict[str, Any] | None = None,
+    identity_issuer: str = "axor-identity",
 ) -> FastAPI:
     @contextlib.asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -174,6 +176,18 @@ def create_app(
     if api_token is None:
         api_token = os.environ.get("AXOR_API_TOKEN") or None
 
+    # axor-identity login (optional): with a JWKS configured, a request may
+    # authenticate with a human's identity access token, not only an operator
+    # credential. Supplied inline (AXOR_IDENTITY_JWKS) or fetched once at boot
+    # (AXOR_IDENTITY_JWKS_URL). Requires the `axor-backend[identity]` extra.
+    if identity_jwks is None:
+        raw_jwks = os.environ.get("AXOR_IDENTITY_JWKS")
+        if raw_jwks:
+            identity_jwks = json.loads(raw_jwks)
+        elif os.environ.get("AXOR_IDENTITY_JWKS_URL"):
+            from axor_backend.identity_client import fetch_jwks
+            identity_jwks = fetch_jwks(os.environ["AXOR_IDENTITY_JWKS_URL"])
+
     _store = Store(make_engine(url))
     app.state.store = _store
     app.state.broadcast = Broadcast()
@@ -225,6 +239,24 @@ def create_app(
         ):
             return Principal(kind="key", key_id=key_id,
                              scopes=frozenset(record["scopes"]))
+        # axor-identity login: a human's access token, verified locally against
+        # the JWKS. The org scopes the principal to a tenant; the role maps to
+        # the scope ladder (a viewer reads, an owner may mint keys).
+        if identity_jwks is not None:
+            from axor_backend.identity_client import (
+                IdentityError,
+                verify_access_token,
+            )
+            try:
+                claims = verify_access_token(token, identity_jwks,
+                                             issuer=identity_issuer)
+            except IdentityError:
+                return None
+            return Principal(
+                kind="user", key_id=claims.user_id,
+                scopes=auth_mod.scopes_for_role(claims.role),
+                org=claims.org, role=claims.role, tier=claims.tier,
+                user_id=claims.user_id, email=claims.email)
         return None
 
     @app.middleware("http")
