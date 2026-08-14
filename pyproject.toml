@@ -9,6 +9,7 @@ members = ["packages/*"]
 [tool.uv.sources]
 axor-proxy = { workspace = true }
 axor-backend = { workspace = true }
+axor-identity = { workspace = true }
 # Ecosystem deps come from PyPI (axor-core 0.10.0, axor-eval 0.1.1, axor-wrap
 # 0.1.0 are published); the version ranges live in the packages' own
 # dependency lists.
