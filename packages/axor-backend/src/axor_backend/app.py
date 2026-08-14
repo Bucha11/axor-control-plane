@@ -52,6 +52,7 @@ from axor_backend.share import (
 )
 from axor_backend.signing import OperatorKeyring
 from axor_backend.storage import Store, init_db, make_engine
+from axor_backend.tenancy import set_current_org
 
 
 def _now() -> str:
@@ -237,8 +238,11 @@ def create_app(
         if record and auth_mod.constant_time_eq(
             record["hashed_secret"], hash_secret(token)
         ):
+            # a key carries the org it was minted under, so the proxy/connection
+            # using it reads and writes that org's data (None → the public tenant)
             return Principal(kind="key", key_id=key_id,
-                             scopes=frozenset(record["scopes"]))
+                             scopes=frozenset(record["scopes"]),
+                             org=record.get("org_id"))
         # axor-identity login: a human's access token, verified locally against
         # the JWKS. The org scopes the principal to a tenant; the role maps to
         # the scope ladder (a viewer reads, an owner may mint keys).
@@ -274,6 +278,9 @@ def create_app(
                 status_code=403,
             )
         request.state.principal = principal
+        # scope every store query in this request to the principal's org (the
+        # public tenant for master/keyless/open deployments) — see tenancy.py
+        set_current_org(principal.org)
         return await call_next(request)
 
     app.include_router(plane.router)

@@ -28,6 +28,8 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
+from axor_backend.tenancy import PUBLIC_ORG, current_org_id
+
 metadata = MetaData()
 
 # JSON payload columns: real JSONB on Postgres (indexable, queryable), portable
@@ -45,6 +47,7 @@ runs = Table(
     Column("completed", Boolean, nullable=False, default=False),
     Column("evidence_json", _JSON, nullable=False, default=list),
     Column("created_ts", String(40), nullable=False),
+    Column("org_id", String(64), nullable=False, server_default=PUBLIC_ORG, index=True),
 )
 
 events = Table(
@@ -55,6 +58,7 @@ events = Table(
     Column("seq", Integer, nullable=False),
     Column("kind", String(40), nullable=False),
     Column("line", _JSON, nullable=False),  # full kernel-schema JSON line
+    Column("org_id", String(64), nullable=False, server_default=PUBLIC_ORG, index=True),
     # Per-node sequences (spec v2 Ch.4 §5): seq is monotonic PER NODE, so a
     # multi-node run legitimately repeats seq across nodes.
     UniqueConstraint("run_id", "node_id", "seq", name="uq_events_run_node_seq"),
@@ -70,6 +74,7 @@ desired_state = Table(
     Column("node_id", String(128), primary_key=True),
     Column("version", Integer, nullable=False),
     Column("state_json", _JSON, nullable=False),
+    Column("org_id", String(64), nullable=False, server_default=PUBLIC_ORG, index=True),
 )
 
 reported_state = Table(
@@ -79,6 +84,7 @@ reported_state = Table(
     Column("level", String(24), nullable=False, default="NORMAL"),
     Column("budget_remaining", Integer, nullable=True),
     Column("updated_ts", String(40), nullable=False),
+    Column("org_id", String(64), nullable=False, server_default=PUBLIC_ORG, index=True),
 )
 
 facts = Table(
@@ -87,6 +93,7 @@ facts = Table(
     Column("node_id", String(128), nullable=False, index=True),
     Column("fact_json", _JSON, nullable=False),
     Column("created_ts", String(40), nullable=False),
+    Column("org_id", String(64), nullable=False, server_default=PUBLIC_ORG, index=True),
 )
 
 pins = Table(
@@ -94,6 +101,7 @@ pins = Table(
     Column("run_id", String(64), primary_key=True),
     Column("side", String(16), nullable=False),  # must_block | must_pass
     Column("label", String(200), nullable=False, default=""),
+    Column("org_id", String(64), nullable=False, server_default=PUBLIC_ORG, index=True),
 )
 
 # Share links & notification subscriptions are PRIMARY user data (a revocable
@@ -144,6 +152,7 @@ regression_reports = Table(
     Column("total", Integer, nullable=False),
     Column("safe_to_ship", Boolean, nullable=False),
     Column("report_json", _JSON, nullable=False),
+    Column("org_id", String(64), nullable=False, server_default=PUBLIC_ORG, index=True),
 )
 
 # Accepted Lab deploy packages (axor-cp-deploy/v1, migration 0005): the record
@@ -161,6 +170,7 @@ lab_deploys = Table(
     Column("pins_created", Integer, nullable=False, default=0),
     Column("manifest_count", Integer, nullable=False, default=0),
     Column("package_json", _JSON, nullable=False),
+    Column("org_id", String(64), nullable=False, server_default=PUBLIC_ORG, index=True),
 )
 
 # Dead letters are the honesty ledger of the notification channel: a webhook
@@ -194,6 +204,7 @@ probe_reports = Table(
     Column("escape_count", Integer, nullable=False, default=0),
     Column("probes_sent", Integer, nullable=False, default=0),
     Column("payload_json", _JSON, nullable=False),
+    Column("org_id", String(64), nullable=False, server_default=PUBLIC_ORG, index=True),
 )
 
 api_keys = Table(
@@ -203,6 +214,7 @@ api_keys = Table(
     Column("scopes", String(200), nullable=False),        # comma-separated
     Column("label", String(200), nullable=False, default=""),
     Column("created_ts", String(40), nullable=False),
+    Column("org_id", String(64), nullable=False, server_default=PUBLIC_ORG, index=True),
 )
 
 
@@ -254,13 +266,16 @@ class Store:
     async def upsert_run(self, run_id: str, node_id: str, scenario: str, ts: str) -> None:
         async with self.engine.begin() as conn:
             existing = (
-                await conn.execute(select(runs.c.run_id).where(runs.c.run_id == run_id))
+                await conn.execute(select(runs.c.run_id).where(
+                    runs.c.run_id == run_id,
+                    runs.c.org_id == current_org_id(),
+                ))
             ).first()
             if existing is None:
                 await conn.execute(insert(runs).values(
                     run_id=run_id, node_id=node_id, scenario=scenario,
                     intervened=False, completed=False, evidence_json=[],
-                    created_ts=ts,
+                    created_ts=ts, org_id=current_org_id(),
                 ))
 
     async def ingest_events(
@@ -280,7 +295,10 @@ class Store:
             seen = {
                 (row.node_id, row.seq) for row in (await conn.execute(
                     select(events.c.node_id, events.c.seq)
-                    .where(events.c.run_id == run_id)
+                    .where(
+                        events.c.run_id == run_id,
+                        events.c.org_id == current_org_id(),
+                    )
                 )).all()
             }
             stored = 0
@@ -295,6 +313,7 @@ class Store:
                     seq=line["seq"],
                     kind=line["kind"],
                     line=line,
+                    org_id=current_org_id(),
                 ))
                 stored += 1
             return stored
@@ -303,7 +322,10 @@ class Store:
         async with self.engine.connect() as conn:
             rows = (await conn.execute(
                 select(events.c.line)
-                .where(events.c.run_id == run_id, events.c.seq > after_seq)
+                .where(
+                    events.c.run_id == run_id, events.c.seq > after_seq,
+                    events.c.org_id == current_org_id(),
+                )
                 .order_by(events.c.seq)
             )).all()
         # The column is native JSON; callers of this method still expect the raw
@@ -326,7 +348,10 @@ class Store:
             seen = {
                 (row.node_id, row.seq) for row in (await conn.execute(
                     select(events.c.node_id, events.c.seq)
-                    .where(events.c.run_id == run_id)
+                    .where(
+                        events.c.run_id == run_id,
+                        events.c.org_id == current_org_id(),
+                    )
                 )).all()
             }
             stored = 0
@@ -338,6 +363,7 @@ class Store:
                 await conn.execute(insert(events).values(
                     run_id=run_id, node_id=node_id, seq=seq,
                     kind=str(line["kind"]), line=line,
+                    org_id=current_org_id(),
                 ))
                 seen.add((node_id, seq))
                 stored += 1
@@ -346,7 +372,8 @@ class Store:
     async def list_runs(self) -> list[dict[str, Any]]:
         async with self.engine.connect() as conn:
             rows = (await conn.execute(
-                select(runs).order_by(runs.c.created_ts.desc())
+                select(runs).where(runs.c.org_id == current_org_id())
+                .order_by(runs.c.created_ts.desc())
             )).all()
         return [
             {
@@ -360,7 +387,10 @@ class Store:
     async def set_evidence(self, run_id: str, evidence: list[dict[str, Any]]) -> None:
         async with self.engine.begin() as conn:
             await conn.execute(
-                update(runs).where(runs.c.run_id == run_id).values(
+                update(runs).where(
+                    runs.c.run_id == run_id,
+                    runs.c.org_id == current_org_id(),
+                ).values(
                     evidence_json=evidence, completed=True,
                 )
             )
@@ -368,7 +398,10 @@ class Store:
     async def mark_intervened(self, run_id: str) -> None:
         async with self.engine.begin() as conn:
             await conn.execute(
-                update(runs).where(runs.c.run_id == run_id).values(intervened=True)
+                update(runs).where(
+                    runs.c.run_id == run_id,
+                    runs.c.org_id == current_org_id(),
+                ).values(intervened=True)
             )
 
     # ── desired / reported state ──────────────────────────────────────────────
@@ -379,19 +412,26 @@ class Store:
         at the adapter — the backend stores what was commanded."""
         async with self.engine.begin() as conn:
             row = (await conn.execute(
-                select(desired_state).where(desired_state.c.node_id == node_id)
+                select(desired_state).where(
+                    desired_state.c.node_id == node_id,
+                    desired_state.c.org_id == current_org_id(),
+                )
             )).first()
             if row is None:
                 version, state = 1, dict(delta)
                 await conn.execute(insert(desired_state).values(
                     node_id=node_id, version=version, state_json=state,
+                    org_id=current_org_id(),
                 ))
             else:
                 version = row.version + 1
                 state = {**row.state_json, **delta}
                 await conn.execute(
                     update(desired_state)
-                    .where(desired_state.c.node_id == node_id)
+                    .where(
+                        desired_state.c.node_id == node_id,
+                        desired_state.c.org_id == current_org_id(),
+                    )
                     .values(version=version, state_json=state)
                 )
             return version, state
@@ -399,7 +439,10 @@ class Store:
     async def get_desired(self, node_id: str) -> tuple[int, dict[str, Any]] | None:
         async with self.engine.connect() as conn:
             row = (await conn.execute(
-                select(desired_state).where(desired_state.c.node_id == node_id)
+                select(desired_state).where(
+                    desired_state.c.node_id == node_id,
+                    desired_state.c.org_id == current_org_id(),
+                )
             )).first()
         if row is None:
             return None
@@ -409,7 +452,10 @@ class Store:
         """Consumption ack (injection/excision): clear the one-shot from state."""
         async with self.engine.begin() as conn:
             row = (await conn.execute(
-                select(desired_state).where(desired_state.c.node_id == node_id)
+                select(desired_state).where(
+                    desired_state.c.node_id == node_id,
+                    desired_state.c.org_id == current_org_id(),
+                )
             )).first()
             if row is None:
                 return
@@ -418,7 +464,10 @@ class Store:
                 state.pop(key)
                 await conn.execute(
                     update(desired_state)
-                    .where(desired_state.c.node_id == node_id)
+                    .where(
+                        desired_state.c.node_id == node_id,
+                        desired_state.c.org_id == current_org_id(),
+                    )
                     .values(version=row.version + 1, state_json=state)
                 )
 
@@ -429,7 +478,10 @@ class Store:
         async with self.engine.begin() as conn:
             row = (await conn.execute(
                 select(reported_state.c.node_id)
-                .where(reported_state.c.node_id == node_id)
+                .where(
+                    reported_state.c.node_id == node_id,
+                    reported_state.c.org_id == current_org_id(),
+                )
             )).first()
             values = {
                 "applied_version": applied_version, "level": level,
@@ -437,18 +489,24 @@ class Store:
             }
             if row is None:
                 await conn.execute(insert(reported_state).values(
-                    node_id=node_id, **values,
+                    node_id=node_id, org_id=current_org_id(), **values,
                 ))
             else:
                 await conn.execute(
                     update(reported_state)
-                    .where(reported_state.c.node_id == node_id).values(**values)
+                    .where(
+                        reported_state.c.node_id == node_id,
+                        reported_state.c.org_id == current_org_id(),
+                    ).values(**values)
                 )
 
     async def get_reported(self, node_id: str) -> dict[str, Any] | None:
         async with self.engine.connect() as conn:
             row = (await conn.execute(
-                select(reported_state).where(reported_state.c.node_id == node_id)
+                select(reported_state).where(
+                    reported_state.c.node_id == node_id,
+                    reported_state.c.org_id == current_org_id(),
+                )
             )).first()
         if row is None:
             return None
@@ -465,7 +523,7 @@ class Store:
                 select(
                     reported_state.c.node_id, reported_state.c.level,
                     reported_state.c.updated_ts,
-                )
+                ).where(reported_state.c.org_id == current_org_id())
             )).all()
         return [
             {"node_id": r.node_id, "level": r.level, "updated_ts": r.updated_ts}
@@ -478,17 +536,24 @@ class Store:
         async with self.engine.connect() as conn:
             rows = (await conn.execute(
                 select(events.c.line)
-                .where(events.c.kind.in_(
-                    ("node_spawned", "message_sent", "message_received")
-                ))
+                .where(
+                    events.c.kind.in_(
+                        ("node_spawned", "message_sent", "message_received")
+                    ),
+                    events.c.org_id == current_org_id(),
+                )
                 .order_by(events.c.run_id, events.c.node_id, events.c.seq)
             )).all()
         return [r.line for r in rows]
 
     async def list_nodes(self) -> list[str]:
         async with self.engine.connect() as conn:
-            desired = (await conn.execute(select(desired_state.c.node_id))).all()
-            reported = (await conn.execute(select(reported_state.c.node_id))).all()
+            desired = (await conn.execute(select(desired_state.c.node_id).where(
+                desired_state.c.org_id == current_org_id()
+            ))).all()
+            reported = (await conn.execute(select(reported_state.c.node_id).where(
+                reported_state.c.org_id == current_org_id()
+            ))).all()
         return sorted({r.node_id for r in desired} | {r.node_id for r in reported})
 
     # ── facts ─────────────────────────────────────────────────────────────────
@@ -497,13 +562,16 @@ class Store:
         """Append-only: a duplicate fact_id is refused, never replaced."""
         async with self.engine.begin() as conn:
             dup = (await conn.execute(
-                select(facts.c.fact_id).where(facts.c.fact_id == fact["fact_id"])
+                select(facts.c.fact_id).where(
+                    facts.c.fact_id == fact["fact_id"],
+                    facts.c.org_id == current_org_id(),
+                )
             )).first()
             if dup is not None:
                 return False
             await conn.execute(insert(facts).values(
                 fact_id=fact["fact_id"], node_id=node_id,
-                fact_json=fact, created_ts=ts,
+                fact_json=fact, created_ts=ts, org_id=current_org_id(),
             ))
             return True
 
@@ -511,7 +579,10 @@ class Store:
         async with self.engine.connect() as conn:
             rows = (await conn.execute(
                 select(facts.c.fact_json)
-                .where(facts.c.node_id == node_id)
+                .where(
+                    facts.c.node_id == node_id,
+                    facts.c.org_id == current_org_id(),
+                )
                 .order_by(facts.c.created_ts)
             )).all()
         return [r.fact_json for r in rows]
@@ -521,7 +592,9 @@ class Store:
         attestations from here (a fact can exist for a node with no plane state)."""
         async with self.engine.connect() as conn:
             rows = (await conn.execute(
-                select(facts.c.fact_json).order_by(facts.c.created_ts)
+                select(facts.c.fact_json)
+                .where(facts.c.org_id == current_org_id())
+                .order_by(facts.c.created_ts)
             )).all()
         return [r.fact_json for r in rows]
 
@@ -529,15 +602,19 @@ class Store:
 
     async def create_api_key(
         self, key_id: str, hashed_secret: str, scopes: list[str],
-        label: str, ts: str,
+        label: str, ts: str, org: str | None = None,
     ) -> None:
         async with self.engine.begin() as conn:
             await conn.execute(insert(api_keys).values(
                 key_id=key_id, hashed_secret=hashed_secret,
                 scopes=",".join(scopes), label=label, created_ts=ts,
+                org_id=org if org is not None else current_org_id(),
             ))
 
     async def get_api_key(self, key_id: str) -> dict[str, Any] | None:
+        # Global lookup by key_id: auth resolves the key BEFORE the request's
+        # org is known, so this is NOT org-scoped — it returns the key's org_id
+        # so the caller can stamp the request.
         async with self.engine.connect() as conn:
             row = (await conn.execute(
                 select(api_keys).where(api_keys.c.key_id == key_id)
@@ -548,11 +625,14 @@ class Store:
             "key_id": row.key_id, "hashed_secret": row.hashed_secret,
             "scopes": [s for s in row.scopes.split(",") if s],
             "label": row.label, "created_ts": row.created_ts,
+            "org_id": row.org_id,
         }
 
     async def list_api_keys(self) -> list[dict[str, Any]]:
         async with self.engine.connect() as conn:
-            rows = (await conn.execute(select(api_keys))).all()
+            rows = (await conn.execute(
+                select(api_keys).where(api_keys.c.org_id == current_org_id())
+            )).all()
         return [
             {"key_id": r.key_id, "scopes": [s for s in r.scopes.split(",") if s],
              "label": r.label, "created_ts": r.created_ts}
@@ -563,7 +643,10 @@ class Store:
         from sqlalchemy import delete
         async with self.engine.begin() as conn:
             result = await conn.execute(
-                delete(api_keys).where(api_keys.c.key_id == key_id)
+                delete(api_keys).where(
+                    api_keys.c.key_id == key_id,
+                    api_keys.c.org_id == current_org_id(),
+                )
             )
         return bool(result.rowcount)
 
@@ -572,15 +655,22 @@ class Store:
     async def pin(self, run_id: str, side: str, label: str = "") -> None:
         async with self.engine.begin() as conn:
             dup = (await conn.execute(
-                select(pins.c.run_id).where(pins.c.run_id == run_id)
+                select(pins.c.run_id).where(
+                    pins.c.run_id == run_id,
+                    pins.c.org_id == current_org_id(),
+                )
             )).first()
             if dup is None:
                 await conn.execute(insert(pins).values(
                     run_id=run_id, side=side, label=label,
+                    org_id=current_org_id(),
                 ))
             else:
                 await conn.execute(
-                    update(pins).where(pins.c.run_id == run_id)
+                    update(pins).where(
+                        pins.c.run_id == run_id,
+                        pins.c.org_id == current_org_id(),
+                    )
                     .values(side=side, label=label)
                 )
 
@@ -594,22 +684,36 @@ class Store:
         async with self.engine.begin() as conn:
             old_ids = [
                 r.run_id for r in (await conn.execute(
-                    select(runs.c.run_id).where(runs.c.created_ts < cutoff_ts)
+                    select(runs.c.run_id).where(
+                        runs.c.created_ts < cutoff_ts,
+                        runs.c.org_id == current_org_id(),
+                    )
                 )).all()
             ]
             if not old_ids:
                 return 0
-            await conn.execute(delete(events).where(events.c.run_id.in_(old_ids)))
-            await conn.execute(delete(pins).where(pins.c.run_id.in_(old_ids)))
+            await conn.execute(delete(events).where(
+                events.c.run_id.in_(old_ids),
+                events.c.org_id == current_org_id(),
+            ))
+            await conn.execute(delete(pins).where(
+                pins.c.run_id.in_(old_ids),
+                pins.c.org_id == current_org_id(),
+            ))
             await conn.execute(
                 delete(share_links).where(share_links.c.run_id.in_(old_ids))
             )
-            await conn.execute(delete(runs).where(runs.c.run_id.in_(old_ids)))
+            await conn.execute(delete(runs).where(
+                runs.c.run_id.in_(old_ids),
+                runs.c.org_id == current_org_id(),
+            ))
             return len(old_ids)
 
     async def pinned(self) -> list[dict[str, str]]:
         async with self.engine.connect() as conn:
-            rows = (await conn.execute(select(pins))).all()
+            rows = (await conn.execute(
+                select(pins).where(pins.c.org_id == current_org_id())
+            )).all()
         return [
             {"run_id": r.run_id, "side": r.side, "label": r.label} for r in rows
         ]
@@ -716,13 +820,14 @@ class Store:
                 skipped=len(report.get("skipped", [])),
                 total=len(report.get("rows", [])),
                 safe_to_ship=bool(report.get("safe_to_ship")),
-                report_json=report,
+                report_json=report, org_id=current_org_id(),
             ))
 
     async def list_regression_reports(self, limit: int = 50) -> list[dict[str, Any]]:
         async with self.engine.connect() as conn:
             rows = (await conn.execute(
                 select(regression_reports)
+                .where(regression_reports.c.org_id == current_org_id())
                 .order_by(regression_reports.c.id.desc()).limit(limit)
             )).all()
         return [
@@ -751,7 +856,7 @@ class Store:
                 overall_verdict=str(payload.get("overall_verdict", "INCONCLUSIVE")),
                 escape_count=int(payload.get("escape_count", 0)),
                 probes_sent=int(payload.get("probes_sent", 0)),
-                payload_json=payload,
+                payload_json=payload, org_id=current_org_id(),
             ))
             return int(result.inserted_primary_key[0])
 
@@ -759,7 +864,10 @@ class Store:
         async with self.engine.connect() as conn:
             row = (await conn.execute(
                 select(probe_reports)
-                .where(probe_reports.c.node_id == node_id)
+                .where(
+                    probe_reports.c.node_id == node_id,
+                    probe_reports.c.org_id == current_org_id(),
+                )
                 .order_by(probe_reports.c.id.desc()).limit(1)
             )).first()
         if row is None:
@@ -773,7 +881,10 @@ class Store:
         async with self.engine.connect() as conn:
             rows = (await conn.execute(
                 select(probe_reports)
-                .where(probe_reports.c.node_id == node_id)
+                .where(
+                    probe_reports.c.node_id == node_id,
+                    probe_reports.c.org_id == current_org_id(),
+                )
                 .order_by(probe_reports.c.id.desc()).limit(limit)
             )).all()
         return [
@@ -794,7 +905,10 @@ class Store:
         async with self.engine.begin() as conn:
             dup = (await conn.execute(
                 select(lab_deploys.c.package_id)
-                .where(lab_deploys.c.package_id == package_id)
+                .where(
+                    lab_deploys.c.package_id == package_id,
+                    lab_deploys.c.org_id == current_org_id(),
+                )
             )).first()
             if dup is not None:
                 return False
@@ -805,14 +919,16 @@ class Store:
                 parametric_config_hash=str(package.get("parametric_config_hash", "")),
                 pins_created=pins_created,
                 manifest_count=len(package.get("tool_manifests", [])),
-                package_json=package,
+                package_json=package, org_id=current_org_id(),
             ))
             return True
 
     async def list_lab_deploys(self) -> list[dict[str, Any]]:
         async with self.engine.connect() as conn:
             rows = (await conn.execute(
-                select(lab_deploys).order_by(lab_deploys.c.created_ts.desc())
+                select(lab_deploys)
+                .where(lab_deploys.c.org_id == current_org_id())
+                .order_by(lab_deploys.c.created_ts.desc())
             )).all()
         return [
             {"package_id": r.package_id, "created_ts": r.created_ts,
@@ -827,7 +943,10 @@ class Store:
         async with self.engine.connect() as conn:
             row = (await conn.execute(
                 select(lab_deploys.c.package_json)
-                .where(lab_deploys.c.package_id == package_id)
+                .where(
+                    lab_deploys.c.package_id == package_id,
+                    lab_deploys.c.org_id == current_org_id(),
+                )
             )).first()
         return row.package_json if row is not None else None
 
