@@ -6,6 +6,7 @@ import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Check, Copy, Loader2, Trash2 } from "lucide-react";
 import { api } from "../api";
+import { IdentityError, login, signup } from "../identity";
 import { MODE_LABEL, useApp } from "../store";
 import { C, MONO, btn } from "../theme";
 import Coach from "../components/Coach";
@@ -20,6 +21,95 @@ const TRIGGERS = [
 ];
 
 const KEY_SCOPES = ["read", "ingest", "operate", "admin"];
+
+const INPUT_STYLE = {
+  background: C.bg, border: `1px solid ${C.line}`, borderRadius: 5, color: C.text,
+  fontFamily: MONO, fontSize: 12, padding: "7px 9px", outline: "none", width: "100%",
+} as const;
+
+/** Sign in with the shared axor-identity service. On success the access token
+ * becomes the bearer (renewed transparently on expiry via api.af); operators
+ * who prefer a static token can still paste one below. */
+function IdentityLogin() {
+  const identityEmail = useApp((s) => s.identityEmail);
+  const setSession = useApp((s) => s.setSession);
+  const clearSession = useApp((s) => s.clearSession);
+  const [mode, setMode] = useState<"login" | "signup">("login");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [orgName, setOrgName] = useState("");
+  const [orgId, setOrgId] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  if (identityEmail) {
+    return (
+      <div className="flex items-center gap-2 mb-3" style={{ fontFamily: MONO, fontSize: 11.5 }}>
+        <span style={{ color: C.green }}>● signed in as {identityEmail}</span>
+        <button onClick={clearSession} style={btn({ color: C.mut, fontSize: 10.5, padding: "3px 10px" })}>
+          log out
+        </button>
+      </div>
+    );
+  }
+
+  async function submit() {
+    setBusy(true);
+    setError(null);
+    try {
+      const session =
+        mode === "signup"
+          ? await signup(email, password, orgName)
+          : await login(email, password, orgId || undefined);
+      setSession(session.access_token, session.refresh_token, session.user.email);
+      setPassword("");
+    } catch (err) {
+      setError(err instanceof IdentityError ? err.message : "login failed");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const canSubmit = email && password && (mode === "login" || orgName);
+
+  return (
+    <form
+      onSubmit={(e) => {
+        e.preventDefault();
+        if (canSubmit && !busy) submit();
+      }}
+      className="mb-3"
+      style={{ display: "flex", flexDirection: "column", gap: 8 }}
+    >
+      <div style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim, letterSpacing: "0.08em" }}>
+        SIGN IN · axor identity
+      </div>
+      <input type="email" autoComplete="email" value={email} placeholder="email"
+        onChange={(e) => setEmail(e.target.value)} style={INPUT_STYLE} aria-label="email" />
+      <input type="password" value={password} placeholder="password"
+        autoComplete={mode === "signup" ? "new-password" : "current-password"}
+        onChange={(e) => setPassword(e.target.value)} style={INPUT_STYLE} aria-label="password" />
+      {mode === "signup" ? (
+        <input value={orgName} placeholder="organization name"
+          onChange={(e) => setOrgName(e.target.value)} style={INPUT_STYLE} aria-label="organization name" />
+      ) : (
+        <input value={orgId} placeholder="organization id (optional)"
+          onChange={(e) => setOrgId(e.target.value)} style={INPUT_STYLE} aria-label="organization id" />
+      )}
+      {error && <div style={{ fontFamily: MONO, fontSize: 11, color: C.red }}>{error}</div>}
+      <div className="flex items-center gap-2">
+        <button type="submit" disabled={!canSubmit || busy}
+          style={btn({ color: C.steel, borderColor: C.steel, fontSize: 11, padding: "5px 14px" })}>
+          {busy ? "…" : mode === "signup" ? "create workspace" : "log in"}
+        </button>
+        <button type="button" onClick={() => { setError(null); setMode(mode === "signup" ? "login" : "signup"); }}
+          style={btn({ color: C.dim, fontSize: 10.5, padding: "5px 10px" })}>
+          {mode === "signup" ? "have an account? log in" : "new? create a workspace"}
+        </button>
+      </div>
+    </form>
+  );
+}
 
 export default function Settings() {
   const { mode, testBench } = useApp((s) => s.connection);
@@ -129,6 +219,7 @@ export default function Settings() {
 
       {/* Authentication (architecture section 9) */}
       <Section title="AUTHENTICATION">
+        <IdentityLogin />
         {authStatus.data && !authStatus.data.auth_enabled ? (
           <div style={{ fontFamily: MONO, fontSize: 11.5, color: C.mut }}>
             Auth is off — this backend is open (dev / self-hosted without a token).
