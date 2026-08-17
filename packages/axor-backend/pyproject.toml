@@ -29,7 +29,7 @@ wrap = ["axor-wrap>=0.1,<0.2"]
 # Accepting axor-identity login tokens. Absent, identity login is simply off
 # (operator master token + scoped API keys still work); the routes never 501
 # — resolve_principal only reaches the verifier when a JWKS is configured.
-identity = ["pyjwt[crypto]>=2.8", "cryptography>=42.0"]
+identity = ["pyjwt[crypto]>=2.8", "cryptography>=50.0.0"]
 
 [project.urls]
 Homepage = "https://github.com/Bucha11/axor-control-plane"

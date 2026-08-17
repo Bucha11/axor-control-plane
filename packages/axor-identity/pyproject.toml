@@ -16,7 +16,8 @@ dependencies = [
   "alembic>=1.13",
   "argon2-cffi>=23.1",
   "pyjwt[crypto]>=2.8",
-  "cryptography>=42.0",
+  # >=50 avoids PYSEC-2026-3552 (flagged by the pip-audit CI gate on 49.0.0)
+  "cryptography>=50.0.0",
   "pydantic[email]>=2.0",
 ]
 
