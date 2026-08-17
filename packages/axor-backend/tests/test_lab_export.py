@@ -12,6 +12,7 @@ otherwise.
 """
 from __future__ import annotations
 
+import json
 import pathlib
 
 import httpx
@@ -95,21 +96,42 @@ async def test_recorded_condition_is_bound(client: httpx.AsyncClient) -> None:
 
 
 async def test_package_round_trips_through_lab_import(
-    client: httpx.AsyncClient,
+    client: httpx.AsyncClient, tmp_path: pathlib.Path,
 ) -> None:
     """The acceptance core: the package imports through the Lab's OWN
     import-incident path (validate + config hash + REPLAY before write) and
-    replays bit-identically under its recorded condition."""
-    incident = pytest.importorskip("lab_runner.incident")
+    replays bit-identically under its recorded condition.
+
+    This used to `importorskip("lab_runner.incident")`. That module has never
+    existed under any name — the import path is the `axor-lab import-incident`
+    COMMAND — so the acceptance core of this file skipped on every run,
+    including on a machine with axor-lab fully installed. It drives the real CLI
+    now, which is the only entry point the feature actually has.
+    """
+    cli = pytest.importorskip("lab_runner.cli")
     pkg = await _seeded_package(client)
-    result = incident.import_incident(
-        pkg["trace"], pkg["scenario"], pkg["manifests"], pkg["condition"]
+    for name in ("trace", "scenario", "manifests", "condition"):
+        (tmp_path / f"{name}.json").write_text(json.dumps(pkg[name]))
+    code = cli.main([
+        "import-incident",
+        "--trace", str(tmp_path / "trace.json"),
+        "--scenario", str(tmp_path / "scenario.json"),
+        "--manifests", str(tmp_path / "manifests.json"),
+        "--condition", str(tmp_path / "condition.json"),
+        "--out", str(tmp_path / "bundle"),
+    ])
+    # exit 0 means it validated, hashed, AND replayed to `match` — the command
+    # refuses to write otherwise
+    assert code == 0
+    bundle = json.loads((tmp_path / "bundle" / "bundle.json").read_text())
+    imported = json.loads(
+        next((tmp_path / "bundle" / "traces").glob("*.json")).read_text()
     )
-    assert result.replay_status == "match"
-    assert result.trace_id == "cp-ex_block"
-    # the recorded DENY (the caught exfil) is in the imported trace
+    assert str(imported["trace_id"]) == "cp-ex_block"
+    assert bundle["trials"]
+    # the recorded DENY (the caught exfil) survived the round trip
     verdicts = [
-        e["decision"]["verdict"] for e in result.trace["events"]
+        e["decision"]["verdict"] for e in imported["events"]
         if e.get("type") == "gate_decision"
     ]
     assert verdicts.count("DENY") == 1 and verdicts[-1] == "DENY"

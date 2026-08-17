@@ -7,3 +7,6 @@ dist/
 *.kuzu/
 traces/
 axor-traces/
+
+# stray SQLite files from a test run against a real app instance
+*.db

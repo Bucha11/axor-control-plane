@@ -23,9 +23,14 @@ export interface ConnectionState {
 interface AppState {
   connection: ConnectionState;
   lastRunId: string | null;
-  // Backend API token (local token or an API key). Sent as the bearer on every
-  // request when the backend has auth enabled (architecture section 9).
+  // Backend API token: the operator master token, a scoped API key, OR a human's
+  // axor-identity access token — whichever is set is sent as the bearer.
   apiToken: string;
+  // The axor-identity refresh token, held to renew an expired access token. Set
+  // only for a human login; empty for a pasted operator/API token.
+  refreshToken: string;
+  // Who is logged in, for display (identity login only).
+  identityEmail: string;
   // Signed command posture (protocol §6). When both are set, operator commands
   // and facts are canonicalized in the browser and signed by the vault signing
   // custody (never the operator key itself — only this token, which authorizes
@@ -46,6 +51,9 @@ interface AppState {
   setTestBench: (v: boolean) => void;
   setLastRun: (runId: string) => void;
   setApiToken: (token: string) => void;
+  // establish an identity session (access + refresh + email); clear it on logout
+  setSession: (access: string, refresh: string, email: string) => void;
+  clearSession: () => void;
   setSigningKeyId: (id: string) => void;
   setVaultSigningToken: (token: string) => void;
   setLearnMode: (v: boolean) => void;
@@ -71,6 +79,8 @@ export const useApp = create<AppState>()(
       connection: { mode: "none", tools: [], testBench: false },
       lastRunId: null,
       apiToken: "",
+      refreshToken: "",
+      identityEmail: "",
       signingKeyId: "",
       vaultSigningToken: "",
       learnMode: false,
@@ -91,6 +101,9 @@ export const useApp = create<AppState>()(
       setTestBench: (v) => set((s) => ({ connection: { ...s.connection, testBench: v } })),
       setLastRun: (runId) => set({ lastRunId: runId }),
       setApiToken: (token) => set({ apiToken: token }),
+      setSession: (access, refresh, email) =>
+        set({ apiToken: access, refreshToken: refresh, identityEmail: email }),
+      clearSession: () => set({ apiToken: "", refreshToken: "", identityEmail: "" }),
       setSigningKeyId: (id) => set({ signingKeyId: id }),
       setVaultSigningToken: (token) => set({ vaultSigningToken: token }),
       setLearnMode: (v) => set({ learnMode: v, learnSeen: true }),

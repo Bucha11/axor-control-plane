@@ -23,18 +23,25 @@ from axor_backend.app import create_app
 
 lab_contracts = pytest.importorskip("lab_contracts")
 lab_runner = pytest.importorskip("lab_runner")
+# axor-lab moved the kernel, replay, verdict pinning and the Control Plane
+# bridge out of `lab_runner` and into `lab_capabilities.governance`: governance
+# is a capability there now, not the spine (Suite Platform RFC §10).
+lab_governance = pytest.importorskip("lab_capabilities.governance")
 
 from axor_backend.lab_trace import config_dict_from_manifests  # noqa: E402
-from lab_contracts import build_bundle, condition_config_hash, content_hash  # noqa: E402
-from lab_runner import (  # noqa: E402
+from lab_capabilities.governance import (  # noqa: E402
     Kernel,
     KernelRegistry,
     axor_available,
     real_kernel_version,
     run_experiment_suite,
 )
+from lab_capabilities.governance.cp_export import (  # noqa: E402
+    export_cp,
+    export_cp_template,
+)
+from lab_contracts import build_bundle, condition_config_hash, content_hash  # noqa: E402
 from lab_runner.agents import ScriptedAgent  # noqa: E402
-from lab_runner.cp_export import export_cp, export_cp_template  # noqa: E402
 
 TOKEN = "master-secret-lab"
 KERNEL = "reference_taint_floor_kernel"
@@ -468,3 +475,41 @@ async def test_lab_package_readable_with_read_scope(secured: httpx.AsyncClient) 
     )).json()["secret"]
     assert (await secured.get("/v1/runs/ex_block/lab-package",
                               headers=_bearer(read_key))).status_code == 200
+
+
+# ── the frozen fixture must stay what axor-lab actually produces ──────────────
+
+
+def test_the_frozen_fixture_still_matches_a_live_export(
+    real_cp_deploy: dict[str, object],
+) -> None:
+    """`test_lab_import_frozen.py` runs on every CI run against a checked-in
+    package, because axor-lab is not on PyPI and everything in THIS module is
+    skipped without it.
+
+    That frozen package can go stale silently: a good package stays good even
+    if axor-lab stops producing the shape. So when axor-lab IS installed —
+    a developer's checkout — compare the live export's structure against the
+    fixture and fail if they have drifted apart. Structure, not bytes: a live
+    export carries different trace ids and hashes every run.
+    """
+    import json
+    import pathlib
+
+    frozen = json.loads(
+        (pathlib.Path(__file__).parent / "fixtures" / "lab-cp-deploy.json").read_text()
+    )
+    assert set(frozen) == set(real_cp_deploy), (
+        "the frozen cp-deploy fixture has different top-level keys than a live "
+        "axor-lab export — regenerate it (see test_lab_import_frozen.py)"
+    )
+    assert frozen["schema_version"] == real_cp_deploy["schema_version"]
+    # the key the whole replayable-pin path reads, and the one axor-lab did not
+    # write for as long as nothing checked
+    assert frozen["regression_traces"], "the fixture carries no trace bodies"
+    assert real_cp_deploy["regression_traces"], (
+        "a live axor-lab export carries no regression_traces — every pin it "
+        "produces will land skipped here"
+    )
+    for pin in real_cp_deploy["regressions"]:
+        assert str(pin["trace_id"]) in real_cp_deploy["regression_traces"]

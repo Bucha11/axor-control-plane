@@ -17,7 +17,12 @@ services:
       POSTGRES_DB: axor
       POSTGRES_USER: axor
       POSTGRES_PASSWORD: ${AXOR_PG_PASSWORD:?set AXOR_PG_PASSWORD in .env}
-    volumes: ["pgdata:/var/lib/postgresql/data"]
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      # create the identity service's own database on first init (its schema and
+      # alembic history are separate from the backend's — one DB, two apps, would
+      # collide on alembic_version)
+      - ./deploy/initdb:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U axor -d axor"]
       interval: 5s
@@ -42,12 +47,43 @@ services:
       AXOR_VENDOR_PUBKEY: ${AXOR_VENDOR_PUBKEY:-}
       # Auth (architecture section 9): empty = open (dev). Set to require a token.
       AXOR_API_TOKEN: ${AXOR_API_TOKEN:-}
+      # axor-identity login: the backend verifies human access tokens against the
+      # identity service's JWKS, fetched once at boot. Point elsewhere or clear it
+      # to run without identity login (operator token + API keys still work).
+      AXOR_IDENTITY_JWKS_URL: ${AXOR_IDENTITY_JWKS_URL:-http://identity:8402/.well-known/jwks.json}
     ports: ["8400:8400"]
     depends_on:
       postgres:
         condition: service_healthy
+      identity:
+        condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8400/v1/healthz').status==200 else 1)\""]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  identity:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      secrets: [github_token]
+    command: ["axor-identity"]
+    environment:
+      AXOR_IDENTITY_HOST: 0.0.0.0
+      AXOR_IDENTITY_PORT: "8402"
+      AXOR_IDENTITY_DATABASE_URL: postgresql+asyncpg://axor:${AXOR_PG_PASSWORD}@postgres/axor_identity
+      # Stable EdDSA signing key (PKCS#8 PEM). Empty = a throwaway key generated
+      # at boot — DEV ONLY: tokens die on restart and the backend's cached JWKS
+      # goes stale. Generate one:
+      #   python -c "from axor_identity.keys import generate_pem; print(generate_pem())"
+      AXOR_IDENTITY_SIGNING_KEY: ${AXOR_IDENTITY_SIGNING_KEY:-}
+    ports: ["8402:8402"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8402/v1/healthz').status==200 else 1)\""]
       interval: 10s
       timeout: 5s
       retries: 10
@@ -89,6 +125,8 @@ services:
         condition: service_healthy
       proxy:
         condition: service_started
+      identity:
+        condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://localhost:8080/ >/dev/null || exit 1"]
       interval: 10s

@@ -4,6 +4,11 @@ on:
   push:
     branches: [main]
   pull_request:
+  # Re-run when a new axor-core is published: the backend, proxy and the
+  # ecosystem deps resolve against it, so a release can change the stack.
+  # axor-core's publish job fans this out.
+  repository_dispatch:
+    types: [axor-core-published]
   workflow_dispatch:
 
 jobs:
@@ -136,6 +141,7 @@ jobs:
         run: |
           set -e
           for svc in \
+            "http://localhost:8402/v1/healthz" \
             "http://localhost:8400/v1/healthz" \
             "http://localhost:8401/axor/healthz" \
             "http://localhost:8080/"; do

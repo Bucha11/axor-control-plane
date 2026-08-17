@@ -1,4 +1,5 @@
 import { canonicalize } from "./jcs";
+import { refresh } from "./identity";
 import { useApp } from "./store";
 
 // Backend client. Vite dev-proxies /v1 -> backend :8400 and /axor -> proxy :8401.
@@ -334,12 +335,28 @@ function apiToken(): string {
   return useApp.getState().apiToken;
 }
 
-// Authed fetch: merges the Authorization header into any request.
-function af(path: string, init: RequestInit = {}): Promise<Response> {
+// Authed fetch: merges the Authorization header into any request. When an
+// identity access token has expired, a 401 triggers one transparent refresh
+// (using the stored refresh token) and the request is retried; a failed refresh
+// clears the session. Operator/API tokens have no refresh token and fall
+// through unchanged.
+async function af(path: string, init: RequestInit = {}, retried = false): Promise<Response> {
   const token = apiToken();
   const headers = new Headers(init.headers);
   if (token) headers.set("Authorization", `Bearer ${token}`);
-  return fetch(path, { ...init, headers });
+  const resp = await fetch(path, { ...init, headers });
+  if (resp.status === 401 && !retried) {
+    const state = useApp.getState();
+    if (state.refreshToken) {
+      const next = await refresh(state.refreshToken);
+      if (next) {
+        state.setSession(next.access_token, next.refresh_token, next.user.email);
+        return af(path, init, true);
+      }
+      state.clearSession();
+    }
+  }
+  return resp;
 }
 
 // Append the token as a query param for URLs the browser opens directly (SSE
