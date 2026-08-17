@@ -136,6 +136,7 @@ jobs:
         run: |
           set -e
           for svc in \
+            "http://localhost:8402/v1/healthz" \
             "http://localhost:8400/v1/healthz" \
             "http://localhost:8401/axor/healthz" \
             "http://localhost:8080/"; do
