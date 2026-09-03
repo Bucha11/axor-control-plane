@@ -24,11 +24,33 @@ Numbers below: single uvicorn worker, 4-core container, 2026-07.
 
 Reading: correctness holds under pressure in every run (zero drops, zero
 errors, no SSE stalls). On Postgres the DB stops being the limit at moderate
-subscriber counts; the next ceiling is single-process SSE fan-out. If you need
-more: run several uvicorn workers behind a load balancer (ingest scales; SSE
-subscribers stick to a worker) — unmeasured, so treat >150 rps as unknown
-territory and measure your own deployment.
+subscriber counts; the next ceiling is single-process SSE fan-out.
 
 A single agent emits a few events per second at most, so ~150 rps ≈ 50–100
 concurrently chatty agents on one backend process. SQLite is fine for
 evaluation; use Postgres for a fleet.
+
+## One backend process — a correctness limit, not a tuning knob
+
+**Run exactly one backend replica.** An earlier version of this page suggested
+several uvicorn workers behind a load balancer, with SSE subscribers sticking
+to a worker. That is wrong, and the failure is silent rather than loud:
+
+- **The event bus is in-process** (`broadcast.py`). A publish on worker A never
+  reaches a subscriber on worker B. The audit stream would still open, still
+  replay history from the database, and then simply never show a live event —
+  a stream that looks healthy and is not.
+- **Every worker runs its own background sweeps.** The stale monitor and the
+  EE regression scheduler are per-process, so N workers page the on-call N
+  times for one silent node and fire the corpus N times per interval.
+- **Every worker migrates at boot.** `init_db` runs `alembic upgrade head` in
+  the app lifespan, so simultaneous starts race on the same schema change.
+- **Every worker rehydrates its own taint graph** from the event log — correct,
+  but the memory cost is per worker, not shared.
+
+None of this is a throughput ceiling you can raise with hardware; it is what
+"single-instance by design" means in the architecture note. Horizontal scaling
+needs the bus moved out of the process (Postgres `LISTEN`/`NOTIFY` is the
+intended replacement), the sweeps given a leader election, and migrations moved
+to a deploy step. Until then, scale up rather than out, and treat >150 rps as
+unknown territory to measure in your own deployment.

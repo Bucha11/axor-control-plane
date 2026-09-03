@@ -37,6 +37,11 @@ def cli() -> None:
     parser.add_argument("--backend-url",
                         default=os.environ.get("AXOR_BACKEND_URL"),
                         help="push trace + evidence to this backend on claim")
+    parser.add_argument("--token", default=os.environ.get("AXOR_PROXY_TOKEN"),
+                        help="require this bearer token on the /axor control "
+                             "routes (arm runs, inject faults, read traces). "
+                             "Unset = open, which is fine on loopback and not "
+                             "on a published port.")
     args = parser.parse_args()
 
     # The self-dial host (scripted agent + demo mock upstream) must be a routable
@@ -58,10 +63,24 @@ def cli() -> None:
 
     args.trace_dir.mkdir(parents=True, exist_ok=True)
     self_base = f"http://{self_host}:{args.port}"
-    app = create_app(ProxyState(tools=tools, trace_dir=args.trace_dir,
-                                backend_url=args.backend_url,
-                                self_base_url=self_base,
-                                ingest_key=os.environ.get("AXOR_INGEST_KEY")))
+    state = ProxyState(tools=tools, trace_dir=args.trace_dir,
+                       backend_url=args.backend_url,
+                       self_base_url=self_base,
+                       ingest_key=os.environ.get("AXOR_INGEST_KEY"),
+                       control_token=args.token)
+    if state.control_token is None and args.host not in ("127.0.0.1", "localhost", "::1"):
+        # Binding beyond loopback with no token means anyone who can reach the
+        # port can arm runs, inject faults into live tool traffic and read back
+        # every recorded trace. Say so, in the same voice the backend uses for
+        # its own open posture.
+        import logging
+
+        logging.getLogger("axor.proxy").warning(
+            "PROXY CONTROL SURFACE IS OPEN (no AXOR_PROXY_TOKEN) and bound to "
+            "%s — anyone who reaches this port can arm runs, inject faults and "
+            "read traces. Set a token for any non-loopback bind.", args.host,
+        )
+    app = create_app(state)
     uvicorn.run(app, host=args.host, port=args.port)
 
 

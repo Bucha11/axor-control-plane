@@ -142,6 +142,18 @@ def is_open(method: str, path: str) -> bool:
     )
 
 
+# The only routes a browser opens DIRECTLY, where no Authorization header is
+# possible: an EventSource subscription and an <a href> export/download. These
+# alone accept `?token=`; everywhere else a query token is ignored, so a URL
+# copied out of a log or a history entry is not a working credential.
+_QUERY_TOKEN_SUFFIXES = ("/stream", "/events", "/export")
+
+
+def accepts_query_token(method: str, path: str) -> bool:
+    """Whether `?token=` is honoured for this route (see the note above)."""
+    return method in _READ_METHODS and path.endswith(_QUERY_TOKEN_SUFFIXES)
+
+
 # Upstream plane writes: the node reporting about ITSELF. A request to one of
 # these speaks AS the node named in the path, so a node-bound key must match it.
 # `/command` and `/cascade-stop` are excluded deliberately — they are operator

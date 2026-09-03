@@ -10,6 +10,7 @@ import asyncio
 import contextlib
 import json
 import os
+from collections import OrderedDict
 from collections.abc import AsyncIterator, Callable
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -35,6 +36,7 @@ from axor_backend.graph import (
     register_trace_derivations,
     rehydrate_all_graphs,
 )
+from axor_backend.limits import SUBGRAPH_CACHE_MAX, check_batch_size
 from axor_backend.monitor import running_stale_monitor
 from axor_backend.notifications import Notifier
 from axor_backend.replay_api import (
@@ -147,11 +149,12 @@ def create_app(
                 link["token"], link["run_id"], link["case_index"], link["revoked"],
                 org=link["org_id"],
             )
-        for sub in await app.state.store.list_subscriptions():
+        for sub in await app.state.store.all_subscriptions():
             app.state.notifier.subscribe(
                 sub["url"], sub["triggers"], sub["debounce_seconds"],
                 label=sub.get("label", ""),
                 node_pattern=sub.get("node_pattern", "*"),
+                org=sub["org_id"],
             )
         # EE license: rehydrate the verified license (env or Settings-pasted)
         # so org features survive a restart; scheduler fires the corpus when
@@ -223,10 +226,21 @@ def create_app(
 
     async def _persist_dead_letter(letter: Any) -> None:  # noqa: ANN401 - DeadLetter
         await _store.add_dead_letter(
-            letter.url, letter.payload, letter.error, letter.attempts, _now()
+            letter.url, letter.payload, letter.error, letter.attempts, _now(),
+            org=letter.org,
         )
 
-    app.state.notifier = Notifier(dead_sink=_persist_dead_letter)
+    # A multi-tenant server blocks webhooks aimed at internal addresses: there
+    # an org admin holds `operate` without being the infrastructure operator.
+    # A single-tenant self-hosted server does not, because dialing its own
+    # collector on the compose network is the normal case. Either way the
+    # metadata-service range is refused (notifications.check_webhook_url).
+    block_private = identity_jwks is not None or os.environ.get(
+        "AXOR_WEBHOOK_BLOCK_PRIVATE", ""
+    ) == "1"
+    app.state.notifier = Notifier(
+        dead_sink=_persist_dead_letter, block_private=block_private
+    )
     # Verified EE licences, per organization: a licence entitles ONE tenant, so
     # a process-wide slot would let whichever org pasted last decide everyone
     # else's tier. Populated by _load_license at boot and by a verified paste.
@@ -252,13 +266,22 @@ def create_app(
     app.state.graphs = GraphRegistry()
 
     async def resolve_principal(request: Request) -> Principal | None:
-        """Bearer from the Authorization header, or ?token= for SSE (EventSource
-        cannot set headers). Returns the principal, or None if unauthenticated."""
+        """Bearer from the Authorization header, or ?token= on the few routes a
+        browser opens directly. Returns the principal, or None if
+        unauthenticated."""
         token = None
         header = request.headers.get("authorization", "")
         if header.lower().startswith("bearer "):
             token = header[7:].strip()
-        if token is None:
+        if token is None and auth_mod.accepts_query_token(
+            request.method, request.url.path
+        ):
+            # A token in the query string ends up in access logs, browser
+            # history and Referer headers, so it is accepted ONLY where a
+            # header is genuinely impossible: EventSource cannot set one, and
+            # neither can an <a download> link. Every other route requires the
+            # Authorization header — previously any route accepted ?token=,
+            # which meant a copied URL could carry a live credential anywhere.
             token = request.query_params.get("token")
         if not token:
             return None
@@ -341,8 +364,8 @@ def create_app(
     ) -> dict:
         store: Store = request.app.state.store
         node_id = body.get("node_id", "proxy")
+        events = check_batch_size(body.get("events", []))
         await store.upsert_run(run_id, node_id, body.get("scenario", "custom"), _now())
-        events = body.get("events", [])
         stored = await store.ingest_events(
             run_id, node_id, events, idempotency_key
         )
@@ -469,9 +492,20 @@ def create_app(
 
     # ── replay & regression (spec section 13) ─────────────────────────────────
 
-    # Derive-on-open cache (decision v2-12): keyed by (run_id, anchor), never
-    # invalidated — traces are append-only.
-    _subgraph_cache: dict[tuple, dict] = {}
+    # Derive-on-open cache (decision v2-12): never invalidated, because traces
+    # are append-only — but bounded, and keyed by TENANT as well as anchor. Two
+    # tenants legitimately hold the same run_id (a Lab pin is the deterministic
+    # `lab:{trace_id}`), so an org-blind key served one tenant's causal subgraph
+    # to the other; and an unbounded dict on a public route is a memory leak
+    # anyone can drive. Insertion-ordered eviction: a subgraph costs one pure
+    # kernel walk to rebuild.
+    _subgraph_cache: OrderedDict[tuple, dict] = OrderedDict()
+
+    def _cache_subgraph(key: tuple, value: dict) -> dict:
+        _subgraph_cache[key] = value
+        while len(_subgraph_cache) > SUBGRAPH_CACHE_MAX:
+            _subgraph_cache.popitem(last=False)
+        return value
 
     @app.get("/v1/runs/{run_id}/subgraph")
     async def run_subgraph(
@@ -479,16 +513,16 @@ def create_app(
     ) -> dict:
         """The causal subgraph for a case (spec v2 Ch.3): computed on open by
         the pure kernel walk, cached, never stored redundantly."""
-        key = (run_id, anchor_node, anchor_seq)
-        if key not in _subgraph_cache:
-            events = await _events_for(request.app.state.store, run_id)
-            try:
-                _subgraph_cache[key] = causal_subgraph(
-                    events, anchor_node, anchor_seq
-                )
-            except ValueError as exc:
-                raise HTTPException(404, str(exc)) from exc
-        return _subgraph_cache[key]
+        key = (current_org_id(), run_id, anchor_node, anchor_seq)
+        cached = _subgraph_cache.get(key)
+        if cached is not None:
+            return cached
+        events = await _events_for(request.app.state.store, run_id)
+        try:
+            computed = causal_subgraph(events, anchor_node, anchor_seq)
+        except ValueError as exc:
+            raise HTTPException(404, str(exc)) from exc
+        return _cache_subgraph(key, computed)
 
     @app.get("/v1/runs/{run_id}/containment")
     async def run_containment(
@@ -850,10 +884,15 @@ def create_app(
         if label or node_pattern != "*":
             _require_ee(request.app, current_org_id(),
                         "notification routing (channels / node patterns)")
+        from axor_backend.notifications import WebhookRefused
+
         try:
             request.app.state.notifier.subscribe(
-                url, triggers, debounce, label=label, node_pattern=node_pattern
+                url, triggers, debounce, label=label, node_pattern=node_pattern,
+                org=current_org_id(),
             )
+        except WebhookRefused as exc:
+            raise HTTPException(400, str(exc)) from exc
         except ValueError as exc:
             raise HTTPException(400, str(exc)) from exc
         # Persist so the subscription survives a restart (idempotent on

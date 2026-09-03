@@ -156,7 +156,12 @@ notification_subs = Table(
     # tier is one global webhook — label "" and pattern "*".
     Column("label", String(100), nullable=False, default="", server_default=""),
     Column("node_pattern", String(200), nullable=False, default="*", server_default="*"),
-    UniqueConstraint("url", "triggers", "node_pattern", name="uq_sub_url_triggers"),
+    Column("org_id", String(64), nullable=False, server_default=PUBLIC_ORG),
+    # org_id joins the uniqueness (migration 0010): two tenants may register the
+    # same URL with the same triggers, and neither may dedupe the other away.
+    UniqueConstraint(
+        "org_id", "url", "triggers", "node_pattern", name="uq_sub_url_triggers"
+    ),
 )
 
 # Small KV for operator-set runtime state that must survive restarts: the
@@ -222,6 +227,7 @@ dead_letters = Table(
     Column("error", String(500), nullable=False),
     Column("attempts", Integer, nullable=False),
     Column("created_ts", String(40), nullable=False),
+    Column("org_id", String(64), nullable=False, server_default=PUBLIC_ORG, index=True),
 )
 
 # Behavioral health checks (axor-probe, migration 0006). One row per battery a
@@ -817,6 +823,7 @@ class Store:
                     notification_subs.c.url == url,
                     notification_subs.c.triggers == joined,
                     notification_subs.c.node_pattern == node_pattern,
+                    notification_subs.c.org_id == current_org_id(),
                 )
             )).first()
             if dup is not None:
@@ -828,19 +835,25 @@ class Store:
                 return
             await conn.execute(insert(notification_subs).values(
                 url=url, triggers=joined, debounce_seconds=debounce_seconds,
-                label=label, node_pattern=node_pattern,
+                label=label, node_pattern=node_pattern, org_id=current_org_id(),
             ))
 
     async def list_subscriptions(self) -> list[dict[str, Any]]:
+        """This tenant's subscriptions — what the settings surface shows."""
+        async with self.engine.connect() as conn:
+            rows = (await conn.execute(
+                select(notification_subs)
+                .where(notification_subs.c.org_id == current_org_id())
+            )).all()
+        return [_subscription_row(r) for r in rows]
+
+    async def all_subscriptions(self) -> list[dict[str, Any]]:
+        """Every tenant's subscriptions, each carrying its org — the boot
+        rehydrate, which runs before any request and must repopulate the whole
+        in-memory notifier."""
         async with self.engine.connect() as conn:
             rows = (await conn.execute(select(notification_subs))).all()
-        return [
-            {"url": r.url,
-             "triggers": [t for t in r.triggers.split(",") if t],
-             "debounce_seconds": r.debounce_seconds,
-             "label": r.label, "node_pattern": r.node_pattern}
-            for r in rows
-        ]
+        return [{**_subscription_row(r), "org_id": r.org_id} for r in rows]
 
     # ── settings KV (license, regression schedule) ────────────────────────────
 
@@ -1050,12 +1063,17 @@ class Store:
 
     async def add_dead_letter(
         self, url: str, payload: dict[str, Any], error: str, attempts: int,
-        created_ts: str, cap: int = 500,
+        created_ts: str, cap: int = 500, org: str | None = None,
     ) -> None:
+        """`org` is passed explicitly: a dead letter is written after the retry
+        backoff, potentially far from the request that emitted it, so the
+        tenant is captured at emit time rather than read from the ambient
+        context here."""
         async with self.engine.begin() as conn:
             await conn.execute(insert(dead_letters).values(
                 url=url, payload_json=payload, error=error[:500],
                 attempts=attempts, created_ts=created_ts,
+                org_id=org if org is not None else current_org_id(),
             ))
             # Keep only the newest `cap` rows — same bound the in-memory deque
             # had, enforced in SQL so the table cannot grow without limit.
@@ -1071,10 +1089,22 @@ class Store:
     async def list_dead_letters(self, limit: int = 500) -> list[dict[str, Any]]:
         async with self.engine.connect() as conn:
             rows = (await conn.execute(
-                select(dead_letters).order_by(dead_letters.c.id.desc()).limit(limit)
+                select(dead_letters)
+                .where(dead_letters.c.org_id == current_org_id())
+                .order_by(dead_letters.c.id.desc()).limit(limit)
             )).all()
         return [
             {"url": r.url, "payload": r.payload_json, "error": r.error,
              "attempts": r.attempts, "created_ts": r.created_ts}
             for r in rows
         ]
+
+
+def _subscription_row(row: Any) -> dict[str, Any]:  # noqa: ANN401 - SQLAlchemy Row
+    return {
+        "url": row.url,
+        "triggers": [t for t in row.triggers.split(",") if t],
+        "debounce_seconds": row.debounce_seconds,
+        "label": row.label,
+        "node_pattern": row.node_pattern,
+    }

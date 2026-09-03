@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import secrets
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
@@ -59,8 +60,20 @@ class ProxyState:
         self_base_url: str = "http://127.0.0.1:8401",
         agent_client: httpx.AsyncClient | None = None,
         ingest_key: str | None = None,
+        control_token: str | None = None,
     ) -> None:
         import os as _os
+
+        # Control-surface token (AXOR_PROXY_TOKEN). The proxy arms runs, injects
+        # faults into live tool traffic, spawns governed nodes and reads back
+        # traces — and docker-compose publishes its port. Unset keeps the
+        # historical open posture for a loopback test bench; set it and every
+        # /axor route needs the bearer. The /t/ passthrough is deliberately NOT
+        # gated: the agent's own credential rides through it byte-for-byte and
+        # the run must already be armed for anything to happen.
+        self.control_token = (
+            control_token or _os.environ.get("AXOR_PROXY_TOKEN") or None
+        )
 
         # tool name -> upstream: an HTTP base url, or a live StdioMcpServer
         # (the stdio-MCP gateway) registered via /axor/mcp/discover.
@@ -173,6 +186,32 @@ async def _stdio_dispatch(
 
 
 def create_app(state: ProxyState) -> Starlette:
+    def authorized(request: Request) -> bool:
+        """Bearer check for the control surface. Open when no token is set."""
+        if state.control_token is None:
+            return True
+        header = request.headers.get("authorization", "")
+        if not header.lower().startswith("bearer "):
+            return False
+        return secrets.compare_digest(header[7:].strip(), state.control_token)
+
+    def unauthorized() -> Response:
+        return JSONResponse(
+            {"error": "unauthorized",
+             "detail": "this proxy requires a bearer token on /axor routes "
+                       "(AXOR_PROXY_TOKEN)"},
+            status_code=401,
+        )
+
+    def guarded(handler: Any) -> Any:  # noqa: ANN401 - Starlette endpoint
+        async def wrapped(request: Request) -> Response:
+            if not authorized(request):
+                return unauthorized()
+            return await handler(request)
+
+        wrapped.__name__ = handler.__name__
+        return wrapped
+
     async def tool_route(request: Request) -> Response:
         tool = request.path_params["tool"]
         path = request.path_params.get("path", "")
@@ -579,15 +618,18 @@ def create_app(state: ProxyState) -> Starlette:
                 await upstream.close()
 
     app = Starlette(lifespan=lifespan, routes=[
+        # healthz stays open: it is what a container's health check calls, and
+        # it reveals only liveness plus whether a run is armed.
         Route("/axor/healthz", healthz),
-        Route("/axor/preflight", preflight),
-        Route("/axor/mcp/discover", mcp_discover, methods=["POST"]),
-        Route("/axor/governed/spawn", spawn_governed, methods=["POST"]),
-        Route("/axor/governed/spawn-tree", spawn_governed_tree_route, methods=["POST"]),
-        Route("/axor/runs", start_run, methods=["POST"]),
-        Route("/axor/runs/{run_id}/simulate", simulate, methods=["POST"]),
-        Route("/axor/runs/{run_id}/claim", submit_claim, methods=["POST"]),
-        Route("/axor/runs/{run_id}", get_run),
+        Route("/axor/preflight", guarded(preflight)),
+        Route("/axor/mcp/discover", guarded(mcp_discover), methods=["POST"]),
+        Route("/axor/governed/spawn", guarded(spawn_governed), methods=["POST"]),
+        Route("/axor/governed/spawn-tree", guarded(spawn_governed_tree_route),
+              methods=["POST"]),
+        Route("/axor/runs", guarded(start_run), methods=["POST"]),
+        Route("/axor/runs/{run_id}/simulate", guarded(simulate), methods=["POST"]),
+        Route("/axor/runs/{run_id}/claim", guarded(submit_claim), methods=["POST"]),
+        Route("/axor/runs/{run_id}", guarded(get_run)),
         Mount("/mock", app=mock_tools_app()),
         Route(
             "/t/{tool}/{path:path}", tool_route,

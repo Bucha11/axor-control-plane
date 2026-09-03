@@ -26,6 +26,7 @@ from fastapi import APIRouter, Header, HTTPException, Request
 from sse_starlette.sse import EventSourceResponse
 
 from axor_backend.errors import CommandRejected
+from axor_backend.limits import check_batch_size
 from axor_backend.signing import signed_payload
 from axor_backend.tenancy import current_org_id, topic
 
@@ -168,7 +169,9 @@ async def telemetry(
 ) -> dict:
     ctx = _ctx(request)
     run_id = body.get("run_id", node_id)
-    lines: list[dict[str, Any]] = body.get("events", [])
+    # Same ceiling as /v1/ingest: the batch is held, parsed and folded in
+    # memory, so its size is a resource the caller controls.
+    lines: list[dict[str, Any]] = check_batch_size(body.get("events", []))
     await ctx.store.upsert_run(run_id, node_id, body.get("scenario", "live"), _now())
     stored = await ctx.store.ingest_events(run_id, node_id, lines, idempotency_key)
     notifier = getattr(ctx, "notifier", None)
