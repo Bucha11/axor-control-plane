@@ -35,8 +35,57 @@ async def test_fresh_db_reaches_head_with_all_tables(db_url: str) -> None:
         columns = await conn.run_sync(
             lambda c: {col["name"] for col in inspect(c).get_columns("api_keys")}
         )
-    assert rev == "0008"
+    # Head is whatever the newest revision file declares — asserting a literal
+    # here only ever measures whether someone remembered to edit this line.
+    assert rev == _head_revision()
     assert "node_id" in columns
+    await engine.dispose()
+
+
+def _head_revision() -> str:
+    """The newest revision id on disk, read the way alembic reads it."""
+    from alembic.config import Config
+    from alembic.script import ScriptDirectory
+    from axor_backend import storage
+
+    cfg = Config()
+    cfg.set_main_option(
+        "script_location",
+        str(pathlib.Path(storage.__file__).parent / "migrations"),
+    )
+    return ScriptDirectory.from_config(cfg).get_current_head()
+
+
+async def test_tenant_tables_are_keyed_by_org(db_url: str) -> None:
+    """0009: org_id leads the primary key of every table whose identifier is
+    caller-chosen. Before it, org_id only filtered reads — so one tenant could
+    take a run_id or node_id out from under another, and two tenants importing
+    the same Lab package collided on its deterministic `lab:{trace_id}` pins."""
+    engine = make_engine(db_url)
+    await init_db(engine)
+    async with engine.connect() as conn:
+        keys = await conn.run_sync(lambda c: {
+            table: inspect(c).get_pk_constraint(table)["constrained_columns"]
+            for table in ("runs", "desired_state", "reported_state", "facts",
+                          "pins", "lab_deploys", "settings", "ingest_keys",
+                          "api_keys", "share_links")
+        })
+    for table, expected in (
+        ("runs", ["org_id", "run_id"]),
+        ("desired_state", ["org_id", "node_id"]),
+        ("reported_state", ["org_id", "node_id"]),
+        ("facts", ["org_id", "fact_id"]),
+        ("pins", ["org_id", "run_id"]),
+        ("lab_deploys", ["org_id", "package_id"]),
+        ("settings", ["org_id", "key"]),
+        ("ingest_keys", ["org_id", "key"]),
+    ):
+        assert keys[table] == expected, table
+    # Two deliberate exceptions, both documented in 0009: auth resolves a key_id
+    # before the request's org is known, and a share token is an unguessable
+    # global capability served on a route that has no principal at all.
+    assert keys["api_keys"] == ["key_id"]
+    assert keys["share_links"] == ["token"]
     await engine.dispose()
 
 

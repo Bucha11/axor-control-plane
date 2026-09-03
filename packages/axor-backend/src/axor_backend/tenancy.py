@@ -28,3 +28,24 @@ def set_current_org(org: str | None) -> None:
 
 def current_org_id() -> str:
     return _current_org.get()
+
+
+# Topic separator: a unit separator cannot appear in an org id or a node id, so
+# a namespaced topic can never be spelled by an id that merely contains ":".
+_TOPIC_SEP = "\x1f"
+
+
+def topic(kind: str, key: str, org: str | None = None) -> str:
+    """A broadcast topic namespaced by tenant.
+
+    The SSE bus is addressed by strings. Un-namespaced (``plane:{node_id}``,
+    ``run:{run_id}``) those strings are global, so a subscriber holding only the
+    `read` scope could name another tenant's node and receive its live desired
+    state and telemetry — the historical path was org-filtered in SQL, the live
+    one was not.
+
+    Pass `org` explicitly when the topic outlives the request that built it: a
+    streaming response body is iterated after the handler returns, and the
+    ambient tenant is not guaranteed to still be set by then.
+    """
+    return f"{org or current_org_id()}{_TOPIC_SEP}{kind}:{key}"

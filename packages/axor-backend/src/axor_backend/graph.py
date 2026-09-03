@@ -15,8 +15,11 @@ from __future__ import annotations
 
 import asyncio
 import json
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any, Protocol
+
+from axor_backend.tenancy import current_org_id, set_current_org
 
 
 async def register_trace_derivations(
@@ -46,12 +49,17 @@ async def register_trace_derivations(
 
 
 async def rehydrate_graph(store: Any, graph: GraphStore) -> None:  # noqa: ANN401
-    """Rebuild the taint graph from the persisted event log on startup.
+    """Rebuild ONE tenant's taint graph from the persisted event log.
 
     The graph is a DERIVED index, not a source of truth — every derivation is
     already in the events table (arg_refs/value_ref) and every attestation in the
     facts table. Folding them back in at boot makes the in-memory store durable
     across restarts (and lets a fresh instance catch up) without a graph DB.
+
+    Reads through the ambient tenant (``tenancy.current_org_id``), so the caller
+    sets the org first — see :func:`rehydrate_all_graphs`, which is what boot
+    calls. Rehydrating without setting one folds the public tenant's runs only,
+    which is what happened before the registry existed.
     """
     for run in await store.list_runs():
         lines = [json.loads(raw) for raw in await store.run_events(run["run_id"])]
@@ -59,6 +67,57 @@ async def rehydrate_graph(store: Any, graph: GraphStore) -> None:  # noqa: ANN40
     for fact in await store.all_facts():
         if fact.get("fact_type") == "operator_attestation":
             await graph.append_attestation(json.dumps(fact))
+
+
+async def rehydrate_all_graphs(store: Any, registry: GraphRegistry) -> None:  # noqa: ANN401
+    """Boot rehydrate for every tenant, each into its own graph."""
+    previous = current_org_id()
+    try:
+        for org in await store.list_orgs():
+            set_current_org(org)
+            await rehydrate_graph(store, registry.for_org(org))
+    finally:
+        set_current_org(previous)
+
+
+class GraphRegistry:
+    """One :class:`GraphStore` per tenant, created on first use.
+
+    The taint graph holds value refs and the run ids they were derived in, which
+    is exactly the shape of a tenant's private data — so it cannot be one store
+    per process. Before this, a single ``InMemoryGraphStore`` served every org
+    and ``/v1/graph/khop`` returned another tenant's refs and run ids to anyone
+    who guessed a ref.
+
+    ``factory`` builds a store for one org; the default is the in-memory
+    implementation, matching SQLite's role as the dev/test default. A hosted
+    deployment passes a factory returning :class:`KuzuGraphStore` with a
+    per-tenant DB file — the isolation that class's docstring already promised
+    and that only a registry can deliver.
+    """
+
+    def __init__(
+        self, factory: Callable[[str], GraphStore] | None = None
+    ) -> None:
+        self._factory: Callable[[str], GraphStore] = (
+            factory if factory is not None else lambda _org: InMemoryGraphStore()
+        )
+        self._graphs: dict[str, GraphStore] = {}
+
+    def for_org(self, org: str) -> GraphStore:
+        graph = self._graphs.get(org)
+        if graph is None:
+            graph = self._factory(org)
+            self._graphs[org] = graph
+        return graph
+
+    def current(self) -> GraphStore:
+        """The graph of the tenant this request belongs to."""
+        return self.for_org(current_org_id())
+
+    @property
+    def tenants(self) -> tuple[str, ...]:
+        return tuple(sorted(self._graphs))
 
 
 class GraphStore(Protocol):

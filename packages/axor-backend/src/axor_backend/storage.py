@@ -17,6 +17,7 @@ from sqlalchemy import (
     Float,
     Integer,
     MetaData,
+    PrimaryKeyConstraint,
     String,
     Table,
     UniqueConstraint,
@@ -38,16 +39,24 @@ metadata = MetaData()
 # blobs the moment it runs on Postgres.
 _JSON = JSON().with_variant(JSONB(), "postgresql")
 
+# Tenant-scoped key space (migration 0009). An identifier is unique WITHIN an
+# organization, never globally: migration 0007 added org_id and scoped every
+# READ by it, but left the single-column primary keys in place, so one tenant
+# could still take an id out from under another — and for a Lab handoff, whose
+# pins are the deterministic `lab:{trace_id}`, two tenants importing the same
+# package collide by construction. org_id leads every key so the index that
+# serves the tenant filter is the primary key itself.
 runs = Table(
     "runs", metadata,
-    Column("run_id", String(64), primary_key=True),
+    Column("run_id", String(64), nullable=False),
     Column("node_id", String(128), nullable=False),
     Column("scenario", String(128), nullable=False, default="custom"),
     Column("intervened", Boolean, nullable=False, default=False),
     Column("completed", Boolean, nullable=False, default=False),
     Column("evidence_json", _JSON, nullable=False, default=list),
     Column("created_ts", String(40), nullable=False),
-    Column("org_id", String(64), nullable=False, server_default=PUBLIC_ORG, index=True),
+    Column("org_id", String(64), nullable=False, server_default=PUBLIC_ORG),
+    PrimaryKeyConstraint("org_id", "run_id"),
 )
 
 events = Table(
@@ -61,47 +70,59 @@ events = Table(
     Column("org_id", String(64), nullable=False, server_default=PUBLIC_ORG, index=True),
     # Per-node sequences (spec v2 Ch.4 §5): seq is monotonic PER NODE, so a
     # multi-node run legitimately repeats seq across nodes.
-    UniqueConstraint("run_id", "node_id", "seq", name="uq_events_run_node_seq"),
+    UniqueConstraint(
+        "org_id", "run_id", "node_id", "seq", name="uq_events_run_node_seq"
+    ),
 )
 
+# Idempotency keys are client-chosen, so they are scoped per tenant too: a
+# collision across organizations would silently drop the other tenant's batch
+# (ingest_events returns 0 stored), which is a denial of ingest disguised as a
+# successful dedupe.
 ingest_keys = Table(
     "ingest_keys", metadata,
-    Column("key", String(128), primary_key=True),
+    Column("key", String(128), nullable=False),
+    Column("org_id", String(64), nullable=False, server_default=PUBLIC_ORG),
+    PrimaryKeyConstraint("org_id", "key"),
 )
 
 desired_state = Table(
     "desired_state", metadata,
-    Column("node_id", String(128), primary_key=True),
+    Column("node_id", String(128), nullable=False),
     Column("version", Integer, nullable=False),
     Column("state_json", _JSON, nullable=False),
-    Column("org_id", String(64), nullable=False, server_default=PUBLIC_ORG, index=True),
+    Column("org_id", String(64), nullable=False, server_default=PUBLIC_ORG),
+    PrimaryKeyConstraint("org_id", "node_id"),
 )
 
 reported_state = Table(
     "reported_state", metadata,
-    Column("node_id", String(128), primary_key=True),
+    Column("node_id", String(128), nullable=False),
     Column("applied_version", Integer, nullable=False, default=0),
     Column("level", String(24), nullable=False, default="NORMAL"),
     Column("budget_remaining", Integer, nullable=True),
     Column("updated_ts", String(40), nullable=False),
-    Column("org_id", String(64), nullable=False, server_default=PUBLIC_ORG, index=True),
+    Column("org_id", String(64), nullable=False, server_default=PUBLIC_ORG),
+    PrimaryKeyConstraint("org_id", "node_id"),
 )
 
 facts = Table(
     "facts", metadata,
-    Column("fact_id", String(128), primary_key=True),
+    Column("fact_id", String(128), nullable=False),
     Column("node_id", String(128), nullable=False, index=True),
     Column("fact_json", _JSON, nullable=False),
     Column("created_ts", String(40), nullable=False),
-    Column("org_id", String(64), nullable=False, server_default=PUBLIC_ORG, index=True),
+    Column("org_id", String(64), nullable=False, server_default=PUBLIC_ORG),
+    PrimaryKeyConstraint("org_id", "fact_id"),
 )
 
 pins = Table(
     "pins", metadata,
-    Column("run_id", String(64), primary_key=True),
+    Column("run_id", String(64), nullable=False),
     Column("side", String(16), nullable=False),  # must_block | must_pass
     Column("label", String(200), nullable=False, default=""),
-    Column("org_id", String(64), nullable=False, server_default=PUBLIC_ORG, index=True),
+    Column("org_id", String(64), nullable=False, server_default=PUBLIC_ORG),
+    PrimaryKeyConstraint("org_id", "run_id"),
 )
 
 # Share links & notification subscriptions are PRIMARY user data (a revocable
@@ -109,6 +130,12 @@ pins = Table(
 # taint graph — so they persist here and rehydrate into their in-memory holders
 # at boot. Without this a restart 404s every shared EvidenceCase and silently
 # stops every notification.
+# The token stays the sole primary key: it is an unguessable global capability,
+# and `GET /v1/share/{token}` is served WITHOUT auth, so there is no principal
+# to take an org from. The org_id column (migration 0009) is what lets that
+# open route scope itself — it reads the link, adopts the link's tenant, and
+# only then looks the case up (before 0009 the lookup ran under the public
+# tenant and 404'd every link an identity user had created).
 share_links = Table(
     "share_links", metadata,
     Column("token", String(64), primary_key=True),
@@ -116,6 +143,7 @@ share_links = Table(
     Column("case_index", Integer, nullable=False),
     Column("revoked", Boolean, nullable=False, default=False),
     Column("created_ts", String(40), nullable=False),
+    Column("org_id", String(64), nullable=False, server_default=PUBLIC_ORG, index=True),
 )
 
 notification_subs = Table(
@@ -132,11 +160,17 @@ notification_subs = Table(
 )
 
 # Small KV for operator-set runtime state that must survive restarts: the
-# active EE license, the regression schedule. JSON values, single row per key.
+# active EE license, the regression schedule, and BOTH federation vaults —
+# enrolled tool credentials, signing-key seeds and the signing audit log. That
+# last part is why this table is org-scoped (migration 0009) rather than left
+# global as 0007 had it: a global KV means one tenant's `get_setting` returns
+# another tenant's vault.
 settings = Table(
     "settings", metadata,
-    Column("key", String(64), primary_key=True),
+    Column("key", String(64), nullable=False),
     Column("value", _JSON, nullable=False),
+    Column("org_id", String(64), nullable=False, server_default=PUBLIC_ORG),
+    PrimaryKeyConstraint("org_id", "key"),
 )
 
 # Every corpus run leaves a report (source: manual | scheduled) — the history
@@ -162,7 +196,7 @@ regression_reports = Table(
 # provenance of where they came from.
 lab_deploys = Table(
     "lab_deploys", metadata,
-    Column("package_id", String(64), primary_key=True),
+    Column("package_id", String(64), nullable=False),
     Column("created_ts", String(40), nullable=False),
     Column("kernel", String(120), nullable=False),
     Column("config_hash", String(80), nullable=False),
@@ -170,7 +204,10 @@ lab_deploys = Table(
     Column("pins_created", Integer, nullable=False, default=0),
     Column("manifest_count", Integer, nullable=False, default=0),
     Column("package_json", _JSON, nullable=False),
-    Column("org_id", String(64), nullable=False, server_default=PUBLIC_ORG, index=True),
+    Column("org_id", String(64), nullable=False, server_default=PUBLIC_ORG),
+    # package_id is a content hash of the package, so two tenants deploying the
+    # same Lab export collide on it by construction.
+    PrimaryKeyConstraint("org_id", "package_id"),
 )
 
 # Dead letters are the honesty ledger of the notification channel: a webhook
@@ -291,11 +328,16 @@ class Store:
         async with self.engine.begin() as conn:
             if idempotency_key:
                 dup = (await conn.execute(
-                    select(ingest_keys.c.key).where(ingest_keys.c.key == idempotency_key)
+                    select(ingest_keys.c.key).where(
+                        ingest_keys.c.key == idempotency_key,
+                        ingest_keys.c.org_id == current_org_id(),
+                    )
                 )).first()
                 if dup is not None:
                     return 0
-                await conn.execute(insert(ingest_keys).values(key=idempotency_key))
+                await conn.execute(insert(ingest_keys).values(
+                    key=idempotency_key, org_id=current_org_id(),
+                ))
             seen = {
                 (row.node_id, row.seq) for row in (await conn.execute(
                     select(events.c.node_id, events.c.seq)
@@ -706,9 +748,10 @@ class Store:
                 pins.c.run_id.in_(old_ids),
                 pins.c.org_id == current_org_id(),
             ))
-            await conn.execute(
-                delete(share_links).where(share_links.c.run_id.in_(old_ids))
-            )
+            await conn.execute(delete(share_links).where(
+                share_links.c.run_id.in_(old_ids),
+                share_links.c.org_id == current_org_id(),
+            ))
             await conn.execute(delete(runs).where(
                 runs.c.run_id.in_(old_ids),
                 runs.c.org_id == current_org_id(),
@@ -732,23 +775,30 @@ class Store:
         async with self.engine.begin() as conn:
             await conn.execute(insert(share_links).values(
                 token=token, run_id=run_id, case_index=case_index,
-                revoked=False, created_ts=ts,
+                revoked=False, created_ts=ts, org_id=current_org_id(),
             ))
 
     async def revoke_share_link(self, token: str) -> bool:
+        """Revoking is org-scoped: a token is unguessable, but knowing one must
+        not let another tenant burn it."""
         async with self.engine.begin() as conn:
             result = await conn.execute(
-                update(share_links).where(share_links.c.token == token)
-                .values(revoked=True)
+                update(share_links).where(
+                    share_links.c.token == token,
+                    share_links.c.org_id == current_org_id(),
+                ).values(revoked=True)
             )
         return bool(result.rowcount)
 
     async def list_share_links(self) -> list[dict[str, Any]]:
+        """Every link, across tenants — this feeds the boot rehydrate, which
+        runs before any request and must repopulate the whole registry. Each
+        row carries the org the link resolves under."""
         async with self.engine.connect() as conn:
             rows = (await conn.execute(select(share_links))).all()
         return [
             {"token": r.token, "run_id": r.run_id, "case_index": r.case_index,
-             "revoked": r.revoked}
+             "revoked": r.revoked, "org_id": r.org_id}
             for r in rows
         ]
 
@@ -797,21 +847,60 @@ class Store:
     async def get_setting(self, key: str) -> Any | None:  # noqa: ANN401 - JSON value
         async with self.engine.connect() as conn:
             row = (await conn.execute(
-                select(settings.c.value).where(settings.c.key == key)
+                select(settings.c.value).where(
+                    settings.c.key == key,
+                    settings.c.org_id == current_org_id(),
+                )
             )).first()
         return row.value if row is not None else None
 
     async def set_setting(self, key: str, value: Any) -> None:  # noqa: ANN401 - JSON
         async with self.engine.begin() as conn:
             existing = (await conn.execute(
-                select(settings.c.key).where(settings.c.key == key)
+                select(settings.c.key).where(
+                    settings.c.key == key,
+                    settings.c.org_id == current_org_id(),
+                )
             )).first()
             if existing is None:
-                await conn.execute(insert(settings).values(key=key, value=value))
+                await conn.execute(insert(settings).values(
+                    key=key, value=value, org_id=current_org_id(),
+                ))
             else:
                 await conn.execute(
-                    update(settings).where(settings.c.key == key).values(value=value)
+                    update(settings)
+                    .where(
+                        settings.c.key == key,
+                        settings.c.org_id == current_org_id(),
+                    )
+                    .values(value=value)
                 )
+
+    async def orgs_with_setting(self, key: str) -> list[str]:
+        """Every org that has stored `key`. A process-wide sweep (the EE
+        regression scheduler) must run once per tenant that configured one,
+        instead of only for whichever org happens to be ambient — which, in a
+        background task, is always the public one."""
+        async with self.engine.connect() as conn:
+            rows = (await conn.execute(
+                select(settings.c.org_id).where(settings.c.key == key)
+            )).all()
+        return sorted({r.org_id for r in rows})
+
+    async def list_orgs(self) -> list[str]:
+        """Every tenant with data this process sweeps over.
+
+        The union of the tables the background loops touch: runs (retention),
+        reported_state (the stale monitor), settings (the scheduler). Always
+        includes the public tenant, so a single-tenant deployment sweeps exactly
+        as it did before multi-tenancy existed."""
+        async with self.engine.connect() as conn:
+            found: set[str] = {PUBLIC_ORG}
+            for column in (runs.c.org_id, reported_state.c.org_id,
+                           settings.c.org_id):
+                rows = (await conn.execute(select(column).distinct())).all()
+                found |= {r[0] for r in rows}
+        return sorted(found)
 
     # ── regression report history (EE surfaces it; every run records) ────────
 

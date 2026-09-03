@@ -31,9 +31,9 @@ from axor_backend.auth import (
 )
 from axor_backend.broadcast import Broadcast
 from axor_backend.graph import (
-    InMemoryGraphStore,
+    GraphRegistry,
     register_trace_derivations,
-    rehydrate_graph,
+    rehydrate_all_graphs,
 )
 from axor_backend.monitor import running_stale_monitor
 from axor_backend.notifications import Notifier
@@ -52,7 +52,12 @@ from axor_backend.share import (
 )
 from axor_backend.signing import OperatorKeyring
 from axor_backend.storage import Store, init_db, make_engine
-from axor_backend.tenancy import set_current_org
+from axor_backend.tenancy import (
+    PUBLIC_ORG,
+    current_org_id,
+    set_current_org,
+    topic,
+)
 
 
 def _now() -> str:
@@ -111,10 +116,16 @@ def create_app(
         retention_task: asyncio.Task | None = None
         if days is not None and days > 0:
             async def prune_once() -> None:
+                # A background task has no request, so the ambient tenant is the
+                # public one — pruning under it silently exempted every other
+                # organization from retention. Sweep each in turn.
                 cutoff = (datetime.now(UTC) - timedelta(days=days)).isoformat()
-                pruned = await app.state.store.prune_runs_older_than(cutoff)
-                if pruned:
-                    log.info("retention: pruned %d runs older than %s", pruned, cutoff)
+                for org in await app.state.store.list_orgs():
+                    set_current_org(org)
+                    pruned = await app.state.store.prune_runs_older_than(cutoff)
+                    if pruned:
+                        log.info("retention: pruned %d runs older than %s (org %s)",
+                                 pruned, cutoff, org)
 
             async def prune_loop() -> None:
                 while True:
@@ -127,13 +138,14 @@ def create_app(
         # The taint graph is a derived index over the persisted event log —
         # rebuild it from the DB at boot so it survives restarts (and a fresh
         # instance catches up) without a graph database.
-        await rehydrate_graph(app.state.store, app.state.graph)
+        await rehydrate_all_graphs(app.state.store, app.state.graphs)
         # Share links and notification subscriptions are primary data: rebuild
         # their in-memory holders from the DB so a restart keeps permalinks live
         # and keeps notifications firing (see storage.share_links / _subs).
         for link in await app.state.store.list_share_links():
             app.state.shares.load(
                 link["token"], link["run_id"], link["case_index"], link["revoked"],
+                org=link["org_id"],
             )
         for sub in await app.state.store.list_subscriptions():
             app.state.notifier.subscribe(
@@ -215,7 +227,10 @@ def create_app(
         )
 
     app.state.notifier = Notifier(dead_sink=_persist_dead_letter)
-    app.state.license = None  # set by _load_license / a verified paste
+    # Verified EE licences, per organization: a licence entitles ONE tenant, so
+    # a process-wide slot would let whichever org pasted last decide everyone
+    # else's tier. Populated by _load_license at boot and by a verified paste.
+    app.state.licenses = {}
     app.state.shares = ShareRegistry()
     app.state.api_token = api_token
     # THE WALL (spec v2 Ch.5 §3): the two vault subsystems are reached with
@@ -227,11 +242,14 @@ def create_app(
     app.state.vault_signing_token = (
         vault_signing_token or os.environ.get("AXOR_VAULT_SIGNING_TOKEN") or None
     )
-    # Taint/provenance graph (spec decision 6). In-memory by default — the same
-    # dev posture as SQLite; a hosted deployment swaps in KuzuGraphStore (per-tenant
-    # DB) behind the GraphStore Protocol. Ingested traces fold their arg_refs →
-    # value_ref derivations into it, so the graph is real data, not a mock.
-    app.state.graph = InMemoryGraphStore()
+    # Taint/provenance graph (spec decision 6), ONE PER TENANT. In-memory by
+    # default — the same dev posture as SQLite; a hosted deployment passes a
+    # factory returning KuzuGraphStore (per-tenant DB file) behind the same
+    # GraphStore Protocol. Ingested traces fold their arg_refs → value_ref
+    # derivations into it, so the graph is real data, not a mock. A single
+    # process-wide store would hand one tenant's value refs and run ids to
+    # every other tenant that guessed a ref.
+    app.state.graphs = GraphRegistry()
 
     async def resolve_principal(request: Request) -> Principal | None:
         """Bearer from the Authorization header, or ?token= for SSE (EventSource
@@ -329,10 +347,12 @@ def create_app(
             run_id, node_id, events, idempotency_key
         )
         # Fold the trace's value provenance into the taint graph (spec decision 6).
-        await register_trace_derivations(request.app.state.graph, run_id, events)
+        await register_trace_derivations(
+            request.app.state.graphs.current(), run_id, events
+        )
         for line in events:
             request.app.state.broadcast.publish(
-                f"run:{run_id}", {"type": "event", "line": line}
+                topic("run", run_id), {"type": "event", "line": line}
             )
         return {"stored": stored}
 
@@ -366,7 +386,7 @@ def create_app(
         from axor_backend import demo
 
         store: Store = request.app.state.store
-        graph = request.app.state.graph
+        graph = request.app.state.graphs.current()
         for run_id, node, events, evidence, pin_side in (
             ("ex_block", demo.EX_BLOCK_NODE, demo.EX_BLOCK_EVENTS,
              demo.EX_BLOCK_EVIDENCE, "must_block"),
@@ -391,7 +411,7 @@ def create_app(
         from axor_backend import demo
 
         store: Store = request.app.state.store
-        graph = request.app.state.graph
+        graph = request.app.state.graphs.current()
         await store.upsert_run("ex_tree", demo.TREE_ORCH, "multi-agent-demo", _now())
         await store.ingest_events(
             "ex_tree", demo.TREE_ORCH, demo.TREE_EVENTS, "seed-ex_tree"
@@ -419,7 +439,10 @@ def create_app(
         Last-Event-ID (seq), then live events."""
         broadcast: Broadcast = request.app.state.broadcast
         store: Store = request.app.state.store
-        queue = broadcast.subscribe(f"run:{run_id}")
+        # Bind the tenant before the body starts streaming: the generator below
+        # is iterated after this handler returns.
+        run_topic = topic("run", run_id, current_org_id())
+        queue = broadcast.subscribe(run_topic)
 
         async def stream() -> AsyncIterator[dict]:
             try:
@@ -440,7 +463,7 @@ def create_app(
                         "data": json.dumps(line_dict, sort_keys=True),
                     }
             finally:
-                broadcast.unsubscribe(f"run:{run_id}", queue)
+                broadcast.unsubscribe(run_topic, queue)
 
         return EventSourceResponse(stream())
 
@@ -753,7 +776,7 @@ def create_app(
     async def regression_history(request: Request, limit: int = 50) -> list[dict]:
         """Corpus-run history — the org surface (EE): "when did this config
         last regress"."""
-        _require_ee(request.app, "regression history")
+        _require_ee(request.app, current_org_id(), "regression history")
         return await request.app.state.store.list_regression_reports(limit)
 
     @app.get("/v1/regression/schedule")
@@ -764,14 +787,14 @@ def create_app(
             "enabled": bool(sched and sched.get("enabled")),
             "interval_hours": (sched or {}).get("interval_hours"),
             "last_run_ts": (sched or {}).get("last_run_ts"),
-            "ee_active": _active_license(request.app) is not None,
+            "ee_active": _active_license(request.app, current_org_id()) is not None,
         }
 
     @app.put("/v1/regression/schedule")
     async def put_regression_schedule(body: dict, request: Request) -> dict:
         """Scheduled corpus CI (EE): store {enabled, interval_hours, config};
         the sweep loop fires it when due and regression_failed gets loud."""
-        _require_ee(request.app, "scheduled corpus CI")
+        _require_ee(request.app, current_org_id(), "scheduled corpus CI")
         enabled = bool(body.get("enabled"))
         try:
             interval = float(body.get("interval_hours", 24))
@@ -801,12 +824,12 @@ def create_app(
         """k-hop neighbourhood around a value ref, expand-on-click. Each edge
         carries the run_id it was derived in — the UI links an edge back to that
         run's EvidenceCase."""
-        return await request.app.state.graph.khop(focus, k, limit)
+        return await request.app.state.graphs.current().khop(focus, k, limit)
 
     @app.get("/v1/graph/attestations")
     async def graph_attestations(request: Request, ref: str) -> list[dict]:
         """Attestations covering a value branch (spec 8.1.1)."""
-        return await request.app.state.graph.branch_attestations(ref)
+        return await request.app.state.graphs.current().branch_attestations(ref)
 
     # ── notifications (spec section 16) ───────────────────────────────────────
 
@@ -825,7 +848,8 @@ def create_app(
         label = str(body.get("label") or "")
         node_pattern = str(body.get("node_pattern") or "*")
         if label or node_pattern != "*":
-            _require_ee(request.app, "notification routing (channels / node patterns)")
+            _require_ee(request.app, current_org_id(),
+                        "notification routing (channels / node patterns)")
         try:
             request.app.state.notifier.subscribe(
                 url, triggers, debounce, label=label, node_pattern=node_pattern
@@ -861,7 +885,11 @@ def create_app(
     @app.post("/v1/runs/{run_id}/cases/{case_index}/share")
     async def create_share(run_id: str, case_index: int, request: Request) -> dict:
         await _case_run(request, run_id, case_index)  # 404 before minting a dead token
-        link = request.app.state.shares.create(run_id, case_index)
+        # The link remembers WHICH tenant's case it points at, because the route
+        # that resolves it has no principal to ask.
+        link = request.app.state.shares.create(
+            run_id, case_index, org=current_org_id()
+        )
         await request.app.state.store.create_share_link(
             link.token, run_id, case_index, _now()
         )
@@ -869,9 +897,12 @@ def create_app(
 
     @app.delete("/v1/share/{token}")
     async def revoke_share(token: str, request: Request) -> dict:
-        ok = request.app.state.shares.revoke(token)
-        if not ok:
+        # Knowing a token must not let another tenant burn it: the in-memory
+        # registry is process-wide, so the org check is what scopes this.
+        link = request.app.state.shares.resolve(token)
+        if link is None or link.org != current_org_id():
             raise HTTPException(404, "unknown token")
+        request.app.state.shares.revoke(token)
         await request.app.state.store.revoke_share_link(token)
         return {"revoked": token}
 
@@ -880,6 +911,10 @@ def create_app(
         link = request.app.state.shares.resolve(token)
         if link is None:
             raise HTTPException(404, "link revoked or unknown")
+        # This route is open (auth.is_open), so the middleware never stamped a
+        # tenant. Adopt the LINK's — otherwise the case lookup below runs under
+        # the public tenant and 404s every link an identity user created.
+        set_current_org(link.org)
         return await _receipt(request, link.run_id, link.case_index)
 
     @app.get("/v1/runs/{run_id}/cases/{case_index}/export")
@@ -939,7 +974,7 @@ def create_app(
             await request.app.state.store.set_setting(
                 "license_json", body.get("license_json", "")
             )
-            request.app.state.license = lic
+            request.app.state.licenses[current_org_id()] = lic
         # Node-ceiling telemetry (launch-readiness §5): compare the live fleet
         # against the license and WARN — never block; safety never checks a
         # license (monetization Line 1).
@@ -955,14 +990,14 @@ def create_app(
             "features": list(lic.features),
             "live_nodes": live_nodes,
             "over_ceiling": live_nodes > lic.governed_node_ceiling,
-            "activated": request.app.state.license is lic,
+            "activated": request.app.state.licenses.get(current_org_id()) is lic,
         }
 
     @app.get("/v1/license/status")
     async def license_status(request: Request) -> dict:
         """The currently ACTIVE license (post-boot rehydrate) — what the UI
         uses to decide which org features to unlock vs render locked."""
-        lic = _active_license(request.app)
+        lic = _active_license(request.app, current_org_id())
         if lic is None:
             return {"active": False}
         from axor_backend.ee.license import KNOWN_MODULES
@@ -1086,39 +1121,50 @@ def _verify_license_str(license_json: str) -> Any:  # noqa: ANN401 - License
 
 
 async def _load_license(app: FastAPI) -> None:
-    """Boot rehydrate: AXOR_LICENSE env (raw license-file JSON) wins, else the
-    license pasted in Settings (persisted in the settings KV). Invalid or
-    unverifiable licenses log a warning and leave EE off — never crash boot."""
+    """Boot rehydrate, per tenant: AXOR_LICENSE env (raw license-file JSON)
+    applies to the public tenant, and each org's own pasted license comes from
+    ITS row in the settings KV. Invalid or unverifiable licenses log a warning
+    and leave EE off for that org — never crash boot, never entitle another."""
     import logging
 
-    raw = os.environ.get("AXOR_LICENSE") or await app.state.store.get_setting(
-        "license_json"
-    )
-    if not raw:
-        return
-    try:
-        app.state.license = _verify_license_str(raw)
-    except Exception as exc:  # noqa: BLE001 - boot must not die on a bad license
-        logging.getLogger("axor.backend").warning("stored license ignored: %s", exc)
+    log = logging.getLogger("axor.backend")
+    env_license = os.environ.get("AXOR_LICENSE")
+    for org in await app.state.store.list_orgs():
+        set_current_org(org)
+        raw = await app.state.store.get_setting("license_json")
+        if org == PUBLIC_ORG and env_license:
+            raw = env_license  # the operator's env pin wins for the local tenant
+        if not raw:
+            continue
+        try:
+            app.state.licenses[org] = _verify_license_str(raw)
+        except Exception as exc:  # noqa: BLE001 - boot must not die on a bad license
+            log.warning("stored license ignored for org %s: %s", org, exc)
+    set_current_org(PUBLIC_ORG)
 
 
-def _active_license(app: FastAPI) -> Any | None:  # noqa: ANN401 - License
-    """The verified, non-expired license — or None. Expiry degrades EE to
-    read-only (Line 1: safety never checks a license)."""
-    lic = getattr(app.state, "license", None)
+def _active_license(app: FastAPI, org: str) -> Any | None:  # noqa: ANN401 - License
+    """The verified, non-expired license OF ONE TENANT — or None. Expiry
+    degrades EE to read-only (Line 1: safety never checks a license).
+
+    Keyed by org because a license entitles one organization: a process-wide
+    slot would let whichever tenant pasted last decide everyone else's tier.
+    """
+    lic = getattr(app.state, "licenses", {}).get(org)
     if lic is None or lic.is_expired(datetime.now(UTC).date().isoformat()):
         return None
     return lic
 
 
 def _require_ee(
-    app: FastAPI, what: str, *, min_tier: str = "team", module: str | None = None
+    app: FastAPI, org: str, what: str, *, min_tier: str = "team",
+    module: str | None = None,
 ) -> None:
     """Gate a paid org feature by the license's workspace tier (and optionally a
     module), not merely by a license being present (axor-packaging.md §1). A
     community-tier license does not unlock a team feature; the 402 names what is
     needed. Safety features never call this."""
-    lic = _active_license(app)
+    lic = _active_license(app, org)
     if lic is None:
         raise HTTPException(
             402,
@@ -1140,7 +1186,14 @@ def _require_ee(
 async def _regression_schedule_loop(app: FastAPI) -> None:
     """EE scheduler sweep: fire the corpus when the operator-set interval is
     due. License is checked at fire time — an expired license pauses the
-    schedule (EE read-only) without touching the stored setting."""
+    schedule (EE read-only) without touching the stored setting.
+
+    Runs once PER TENANT that configured a schedule. A background task carries
+    no request, so the ambient tenant is the public one; sweeping under it meant
+    an identity organization could set a schedule, see it stored, and have it
+    silently never fire — the schedule row was theirs, the corpus read was the
+    public tenant's, and that corpus is empty.
+    """
     import logging
 
     log = logging.getLogger("axor.backend")
@@ -1148,30 +1201,45 @@ async def _regression_schedule_loop(app: FastAPI) -> None:
     while True:
         await asyncio.sleep(sweep)
         try:
-            sched = await app.state.store.get_setting("regression_schedule")
-            if not sched or not sched.get("enabled"):
-                continue
-            if _active_license(app) is None:
-                continue
-            last = sched.get("last_run_ts")
-            interval = timedelta(hours=float(sched.get("interval_hours", 24)))
-            now = datetime.now(UTC)
-            if last is not None and now - datetime.fromisoformat(last) < interval:
-                continue
-            report = await _regression_report(
-                app.state.store, sched.get("config", {})
-            )
-            await _record_corpus_run(app, report, "scheduled")
-            sched["last_run_ts"] = now.isoformat()
-            await app.state.store.set_setting("regression_schedule", sched)
-            log.info(
-                "scheduled corpus run: %d rows, regressed=%d escaped=%d",
-                len(report["rows"]), report["regressed"], report["escaped"],
-            )
+            for org in await app.state.store.orgs_with_setting(
+                "regression_schedule"
+            ):
+                set_current_org(org)
+                await _run_due_schedule(app, org, log)
         except asyncio.CancelledError:
             raise
         except Exception:  # noqa: BLE001 - the loop must survive a bad cycle
-            log.exception("scheduled corpus run failed")
+            log.exception("scheduled corpus sweep failed")
+        finally:
+            set_current_org(PUBLIC_ORG)
+
+
+async def _run_due_schedule(app: FastAPI, org: str, log: Any) -> None:  # noqa: ANN401
+    """Fire one tenant's scheduled corpus run if it is due. A failure for one
+    organization must not stop the sweep reaching the others."""
+    try:
+        sched = await app.state.store.get_setting("regression_schedule")
+        if not sched or not sched.get("enabled"):
+            return
+        if _active_license(app, org) is None:
+            return
+        last = sched.get("last_run_ts")
+        interval = timedelta(hours=float(sched.get("interval_hours", 24)))
+        now = datetime.now(UTC)
+        if last is not None and now - datetime.fromisoformat(last) < interval:
+            return
+        report = await _regression_report(app.state.store, sched.get("config", {}))
+        await _record_corpus_run(app, report, "scheduled")
+        sched["last_run_ts"] = now.isoformat()
+        await app.state.store.set_setting("regression_schedule", sched)
+        log.info(
+            "scheduled corpus run (org %s): %d rows, regressed=%d escaped=%d",
+            org, len(report["rows"]), report["regressed"], report["escaped"],
+        )
+    except asyncio.CancelledError:
+        raise
+    except Exception:  # noqa: BLE001 - one tenant's bad cycle is not the fleet's
+        log.exception("scheduled corpus run failed for org %s", org)
 
 
 async def _events_for(store: Store, run_id: str) -> list:

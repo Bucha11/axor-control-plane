@@ -27,6 +27,7 @@ from sse_starlette.sse import EventSourceResponse
 
 from axor_backend.errors import CommandRejected
 from axor_backend.signing import signed_payload
+from axor_backend.tenancy import current_org_id, topic
 
 router = APIRouter(prefix="/v1/plane")
 
@@ -70,7 +71,7 @@ async def command(node_id: str, body: dict, request: Request) -> dict:
         "state": state, "delta": delta, "operator": operator,
         "timestamp": timestamp, "sig": sig,
     }
-    ctx.broadcast.publish(f"plane:{node_id}", message)
+    ctx.broadcast.publish(topic("plane", node_id), message)
     return {"node_id": node_id, "version": new_version, "state": state}
 
 
@@ -101,7 +102,7 @@ async def cascade_stop(node_id: str, request: Request, body: dict | None = None)
         except CommandRejected as exc:
             raise HTTPException(403, str(exc)) from exc
         new_version, state = await ctx.store.bump_desired(node_id, delta)
-        ctx.broadcast.publish(f"plane:{node_id}", {
+        ctx.broadcast.publish(topic("plane", node_id), {
             "type": "delta", "node_id": node_id, "version": new_version,
             "state": state, "delta": delta,
             "operator": body.get("operator", ""),
@@ -124,7 +125,7 @@ async def cascade_stop(node_id: str, request: Request, body: dict | None = None)
     stopped = []
     for nid in subtree:
         new_version, state = await ctx.store.bump_desired(nid, {"stopped": True})
-        ctx.broadcast.publish(f"plane:{nid}", {
+        ctx.broadcast.publish(topic("plane", nid), {
             "type": "delta", "node_id": nid, "version": new_version,
             "state": state, "delta": {"stopped": True},
             "operator": "op_ui", "timestamp": "", "sig": "",
@@ -136,7 +137,10 @@ async def cascade_stop(node_id: str, request: Request, body: dict | None = None)
 @router.get("/{node_id}/desired")
 async def desired_stream(node_id: str, request: Request) -> EventSourceResponse:
     ctx = _ctx(request)
-    queue = ctx.broadcast.subscribe(f"plane:{node_id}")
+    # The response body is iterated after this handler returns, so the topic
+    # binds the tenant NOW rather than relying on the ambient one later.
+    node_topic = topic("plane", node_id, current_org_id())
+    queue = ctx.broadcast.subscribe(node_topic)
 
     async def stream() -> AsyncIterator[dict]:
         try:
@@ -150,7 +154,7 @@ async def desired_stream(node_id: str, request: Request) -> EventSourceResponse:
                 yield {"event": message.get("type", "delta"),
                        "data": _json(message)}
         finally:
-            ctx.broadcast.unsubscribe(f"plane:{node_id}", queue)
+            ctx.broadcast.unsubscribe(node_topic, queue)
 
     return EventSourceResponse(stream())
 
@@ -182,7 +186,7 @@ async def telemetry(
                 ts=_now(),
             )
             ctx.broadcast.publish(
-                f"plane:{node_id}",
+                topic("plane", node_id),
                 {"type": "reported", "node_id": node_id, "reported": hb},
             )
             # Notify on an upward level transition (spec section 16 trigger).
@@ -196,7 +200,7 @@ async def telemetry(
                 )
         if kind == "operator_intervention":
             await ctx.store.mark_intervened(run_id)
-        ctx.broadcast.publish(f"run:{run_id}", {"type": "event", "line": line})
+        ctx.broadcast.publish(topic("run", run_id), {"type": "event", "line": line})
     return {"stored": stored}
 
 
@@ -224,14 +228,16 @@ async def append_fact(node_id: str, body: dict, request: Request) -> dict:
     if not appended:
         raise HTTPException(409, "fact_id already exists (append-only)")
     # An operator attestation is an append-only node over the branch it covers
-    # (spec 8.1.1) — mirror it into the taint graph so the graph's attestation
-    # surface and the fact log stay one story.
-    graph = getattr(ctx, "graph", None)
-    if graph is not None and fact.get("fact_type") == "operator_attestation":
+    # (spec 8.1.1) — mirror it into THIS TENANT's taint graph so the graph's
+    # attestation surface and the fact log stay one story. Not behind a
+    # getattr() default: a missing registry is a wiring bug, and silently
+    # skipping the mirror is how an attestation stops reaching the graph
+    # without anything failing.
+    if fact.get("fact_type") == "operator_attestation":
         import json as _json
-        await graph.append_attestation(_json.dumps(fact))
+        await ctx.graphs.current().append_attestation(_json.dumps(fact))
     ctx.broadcast.publish(
-        f"plane:{node_id}",
+        topic("plane", node_id),
         {"type": "fact", "node_id": node_id, "fact": fact,
          "operator": operator, "timestamp": timestamp, "sig": sig},
     )
@@ -303,7 +309,7 @@ async def post_probe_report(node_id: str, body: dict, request: Request) -> dict:
             )
     report_id = await ctx.store.add_probe_report(node_id, body, _now())
     ctx.broadcast.publish(
-        f"plane:{node_id}",
+        topic("plane", node_id),
         {"type": "probe_report", "node_id": node_id, "report": body},
     )
     notifier = getattr(ctx, "notifier", None)

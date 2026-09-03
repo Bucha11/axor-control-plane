@@ -17,6 +17,8 @@ import logging
 from datetime import UTC, datetime
 from typing import Any
 
+from axor_backend.tenancy import topic
+
 log = logging.getLogger("axor.backend.monitor")
 
 HEARTBEAT_PERIOD = 10.0          # protocol §9: static T
@@ -55,7 +57,7 @@ async def stale_sweep(
             if node_id not in already_stale:
                 already_stale.add(node_id)
                 broadcast.publish(
-                    f"plane:{node_id}",
+                    topic("plane", node_id),
                     {"type": "node_stale", "node_id": node_id,
                      "silent_seconds": silent},
                 )
@@ -80,17 +82,37 @@ async def stale_monitor(
     interval: float = HEARTBEAT_PERIOD,
     stale_after: float = STALE_AFTER,
 ) -> None:
-    """Sweep forever, `interval` apart. Cancelled at app shutdown."""
-    already_stale: set[str] = set()
+    """Sweep forever, `interval` apart, once per tenant. Cancelled at shutdown.
+
+    Per tenant because this loop is a background task and therefore carries no
+    request: the ambient organization is the public one, so a single sweep only
+    ever saw the public tenant's nodes. An identity organization's node could go
+    silent forever without anyone being paged — a failure of the one trigger
+    whose whole purpose is to notice silence.
+
+    The `already_stale` edge-detection set is keyed by (org, node) so two
+    tenants may legitimately run a node of the same name.
+    """
+    from axor_backend.tenancy import PUBLIC_ORG, set_current_org
+
+    already_stale: set[tuple[str, str]] = set()
     while True:
         await asyncio.sleep(interval)
         try:
-            await stale_sweep(
-                store, notifier, broadcast, stale_after,
-                already_stale, datetime.now(UTC),
-            )
+            now = datetime.now(UTC)
+            for org in await store.list_orgs():
+                set_current_org(org)
+                seen = {node for scope, node in already_stale if scope == org}
+                await stale_sweep(
+                    store, notifier, broadcast, stale_after, seen, now,
+                )
+                already_stale = {
+                    (scope, node) for scope, node in already_stale if scope != org
+                } | {(org, node) for node in seen}
         except Exception as exc:  # noqa: BLE001 - a sweep error must not kill the loop
             log.warning("stale sweep failed: %s", exc)
+        finally:
+            set_current_org(PUBLIC_ORG)
 
 
 def spawn_stale_monitor(app: Any) -> asyncio.Task[None]:  # noqa: ANN401

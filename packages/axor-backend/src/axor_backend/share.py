@@ -17,6 +17,8 @@ import textwrap
 from dataclasses import dataclass, field
 from typing import Any
 
+from axor_backend.tenancy import PUBLIC_ORG
+
 
 @dataclass
 class ShareLink:
@@ -24,23 +26,33 @@ class ShareLink:
     run_id: str
     case_index: int
     revoked: bool = False
+    # The tenant the case belongs to. `GET /v1/share/{token}` is served without
+    # auth, so there is no principal to take an org from — the LINK carries it,
+    # and the route adopts it before looking the case up. Without this the
+    # lookup ran under the public tenant and 404'd every link an identity user
+    # had created.
+    org: str = PUBLIC_ORG
 
 
 @dataclass
 class ShareRegistry:
     _links: dict[str, ShareLink] = field(default_factory=dict)
 
-    def create(self, run_id: str, case_index: int) -> ShareLink:
+    def create(self, run_id: str, case_index: int, org: str = PUBLIC_ORG) -> ShareLink:
         token = secrets.token_urlsafe(16)
-        link = ShareLink(token=token, run_id=run_id, case_index=case_index)
+        link = ShareLink(
+            token=token, run_id=run_id, case_index=case_index, org=org,
+        )
         self._links[token] = link
         return link
 
-    def load(self, token: str, run_id: str, case_index: int, revoked: bool) -> None:
+    def load(self, token: str, run_id: str, case_index: int, revoked: bool,
+             org: str = PUBLIC_ORG) -> None:
         """Rehydrate one persisted link at boot (the store is the source of
         truth; this in-memory index is rebuilt from it, like the taint graph)."""
         self._links[token] = ShareLink(
             token=token, run_id=run_id, case_index=case_index, revoked=revoked,
+            org=org,
         )
 
     def resolve(self, token: str) -> ShareLink | None:
