@@ -215,6 +215,10 @@ api_keys = Table(
     Column("label", String(200), nullable=False, default=""),
     Column("created_ts", String(40), nullable=False),
     Column("org_id", String(64), nullable=False, server_default=PUBLIC_ORG, index=True),
+    # A key minted for ONE governed node names it here (migration 0008); the
+    # plane then refuses to let that key speak for any other node. NULL = an
+    # unbound fleet-wide operator key, the pre-0008 behaviour.
+    Column("node_id", String(128), nullable=True),
 )
 
 
@@ -603,12 +607,14 @@ class Store:
     async def create_api_key(
         self, key_id: str, hashed_secret: str, scopes: list[str],
         label: str, ts: str, org: str | None = None,
+        node_id: str | None = None,
     ) -> None:
         async with self.engine.begin() as conn:
             await conn.execute(insert(api_keys).values(
                 key_id=key_id, hashed_secret=hashed_secret,
                 scopes=",".join(scopes), label=label, created_ts=ts,
                 org_id=org if org is not None else current_org_id(),
+                node_id=node_id,
             ))
 
     async def get_api_key(self, key_id: str) -> dict[str, Any] | None:
@@ -625,7 +631,7 @@ class Store:
             "key_id": row.key_id, "hashed_secret": row.hashed_secret,
             "scopes": [s for s in row.scopes.split(",") if s],
             "label": row.label, "created_ts": row.created_ts,
-            "org_id": row.org_id,
+            "org_id": row.org_id, "node_id": row.node_id,
         }
 
     async def list_api_keys(self) -> list[dict[str, Any]]:
@@ -635,7 +641,7 @@ class Store:
             )).all()
         return [
             {"key_id": r.key_id, "scopes": [s for s in r.scopes.split(",") if s],
-             "label": r.label, "created_ts": r.created_ts}
+             "label": r.label, "created_ts": r.created_ts, "node_id": r.node_id}
             for r in rows
         ]
 

@@ -87,6 +87,20 @@ def create_app(
                 "UNSIGNED PLANE COMMANDS ACCEPTED (AXOR_ALLOW_UNSIGNED=1, no "
                 "operator keys) — set AXOR_OPERATOR_KEYS for any real deployment."
             )
+        # The vault's own gate is opt-in like the two above, so its absence must
+        # be as loud as theirs. Silence here reads as "the wall is up" when it
+        # is not: without a token the subsystem falls back to the scope ladder
+        # alone (admin, since 0008) instead of its own separated credential.
+        for subsystem, env in (("creds", "AXOR_VAULT_CREDS_TOKEN"),
+                               ("signing", "AXOR_VAULT_SIGNING_TOKEN")):
+            if getattr(app.state, f"vault_{subsystem}_token") is None:
+                log.warning(
+                    "VAULT '%s' HAS NO SEPARATE TOKEN (%s unset) — the wall "
+                    "between dispensing credentials and requesting signatures "
+                    "is down; admin scope is the only check. Set it for any "
+                    "real deployment (spec v2 Ch.5 §3).",
+                    subsystem, env,
+                )
         await init_db(app.state.store.engine)
         # Retention (launch-readiness §1): AXOR_RETENTION_DAYS prunes runs
         # older than the window — at boot, then every 6h. Unset = keep forever.
@@ -242,7 +256,8 @@ def create_app(
             # using it reads and writes that org's data (None → the public tenant)
             return Principal(kind="key", key_id=key_id,
                              scopes=frozenset(record["scopes"]),
-                             org=record.get("org_id"))
+                             org=record.get("org_id"),
+                             node_id=record.get("node_id"))
         # axor-identity login: a human's access token, verified locally against
         # the JWKS. The org scopes the principal to a tenant; the role maps to
         # the scope ladder (a viewer reads, an owner may mint keys).
@@ -265,7 +280,7 @@ def create_app(
 
     @app.middleware("http")
     async def auth_gate(request: Request, call_next: Callable) -> Response:
-        if api_token is None or is_open(request.url.path):
+        if api_token is None or is_open(request.method, request.url.path):
             return await call_next(request)
         principal = await resolve_principal(request)
         if principal is None:
@@ -275,6 +290,17 @@ def create_app(
             return JSONResponse(
                 {"error": "forbidden", "need": need,
                  "have": sorted(principal.scopes)},
+                status_code=403,
+            )
+        # A node-bound key may only speak AS its own node (auth.Principal):
+        # scopes say what a credential may do, this says who it may do it as.
+        spoke_for = auth_mod.plane_node_of(request.method, request.url.path)
+        if spoke_for is not None and not principal.may_speak_for(spoke_for):
+            return JSONResponse(
+                {"error": "forbidden",
+                 "detail": f"key {principal.key_id} is bound to node "
+                           f"{principal.node_id!r} and may not post as "
+                           f"{spoke_for!r}"},
                 status_code=403,
             )
         request.state.principal = principal
@@ -901,7 +927,12 @@ def create_app(
             raise HTTPException(403, str(exc)) from exc
         # A verified license ACTIVATES EE: persist it (survives restarts) and
         # hold it in state so org features unlock immediately. Only licenses
-        # verified against the operator-pinned vendor key ever get stored.
+        # verified against the operator-pinned vendor key ever get stored — and
+        # only an `admin` principal reaches this line at all (auth._WRITE_POLICY).
+        # This route used to be open, on the grounds that it was "a pure utility
+        # over user-supplied input"; it is not pure, it rewrites the deployment's
+        # entitlement, so anyone holding ANY vendor-signed license could swap a
+        # paid tier for a community one and silently switch EE features off.
         if not body.get("vendor_pubkey") or body.get("vendor_pubkey") == os.environ.get(
             "AXOR_VENDOR_PUBKEY", ""
         ):
@@ -970,12 +1001,20 @@ def create_app(
         bad = set(scopes) - auth_mod.SCOPES
         if bad:
             raise HTTPException(400, f"unknown scopes: {sorted(bad)}")
+        # Optional node binding: a key minted for one governed node may only
+        # post telemetry / facts / health AS that node (auth.plane_node_of).
+        # Omit it for a fleet-wide operator key — the pre-existing shape.
+        node_id = body.get("node_id")
+        if node_id is not None and (not isinstance(node_id, str) or not node_id):
+            raise HTTPException(400, "node_id must be a non-empty string when given")
         key_id, secret = auth_mod.generate_key()
         await request.app.state.store.create_api_key(
             key_id, hash_secret(secret), scopes, body.get("label", ""), _now(),
+            node_id=node_id,
         )
         # The full secret is returned exactly once; only its hash is stored.
-        return {"key_id": key_id, "secret": secret, "scopes": scopes}
+        return {"key_id": key_id, "secret": secret, "scopes": scopes,
+                "node_id": node_id}
 
     @app.get("/v1/keys")
     async def list_keys(request: Request) -> list[dict]:

@@ -30,7 +30,13 @@ async def test_fresh_db_reaches_head_with_all_tables(db_url: str) -> None:
             "lab_deploys", "probe_reports", "alembic_version"} <= tables
     async with engine.connect() as conn:
         rev = (await conn.execute(text("SELECT version_num FROM alembic_version"))).scalar()
-    assert rev == "0007"
+        # 0008 binds a key to one node; without the column the plane cannot tell
+        # a node's own telemetry from a neighbour's forged heartbeat.
+        columns = await conn.run_sync(
+            lambda c: {col["name"] for col in inspect(c).get_columns("api_keys")}
+        )
+    assert rev == "0008"
+    assert "node_id" in columns
     await engine.dispose()
 
 
