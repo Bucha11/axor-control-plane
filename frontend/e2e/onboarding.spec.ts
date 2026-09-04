@@ -47,4 +47,33 @@ test.describe("onboarding", () => {
     await page.getByRole("button", { name: "adapter", exact: true }).click();
     await expect(page.getByText("unlocks Control, taint graph, probe health")).toBeVisible();
   });
+
+  test("the adapter path hands over a key and a snippet, not just a label", async ({ page }) => {
+    // Choosing `adapter` used to set a client-side flag and nothing else: it
+    // unlocked Control and left the user to discover axor-wrap, and — after the
+    // plane channel learned to authenticate — an unmentioned ingest key too.
+    await goHash(page, "get-started");
+    await page.getByRole("button", { name: /Load example tools/ }).click();
+    await page.getByRole("button", { name: /Continue/ }).click();
+    await page.getByRole("button", { name: /Continue/ }).click();
+    await page.getByRole("button", { name: "adapter", exact: true }).click();
+
+    // The snippet is real setup: the wrapped toolset, the connector, the gate.
+    const snippet = page.locator("pre", { hasText: "PlaneConnector" });
+    await expect(snippet).toBeVisible();
+    await expect(snippet).toContainText("pip install 'axor-wrap[plane]'");
+    await expect(snippet).toContainText("node.gate(toolset)");
+    // …and it names the declared tools, not a placeholder.
+    await expect(snippet).toContainText("web_search");
+    await expect(snippet).toContainText("<mint a key above>");
+
+    // Minting binds the key to this node id and shows the secret exactly once.
+    await page.getByRole("button", { name: /Mint node-bound key/ }).click();
+    await expect(page.getByText(/shown once/)).toBeVisible();
+    await expect(snippet).not.toContainText("<mint a key above>");
+    await expect(snippet).toContainText(/ingest_key="ak_/);
+
+    // The honest boundary is stated where the user chooses, not only in a docstring.
+    await expect(page.getByText(/one-shot injection, context excision and replan/)).toBeVisible();
+  });
 });

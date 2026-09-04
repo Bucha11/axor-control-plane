@@ -712,12 +712,17 @@ export const api = {
     af("/v1/keys").then((r) =>
       j<{ key_id: string; scopes: string[]; label: string; created_ts: string }[]>(r),
     ),
-  createKey: (scopes: string[], label: string) =>
+  // `nodeId` binds the key to ONE governed node: the plane then refuses it for
+  // any other, so a compromised node cannot forge its neighbour's heartbeat,
+  // level or health verdict. Omit it for a fleet-wide operator key.
+  createKey: (scopes: string[], label: string, nodeId?: string) =>
     af("/v1/keys", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ scopes, label }),
-    }).then((r) => j<{ key_id: string; secret: string; scopes: string[] }>(r)),
+      body: JSON.stringify(nodeId ? { scopes, label, node_id: nodeId } : { scopes, label }),
+    }).then((r) =>
+      j<{ key_id: string; secret: string; scopes: string[]; node_id: string | null }>(r),
+    ),
   revokeKey: (keyId: string) =>
     af(`/v1/keys/${keyId}`, { method: "DELETE" }).then((r) => j<{ revoked: string }>(r)),
 };

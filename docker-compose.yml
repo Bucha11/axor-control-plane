@@ -127,6 +127,10 @@ services:
       args:
         # Stripe payment link for the Pricing CTA; empty = mailto fallback.
         VITE_CHECKOUT_URL: ${VITE_CHECKOUT_URL:-}
+    environment:
+      # nginx attaches the proxy's control credential on the /axor hop, so the
+      # browser never holds it. Must be the SAME value the proxy service gets.
+      AXOR_PROXY_TOKEN: ${AXOR_PROXY_TOKEN:-}
     ports: ["8080:8080"]
     depends_on:
       backend:
