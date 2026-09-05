@@ -67,6 +67,17 @@ _ROUTE_POLICY: tuple[tuple[str, str, str], ...] = (
     # on the plane (command / facts / cascade-stop) stay operate.
     ("/v1/plane/", "/telemetry", "ingest"),
     ("/v1/plane/", "/consumed", "ingest"),
+    # A health check is the node reporting about ITSELF, out-dial, exactly like
+    # telemetry — the plane has no inbound path into a runtime and a battery is
+    # no exception. Left at `operate` it was unreachable by the only credential
+    # a node has, and axor-wrap treats a 4xx here as a programming error and
+    # raises, so the battery crashed instead of degrading.
+    ("/v1/plane/", "/probe-report", "ingest"),
+    # Influence ranking is subgraph ablation: replay with one value excised.
+    # Its siblings /v1/replay and /v1/regression are `read` for exactly that
+    # reason; this one inherited `ingest` from the /v1/runs/ prefix, so a
+    # read-only dashboard key could replay a trace but not rank it.
+    ("/v1/runs/", "/influence", "read"),
     # Minting a share link publishes an EvidenceCase behind an unauthenticated
     # read token. That is an operator decision, not part of uploading a trace —
     # otherwise the proxy's ingest key doubles as a publishing credential.

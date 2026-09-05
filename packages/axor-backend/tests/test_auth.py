@@ -227,6 +227,13 @@ async def test_minting_a_share_link_needs_operate(secured: httpx.AsyncClient) ->
 
     assert required_scope("POST", "/v1/runs/r/evidence") == "ingest"
     assert required_scope("POST", "/v1/runs/r/cases/0/share") == "operate"
+    # Influence ranking is subgraph ablation — replay, no state change — so it
+    # belongs with its siblings, not with the ingest prefix it sat under.
+    assert required_scope("POST", "/v1/runs/r/influence") == "read"
+    assert required_scope("POST", "/v1/replay/r") == "read"
+    assert required_scope("POST", "/v1/regression") == "read"
+    # A node reports its own health out-dial, exactly like telemetry.
+    assert required_scope("POST", "/v1/plane/n1/probe-report") == "ingest"
 
     ingest_key = (await secured.post("/v1/keys", json={"scopes": ["ingest"]},
                                      headers=_bearer(TOKEN))).json()["secret"]
@@ -269,14 +276,26 @@ async def test_node_bound_key_cannot_speak_for_another_node(
     assert forged.status_code == 403
     assert "may not post as" in forged.json()["detail"]
 
-    # the health channel is bound the same way — a clean verdict for a
-    # neighbour is exactly the report worth forging
+    # The health channel is bound the same way — a clean verdict for a
+    # neighbour is exactly the report worth forging. Assert the REASON: this
+    # route used to need `operate`, so an ingest key was refused before the
+    # binding was ever consulted and this test passed without exercising it.
     health = await secured.post(
         "/v1/plane/node-b/probe-report",
         json={"overall_verdict": "CONSISTENT", "families": []},
         headers=_bearer(key),
     )
     assert health.status_code == 403
+    assert "may not post as" in health.json()["detail"]
+
+    # …and the node's own health check goes through, which is the half that
+    # was broken: axor-wrap raises on a 4xx here, so a battery crashed.
+    own_health = await secured.post(
+        "/v1/plane/node-a/probe-report",
+        json={"overall_verdict": "CONSISTENT", "families": []},
+        headers=_bearer(key),
+    )
+    assert own_health.status_code == 201
 
 
 async def test_unbound_key_still_speaks_for_the_fleet(
