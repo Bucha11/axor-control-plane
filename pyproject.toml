@@ -32,4 +32,5 @@ asyncio_mode = "auto"
 testpaths = ["packages"]
 markers = [
   "e2e: end-to-end tests that boot the real backend/proxy as subprocesses and drive them over HTTP (slower; deselect with -m 'not e2e')",
+  "postgres: runs against a real Postgres (AXOR_TEST_POSTGRES_URL); skipped when it is unset. The rest of the suite is SQLite, and the dialects do differ — a migration that passed every SQLite test could not be applied to Postgres at all.",
 ]

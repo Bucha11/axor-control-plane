@@ -34,7 +34,11 @@ them is resolved in `config.py` and nowhere else — the dataclass fields are th
 list. `AXOR_VENDOR_PUBKEY` is the licensing trust root: `/v1/license/verify`
 checks against it and refuses a vendor key supplied in the request.
 
-Tests: `uv run pytest packages/axor-backend`. In-process suites use httpx
+Tests: `uv run pytest packages/axor-backend`. The suite runs on SQLite; the
+`postgres` marker runs the dialect-sensitive parts (migration chain, JSONB,
+batched RETURNING, versioned CAS under real concurrent connections) against a
+real Postgres when `AXOR_TEST_POSTGRES_URL` is set, and skips otherwise — CI
+sets it. In-process suites use httpx
 ASGITransport; `tests/e2e/` (marker `e2e`) boots the real backend + proxy as
 subprocesses and drives them over HTTP/SSE — cross-service upload, live audit &
 desired streams, webhook delivery, auth enforcement, and process-restart

@@ -15,6 +15,26 @@ jobs:
   # ── Python: lint + unit + backend E2E (real backend/proxy subprocesses) ──────
   python:
     runs-on: ubuntu-latest
+    # The suite runs on SQLite; production runs on Postgres. Until this service
+    # existed the only thing that ever touched Postgres was the deploy job's
+    # three-route smoke, which does not run on pull requests — so the second
+    # dialect was a claim, and the first thing it cost was a migration that
+    # passed every test and could not be applied to the production database at
+    # all (Postgres does not rename a table's constraints when the table is
+    # renamed; SQLite has no such rule). `-m postgres` closes that gap.
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: axor
+          POSTGRES_PASSWORD: ci
+          POSTGRES_DB: axor_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U axor"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      AXOR_TEST_POSTGRES_URL: postgresql+asyncpg://axor:ci@127.0.0.1:5432/axor_test
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v4
@@ -37,6 +57,10 @@ jobs:
       # failure there is legible, then the whole suite.
       - name: Backend E2E
         run: uv run pytest -q -m e2e
+      # Named separately so a dialect failure is legible as one, rather than
+      # arriving inside a 300-test run.
+      - name: Postgres dialect
+        run: uv run pytest -q -m postgres
       - name: Tests
         run: uv run pytest -q
 
