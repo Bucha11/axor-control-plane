@@ -9,7 +9,7 @@ import pathlib
 
 import httpx
 import pytest
-from axor_backend.app import _regression_schedule_loop, create_app  # noqa: F401
+from axor_backend.app import create_app
 from axor_backend.ee.license import sign_license
 from axor_backend.notifications import Notifier
 
@@ -150,12 +150,12 @@ async def test_scheduler_fires_when_due_and_alerts_on_failure(
         "enabled": True, "interval_hours": 1, "config": {}, "last_run_ts": None,
     })
 
-    # One decision-cycle of the loop, extracted: emulate by calling the same
-    # internals the loop uses.
-    from axor_backend.app import _record_corpus_run, _regression_report
+    # One decision-cycle of the sweep loop, called directly — the real
+    # function the loop calls per tenant, not a re-implementation of it.
+    from axor_backend.lifecycle import run_due_schedule
+    from axor_backend.tenancy import PUBLIC_ORG
 
-    report = await _regression_report(app.state.store, {})
-    await _record_corpus_run(app, report, "scheduled")
+    await run_due_schedule(app.state, PUBLIC_ORG)
 
     history = (await client.get("/v1/regression/history")).json()
     assert history[0]["source"] == "scheduled"

@@ -165,14 +165,23 @@ class Notifier:
         self._dead_sink = dead_sink
         self._clock = 0.0  # logical clock; debounce is in these units
 
-    def subscribe(
-        self, url: str, triggers: list[str], debounce_seconds: float = 0.0,
-        label: str = "", node_pattern: str = "*", org: str | None = None,
-    ) -> None:
+    def validate(self, url: str, triggers: list[str]) -> None:
+        """Everything :meth:`subscribe` would reject, without registering.
+
+        A caller that persists a subscription before registering it needs to
+        know the answer first, so it does not write a row for a webhook this
+        notifier will refuse to hold.
+        """
         bad = set(triggers) - TRIGGERS
         if bad:
             raise ValueError(f"unknown triggers: {sorted(bad)}")
         check_webhook_url(url, self._block_private)
+
+    def subscribe(
+        self, url: str, triggers: list[str], debounce_seconds: float = 0.0,
+        label: str = "", node_pattern: str = "*", org: str | None = None,
+    ) -> None:
+        self.validate(url, triggers)
         self._subs.append(Subscription(
             url, frozenset(triggers), debounce_seconds,
             label=label, node_pattern=node_pattern or "*",

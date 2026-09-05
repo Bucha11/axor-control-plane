@@ -15,6 +15,7 @@ too, and ``app`` imports the router — the other direction would be a cycle.
 from __future__ import annotations
 
 import os
+from collections import OrderedDict
 from typing import Any
 
 from fastapi import HTTPException
@@ -36,3 +37,48 @@ def check_batch_size(events: Any, what: str = "events") -> list:  # noqa: ANN401
             f"batch — ingest is idempotent per Idempotency-Key.",
         )
     return events
+
+
+class SubgraphCache:
+    """Derive-on-open cache for causal subgraphs (decision v2-12).
+
+    A subgraph costs one pure kernel walk to rebuild, so this is a convenience,
+    not a source of truth — which is why eviction is plain insertion order.
+
+    Two properties it must have, both learned the hard way:
+
+    - **Keyed by tenant.** Two tenants legitimately hold the same run id (a Lab
+      pin is the deterministic ``lab:{trace_id}``), so an org-blind key served
+      one tenant's causal subgraph to the other.
+    - **Bounded, and dropped when its run grows.** An unbounded dict on a
+      public route is a memory leak anyone can drive. And "traces are
+      append-only" does not mean a run is immutable: ``POST /v1/ingest/{run_id}``
+      and a Lab re-deploy both append to an existing run, after which every
+      cached subgraph for it is missing the new derivations. The writers call
+      :meth:`drop_run`.
+    """
+
+    def __init__(self, maxsize: int = SUBGRAPH_CACHE_MAX) -> None:
+        self._maxsize = maxsize
+        self._entries: OrderedDict[tuple, dict] = OrderedDict()
+
+    def __len__(self) -> int:
+        return len(self._entries)
+
+    def get(self, org: str, run_id: str, anchor_node: str, anchor_seq: int) -> dict | None:
+        return self._entries.get((org, run_id, anchor_node, anchor_seq))
+
+    def put(
+        self, org: str, run_id: str, anchor_node: str, anchor_seq: int, value: dict
+    ) -> dict:
+        self._entries[(org, run_id, anchor_node, anchor_seq)] = value
+        while len(self._entries) > self._maxsize:
+            self._entries.popitem(last=False)
+        return value
+
+    def drop_run(self, org: str, run_id: str) -> int:
+        """Forget every anchor of one run, because its events changed."""
+        stale = [k for k in self._entries if k[0] == org and k[1] == run_id]
+        for key in stale:
+            del self._entries[key]
+        return len(stale)

@@ -10,7 +10,14 @@ Modules:
 
 | Module | Responsibility |
 |---|---|
-| `app.py` | app factory: routes, auth middleware, lifespan (stale monitor) |
+| `app.py` | application factory — resolves config, builds state, installs the auth gate, registers routers. Nothing else. |
+| `config.py` | every `AXOR_*` variable, resolved once into one frozen `AppConfig` |
+| `deps.py` | request-scoped access to the long-lived collaborators (`StoreDep`, `GraphDep`, …) |
+| `security.py` | principal resolution + the auth middleware; the *policy* it applies lives in `auth.py` |
+| `lifecycle.py` | lifespan: boot warnings, rehydrating the in-memory projections, retention and EE-scheduler sweeps |
+| `licensing.py` | verified EE licenses per organization + the paid-feature gate |
+| `corpus.py` / `traces.py` | the pinned-corpus report (shared by route and scheduler); reading a run back as a kernel trace |
+| `routers/` | the HTTP surface, one module per domain; `ALL_ROUTERS` is the single registration point |
 | `plane.py` | plane service (protocol v0.2): `/command`, `/desired` (SSE), `/telemetry`, `/facts`, `/cascade-stop` |
 | `storage.py` | append-only events + runs/desired/reported/facts/pins/keys/share-links/notification-subs; JSON→JSONB on Postgres |
 | `replay_api.py` | config→`KernelConfig`, scrubber/counterfactual payloads |

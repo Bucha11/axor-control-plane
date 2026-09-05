@@ -19,22 +19,18 @@ from __future__ import annotations
 
 import json
 from collections.abc import AsyncIterator
-from datetime import UTC, datetime
 from typing import Any
 
 from fastapi import APIRouter, Header, HTTPException, Request
 from sse_starlette.sse import EventSourceResponse
 
+from axor_backend.clock import now
 from axor_backend.errors import CommandRejected
 from axor_backend.limits import check_batch_size
 from axor_backend.signing import signed_payload
 from axor_backend.tenancy import current_org_id, topic
 
 router = APIRouter(prefix="/v1/plane")
-
-
-def _now() -> str:
-    return datetime.now(UTC).isoformat()
 
 
 def _ctx(request: Request) -> Any:  # noqa: ANN401 - app.state is dynamic
@@ -172,7 +168,7 @@ async def telemetry(
     # Same ceiling as /v1/ingest: the batch is held, parsed and folded in
     # memory, so its size is a resource the caller controls.
     lines: list[dict[str, Any]] = check_batch_size(body.get("events", []))
-    await ctx.store.upsert_run(run_id, node_id, body.get("scenario", "live"), _now())
+    await ctx.store.upsert_run(run_id, node_id, body.get("scenario", "live"), now())
     stored = await ctx.store.ingest_events(run_id, node_id, lines, idempotency_key)
     notifier = getattr(ctx, "notifier", None)
     _LEVELS = {"NORMAL": 0, "CAUTIOUS": 1, "RESTRICTED": 2, "LOCKED": 3, "TERMINAL": 4}
@@ -186,7 +182,7 @@ async def telemetry(
                 applied_version=int(hb.get("applied_version", 0)),
                 level=str(hb.get("level", "NORMAL")),
                 budget_remaining=hb.get("budget_remaining"),
-                ts=_now(),
+                ts=now(),
             )
             ctx.broadcast.publish(
                 topic("plane", node_id),
@@ -227,7 +223,7 @@ async def append_fact(node_id: str, body: dict, request: Request) -> dict:
             raise HTTPException(403, str(exc)) from exc
     elif not ctx.allow_unsigned:
         raise HTTPException(403, "no operator keys registered; facts rejected")
-    appended = await ctx.store.append_fact(node_id, fact, _now())
+    appended = await ctx.store.append_fact(node_id, fact, now())
     if not appended:
         raise HTTPException(409, "fact_id already exists (append-only)")
     # An operator attestation is an append-only node over the branch it covers
@@ -310,7 +306,7 @@ async def post_probe_report(node_id: str, body: dict, request: Request) -> dict:
             raise HTTPException(
                 400, f"each family needs a state in {sorted(_FAMILY_STATES)}"
             )
-    report_id = await ctx.store.add_probe_report(node_id, body, _now())
+    report_id = await ctx.store.add_probe_report(node_id, body, now())
     ctx.broadcast.publish(
         topic("plane", node_id),
         {"type": "probe_report", "node_id": node_id, "report": body},
