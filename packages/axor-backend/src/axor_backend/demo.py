@@ -19,6 +19,9 @@ from __future__ import annotations
 
 from typing import Any
 
+_WEB: dict[str, Any] = {"sources": ["web"], "sensitive": False}
+_CLEAN: dict[str, Any] = {"sources": [], "sensitive": False}
+
 
 def _ev(seq: int, node: str, kind: str, verdict: str | None, **payload: Any) -> dict:  # noqa: ANN401
     gate = payload.pop("gate", None)
@@ -29,27 +32,82 @@ def _ev(seq: int, node: str, kind: str, verdict: str | None, **payload: Any) -> 
     }
 
 
+def _norm(**over: Any) -> dict[str, Any]:  # noqa: ANN401
+    """The structural projection a real recorded call carries.
+
+    All ten fields, because ``axor_core.policy.provenance.normalized_payload``
+    writes all ten and a consumer that must RE-DECIDE the call refuses a partial
+    block — three of these decide a taint verdict, and absent is not False. A
+    fixture that carried only ``destination_kind`` was teaching a shape no
+    adapter produces, and it stopped being exportable the moment the export
+    started asking the kernel instead of reimplementing it.
+    """
+    return {
+        "operation": "other", "target_kind": "workdir",
+        "destination_kind": "none", "provenance": "unknown",
+        "reads_secret_like_data": False, "writes_outside_workdir": False,
+        "executes_generated_code": False, "after_external_read": False,
+        "after_secret_access": False, "data_flow": "none", **over,
+    }
+
+
+def _call(
+    seq: int, node: str, verdict: str, tool: str, *,
+    args: dict[str, Any] | None = None,
+    arg_refs: dict[str, str] | None = None,
+    driving_root: dict[str, Any] | None = None,
+    driving_args: list[str] | None = None,
+    egress: bool = False,
+    normalized: dict[str, Any] | None = None,
+    gate: str | None = None,
+) -> dict:
+    """One recorded tool_call, in the shape ``call_payload`` produces.
+
+    ``driving_root`` is the kernel's OWN answer for the driving argument — a
+    serialized ``CausalRoot``. It is what the gate decides on, which is why a
+    recorded trace can be re-judged without the content that produced it.
+    """
+    payload: dict[str, Any] = {
+        "tool": tool,
+        "args": dict(args or {}),
+        "arg_refs": dict(arg_refs or {}),
+        "driving_args": list(driving_args or []),
+        "driving_root": dict(driving_root or _CLEAN),
+        "floor_active": False,
+        "normalized": normalized or _norm(),
+    }
+    if egress:
+        payload["roles"] = {"egress_sink": True}
+    return _ev(seq, node, "tool_call", verdict, gate=gate, **payload)
+
+
 EX_BLOCK_NODE = "adapter-demo-block"
 EX_BLOCK_EVENTS: list[dict] = [
-    _ev(0, EX_BLOCK_NODE, "tool_call", "pass", tool="email_read", args={}, arg_refs={}),
+    _call(0, EX_BLOCK_NODE, "pass", "email_read"),
     _ev(1, EX_BLOCK_NODE, "tool_result", None, tool="email_read",
         value_ref="v_mail", root={"sources": ["web"], "sensitive": False}),
     # A benign shell call, recorded PASS — this is what the "no exec capability"
     # counterfactual removes, turning it into a capability denial (divergence).
-    _ev(2, EX_BLOCK_NODE, "tool_call", "pass", tool="bash", args={"cmd": "ls"},
-        arg_refs={}),
+    _call(2, EX_BLOCK_NODE, "pass", "bash", args={"cmd": "ls"}),
     _ev(3, EX_BLOCK_NODE, "tool_result", None, tool="bash", value_ref="v_ls",
         root={"sources": [], "sensitive": False}),
     # Summarize carries the web taint from v_mail into v_sum (arg_refs → value_ref
     # is the graph edge; the root keeps it tainted so the egress below denies).
-    _ev(4, EX_BLOCK_NODE, "tool_call", "pass", tool="summarize",
-        args={"text": "…"}, arg_refs={"text": "v_mail"}),
+    _call(4, EX_BLOCK_NODE, "pass", "summarize", args={"text": "…"},
+          arg_refs={"text": "v_mail"}, driving_args=["text"], driving_root=_WEB),
     _ev(5, EX_BLOCK_NODE, "tool_result", None, tool="summarize",
         value_ref="v_sum", root={"sources": ["web"], "sensitive": False}),
     # The exfil: a web-tainted value into an external post — recorded DENY.
-    _ev(6, EX_BLOCK_NODE, "tool_call", "deny", tool="slack_post",
-        args={"text": "…"}, arg_refs={"text": "v_sum"},
-        normalized={"destination_kind": "external_domain"}),
+    # The exfil: a web-tainted driving value into an external post. The kernel
+    # denies on `driving_root.is_tainted` + an external destination, which is
+    # exactly what a consumer re-decides from — no content required.
+    _call(6, EX_BLOCK_NODE, "deny", "slack_post", args={"text": "…"},
+          arg_refs={"text": "v_sum"}, driving_args=["text"], driving_root=_WEB,
+          egress=True, gate="taint_floor",
+          normalized=_norm(destination_kind="external_domain",
+                           target_kind="external_url",
+                           provenance="external_web",
+                           data_flow="local_to_external")),
 ]
 EX_BLOCK_EVIDENCE: list[dict] = [{
     "scenario": "exfil",
@@ -65,11 +123,11 @@ EX_BLOCK_EVIDENCE: list[dict] = [{
 
 EX_PASS_NODE = "adapter-demo-pass"
 EX_PASS_EVENTS: list[dict] = [
-    _ev(0, EX_PASS_NODE, "tool_call", "pass", tool="notes_read", args={}, arg_refs={}),
+    _call(0, EX_PASS_NODE, "pass", "notes_read"),
     _ev(1, EX_PASS_NODE, "tool_result", None, tool="notes_read",
         value_ref="v_note", root={"sources": [], "sensitive": False}),
-    _ev(2, EX_PASS_NODE, "tool_call", "pass", tool="notes_write",
-        args={"text": "…"}, arg_refs={"text": "v_note"}),
+    _call(2, EX_PASS_NODE, "pass", "notes_write", args={"text": "…"},
+          arg_refs={"text": "v_note"}, driving_args=["text"], driving_root=_CLEAN),
 ]
 
 # The kernel config the corpus is evaluated against: slack_post is a declared
@@ -92,9 +150,6 @@ TREE_RESEARCH = "tree-research"
 TREE_WRITER = "tree-writer"
 TREE_SCRAPER = "tree-scraper"
 
-_WEB = {"sources": ["web"], "sensitive": False}
-_CLEAN: dict = {"sources": [], "sensitive": False}
-
 TREE_EVENTS: list[dict] = [
     # orchestrator spawns its two children
     _ev(0, TREE_ORCH, "node_spawned", None, child_id=TREE_RESEARCH,
@@ -107,8 +162,7 @@ TREE_EVENTS: list[dict] = [
     # scraper: fault injected, fabricates instead of reporting failure
     _ev(0, TREE_SCRAPER, "fault_injected", None, tool="web_search",
         mode="silent_fail"),
-    _ev(1, TREE_SCRAPER, "tool_call", "pass", tool="web_search",
-        args={"q": "rates"}, arg_refs={}),
+    _call(1, TREE_SCRAPER, "pass", "web_search", args={"q": "rates"}),
     _ev(2, TREE_SCRAPER, "tool_result", None, tool="web_search",
         value_ref="v_fab", root=_WEB),
     _ev(3, TREE_SCRAPER, "claim", None, text="rates rose 0.25%"),
@@ -120,8 +174,8 @@ TREE_EVENTS: list[dict] = [
         edge_kind="delegation", msg_id="m_fab1", value_ref="v_fab",
         carried={"root": _WEB}),
     # researcher folds it into its summary (derived value keeps the taint)
-    _ev(2, TREE_RESEARCH, "tool_call", "pass", tool="summarize",
-        args={"text": "…"}, arg_refs={"text": "v_fab"}),
+    _call(2, TREE_RESEARCH, "pass", "summarize", args={"text": "…"},
+          arg_refs={"text": "v_fab"}, driving_args=["text"], driving_root=_WEB),
     _ev(3, TREE_RESEARCH, "tool_result", None, tool="summarize",
         value_ref="v_sum", root=_WEB),
     # a lateral edge: researcher hands the writer a CLEAN style guide — the
@@ -141,9 +195,13 @@ TREE_EVENTS: list[dict] = [
         carried={"root": _WEB}),
     _ev(3, TREE_ORCH, "claim", None, text="rates rose 0.25% (confirmed)"),
     # ...and the export is DENIED at the boundary: containment (Ch.2 §2)
-    _ev(4, TREE_ORCH, "tool_call", "deny", tool="slack_post",
-        args={"text": "…"}, arg_refs={"text": "v_sum"},
-        normalized={"destination_kind": "external_domain"}),
+    _call(4, TREE_ORCH, "deny", "slack_post", args={"text": "…"},
+          arg_refs={"text": "v_sum"}, driving_args=["text"], driving_root=_WEB,
+          egress=True, gate="taint_floor",
+          normalized=_norm(destination_kind="external_domain",
+                           target_kind="external_url",
+                           provenance="external_web",
+                           data_flow="local_to_external")),
     # an UNDECLARED foreign peer: the send gate fails closed (L0, Ch.1 §2) —
     # the peer renders as an opaque diamond, the denial flashes on the edge
     _ev(1, TREE_WRITER, "message_sent", "deny", to="partner-agent",

@@ -29,7 +29,14 @@ import hashlib
 from dataclasses import dataclass, field
 from typing import Any
 
+from axor_core.policy.gates import taint_gate
+
 from axor_backend.errors import BackendError
+from axor_backend.kernel_record import (
+    IncompleteRecord,
+    causal_root_from_record,
+    normalized_from_record,
+)
 from axor_backend.signing import jcs_canonical
 
 INCIDENT_SCHEMA = "axor-lab-incident/v1"
@@ -56,12 +63,6 @@ _EGRESS_CLASSES = frozenset({"EXPORT", "EXEC"})
 _RESULT_FIELD = "content"
 
 _PREVIEW_LEN = 80
-
-# typed "argument not passed" sentinels: `None` is a meaningful value for both
-# the driving value id and the unresolved reason, so absence needs its own mark
-_UNSET_STR: str = "\x00unset"
-_UNSET_DICT: dict[str, Any] = {}
-
 
 class LabExportError(BackendError):
     """The run cannot be converted to a Lab incident package; ``reasons`` lists
@@ -108,6 +109,14 @@ class _Call:
     # the driving args the producing kernel DECLARED for this sink, when it
     # recorded them; empty for a proxy-depth trace that carries no declaration.
     declared_driving: list[str] = field(default_factory=list)
+    # What the kernel decided ON, exactly as it recorded it: the structural
+    # projection, the driving value's causal root, and whether the
+    # confidentiality floor was up. `axor_core.policy.gates.taint_gate` takes
+    # these three and nothing else, so recomputing a verdict needs no content —
+    # and needs no reimplementation of the gate either.
+    normalized: dict[str, Any] = field(default_factory=dict)
+    driving_root: dict[str, Any] | None = None
+    floor_active: bool = False
     decision: dict[str, Any] | None = None
 
 
@@ -339,6 +348,9 @@ def _scan(
                 egress=bool(roles.get("egress_sink"))
                 or str(normalized.get("destination_kind", "")) in _EGRESS_DESTINATIONS,
                 declared_driving=declared,
+                normalized=dict(normalized),
+                driving_root=payload.get("driving_root"),
+                floor_active=bool(payload.get("floor_active")),
             )
             calls.append(call)
             last_call[node] = call
@@ -570,7 +582,7 @@ def _violation_call(calls: list[_Call], tools: dict[str, _Tool]) -> _Call:
     )
 
 
-# ── reference-kernel decisions (the convertibility proof) ────────────────────
+# ── kernel decisions (the convertibility proof) ──────────────────────────────
 
 
 def _decide_all(
@@ -579,93 +591,122 @@ def _decide_all(
     values: dict[str, _Value],
     reasons: list[str],
 ) -> None:
-    """Recompute every call's decision under Lab's reference taint-floor decide
-    (enforcement on, empty allowlist) and require it to agree with the recorded
-    verdict — the exported trace must import with ``replay: match``."""
+    """Recompute every call with the KERNEL'S OWN GATE and require it to agree
+    with the recorded verdict — the exported trace must import with
+    ``replay: match``.
+
+    This used to be a hand-written mirror of ``lab_runner.kernel.Kernel.decide``,
+    living inside the platform whose own contributing rules say the kernel is
+    imported and never reimplemented. It reimplemented it because the obvious
+    reading is that the real kernel needs content a recorded trace does not
+    carry. It does not: ``ToolCallGovernor`` needs content because it is the
+    LEDGER, and by the time a call is recorded the ledger's answer is already in
+    the event — ``driving_root`` is a serialized ``CausalRoot`` and
+    ``taint_gate`` takes nothing else about the value.
+    """
     for call in calls:
         tool = tools.get(call.tool)
         if tool is None:  # unreachable: every call registers its tool
             continue
-        decision = _reference_decide(call, tool, values)
+        try:
+            decision = _kernel_decide(call, tool, values)
+        except IncompleteRecord as exc:
+            # Refusing to export beats guessing. A missing field here is one the
+            # verdict turns on, and defaulting it to its permissive value is how
+            # a recorded DENY comes back as a replayed ALLOW.
+            reasons.append(
+                f"{call.tool!r} at {call.node}:{call.seq} cannot be re-decided — {exc}"
+            )
+            continue
         recorded = "ALLOW" if call.verdict == "pass" else "DENY"
         if decision["verdict"] != recorded:
             reasons.append(
                 f"recorded verdict {recorded} for {call.tool!r} at "
-                f"{call.node}:{call.seq} would not reproduce under label-based "
-                f"replay (recomputed {decision['verdict']}: {decision['reason']})"
+                f"{call.node}:{call.seq} would not reproduce under the kernel's "
+                f"taint floor (recomputed {decision['verdict']}: {decision['reason']})"
             )
             continue
         call.decision = decision
 
 
-def _reference_decide(
+def _driving_binding(
+    call: _Call, tool: _Tool, values: dict[str, _Value]
+) -> tuple[str | None, dict[str, Any] | None]:
+    """The ledger id of the call's driving value, and the typed reason when
+    there is none.
+
+    A fail-closed decision must not invent a ``v_unresolved`` ledger id — the
+    trace would then fail its own validation and the most interesting incidents
+    would be unpublishable. ``driving_unresolved`` carries the reason instead.
+    """
+    driving_args = sorted(tool.driving_args)
+    if not driving_args:
+        return None, {"kind": "no_driving_args"}
+    first = driving_args[0]
+    bound = call.arg_refs.get(first)
+    if bound is None:
+        return None, {"kind": "unresolved_argument", "arg": first}
+    return bound, None
+
+
+def _recorded_root(call: _Call, tool: _Tool, values: dict[str, _Value]) -> dict[str, Any]:
+    """The causal root the kernel decided this call on.
+
+    Prefer what the kernel WROTE DOWN (``driving_root``): it is that kernel's own
+    answer over the real content, computed by the ledger at the moment of the
+    call. Falling back to the union of the driving args' recorded value roots is
+    for a trace from a producer that predates the field; it is the same algebra
+    (a causal root is the union of its inputs') so it over-taints at worst, which
+    is the safe direction.
+    """
+    if call.driving_root is not None:
+        return dict(call.driving_root)
+    sources: set[str] = set()
+    sensitive = False
+    for arg in sorted(tool.driving_args):
+        ref = call.arg_refs.get(arg)
+        value = values.get(ref) if ref else None
+        if value is None:
+            continue
+        sources.update(value.sources)
+        sensitive = sensitive or value.sensitive
+    return {"sources": sorted(sources), "sensitive": sensitive}
+
+
+def _kernel_decide(
     call: _Call, tool: _Tool, values: dict[str, _Value]
 ) -> dict[str, Any]:
-    """Mirror of ``lab_runner.kernel.Kernel.decide`` for the manifests this
-    module synthesizes (no resolve rules, empty allowlist, enforcement on)."""
-    driving_args = sorted(tool.driving_args)
-    if driving_args and driving_args[0] in call.arg_refs:
-        driving_value_id: str | None = call.arg_refs[driving_args[0]]
-        unresolved: dict[str, Any] | None = None
-    elif not driving_args:
-        driving_value_id, unresolved = None, {"kind": "no_driving_args"}
-    else:
-        driving_value_id = None
-        unresolved = {"kind": "unresolved_argument", "arg": driving_args[0]}
+    """One call through ``axor_core.policy.gates.taint_gate``."""
+    where = f"{call.node}:{call.seq}"
+    normalized = normalized_from_record(call.tool, call.normalized, where=where)
+    root = causal_root_from_record(_recorded_root(call, tool, values))
+    driving_value_id, unresolved = _driving_binding(call, tool, values)
 
-    def decision(
-        verdict: str, reason: str, *,
-        dv: str | None = _UNSET_STR,
-        unres: dict[str, Any] | None = _UNSET_DICT,
-        projection: str | None = None,
-    ) -> dict[str, Any]:
-        d: dict[str, Any] = {
-            "verdict": verdict, "gate": GATE_TAINT_FLOOR,
-            "driving_value_id": driving_value_id if dv is _UNSET_STR else dv,
-            "reason": reason,
-        }
-        if projection is not None:
-            d["projection"] = projection
-        u = unresolved if unres is _UNSET_DICT else unres
-        if d["driving_value_id"] is None and u is not None:
-            d["driving_unresolved"] = u
-        return d
-
-    effect_class = "EXPORT" if tool.egress else "READ"
-    if effect_class in _EGRESS_CLASSES:
-        if not driving_args:
-            return decision(
-                "DENY",
-                f"egress sink {call.tool} declares no driving_args; cannot "
-                "verify provenance (fail-closed)",
-                projection=PROJECTION_UNTRUSTED,
-            )
-        for arg_name in driving_args:
-            bound = call.arg_refs.get(arg_name)
-            labels = tuple(values[bound].labels()) if bound in values else ()
-            if not labels:
-                return decision(
-                    "DENY",
-                    f"egress sink {call.tool}: driving arg {arg_name!r} has no "
-                    "resolvable provenance (fail-closed)",
-                    dv=bound,
-                    unres=None if bound is not None
-                    else {"kind": "unresolved_argument", "arg": arg_name},
-                    projection=PROJECTION_UNTRUSTED,
-                )
-            if LABEL_UNTRUSTED in labels:
-                # no operator allowlist is recorded for the run → no supersession
-                return decision(
-                    "DENY",
-                    f"egress sink {call.tool}: driving arg {arg_name!r} is "
-                    f"{LABEL_UNTRUSTED} and not allowlisted",
-                    dv=call.arg_refs[arg_name],
-                    projection=PROJECTION_UNTRUSTED,
-                )
-        return decision(
-            "ALLOW", f"effect {effect_class}: every driving arg is trusted or allowlisted"
-        )
-    return decision("ALLOW", f"effect {effect_class}: no egress gate applies")
+    denial = taint_gate(
+        call.tool,
+        normalized,
+        root,
+        floor_active=call.floor_active,
+        # The operator's declaration of what exfiltrates. The gate also reads the
+        # normalizer's structural guess, so passing the tool here only ADDS the
+        # declared half — which is the half that knows a deployment's vocabulary
+        # (`send_email` normalises to `none`).
+        egress_sinks=frozenset({call.tool}) if tool.egress else frozenset(),
+    )
+    decision: dict[str, Any] = {
+        "verdict": "ALLOW" if denial is None else "DENY",
+        "gate": GATE_TAINT_FLOOR,
+        "driving_value_id": driving_value_id,
+        "reason": (
+            denial.reason if denial is not None
+            else f"kernel taint floor: no gate applies to {call.tool}"
+        ),
+    }
+    if denial is not None:
+        decision["projection"] = PROJECTION_UNTRUSTED
+    if driving_value_id is None and unresolved is not None:
+        decision["driving_unresolved"] = unresolved
+    return decision
 
 
 # ── trace assembly ───────────────────────────────────────────────────────────
