@@ -320,7 +320,10 @@ export default function ConfigBuilder() {
             <div className="flex items-start gap-2 mt-6 p-3" style={{ background: C.panel2, border: `1px solid ${C.line}`, borderRadius: 6 }}>
               <Terminal size={13} color={C.dim} style={{ marginTop: 1 }} />
               <div style={{ fontFamily: MONO, fontSize: 11, color: C.dim, lineHeight: 1.6 }}>
-                Code shouldn't leave your machine? <span style={{ color: C.mut }}>uvx axor wrap ./my_agent</span> — same screen, pre-filled, nothing uploaded.
+                Code shouldn't leave your machine? Self-host —{" "}
+                <span style={{ color: C.mut }}>docker compose up</span> ships the
+                same scanner, so this screen analyses your source on your own
+                box and nothing is uploaded anywhere.
               </div>
             </div>
           </>

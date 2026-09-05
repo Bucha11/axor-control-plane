@@ -24,6 +24,22 @@ const AGENT_PY = [
 ].join("\n");
 
 test.describe("config builder", () => {
+  test("the privacy answer points at self-hosting, not a command that does not exist", async ({ page }) => {
+    // This panel used to promise `uvx axor wrap ./my_agent` — "same screen,
+    // pre-filled, nothing uploaded". No such command existed (the binary is
+    // axor-wrap, the verb is scan, and it prints a table with no way back into
+    // this screen), so the one place a security-conscious user goes to check
+    // whether they can trust the upload sent them down a road with no road.
+    //
+    // The real answer needs no second code path: the deployment image ships the
+    // wrap engine, so a self-hosted stack scans on the operator's own machine.
+    await goHash(page, "config-builder");
+    const panel = page.getByText(/Code shouldn't leave your machine/);
+    await expect(panel).toBeVisible();
+    await expect(panel).toContainText("docker compose up");
+    await expect(panel).not.toContainText("axor wrap");
+  });
+
   test("scans uploaded code, classifies tools, and previews the config", async ({ page }) => {
     await goHash(page, "config-builder");
     await expect(page.getByRole("heading", { name: "Bring your agent. Leave governed." })).toBeVisible();
