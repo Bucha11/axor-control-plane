@@ -96,6 +96,12 @@ export default defineConfig({
       env: {
         AXOR_DATABASE_URL: `sqlite+aiosqlite:///${RUN_DB}`,
         AXOR_ALLOW_UNSIGNED: "1",
+        // The licensing trust root is deployment config, so the Settings panel
+        // is inert without it — pin a throwaway key so the license path is
+        // exercisable here. Nothing is signed with it: the point is that a
+        // license verifies against the DEPLOYMENT's key, never one typed into
+        // the form beside it.
+        AXOR_VENDOR_PUBKEY: "00".repeat(32),
       },
     },
     {

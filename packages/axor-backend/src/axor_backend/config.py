@@ -75,6 +75,7 @@ class AppConfig:
         vault_signing_token: str | None = None,
         identity_jwks: dict[str, Any] | None = None,
         identity_issuer: str = "axor-identity",
+        vendor_pubkey: str | None = None,
     ) -> AppConfig:
         """Argument, else environment, else default — field by field."""
         if operator_keys is None:
@@ -111,7 +112,11 @@ class AppConfig:
                 _number("AXOR_SCHEDULE_SWEEP_SECONDS")
                 or DEFAULT_SCHEDULE_SWEEP_SECONDS
             ),
-            vendor_pubkey=os.environ.get("AXOR_VENDOR_PUBKEY", ""),
+            vendor_pubkey=(
+                vendor_pubkey
+                if vendor_pubkey is not None
+                else os.environ.get("AXOR_VENDOR_PUBKEY", "")
+            ),
             env_license=os.environ.get("AXOR_LICENSE") or None,
             # A multi-tenant server blocks webhooks aimed at internal addresses:
             # there an org admin holds `operate` without being the infrastructure

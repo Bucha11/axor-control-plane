@@ -124,7 +124,6 @@ export default function Settings() {
   const [chanLabel, setChanLabel] = useState("");
   const [nodePattern, setNodePattern] = useState("");
   const [licenseJson, setLicenseJson] = useState("");
-  const [vendorKey, setVendorKey] = useState("");
   const [keyScopes, setKeyScopes] = useState<string[]>(["ingest"]);
   const [keyLabel, setKeyLabel] = useState("");
   const [mintedSecret, setMintedSecret] = useState<string | null>(null);
@@ -152,6 +151,9 @@ export default function Settings() {
 
   const licenseStatus = useQuery({ queryKey: ["license-status"], queryFn: api.licenseStatus });
   const eeActive = licenseStatus.data?.active === true;
+  // undefined while the status query is in flight — the button stays disabled
+  // rather than flashing enabled and then failing.
+  const vendorKeyPinned = licenseStatus.data?.vendor_key_configured;
   const subscriptions = useQuery({ queryKey: ["subscriptions"], queryFn: api.listSubscriptions });
 
   const subscribe = useMutation({
@@ -162,8 +164,16 @@ export default function Settings() {
       }),
     onSuccess: () => void qc.invalidateQueries({ queryKey: ["subscriptions"] }),
   });
+  // A 200 means the license is verified AND active, so everything that renders
+  // an entitlement has to be refetched — otherwise the panel says "active" while
+  // Regression still shows its EE controls locked.
   const license = useMutation({
-    mutationFn: () => api.verifyLicense(licenseJson, vendorKey),
+    mutationFn: () => api.verifyLicense(licenseJson),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ["license-status"] });
+      void qc.invalidateQueries({ queryKey: ["regression-schedule"] });
+      void qc.invalidateQueries({ queryKey: ["regression-history"] });
+    },
   });
 
   const toggle = (id: string) =>
@@ -418,14 +428,21 @@ export default function Settings() {
           className="w-full mb-2"
           style={{ background: C.panel2, border: `1px solid ${C.line}`, borderRadius: 5, color: C.text, fontFamily: MONO, fontSize: 11, padding: 8, resize: "vertical", outline: "none" }}
         />
-        <input
-          value={vendorKey}
-          onChange={(e) => setVendorKey(e.target.value)}
-          placeholder="vendor public key (hex)"
-          className="w-full mb-3"
-          style={{ background: C.bg, border: `1px solid ${C.line}`, borderRadius: 5, color: C.text, fontFamily: MONO, fontSize: 11, padding: "7px 9px", outline: "none" }}
-        />
-        <button onClick={() => license.mutate()} disabled={!licenseJson || !vendorKey || license.isPending} style={btn({ color: C.steel, fontSize: 12 })}>
+        {vendorKeyPinned === false && (
+          <div className="mb-3" style={{ fontFamily: MONO, fontSize: 11, color: C.amber }}>
+            This deployment pins no vendor public key, so a license signature
+            cannot be checked against anything. Set <code>AXOR_VENDOR_PUBKEY</code>{" "}
+            (see <code>.env.example</code>) and restart. The key ships with the
+            distribution — it is deliberately not something this screen accepts,
+            because a signature checked against a key typed in beside it proves
+            nothing.
+          </div>
+        )}
+        <button
+          onClick={() => license.mutate()}
+          disabled={!licenseJson || vendorKeyPinned !== true || license.isPending}
+          style={btn({ color: C.steel, fontSize: 12 })}
+        >
           {license.isPending ? <Loader2 size={13} className="animate-spin" /> : null} Verify license
         </button>
         {license.isError && (
@@ -436,7 +453,7 @@ export default function Settings() {
         {license.data && (
           <>
             <div className="mt-2" style={{ fontFamily: MONO, fontSize: 11, color: C.green }}>
-              {license.data.organization} · {license.data.workspace_tier} workspace ·{" "}
+              active · {license.data.organization} · {license.data.workspace_tier} workspace ·{" "}
               {[
                 license.data.modules?.private_lab && "Private Lab",
                 license.data.modules?.control_plane &&

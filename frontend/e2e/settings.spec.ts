@@ -28,7 +28,9 @@ test.describe("settings", () => {
   test("rejects an invalid EE license offline", async ({ page }) => {
     await goHash(page, "settings");
     await page.getByPlaceholder('{"license": {...}, "sig": "…"}').fill('{"license":{},"sig":"deadbeef"}');
-    await page.getByPlaceholder("vendor public key (hex)").fill("00".repeat(32));
+    // No vendor-key field: the key a license is checked against is the
+    // deployment's (AXOR_VENDOR_PUBKEY), not something this form accepts.
+    await expect(page.getByPlaceholder("vendor public key (hex)")).toHaveCount(0);
     await page.getByRole("button", { name: /Verify license/ }).click();
     // A 4xx from the verify endpoint surfaces as a red error line.
     await expect(page.getByText(/^\d{3}\b/)).toBeVisible();

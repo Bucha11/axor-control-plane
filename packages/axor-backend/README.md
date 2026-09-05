@@ -29,7 +29,10 @@ Modules:
 | `ee/` | Enterprise Edition (offline Ed25519 license) — commercial licence, see `ee/LICENSE` |
 
 Env: `AXOR_DATABASE_URL`, `AXOR_API_TOKEN`, `AXOR_OPERATOR_KEYS` (JSON op→hex),
-`AXOR_ALLOW_UNSIGNED`, `AXOR_VENDOR_PUBKEY`, `AXOR_STALE_AFTER`.
+`AXOR_ALLOW_UNSIGNED`, `AXOR_VENDOR_PUBKEY`, `AXOR_STALE_AFTER`. Every one of
+them is resolved in `config.py` and nowhere else — the dataclass fields are the
+list. `AXOR_VENDOR_PUBKEY` is the licensing trust root: `/v1/license/verify`
+checks against it and refuses a vendor key supplied in the request.
 
 Tests: `uv run pytest packages/axor-backend`. In-process suites use httpx
 ASGITransport; `tests/e2e/` (marker `e2e`) boots the real backend + proxy as

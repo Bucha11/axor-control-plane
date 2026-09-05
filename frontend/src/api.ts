@@ -253,6 +253,9 @@ export interface LicenseInfo {
   features: string[];
   live_nodes?: number;
   over_ceiling?: boolean;
+  // True on every 200 — verified against the pinned key and stored. Kept
+  // because "verified" and "active" being the same thing is worth asserting.
+  activated?: boolean;
 }
 
 // Wrap engine (/v1/wrap): real code scan for the Config Builder. The engine is
@@ -637,6 +640,11 @@ export const api = {
     af("/v1/license/status").then((r) =>
       j<{
         active: boolean;
+        // Whether the DEPLOYMENT pins a vendor public key (AXOR_VENDOR_PUBKEY).
+        // Without one no license can be checked at all — a different problem
+        // from "no license yet", with a different fix, and the panel has to be
+        // able to say which.
+        vendor_key_configured: boolean;
         organization?: string;
         workspace_tier?: string;
         modules?: { private_lab: boolean; control_plane: boolean };
@@ -696,11 +704,14 @@ export const api = {
     ),
 
   // ── EE license (monetization 4) ────────────────────────────────────────────
-  verifyLicense: (licenseJson: string, vendorPubkey: string) =>
+  // The vendor public key is NOT sent: the trust root is deployment config
+  // (AXOR_VENDOR_PUBKEY), and a signature checked against a key supplied in the
+  // same request proves nothing. A 200 here means verified AND active.
+  verifyLicense: (licenseJson: string) =>
     af("/v1/license/verify", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ license_json: licenseJson, vendor_pubkey: vendorPubkey }),
+      body: JSON.stringify({ license_json: licenseJson }),
     }).then((r) => j<LicenseInfo>(r)),
 
   // ── auth: local token + scoped API keys (architecture section 9) ───────────

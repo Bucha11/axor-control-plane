@@ -2,7 +2,9 @@
 (section 8.3), and the EE offline license check (monetization section 4)."""
 from __future__ import annotations
 
+import contextlib
 import pathlib
+from collections.abc import AsyncIterator
 
 import httpx
 import pytest
@@ -381,7 +383,24 @@ def _vendor_keypair() -> tuple[str, str]:
     return bytes(key).hex(), key.verify_key.encode().hex()
 
 
-async def test_valid_license_verifies_offline(client: httpx.AsyncClient) -> None:
+@contextlib.asynccontextmanager
+async def _client_pinned_to(
+    tmp_path: pathlib.Path, vendor_pubkey: str,
+) -> AsyncIterator[httpx.AsyncClient]:
+    """A backend whose deployment pins `vendor_pubkey` as its licensing trust
+    root. A license can only be verified against the pinned key, so a test that
+    mints its own vendor keypair has to pin it the way an operator would."""
+    app = create_app(
+        database_url=f"sqlite+aiosqlite:///{tmp_path}/lic.db",
+        operator_keys={}, allow_unsigned=True, vendor_pubkey=vendor_pubkey,
+    )
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://backend.test"
+    ) as c, app.router.lifespan_context(app):
+        yield c
+
+
+async def test_valid_license_verifies_offline(tmp_path: pathlib.Path) -> None:
     from axor_backend.ee.license import sign_license
 
     priv, pub = _vendor_keypair()
@@ -392,11 +411,14 @@ async def test_valid_license_verifies_offline(client: httpx.AsyncClient) -> None
            "governed_node_ceiling": 50, "self_hosted_runner": True,
            "expires_at": "2027-01-01", "features": ["sso", "compliance_exports"]}
     license_json = sign_license(lic, priv)
-    resp = await client.post("/v1/license/verify", json={
-        "license_json": license_json, "vendor_pubkey": pub,
-    })
+    async with _client_pinned_to(tmp_path, pub) as client:
+        resp = await client.post("/v1/license/verify", json={
+            "license_json": license_json,
+        })
     assert resp.status_code == 200
     body = resp.json()
+    # Verified against the pinned key means active — there is no third state.
+    assert body["activated"] is True
     assert body["organization"] == "Acme"
     assert body["workspace_tier"] == "security"
     assert body["modules"] == {"private_lab": True, "control_plane": True}
@@ -404,7 +426,7 @@ async def test_valid_license_verifies_offline(client: httpx.AsyncClient) -> None
     assert "sso" in body["features"]
 
 
-async def test_tampered_license_rejected(client: httpx.AsyncClient) -> None:
+async def test_tampered_license_rejected(tmp_path: pathlib.Path) -> None:
     from axor_backend.ee.license import sign_license
 
     priv, pub = _vendor_keypair()
@@ -415,10 +437,85 @@ async def test_tampered_license_rejected(client: httpx.AsyncClient) -> None:
     license_json = sign_license(lic, priv)
     tampered = license_json.replace('"governed_node_ceiling": 5',
                                     '"governed_node_ceiling": 9999')
-    resp = await client.post("/v1/license/verify", json={
-        "license_json": tampered, "vendor_pubkey": pub,
-    })
+    async with _client_pinned_to(tmp_path, pub) as client:
+        resp = await client.post("/v1/license/verify", json={
+            "license_json": tampered,
+        })
     assert resp.status_code == 403
+
+
+async def test_license_verify_refuses_a_vendor_key_from_the_request(
+    tmp_path: pathlib.Path,
+) -> None:
+    """A signature checked against a key from the same request proves nothing.
+
+    The route used to accept a caller-supplied `vendor_pubkey`, verify against
+    it, activate nothing, and return the parsed license anyway with
+    `activated: false` — organization, tier, modules and node ceiling included.
+    The Settings panel renders those fields, so a self-signed license displayed
+    an enterprise entitlement that did not exist. Refused now, and nothing about
+    the deployment's entitlement moves.
+    """
+    from axor_backend.ee.license import sign_license
+
+    pinned_priv, pinned_pub = _vendor_keypair()
+    forged_priv, forged_pub = _vendor_keypair()
+    forged = sign_license(
+        {"organization": "Attacker", "workspace_tier": "security",
+         "modules": {"private_lab": True, "control_plane": True},
+         "governed_node_ceiling": 9999, "self_hosted_runner": True,
+         "expires_at": "2999-01-01", "features": ["sso"]},
+        forged_priv,
+    )
+    async with _client_pinned_to(tmp_path, pinned_pub) as client:
+        resp = await client.post("/v1/license/verify", json={
+            "license_json": forged, "vendor_pubkey": forged_pub,
+        })
+        assert resp.status_code == 400
+        assert "does not match" in resp.json()["detail"]
+        # Nothing leaked: the refusal carries no field of the forged license.
+        assert "Attacker" not in resp.text and "9999" not in resp.text
+        # And nothing activated.
+        status = (await client.get("/v1/license/status")).json()
+        assert status["active"] is False
+        assert status["vendor_key_configured"] is True
+        # Echoing the pinned key back is harmless — older clients send it.
+        real = sign_license(
+            {"organization": "Acme", "workspace_tier": "team",
+             "modules": {"private_lab": True, "control_plane": False},
+             "governed_node_ceiling": 5, "self_hosted_runner": False,
+             "expires_at": "2999-01-01", "features": []},
+            pinned_priv,
+        )
+        ok = await client.post("/v1/license/verify", json={
+            "license_json": real, "vendor_pubkey": pinned_pub,
+        })
+        assert ok.status_code == 200 and ok.json()["activated"] is True
+
+
+async def test_license_verify_without_a_pinned_key_says_so(
+    tmp_path: pathlib.Path,
+) -> None:
+    """No pin means no license can be checked — and the UI must be able to tell
+    that apart from "no license yet". Both used to render as a green summary:
+    with no env pin the operator's real vendor key verified, activated nothing,
+    and the panel showed the entitlement regardless."""
+    from axor_backend.ee.license import sign_license
+
+    priv, _pub = _vendor_keypair()
+    lic = sign_license(
+        {"organization": "Acme", "workspace_tier": "team",
+         "modules": {"private_lab": True, "control_plane": False},
+         "governed_node_ceiling": 5, "self_hosted_runner": False,
+         "expires_at": "2999-01-01", "features": []},
+        priv,
+    )
+    async with _client_pinned_to(tmp_path, "") as client:
+        resp = await client.post("/v1/license/verify", json={"license_json": lic})
+        assert resp.status_code == 400
+        assert "AXOR_VENDOR_PUBKEY" in resp.json()["detail"]
+        status = (await client.get("/v1/license/status")).json()
+        assert status == {"active": False, "vendor_key_configured": False}
 
 
 def test_license_expiry_degrades_to_readonly() -> None:
@@ -433,7 +530,7 @@ def test_license_expiry_degrades_to_readonly() -> None:
 
 
 async def test_license_verify_reports_node_ceiling_telemetry(
-    client: httpx.AsyncClient,
+    tmp_path: pathlib.Path,
 ) -> None:
     """§5: verify returns live_nodes/over_ceiling — a warning, never a block."""
     from axor_backend.ee.license import sign_license
@@ -443,16 +540,17 @@ async def test_license_verify_reports_node_ceiling_telemetry(
                         "modules": {"private_lab": True, "control_plane": True},
                         "governed_node_ceiling": 1, "self_hosted_runner": False,
                         "expires_at": "2999-01-01", "features": []}, priv)
-    # Two live nodes vs a ceiling of 1.
-    for node in ("ce_n1", "ce_n2"):
-        await client.post(f"/v1/plane/{node}/telemetry", json={
-            "run_id": f"{node}-hb",
-            "events": [{"seq": 0, "kind": "heartbeat",
-                        "payload": {"applied_version": 0, "level": "NORMAL"}}],
-        })
-    r = (await client.post("/v1/license/verify", json={
-        "license_json": lic, "vendor_pubkey": pub,
-    })).json()
+    async with _client_pinned_to(tmp_path, pub) as client:
+        # Two live nodes vs a ceiling of 1.
+        for node in ("ce_n1", "ce_n2"):
+            await client.post(f"/v1/plane/{node}/telemetry", json={
+                "run_id": f"{node}-hb",
+                "events": [{"seq": 0, "kind": "heartbeat",
+                            "payload": {"applied_version": 0, "level": "NORMAL"}}],
+            })
+        r = (await client.post("/v1/license/verify", json={
+            "license_json": lic,
+        })).json()
     assert r["live_nodes"] >= 2 and r["over_ceiling"] is True
 
 

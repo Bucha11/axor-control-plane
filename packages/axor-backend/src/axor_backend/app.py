@@ -72,6 +72,7 @@ def create_app(
     vault_signing_token: str | None = None,
     identity_jwks: dict[str, Any] | None = None,
     identity_issuer: str = "axor-identity",
+    vendor_pubkey: str | None = None,
 ) -> FastAPI:
     """Build a backend. Arguments win over the environment; see `AppConfig`."""
     config = AppConfig.resolve(
@@ -84,6 +85,7 @@ def create_app(
         vault_signing_token=vault_signing_token,
         identity_jwks=identity_jwks,
         identity_issuer=identity_issuer,
+        vendor_pubkey=vendor_pubkey,
     )
     setup_observability()
 
