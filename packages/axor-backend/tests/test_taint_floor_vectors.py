@@ -1,38 +1,30 @@
-"""The platform's record-driven path, against the shared taint-floor vectors.
+"""The platform's record-driven path, against the kernel's taint-floor vectors.
 
-`test-vectors/taint-floor.json` is the repo's existing home for a cross-product
-conformance file (next to `jcs-signing.json`, which the adapter and the plane
-service both verify). The canonical copy ships inside axor-core as
-`axor_core/vectors/taint_floor.json`; this platform pins axor-core from PyPI, so
-until a release carries it the file is mirrored here and
-`test_the_mirrored_vectors_match_the_kernels` compares the two whenever the
-kernel does have it.
+`axor_core/vectors/taint_floor.json` is the ecosystem's statement of what the
+taint floor decides, and it is read from the installed kernel — there is no copy
+of it here. A conformance file mirrored into the product it checks is not a
+shared statement; it is a second opinion waiting to drift.
 
-What this proves is NOT the gate — the gate is imported, and axor-core proves it
-against the same vectors. What this proves is the DECODE: that a recorded event,
-read back by `kernel_record`, reaches the kernel carrying what it was gated on.
-That is the half this platform owns, and it is the half that was wrong: the
-export converter used to reimplement the gate rather than decode into it.
+What this proves is NOT the gate. The gate is imported, and axor-core proves it
+against these same vectors. What this proves is the DECODE: that a recorded
+event, read back through `axor_core.policy.from_record`, reaches the gate
+carrying what it was decided on. That is the half this platform owns, and it is
+the half that was wrong — the export converter used to reimplement the gate
+rather than decode into it.
 """
 from __future__ import annotations
 
-import json
-import pathlib
-
 import pytest
-from axor_backend.kernel_record import (
+from axor_core.policy.from_record import (
     DECISIVE_NORMALIZED_FIELDS,
     IncompleteRecord,
     causal_root_from_record,
     normalized_from_record,
 )
 from axor_core.policy.gates import taint_gate
+from axor_core.vectors import TAINT_FLOOR
 
-VECTORS_PATH = (
-    pathlib.Path(__file__).resolve().parents[3] / "test-vectors" / "taint-floor.json"
-)
-DOC = json.loads(VECTORS_PATH.read_text("utf-8"))
-CASES = DOC["vectors"]
+CASES = TAINT_FLOOR()["vectors"]
 
 
 @pytest.mark.parametrize("vec", CASES, ids=[v["name"] for v in CASES])
@@ -55,7 +47,7 @@ def test_a_recorded_event_decodes_into_the_verdict_it_was_gated_on(vec: dict) ->
 
 @pytest.mark.parametrize("dropped", DECISIVE_NORMALIZED_FIELDS)
 def test_a_partial_normalized_block_is_refused_not_defaulted(dropped: str) -> None:
-    """Absent is not False. Each of these fields can turn a recorded DENY into a
+    """Absent is not False. Each of these can turn a recorded DENY into a
     recomputed ALLOW, so a record missing one cannot be judged at all — the
     export refuses the run rather than exporting a verdict it guessed."""
     full = {f: False for f in DECISIVE_NORMALIZED_FIELDS} | {"destination_kind": "none"}
@@ -69,19 +61,4 @@ def test_a_partial_normalized_block_is_refused_not_defaulted(dropped: str) -> No
 def test_an_unknown_taint_source_still_taints() -> None:
     """Over-tainting is the safe direction; dropping a source we cannot name
     would turn a tainted value trusted."""
-    root = causal_root_from_record({"sources": ["a-source-from-the-future"]})
-    assert root.is_tainted
-
-
-def test_the_mirrored_vectors_match_the_kernels() -> None:
-    """The canonical copy lives in axor-core. When the installed kernel carries
-    it, the mirror here must be identical — a conformance file that has drifted
-    from the thing it conforms to is worse than none."""
-    try:
-        from axor_core.vectors import TAINT_FLOOR
-    except ImportError:
-        pytest.skip("installed axor-core predates the shipped vectors")
-    assert TAINT_FLOOR() == DOC, (
-        "test-vectors/taint-floor.json has drifted from axor_core's copy; "
-        "the kernel's is canonical"
-    )
+    assert causal_root_from_record({"sources": ["a-source-from-the-future"]}).is_tainted

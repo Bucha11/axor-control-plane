@@ -29,14 +29,14 @@ import hashlib
 from dataclasses import dataclass, field
 from typing import Any
 
-from axor_core.policy.gates import taint_gate
-
-from axor_backend.errors import BackendError
-from axor_backend.kernel_record import (
+from axor_core.policy.from_record import (
     IncompleteRecord,
     causal_root_from_record,
     normalized_from_record,
 )
+from axor_core.policy.gates import taint_gate
+
+from axor_backend.errors import BackendError
 from axor_backend.signing import jcs_canonical
 
 INCIDENT_SCHEMA = "axor-lab-incident/v1"

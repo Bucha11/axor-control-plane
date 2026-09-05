@@ -11,7 +11,11 @@ classifiers = [
   "Programming Language :: Python :: 3.12",
 ]
 dependencies = [
-  "axor-core>=0.10,<0.11",
+  # 0.11 is the first release carrying `policy.from_record` and the shared
+  # taint-floor vectors: the incident export decides with the kernel's own gate
+  # now, and reads the recorded event through the kernel's own decoder. Neither
+  # is mirrored here — a copy of a decoder is how a copy of a decision starts.
+  "axor-core>=0.11,<0.12",
   # 0.1.1 is the first release resolvable against axor-core 0.10.
   "axor-eval>=0.1.1,<0.2",
   "fastapi>=0.111", "sse-starlette>=2.1", "uvicorn>=0.29",
