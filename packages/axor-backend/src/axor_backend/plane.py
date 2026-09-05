@@ -25,7 +25,11 @@ from fastapi import APIRouter, Header, HTTPException, Request
 from sse_starlette.sse import EventSourceResponse
 
 from axor_backend.clock import now
-from axor_backend.errors import CommandRejected
+from axor_backend.errors import (
+    CommandRejected,
+    ConcurrentUpdate,
+    StaleVersion,
+)
 from axor_backend.limits import check_batch_size
 from axor_backend.signing import signed_payload
 from axor_backend.tenancy import current_org_id, topic
@@ -62,7 +66,10 @@ async def command(node_id: str, body: dict, request: Request) -> dict:
     elif not ctx.allow_unsigned:
         raise HTTPException(403, "no operator keys registered; commands rejected")
 
-    new_version, state = await ctx.store.bump_desired(node_id, delta)
+    # The store re-checks the version it was signed for, atomically. The 409
+    # above is the friendly early answer; this is the one that actually holds
+    # when two commands arrive together.
+    new_version, state = await _apply(ctx, node_id, delta, expect_version=version - 1)
     message = {
         "type": "delta", "node_id": node_id, "version": new_version,
         "state": state, "delta": delta, "operator": operator,
@@ -98,7 +105,9 @@ async def cascade_stop(node_id: str, request: Request, body: dict | None = None)
             )
         except CommandRejected as exc:
             raise HTTPException(403, str(exc)) from exc
-        new_version, state = await ctx.store.bump_desired(node_id, delta)
+        new_version, state = await _apply(
+            ctx, node_id, delta, expect_version=version - 1,
+        )
         ctx.broadcast.publish(topic("plane", node_id), {
             "type": "delta", "node_id": node_id, "version": new_version,
             "state": state, "delta": delta,
@@ -121,7 +130,7 @@ async def cascade_stop(node_id: str, request: Request, body: dict | None = None)
         frontier = children
     stopped = []
     for nid in subtree:
-        new_version, state = await ctx.store.bump_desired(nid, {"stopped": True})
+        new_version, state = await _apply(ctx, nid, {"stopped": True})
         ctx.broadcast.publish(topic("plane", nid), {
             "type": "delta", "node_id": nid, "version": new_version,
             "state": state, "delta": {"stopped": True},
@@ -199,8 +208,15 @@ async def telemetry(
                 )
         if kind == "operator_intervention":
             await ctx.store.mark_intervened(run_id)
-        ctx.broadcast.publish(topic("run", run_id), {"type": "event", "line": line})
-    return {"stored": stored}
+    # Only the events that were actually STORED reach the audit stream, each
+    # carrying the id a reconnecting subscriber resumes from. Publishing the
+    # request's lines re-broadcast a duplicate batch in full, with no cursor.
+    for event_id, line in stored:
+        ctx.broadcast.publish(
+            topic("run", run_id),
+            {"type": "event", "id": event_id, "line": line},
+        )
+    return {"stored": len(stored)}
 
 
 @router.post("/{node_id}/facts", status_code=201)
@@ -428,6 +444,30 @@ async def nodes(request: Request) -> list[dict]:
             "facts": await ctx.store.node_facts(node_id),
         })
     return out
+
+
+async def _apply(
+    ctx: Any,  # noqa: ANN401 - app.state is dynamic
+    node_id: str,
+    delta: dict[str, Any],
+    *,
+    expect_version: int | None = None,
+) -> tuple[int, dict[str, Any]]:
+    """Write a desired-state delta, turning the store's two concurrency
+    outcomes into the answers an operator can act on.
+
+    Both are 409, and both mean the same thing to the caller — the command was
+    NOT applied, re-read the version and send it again. They are separate types
+    because only one of them is safe to retry inside the store.
+    """
+    try:
+        return await ctx.store.bump_desired(
+            node_id, delta, expect_version=expect_version,
+        )
+    except StaleVersion as exc:
+        raise HTTPException(409, str(exc)) from exc
+    except ConcurrentUpdate as exc:
+        raise HTTPException(409, str(exc)) from exc
 
 
 def _json(value: dict) -> str:

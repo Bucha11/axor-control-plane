@@ -26,8 +26,7 @@ async def run_lab_package(run_id: str, store: StoreDep) -> dict:
     unreproducible verdicts, no vector)."""
     from axor_backend.lab_export import LabExportError, build_incident_package
 
-    runs = {r["run_id"]: r for r in await store.list_runs()}
-    run = runs.get(run_id)
+    run = await store.get_run(run_id)
     if run is None:
         raise HTTPException(404, f"no such run {run_id}")
     events = [json.loads(line) for line in await store.run_events(run_id)]

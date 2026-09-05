@@ -19,6 +19,27 @@ class TraceNotFound(BackendError):
     pass
 
 
+class StaleVersion(BackendError):
+    """A versioned write named a version the row no longer holds.
+
+    Distinct from :class:`ConcurrentUpdate`: that one is contention the store
+    retries through, this one is a command the store must NOT retry. An operator
+    command carries an ed25519 signature over (node_id, version, delta,
+    timestamp), so applying it at a different version would store a state whose
+    audit record does not match what was signed. The operator re-signs instead.
+    """
+
+
+class ConcurrentUpdate(BackendError):
+    """A versioned row was changed by someone else while we were editing it.
+
+    Raised only after the read-modify-write has been retried and lost every
+    time, which for desired state means sustained contention on one node. The
+    caller must surface it — silently returning would be the lost update this
+    exists to prevent.
+    """
+
+
 async def unhandled_error(request: Request, exc: Exception) -> JSONResponse:
     """Log an unhandled route error with structure (and ship it to Sentry when
     configured) instead of letting it surface only as an opaque 500 in an

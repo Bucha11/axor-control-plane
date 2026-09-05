@@ -7,7 +7,9 @@ backend persists and fans out, it does not interpret).
 """
 from __future__ import annotations
 
+import contextlib
 import json
+from collections.abc import Callable
 from typing import Any
 
 from sqlalchemy import (
@@ -27,8 +29,10 @@ from sqlalchemy import (
     update,
 )
 from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
+from axor_backend.errors import ConcurrentUpdate, StaleVersion
 from axor_backend.tenancy import PUBLIC_ORG, current_org_id
 
 metadata = MetaData()
@@ -265,6 +269,12 @@ api_keys = Table(
 )
 
 
+class _NoSuchNode(Exception):
+    """Internal: `_merge_desired` was asked to edit a node with no desired
+    state. Only `clear_desired_key` can hit it, where it means the ack arrived
+    for a node the plane never commanded — a no-op, not an error."""
+
+
 def make_engine(url: str) -> AsyncEngine:
     return create_async_engine(url)
 
@@ -311,78 +321,143 @@ class Store:
     # ── runs & events ─────────────────────────────────────────────────────────
 
     async def upsert_run(self, run_id: str, node_id: str, scenario: str, ts: str) -> None:
-        async with self.engine.begin() as conn:
-            existing = (
-                await conn.execute(select(runs.c.run_id).where(
+        """Create the run if it is not there. Idempotent, and safe against a
+        concurrent create of the same id: the composite primary key decides, and
+        losing that race means the row exists, which is the goal."""
+        try:
+            async with self.engine.begin() as conn:
+                existing = (
+                    await conn.execute(select(runs.c.run_id).where(
+                        runs.c.run_id == run_id,
+                        runs.c.org_id == current_org_id(),
+                    ))
+                ).first()
+                if existing is None:
+                    await conn.execute(insert(runs).values(
+                        run_id=run_id, node_id=node_id, scenario=scenario,
+                        intervened=False, completed=False, evidence_json=[],
+                        created_ts=ts, org_id=current_org_id(),
+                    ))
+        except IntegrityError:
+            return  # another request created it between the select and the insert
+
+    async def get_run(self, run_id: str) -> dict[str, Any] | None:
+        """One run by id. Every caller that needs a single run used to build a
+        dict from `list_runs()` and index into it — reading the whole table, with
+        every EvidenceCase blob in it, to find one row. `GET /v1/share/{token}`
+        is unauthenticated and did exactly that."""
+        async with self.engine.connect() as conn:
+            row = (await conn.execute(
+                select(runs).where(
                     runs.c.run_id == run_id,
                     runs.c.org_id == current_org_id(),
-                ))
-            ).first()
-            if existing is None:
-                await conn.execute(insert(runs).values(
-                    run_id=run_id, node_id=node_id, scenario=scenario,
-                    intervened=False, completed=False, evidence_json=[],
-                    created_ts=ts, org_id=current_org_id(),
-                ))
+                )
+            )).first()
+        return _run_row(row) if row is not None else None
 
     async def ingest_events(
         self, run_id: str, node_id: str, lines: list[dict[str, Any]],
         idempotency_key: str | None,
-    ) -> int:
-        """Append a telemetry batch. Returns number of stored events (0 on
-        duplicate batch or duplicate seqs — dedupe, never double-append)."""
+    ) -> list[tuple[int, dict[str, Any]]]:
+        """Append a telemetry batch, returning the events actually stored as
+        ``(event_id, line)`` — empty on a duplicate batch.
+
+        The id matters to the caller: it is the cursor the live audit stream
+        hands clients as the SSE ``id:`` field, and the only value a reconnect
+        can resume from. Per-node ``seq`` cannot serve that role, because a
+        multi-node run repeats it across nodes.
+
+        Deduplication is on ``(node_id, seq)`` and covers duplicates WITHIN the
+        batch as well as against what is already stored. It did not before, so a
+        client that repeated a line inside one request got an IntegrityError and
+        a 500 instead of the dedupe this method promises.
+        """
+        org = current_org_id()
         async with self.engine.begin() as conn:
             if idempotency_key:
                 dup = (await conn.execute(
                     select(ingest_keys.c.key).where(
                         ingest_keys.c.key == idempotency_key,
-                        ingest_keys.c.org_id == current_org_id(),
+                        ingest_keys.c.org_id == org,
                     )
                 )).first()
                 if dup is not None:
-                    return 0
+                    return []
                 await conn.execute(insert(ingest_keys).values(
-                    key=idempotency_key, org_id=current_org_id(),
+                    key=idempotency_key, org_id=org,
                 ))
-            seen = {
-                (row.node_id, row.seq) for row in (await conn.execute(
-                    select(events.c.node_id, events.c.seq)
-                    .where(
-                        events.c.run_id == run_id,
-                        events.c.org_id == current_org_id(),
-                    )
-                )).all()
-            }
-            stored = 0
+            seen = await _stored_coordinates(conn, run_id, org, lines, node_id)
+            payload: list[dict[str, Any]] = []
+            fresh: list[dict[str, Any]] = []
             for line in lines:
-                if (line.get("node_id", node_id), line["seq"]) in seen:
+                # Multi-node runs carry per-line node identity (spec v2 Ch.4);
+                # fall back to the batch's node for legacy lines.
+                coord = (line.get("node_id", node_id), line["seq"])
+                if coord in seen:
                     continue
-                await conn.execute(insert(events).values(
-                    run_id=run_id,
-                    # Multi-node runs carry per-line node identity (spec v2
-                    # Ch.4); fall back to the batch's node for legacy lines.
-                    node_id=line.get("node_id", node_id),
-                    seq=line["seq"],
-                    kind=line["kind"],
-                    line=line,
-                    org_id=current_org_id(),
-                ))
-                stored += 1
-            return stored
+                seen.add(coord)
+                fresh.append(line)
+                payload.append({
+                    "run_id": run_id, "node_id": coord[0], "seq": coord[1],
+                    "kind": line["kind"], "line": line, "org_id": org,
+                })
+            if not payload:
+                return []
+            # One statement, not one per event. At the 10k-per-request ceiling
+            # the row-at-a-time loop took seconds of round-trips inside a single
+            # transaction; RETURNING hands back the ids in insertion order.
+            result = await conn.execute(insert(events).returning(events.c.id), payload)
+            return list(zip((r.id for r in result), fresh, strict=True))
 
-    async def run_events(self, run_id: str, after_seq: int = -1) -> list[str]:
+    async def run_events(self, run_id: str) -> list[str]:
+        """The run's events in APPEND order — which is causal order.
+
+        Ordering by ``seq`` was wrong for any multi-node run: seq is monotonic
+        per node (see the events table), so ordering by it globally interleaves
+        the nodes and breaks ties by whatever the index happens to yield. On the
+        demo tree that placed a ``message_received`` five positions before the
+        ``message_sent`` that caused it, and made the order differ between
+        SQLite and Postgres — in a trace whose whole promise is that replay
+        reproduces what was recorded.
+
+        ``events.id`` is the order the events arrived in, which is the order
+        they happened in.
+        """
         async with self.engine.connect() as conn:
             rows = (await conn.execute(
                 select(events.c.line)
                 .where(
-                    events.c.run_id == run_id, events.c.seq > after_seq,
+                    events.c.run_id == run_id,
                     events.c.org_id == current_org_id(),
                 )
-                .order_by(events.c.seq)
+                .order_by(events.c.id)
             )).all()
         # The column is native JSON; callers of this method still expect the raw
         # kernel-schema line as a string, so re-serialise on the way out.
         return [json.dumps(r.line) for r in rows]
+
+    async def run_events_after(
+        self, run_id: str, after_id: int = 0,
+    ) -> list[tuple[int, str]]:
+        """``(event_id, line)`` after a cursor — the audit stream's replay.
+
+        The cursor is the event id, not the seq, for the same reason the order
+        is: ids are unique and monotonic across the whole run, seq is neither.
+        A reconnect carrying ``Last-Event-ID`` resumes exactly where it stopped;
+        with seq it silently dropped every event whose node happened to number
+        it below the last one delivered.
+        """
+        async with self.engine.connect() as conn:
+            rows = (await conn.execute(
+                select(events.c.id, events.c.line)
+                .where(
+                    events.c.run_id == run_id,
+                    events.c.id > after_id,
+                    events.c.org_id == current_org_id(),
+                )
+                .order_by(events.c.id)
+            )).all()
+        return [(r.id, json.dumps(r.line)) for r in rows]
 
     async def add_lab_trace_events(
         self, run_id: str, lines: list[dict[str, Any]],
@@ -427,14 +502,7 @@ class Store:
                 select(runs).where(runs.c.org_id == current_org_id())
                 .order_by(runs.c.created_ts.desc())
             )).all()
-        return [
-            {
-                "run_id": r.run_id, "node_id": r.node_id, "scenario": r.scenario,
-                "intervened": r.intervened, "completed": r.completed,
-                "evidence": r.evidence_json, "created_ts": r.created_ts,
-            }
-            for r in rows
-        ]
+        return [_run_row(r) for r in rows]
 
     async def set_evidence(self, run_id: str, evidence: list[dict[str, Any]]) -> None:
         async with self.engine.begin() as conn:
@@ -458,35 +526,117 @@ class Store:
 
     # ── desired / reported state ──────────────────────────────────────────────
 
-    async def bump_desired(self, node_id: str, delta: dict[str, Any]) -> tuple[int, dict[str, Any]]:
+    async def bump_desired(
+        self, node_id: str, delta: dict[str, Any], *, expect_version: int | None = None,
+    ) -> tuple[int, dict[str, Any]]:
         """Apply a declarative delta, assign the next version, persist, return
         (version, merged_state). LWW per key; `stopped` absorbing is enforced
-        at the adapter — the backend stores what was commanded."""
-        async with self.engine.begin() as conn:
-            row = (await conn.execute(
-                select(desired_state).where(
-                    desired_state.c.node_id == node_id,
-                    desired_state.c.org_id == current_org_id(),
-                )
-            )).first()
-            if row is None:
-                version, state = 1, dict(delta)
-                await conn.execute(insert(desired_state).values(
-                    node_id=node_id, version=version, state_json=state,
-                    org_id=current_org_id(),
-                ))
-            else:
-                version = row.version + 1
-                state = {**row.state_json, **delta}
-                await conn.execute(
-                    update(desired_state)
-                    .where(
-                        desired_state.c.node_id == node_id,
-                        desired_state.c.org_id == current_org_id(),
+        at the adapter — the backend stores what was commanded.
+
+        The write is conditional on the version that was read. Without that
+        condition this was a read-modify-write race on the governance command
+        channel: two commands landing together both read version N, both wrote
+        N+1, and one operator's delta vanished after the plane had already
+        answered 202. A command that is acknowledged and never applied is the
+        one failure this channel must not have.
+
+        `expect_version` is how a SIGNED command uses it. The signature covers
+        (node_id, version, delta, timestamp), so such a command may only land at
+        the version it was signed for: passing the version the operator signed
+        makes the store refuse rather than retry, and the operator re-signs. Left
+        unset — an internal or unsigned bump — contention is simply retried.
+        """
+        return await self._merge_desired(
+            node_id, lambda state: {**state, **delta}, expect_version=expect_version,
+        )
+
+    async def clear_desired_key(self, node_id: str, key: str) -> None:
+        """Consumption ack (injection/excision): clear the one-shot from state.
+
+        Same optimistic write as `bump_desired`, for the same reason: an ack
+        racing a command must not resurrect the one-shot it just consumed, nor
+        drop the command.
+        """
+        def without(state: dict[str, Any]) -> dict[str, Any]:
+            rest = dict(state)
+            rest.pop(key, None)
+            return rest
+
+        with contextlib.suppress(_NoSuchNode):
+            await self._merge_desired(
+                node_id, without, require_existing=True, skip_if_unchanged=True,
+            )
+
+    async def _merge_desired(
+        self,
+        node_id: str,
+        merge: Callable[[dict[str, Any]], dict[str, Any]],
+        *,
+        require_existing: bool = False,
+        skip_if_unchanged: bool = False,
+        expect_version: int | None = None,
+        attempts: int = 8,
+    ) -> tuple[int, dict[str, Any]]:
+        """Read the node's desired state, merge, and write it back only if
+        nobody else moved the version meanwhile. Returns (version, state)."""
+        org = current_org_id()
+        if expect_version is not None:
+            attempts = 1  # a signed command is valid for one version only
+        for _ in range(attempts):
+            try:
+                async with self.engine.begin() as conn:
+                    row = (await conn.execute(
+                        select(desired_state).where(
+                            desired_state.c.node_id == node_id,
+                            desired_state.c.org_id == org,
+                        )
+                    )).first()
+                    if row is None:
+                        if require_existing:
+                            raise _NoSuchNode(node_id)
+                        if expect_version not in (None, 0):
+                            raise StaleVersion(
+                                f"node {node_id!r} has no desired state; "
+                                f"expected version {expect_version}"
+                            )
+                        state = merge({})
+                        await conn.execute(insert(desired_state).values(
+                            node_id=node_id, version=1, state_json=state,
+                            org_id=org,
+                        ))
+                        return 1, state
+                    if expect_version is not None and row.version != expect_version:
+                        raise StaleVersion(
+                            f"node {node_id!r} is at version {row.version}, not "
+                            f"{expect_version}; the command was signed for a "
+                            f"state that has since moved"
+                        )
+                    state = merge(dict(row.state_json))
+                    if skip_if_unchanged and state == row.state_json:
+                        # A repeated consumption ack must not bump the version:
+                        # the adapter would fetch a "new" desired state that is
+                        # byte-identical to the one it already applied.
+                        return row.version, dict(row.state_json)
+                    version = row.version + 1
+                    result = await conn.execute(
+                        update(desired_state)
+                        .where(
+                            desired_state.c.node_id == node_id,
+                            desired_state.c.org_id == org,
+                            # The whole fix: this row must still be the one we
+                            # read. Zero rows updated means we lost — re-read.
+                            desired_state.c.version == row.version,
+                        )
+                        .values(version=version, state_json=state)
                     )
-                    .values(version=version, state_json=state)
-                )
-            return version, state
+                    if result.rowcount:
+                        return version, state
+            except IntegrityError:
+                continue  # lost the create race; the next pass merges instead
+        raise ConcurrentUpdate(
+            f"desired state for node {node_id!r} was changed concurrently "
+            f"{attempts} times running; the command was not applied"
+        )
 
     async def get_desired(self, node_id: str) -> tuple[int, dict[str, Any]] | None:
         async with self.engine.connect() as conn:
@@ -499,29 +649,6 @@ class Store:
         if row is None:
             return None
         return row.version, row.state_json
-
-    async def clear_desired_key(self, node_id: str, key: str) -> None:
-        """Consumption ack (injection/excision): clear the one-shot from state."""
-        async with self.engine.begin() as conn:
-            row = (await conn.execute(
-                select(desired_state).where(
-                    desired_state.c.node_id == node_id,
-                    desired_state.c.org_id == current_org_id(),
-                )
-            )).first()
-            if row is None:
-                return
-            state = dict(row.state_json)
-            if key in state:
-                state.pop(key)
-                await conn.execute(
-                    update(desired_state)
-                    .where(
-                        desired_state.c.node_id == node_id,
-                        desired_state.c.org_id == current_org_id(),
-                    )
-                    .values(version=row.version + 1, state_json=state)
-                )
 
     async def upsert_reported(
         self, node_id: str, applied_version: int, level: str,
@@ -611,21 +738,29 @@ class Store:
     # ── facts ─────────────────────────────────────────────────────────────────
 
     async def append_fact(self, node_id: str, fact: dict[str, Any], ts: str) -> bool:
-        """Append-only: a duplicate fact_id is refused, never replaced."""
-        async with self.engine.begin() as conn:
-            dup = (await conn.execute(
-                select(facts.c.fact_id).where(
-                    facts.c.fact_id == fact["fact_id"],
-                    facts.c.org_id == current_org_id(),
-                )
-            )).first()
-            if dup is not None:
-                return False
-            await conn.execute(insert(facts).values(
-                fact_id=fact["fact_id"], node_id=node_id,
-                fact_json=fact, created_ts=ts, org_id=current_org_id(),
-            ))
-            return True
+        """Append-only: a duplicate fact_id is refused, never replaced.
+
+        The primary key is the real arbiter — two concurrent appends of one
+        fact_id both pass the check, and the loser is refused here rather than
+        raising, which is the same answer it would have got a millisecond later.
+        """
+        try:
+            async with self.engine.begin() as conn:
+                dup = (await conn.execute(
+                    select(facts.c.fact_id).where(
+                        facts.c.fact_id == fact["fact_id"],
+                        facts.c.org_id == current_org_id(),
+                    )
+                )).first()
+                if dup is not None:
+                    return False
+                await conn.execute(insert(facts).values(
+                    fact_id=fact["fact_id"], node_id=node_id,
+                    fact_json=fact, created_ts=ts, org_id=current_org_id(),
+                ))
+                return True
+        except IntegrityError:
+            return False
 
     async def node_facts(self, node_id: str) -> list[dict[str, Any]]:
         async with self.engine.connect() as conn:
@@ -694,7 +829,6 @@ class Store:
         ]
 
     async def delete_api_key(self, key_id: str) -> bool:
-        from sqlalchemy import delete
         async with self.engine.begin() as conn:
             result = await conn.execute(
                 delete(api_keys).where(
@@ -707,6 +841,14 @@ class Store:
     # ── pins (regression corpus, decision 11) ─────────────────────────────────
 
     async def pin(self, run_id: str, side: str, label: str = "") -> None:
+        """Pin a run into the corpus, or move its side/label. Idempotent, and a
+        concurrent first pin of the same run resolves to one row."""
+        try:
+            await self._pin(run_id, side, label)
+        except IntegrityError:
+            await self._pin(run_id, side, label)  # the row now exists: update it
+
+    async def _pin(self, run_id: str, side: str, label: str) -> None:
         async with self.engine.begin() as conn:
             dup = (await conn.execute(
                 select(pins.c.run_id).where(
@@ -733,8 +875,6 @@ class Store:
         cutoff, with their events, pins and share links. Plane state (facts,
         desired/reported) is node-scoped operational state and is kept.
         created_ts is ISO-8601, so lexicographic compare is chronological."""
-        from sqlalchemy import delete
-
         async with self.engine.begin() as conn:
             old_ids = [
                 r.run_id for r in (await conn.execute(
@@ -817,6 +957,19 @@ class Store:
         """Persist a subscription; idempotent on (url, trigger-set, pattern) so
         a repeated subscribe or a boot rehydrate never multiplies deliveries."""
         joined = ",".join(sorted(triggers))
+        try:
+            await self._add_subscription(url, joined, debounce_seconds, label,
+                                         node_pattern)
+        except IntegrityError:
+            # The unique constraint decided; the row exists, so re-run and the
+            # duplicate branch updates it instead.
+            await self._add_subscription(url, joined, debounce_seconds, label,
+                                         node_pattern)
+
+    async def _add_subscription(
+        self, url: str, joined: str, debounce_seconds: float,
+        label: str, node_pattern: str,
+    ) -> None:
         async with self.engine.begin() as conn:
             dup = (await conn.execute(
                 select(notification_subs.c.id).where(
@@ -868,6 +1021,14 @@ class Store:
         return row.value if row is not None else None
 
     async def set_setting(self, key: str, value: Any) -> None:  # noqa: ANN401 - JSON
+        """Write one KV row for this tenant. Retried once on a concurrent first
+        write of the same key, which turns the insert into an update."""
+        try:
+            await self._set_setting(key, value)
+        except IntegrityError:
+            await self._set_setting(key, value)
+
+    async def _set_setting(self, key: str, value: Any) -> None:  # noqa: ANN401
         async with self.engine.begin() as conn:
             existing = (await conn.execute(
                 select(settings.c.key).where(
@@ -1010,6 +1171,14 @@ class Store:
         """Store an accepted package; idempotent on package_id (a re-upload of
         the same bytes is acknowledged, never duplicated). Returns True when
         the row is new."""
+        try:
+            return await self._add_lab_deploy(package_id, package, pins_created, ts)
+        except IntegrityError:
+            return False  # a concurrent upload of the same bytes won the race
+
+    async def _add_lab_deploy(
+        self, package_id: str, package: dict[str, Any], pins_created: int, ts: str,
+    ) -> bool:
         async with self.engine.begin() as conn:
             dup = (await conn.execute(
                 select(lab_deploys.c.package_id)
@@ -1069,20 +1238,29 @@ class Store:
         backoff, potentially far from the request that emitted it, so the
         tenant is captured at emit time rather than read from the ambient
         context here."""
+        tenant = org if org is not None else current_org_id()
         async with self.engine.begin() as conn:
             await conn.execute(insert(dead_letters).values(
                 url=url, payload_json=payload, error=error[:500],
-                attempts=attempts, created_ts=created_ts,
-                org_id=org if org is not None else current_org_id(),
+                attempts=attempts, created_ts=created_ts, org_id=tenant,
             ))
-            # Keep only the newest `cap` rows — same bound the in-memory deque
-            # had, enforced in SQL so the table cannot grow without limit.
-            keep = select(dead_letters.c.id).order_by(
-                dead_letters.c.id.desc()
-            ).limit(cap).subquery()
+            # Keep only the newest `cap` rows OF THIS TENANT — the same bound the
+            # in-memory deque had, enforced in SQL so the table cannot grow
+            # without limit. The cap used to be global, which made this the one
+            # table where a tenant could destroy another tenant's data: an org
+            # with a broken webhook evicted everyone else's dead letters, and a
+            # dead letter is precisely the evidence that deliveries were lost.
+            keep = (
+                select(dead_letters.c.id)
+                .where(dead_letters.c.org_id == tenant)
+                .order_by(dead_letters.c.id.desc())
+                .limit(cap)
+                .subquery()
+            )
             await conn.execute(
                 delete(dead_letters).where(
-                    dead_letters.c.id.not_in(select(keep.c.id))
+                    dead_letters.c.org_id == tenant,
+                    dead_letters.c.id.not_in(select(keep.c.id)),
                 )
             )
 
@@ -1098,6 +1276,43 @@ class Store:
              "attempts": r.attempts, "created_ts": r.created_ts}
             for r in rows
         ]
+
+
+async def _stored_coordinates(
+    conn: Any,  # noqa: ANN401 - SQLAlchemy AsyncConnection
+    run_id: str,
+    org: str,
+    lines: list[dict[str, Any]],
+    default_node: str,
+) -> set[tuple[str, int]]:
+    """The ``(node_id, seq)`` pairs of this batch that the run ALREADY holds.
+
+    Bounded by the batch, not by the run. Loading every coordinate of the run
+    made each append cost more as the run grew — quadratic over a long-lived
+    node's keepalive run. The node/seq filters are a superset of the batch (a
+    cross product, not tuple-IN, which is not portable), so the result is
+    intersected with the batch before it is returned.
+    """
+    wanted = {(str(ln.get("node_id", default_node)), int(ln["seq"])) for ln in lines}
+    if not wanted:
+        return set()
+    rows = (await conn.execute(
+        select(events.c.node_id, events.c.seq).where(
+            events.c.run_id == run_id,
+            events.c.org_id == org,
+            events.c.node_id.in_({n for n, _ in wanted}),
+            events.c.seq.in_({s for _, s in wanted}),
+        )
+    )).all()
+    return {(r.node_id, r.seq) for r in rows} & wanted
+
+
+def _run_row(row: Any) -> dict[str, Any]:  # noqa: ANN401 - SQLAlchemy Row
+    return {
+        "run_id": row.run_id, "node_id": row.node_id, "scenario": row.scenario,
+        "intervened": row.intervened, "completed": row.completed,
+        "evidence": row.evidence_json, "created_ts": row.created_ts,
+    }
 
 
 def _subscription_row(row: Any) -> dict[str, Any]:  # noqa: ANN401 - SQLAlchemy Row

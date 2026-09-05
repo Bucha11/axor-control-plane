@@ -47,9 +47,15 @@ async def ingest(
     await register_trace_derivations(graph, run_id, events)
     # This run's causal subgraphs were derived from a shorter event list.
     cache.drop_run(current_org_id(), run_id)
-    for line in events:
-        bus.publish(topic("run", run_id), {"type": "event", "line": line})
-    return {"stored": stored}
+    # Only what was actually STORED goes on the wire, carrying the id a
+    # reconnecting subscriber resumes from. Publishing the request's lines
+    # instead re-broadcast every event of a duplicate batch, with no cursor.
+    for event_id, line in stored:
+        bus.publish(
+            topic("run", run_id),
+            {"type": "event", "id": event_id, "line": line},
+        )
+    return {"stored": len(stored)}
 
 
 @router.post("/runs/{run_id}/evidence")
@@ -98,7 +104,13 @@ async def run_stream(
     last_event_id: str | None = Header(default=None, alias="Last-Event-ID"),
 ) -> EventSourceResponse:
     """Live colour-coded audit stream (spec section 8): replay from
-    Last-Event-ID (seq), then live events."""
+    Last-Event-ID, then live events.
+
+    The SSE id is the stored event's id, not its seq. seq is monotonic per node,
+    so on a multi-node run the ids repeated and a reconnect resumed from a
+    cursor that meant something different for every node — dropping whatever had
+    a lower seq on the nodes that were behind.
+    """
     # Bind the tenant before the body starts streaming: the generator below is
     # iterated after this handler returns, and the ambient org is not guaranteed
     # to still be set by then.
@@ -109,19 +121,25 @@ async def run_stream(
         try:
             # A malformed Last-Event-ID must not kill the stream — replay all.
             try:
-                after = int(last_event_id) if last_event_id else -1
+                after = int(last_event_id) if last_event_id else 0
             except ValueError:
-                after = -1
-            for line in await store.run_events(run_id, after_seq=after):
-                parsed = json.loads(line)
-                yield {"event": "event", "id": str(parsed["seq"]), "data": line}
+                after = 0
+            delivered = after
+            for event_id, line in await store.run_events_after(run_id, after):
+                delivered = event_id
+                yield {"event": "event", "id": str(event_id), "data": line}
             while True:
                 message = await queue.get()
-                line_dict = message["line"]
+                # A live message published before this subscriber finished its
+                # replay would otherwise be sent twice.
+                event_id = int(message.get("id") or 0)
+                if event_id and event_id <= delivered:
+                    continue
+                delivered = max(delivered, event_id)
                 yield {
                     "event": "event",
-                    "id": str(line_dict.get("seq", "")),
-                    "data": json.dumps(line_dict, sort_keys=True),
+                    "id": str(event_id) if event_id else "",
+                    "data": json.dumps(message["line"], sort_keys=True),
                 }
         finally:
             bus.unsubscribe(run_topic, queue)

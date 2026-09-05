@@ -26,8 +26,10 @@ router = APIRouter(prefix="/v1", tags=["share"])
 
 
 async def _case_run(store: Store, run_id: str, case_index: int) -> dict:
-    runs = {r["run_id"]: r for r in await store.list_runs()}
-    run = runs.get(run_id)
+    # One row, one query. This used to build a dict from `list_runs()` and index
+    # into it — reading every run in the tenant, with every EvidenceCase blob,
+    # to find one. `GET /v1/share/{token}` is unauthenticated and did that.
+    run = await store.get_run(run_id)
     if run is None or case_index >= len(run["evidence"]):
         raise HTTPException(404, "no such case")
     return run

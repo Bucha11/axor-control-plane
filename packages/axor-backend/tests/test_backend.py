@@ -269,3 +269,37 @@ async def test_regression_report_both_sides(client: httpx.AsyncClient) -> None:
     assert by_id["run_attack"]["result"] == "held"
     assert by_id["run_legit"]["result"] == "regressed"
     assert by_id["run_legit"]["new_denial"]["category"] == "capability"
+
+
+async def test_two_commands_signed_for_one_version_cannot_both_apply(
+    client: httpx.AsyncClient, signing_key: SigningKey,
+) -> None:
+    """The operator signature covers (node_id, version, delta, timestamp), so a
+    command may only land at the version it was signed for.
+
+    The route's own stale-version check is check-then-act — two commands
+    claiming version 1 both read "expected 1" and both passed it. The store used
+    to merge them into versions 1 and 2, which meant the second command was
+    stored under a version its signature does not cover: the audit record and
+    the signature disagree. Now the loser is refused and re-signs.
+    """
+    import asyncio
+
+    both = await asyncio.gather(
+        client.post("/v1/plane/n_sig/command",
+                    json=_cmd(signing_key, "n_sig", 1, {"a": 1})),
+        client.post("/v1/plane/n_sig/command",
+                    json=_cmd(signing_key, "n_sig", 1, {"b": 2})),
+        return_exceptions=True,
+    )
+    codes = sorted(r.status_code for r in both)
+    assert codes == [202, 409], f"expected one accept and one refusal, got {codes}"
+
+    winner = next(r for r in both if r.status_code == 202).json()
+    assert winner["version"] == 1
+    # Exactly the winning delta is stored — the refused one left no trace.
+    nodes = (await client.get("/v1/plane/nodes")).json()
+    desired = next(n for n in nodes if n["node_id"] == "n_sig")["desired"]
+    assert desired["version"] == 1
+    assert desired["state"] == winner["state"]
+    assert len(desired["state"]) == 1, "the refused command must not be merged in"

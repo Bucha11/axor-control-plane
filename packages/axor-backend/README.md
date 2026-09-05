@@ -19,7 +19,7 @@ Modules:
 | `corpus.py` / `traces.py` | the pinned-corpus report (shared by route and scheduler); reading a run back as a kernel trace |
 | `routers/` | the HTTP surface, one module per domain; `ALL_ROUTERS` is the single registration point |
 | `plane.py` | plane service (protocol v0.2): `/command`, `/desired` (SSE), `/telemetry`, `/facts`, `/cascade-stop` |
-| `storage.py` | append-only events + runs/desired/reported/facts/pins/keys/share-links/notification-subs; JSON→JSONB on Postgres |
+| `storage.py` | append-only events + runs/desired/reported/facts/pins/keys/share-links/notification-subs; JSON→JSONB on Postgres. Events read back in append order (`events.id`), which is causal order — per-node `seq` is not. Desired-state writes are versioned CAS: a signed command lands only at the version it was signed for. |
 | `replay_api.py` | config→`KernelConfig`, scrubber/counterfactual payloads |
 | `graph.py` | taint graph — a derived index over the event log; `InMemoryGraphStore` (default, rebuilt from the DB at boot) + `KuzuGraphStore`; trace→derivation folding |
 | `signing.py` | operator command signing — delegates JCS to `axor_core.kernel.canonicalize` |
