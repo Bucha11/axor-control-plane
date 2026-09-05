@@ -36,6 +36,10 @@ from axor_backend.tenancy import current_org_id, topic
 
 router = APIRouter(prefix="/v1/plane")
 
+# The degradation ladder, as an order. A node climbs it on its own; the plane
+# only records where it says it is, and pages on the way UP.
+_LEVELS = {"NORMAL": 0, "CAUTIOUS": 1, "RESTRICTED": 2, "LOCKED": 3, "TERMINAL": 4}
+
 
 def _ctx(request: Request) -> Any:  # noqa: ANN401 - app.state is dynamic
     return request.app.state
@@ -178,45 +182,79 @@ async def telemetry(
     # memory, so its size is a resource the caller controls.
     lines: list[dict[str, Any]] = check_batch_size(body.get("events", []))
     await ctx.store.upsert_run(run_id, node_id, body.get("scenario", "live"), now())
-    stored = await ctx.store.ingest_events(run_id, node_id, lines, idempotency_key)
-    notifier = getattr(ctx, "notifier", None)
-    _LEVELS = {"NORMAL": 0, "CAUTIOUS": 1, "RESTRICTED": 2, "LOCKED": 3, "TERMINAL": 4}
-    for line in lines:
-        kind = line.get("kind")
-        if kind == "heartbeat":
-            hb = line.get("payload", {})
-            prior = await ctx.store.get_reported(node_id)
-            await ctx.store.upsert_reported(
-                node_id,
-                applied_version=int(hb.get("applied_version", 0)),
-                level=str(hb.get("level", "NORMAL")),
-                budget_remaining=hb.get("budget_remaining"),
-                ts=now(),
-            )
-            ctx.broadcast.publish(
-                topic("plane", node_id),
-                {"type": "reported", "node_id": node_id, "reported": hb},
-            )
-            # Notify on an upward level transition (spec section 16 trigger).
-            new_level = str(hb.get("level", "NORMAL"))
-            old_level = prior["level"] if prior else "NORMAL"
-            if notifier is not None and _LEVELS.get(new_level, 0) > _LEVELS.get(old_level, 0):
-                await notifier.emit(
-                    "level_transition_up", node_id,
-                    {"from": old_level, "to": new_level,
-                     "permalink": f"/v1/plane/nodes#{node_id}"},
-                )
-        if kind == "operator_intervention":
-            await ctx.store.mark_intervened(run_id)
-    # Only the events that were actually STORED reach the audit stream, each
-    # carrying the id a reconnecting subscriber resumes from. Publishing the
-    # request's lines re-broadcast a duplicate batch in full, with no cursor.
-    for event_id, line in stored:
+    # Delivery is at-least-once: a batch is resent whenever its ack is lost, so
+    # applying its effects again would overwrite the node's reported state with a
+    # level it had already left — a node degraded to LOCKED read NORMAL in the
+    # console, which is the plane's one job told backwards. The Idempotency-Key
+    # is what says "already accepted", and it is the ONLY thing that says it.
+    # Whether rows were written does not: an adapter that restarts numbers its
+    # events from zero again on the same keepalive run, so a genuinely new report
+    # can collide with the previous process's rows and store nothing. Gating on
+    # that would make a restarted node go permanently dark.
+    result = await ctx.store.ingest_events(run_id, node_id, lines, idempotency_key)
+    if not result.replayed:
+        await _fold_reported(ctx, node_id, run_id, lines)
+    # Each stored event carries the id a reconnecting subscriber resumes from.
+    for event_id, line in result.rows:
         ctx.broadcast.publish(
             topic("run", run_id),
             {"type": "event", "id": event_id, "line": line},
         )
-    return {"stored": len(stored)}
+    return {"stored": len(result.rows)}
+
+
+async def _fold_reported(
+    ctx: Any,  # noqa: ANN401 - app.state is dynamic
+    node_id: str,
+    run_id: str,
+    lines: list[dict[str, Any]],
+) -> None:
+    """Fold a batch's heartbeats into the node's reported state, once.
+
+    Only the last heartbeat survives in the store — reported state is LWW — so
+    the batch is walked to find it and written once, rather than read-and-written
+    per line. The walk still compares each step, because a batch that climbs
+    NORMAL -> LOCKED -> NORMAL really did reach LOCKED, and the operator is
+    entitled to be told even though nothing in the store will remember it.
+    """
+    heartbeats = [ln for ln in lines if ln.get("kind") == "heartbeat"]
+    if any(ln.get("kind") == "operator_intervention" for ln in lines):
+        await ctx.store.mark_intervened(run_id)
+    if not heartbeats:
+        return
+
+    prior = await ctx.store.get_reported(node_id)          # one read
+    level = prior["level"] if prior else "NORMAL"
+    climbs: list[tuple[str, str]] = []
+    for line in heartbeats:
+        reached = str((line.get("payload") or {}).get("level", "NORMAL"))
+        if _LEVELS.get(reached, 0) > _LEVELS.get(level, 0):
+            climbs.append((level, reached))
+        level = reached
+
+    last = heartbeats[-1].get("payload") or {}
+    await ctx.store.upsert_reported(                        # one write
+        node_id,
+        applied_version=int(last.get("applied_version", 0)),
+        level=str(last.get("level", "NORMAL")),
+        budget_remaining=last.get("budget_remaining"),
+        ts=now(),
+    )
+    # Broadcast what was STORED, so a live panel and a reload agree.
+    ctx.broadcast.publish(
+        topic("plane", node_id),
+        {"type": "reported", "node_id": node_id, "reported": last},
+    )
+    # Upward degradation transition — spec §16 trigger.
+    notifier = getattr(ctx, "notifier", None)
+    if notifier is None:
+        return
+    for from_level, to_level in climbs:
+        await notifier.emit(
+            "level_transition_up", node_id,
+            {"from": from_level, "to": to_level,
+             "permalink": f"/v1/plane/nodes#{node_id}"},
+        )
 
 
 @router.post("/{node_id}/facts", status_code=201)
@@ -322,6 +360,14 @@ async def post_probe_report(node_id: str, body: dict, request: Request) -> dict:
             raise HTTPException(
                 400, f"each family needs a state in {sorted(_FAMILY_STATES)}"
             )
+        # `family` is validated because it is READ below, when a DRIFT_DETECTED
+        # report names the escaped families in its notification. Checking only
+        # `state` left the name unchecked, so a report without one raised a
+        # KeyError — a 500 on the route a node posts its own health to, which
+        # axor-wrap treats as a programming error and re-raises. The battery
+        # crashed instead of the report being rejected.
+        if not isinstance(fam.get("family"), str) or not fam["family"]:
+            raise HTTPException(400, "each family needs a non-empty `family` name")
     report_id = await ctx.store.add_probe_report(node_id, body, now())
     ctx.broadcast.publish(
         topic("plane", node_id),
@@ -413,14 +459,17 @@ async def topology(request: Request) -> dict:
     # Plane-connected nodes with no traced edges still render (size-1 lists).
     for nid in await ctx.store.list_nodes():
         touch(nid)
+    # Two queries for the whole fleet, not two per node.
+    desired_by_node = await ctx.store.all_desired()
+    reported_by_node = await ctx.store.all_reported()
     for n in nodes.values():
         if n["kind"] != "self":
             continue  # foreign peers are opaque: no posture, no interventions
-        current = await ctx.store.get_desired(n["node_id"])
+        current = desired_by_node.get(n["node_id"])
         n["desired"] = (
             {"version": current[0], "state": current[1]} if current else None
         )
-        n["reported"] = await ctx.store.get_reported(n["node_id"])
+        n["reported"] = reported_by_node.get(n["node_id"])
     return {
         "nodes": sorted(nodes.values(), key=lambda n: n["node_id"]),
         "edges": sorted(edges.values(), key=lambda e: (e["from"], e["to"], e["kind"])),
@@ -432,16 +481,21 @@ async def nodes(request: Request) -> list[dict]:
     """Topology data: desired next to reported — divergence is rendered, not
     hidden (protocol, section 5)."""
     ctx = _ctx(request)
+    # Four queries for the whole fleet. Built per node this cost three round
+    # trips each — 151 of them for 50 nodes, on a surface the UI polls.
+    desired_by_node = await ctx.store.all_desired()
+    reported_by_node = await ctx.store.all_reported()
+    facts_by_node = await ctx.store.facts_by_node()
     out = []
     for node_id in await ctx.store.list_nodes():
-        current = await ctx.store.get_desired(node_id)
+        current = desired_by_node.get(node_id)
         out.append({
             "node_id": node_id,
             "desired": (
                 {"version": current[0], "state": current[1]} if current else None
             ),
-            "reported": await ctx.store.get_reported(node_id),
-            "facts": await ctx.store.node_facts(node_id),
+            "reported": reported_by_node.get(node_id),
+            "facts": facts_by_node.get(node_id, []),
         })
     return out
 

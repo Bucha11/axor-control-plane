@@ -42,7 +42,7 @@ async def ingest(
     node_id = body.get("node_id", "proxy")
     events = check_batch_size(body.get("events", []))
     await store.upsert_run(run_id, node_id, body.get("scenario", "custom"), now())
-    stored = await store.ingest_events(run_id, node_id, events, idempotency_key)
+    result = await store.ingest_events(run_id, node_id, events, idempotency_key)
     # Fold the trace's value provenance into the taint graph (spec decision 6).
     await register_trace_derivations(graph, run_id, events)
     # This run's causal subgraphs were derived from a shorter event list.
@@ -50,12 +50,12 @@ async def ingest(
     # Only what was actually STORED goes on the wire, carrying the id a
     # reconnecting subscriber resumes from. Publishing the request's lines
     # instead re-broadcast every event of a duplicate batch, with no cursor.
-    for event_id, line in stored:
+    for event_id, line in result.rows:
         bus.publish(
             topic("run", run_id),
             {"type": "event", "id": event_id, "line": line},
         )
-    return {"stored": len(stored)}
+    return {"stored": len(result.rows)}
 
 
 @router.post("/runs/{run_id}/evidence")

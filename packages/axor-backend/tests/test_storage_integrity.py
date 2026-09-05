@@ -80,15 +80,35 @@ async def test_the_stream_cursor_is_the_event_id_not_the_seq(store: Store) -> No
     assert len(await store.run_events_after("r", ids[1])) == 2
 
 
-async def test_ingest_returns_the_ids_it_stored_and_nothing_else(
+async def test_ingest_separates_a_replayed_batch_from_an_unwritten_one(
     store: Store,
 ) -> None:
-    """The audit stream publishes what was stored, with its cursor. A duplicate
-    batch stores nothing, so it must broadcast nothing."""
+    """Two different answers that used to be the same empty list.
+
+    A REPLAY (the Idempotency-Key was seen) means every side effect the batch
+    implies has already happened — re-applying its heartbeat overwrites the
+    node's state with a level it has since left. Rows failing to WRITE means
+    only that the coordinates collide: an adapter that restarts numbers its
+    events from zero again on the same keepalive run, so a genuinely new report
+    stores nothing while carrying new state. Treating that as a replay makes a
+    restarted node go permanently dark.
+    """
     await store.upsert_run("r", "a", "s", "2026-01-01T00:00:00")
+
     first = await store.ingest_events("r", "a", [_line("a", 0)], "batch-1")
-    assert [line for _, line in first] == [_line("a", 0)]
-    assert await store.ingest_events("r", "a", [_line("a", 0)], "batch-1") == []
+    assert first.replayed is False
+    assert [line for _, line in first.rows] == [_line("a", 0)]
+
+    # Same batch, same key: a replay.
+    replay = await store.ingest_events("r", "a", [_line("a", 0)], "batch-1")
+    assert replay.replayed is True
+    assert replay.rows == []
+
+    # A NEW batch whose coordinates happen to collide: not a replay, even
+    # though nothing could be written.
+    restarted = await store.ingest_events("r", "a", [_line("a", 0)], "batch-2")
+    assert restarted.replayed is False
+    assert restarted.rows == []
 
 
 # ── deduplication ─────────────────────────────────────────────────────────────

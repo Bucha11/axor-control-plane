@@ -7,10 +7,12 @@ backend persists and fans out, it does not interpret).
 """
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import json
+import random
 from collections.abc import Callable
-from typing import Any
+from typing import Any, NamedTuple
 
 from sqlalchemy import (
     JSON,
@@ -269,6 +271,38 @@ api_keys = Table(
 )
 
 
+# Upper bound on one optimistic-write backoff. Deliberately tiny: the contention
+# it breaks up lasts as long as a single UPDATE.
+_BACKOFF_CEILING_SECONDS = 0.01
+
+
+class IngestResult(NamedTuple):
+    """What one telemetry batch did.
+
+    ``replayed`` and an empty ``rows`` are NOT the same thing, and conflating
+    them is a bug in both directions:
+
+    * ``replayed`` — the Idempotency-Key was seen before, so this exact batch has
+      already been accepted and every side effect it implies has already
+      happened. Doing them again re-applies a stale heartbeat.
+    * empty ``rows`` with ``replayed`` false — nothing was WRITTEN, because the
+      coordinates collide with rows already in the log. That says something
+      about the event log, not about the report: an adapter that restarts numbers
+      its events from zero again on the same keepalive run, so its heartbeats
+      collide with the previous process's while carrying genuinely new state.
+      Treating that as a replay makes a restarted node go permanently dark.
+    """
+
+    replayed: bool
+    rows: list[tuple[int, dict[str, Any]]]
+
+    def __len__(self) -> int:
+        return len(self.rows)
+
+    def __iter__(self):  # noqa: ANN204 - iterating a result yields its rows
+        return iter(self.rows)
+
+
 class _NoSuchNode(Exception):
     """Internal: `_merge_desired` was asked to edit a node with no desired
     state. Only `clear_desired_key` can hit it, where it means the ack arrived
@@ -358,9 +392,8 @@ class Store:
     async def ingest_events(
         self, run_id: str, node_id: str, lines: list[dict[str, Any]],
         idempotency_key: str | None,
-    ) -> list[tuple[int, dict[str, Any]]]:
-        """Append a telemetry batch, returning the events actually stored as
-        ``(event_id, line)`` — empty on a duplicate batch.
+    ) -> IngestResult:
+        """Append a telemetry batch, returning what it did (:class:`IngestResult`).
 
         The id matters to the caller: it is the cursor the live audit stream
         hands clients as the SSE ``id:`` field, and the only value a reconnect
@@ -382,7 +415,7 @@ class Store:
                     )
                 )).first()
                 if dup is not None:
-                    return []
+                    return IngestResult(replayed=True, rows=[])
                 await conn.execute(insert(ingest_keys).values(
                     key=idempotency_key, org_id=org,
                 ))
@@ -402,12 +435,15 @@ class Store:
                     "kind": line["kind"], "line": line, "org_id": org,
                 })
             if not payload:
-                return []
+                return IngestResult(replayed=False, rows=[])
             # One statement, not one per event. At the 10k-per-request ceiling
             # the row-at-a-time loop took seconds of round-trips inside a single
             # transaction; RETURNING hands back the ids in insertion order.
             result = await conn.execute(insert(events).returning(events.c.id), payload)
-            return list(zip((r.id for r in result), fresh, strict=True))
+            return IngestResult(
+                replayed=False,
+                rows=list(zip((r.id for r in result), fresh, strict=True)),
+            )
 
     async def run_events(self, run_id: str) -> list[str]:
         """The run's events in APPEND order — which is causal order.
@@ -575,14 +611,24 @@ class Store:
         require_existing: bool = False,
         skip_if_unchanged: bool = False,
         expect_version: int | None = None,
-        attempts: int = 8,
+        attempts: int = 12,
     ) -> tuple[int, dict[str, Any]]:
         """Read the node's desired state, merge, and write it back only if
-        nobody else moved the version meanwhile. Returns (version, state)."""
+        nobody else moved the version meanwhile. Returns (version, state).
+
+        Losers back off with jitter before re-reading. Retrying in lockstep is
+        how optimistic concurrency livelocks: N contenders that all sleep for
+        nothing collide again on the next pass, and against a real Postgres a
+        dozen simultaneous commands could exhaust a fixed retry count without
+        any of them being wrong. The sleep is sub-millisecond — it exists to
+        de-synchronise the stampede, not to wait for anything.
+        """
         org = current_org_id()
         if expect_version is not None:
             attempts = 1  # a signed command is valid for one version only
-        for _ in range(attempts):
+        for attempt in range(attempts):
+            if attempt:
+                await asyncio.sleep(random.uniform(0, _BACKOFF_CEILING_SECONDS))
             try:
                 async with self.engine.begin() as conn:
                     row = (await conn.execute(
@@ -708,6 +754,52 @@ class Store:
             {"node_id": r.node_id, "level": r.level, "updated_ts": r.updated_ts}
             for r in rows
         ]
+
+    # ── fleet-wide reads ──────────────────────────────────────────────────────
+    # The plane's two read surfaces render EVERY node at once, and the UI polls
+    # them. Built from the per-node getters they were one query per node per
+    # field: 50 nodes cost /v1/plane/nodes 151 round trips and /v1/plane/topology
+    # 102. These answer the same questions in one query each.
+
+    async def all_desired(self) -> dict[str, tuple[int, dict[str, Any]]]:
+        """node_id -> (version, state) for every commanded node in this tenant."""
+        async with self.engine.connect() as conn:
+            rows = (await conn.execute(
+                select(desired_state).where(
+                    desired_state.c.org_id == current_org_id()
+                )
+            )).all()
+        return {r.node_id: (r.version, r.state_json) for r in rows}
+
+    async def all_reported(self) -> dict[str, dict[str, Any]]:
+        """node_id -> the full reported row, as `get_reported` returns it."""
+        async with self.engine.connect() as conn:
+            rows = (await conn.execute(
+                select(reported_state).where(
+                    reported_state.c.org_id == current_org_id()
+                )
+            )).all()
+        return {
+            r.node_id: {
+                "applied_version": r.applied_version, "level": r.level,
+                "budget_remaining": r.budget_remaining,
+                "updated_ts": r.updated_ts,
+            }
+            for r in rows
+        }
+
+    async def facts_by_node(self) -> dict[str, list[dict[str, Any]]]:
+        """node_id -> its facts, oldest first, for every node in this tenant."""
+        async with self.engine.connect() as conn:
+            rows = (await conn.execute(
+                select(facts.c.node_id, facts.c.fact_json)
+                .where(facts.c.org_id == current_org_id())
+                .order_by(facts.c.created_ts)
+            )).all()
+        grouped: dict[str, list[dict[str, Any]]] = {}
+        for row in rows:
+            grouped.setdefault(row.node_id, []).append(row.fact_json)
+        return grouped
 
     async def topology_events(self) -> list[dict[str, Any]]:
         """All structure-bearing trace lines (spec v2 Ch.4 §6): spawn and
