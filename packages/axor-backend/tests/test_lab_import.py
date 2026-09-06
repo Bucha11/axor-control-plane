@@ -23,25 +23,19 @@ from axor_backend.app import create_app
 
 lab_contracts = pytest.importorskip("lab_contracts")
 lab_runner = pytest.importorskip("lab_runner")
-# axor-lab moved the kernel, replay, verdict pinning and the Control Plane
-# bridge out of `lab_runner` and into `lab_capabilities.governance`: governance
-# is a capability there now, not the spine (Suite Platform RFC §10).
-lab_governance = pytest.importorskip("lab_capabilities.governance")
 
-from axor_backend.lab_trace import config_dict_from_manifests  # noqa: E402
-from lab_capabilities.governance import (  # noqa: E402
-    Kernel,
-    KernelRegistry,
-    axor_available,
-    real_kernel_version,
-    run_experiment_suite,
-)
-from lab_capabilities.governance.cp_export import (  # noqa: E402
-    export_cp,
-    export_cp_template,
-)
+# These used to come from `lab_capabilities.governance`, on the strength of a
+# comment saying axor-lab had moved the kernel, replay, verdict pinning and the
+# Control Plane bridge there. axor-lab has no such package, so that
+# `importorskip` never resolved and this module was skipped in EVERY
+# environment — including a developer checkout with axor-lab installed, which is
+# the only audience it has. Imported from where the code is.
 from lab_contracts import build_bundle, condition_config_hash, content_hash  # noqa: E402
+from lab_runner import run_experiment_suite  # noqa: E402
 from lab_runner.agents import ScriptedAgent  # noqa: E402
+from lab_runner.axor_backend import axor_available, real_kernel_version  # noqa: E402
+from lab_runner.cp_export import export_cp, export_cp_template  # noqa: E402
+from lab_runner.kernel import Kernel, KernelRegistry  # noqa: E402
 
 TOKEN = "master-secret-lab"
 KERNEL = "reference_taint_floor_kernel"
@@ -210,6 +204,16 @@ def _real_conditions() -> list[dict[str, object]]:
          "config_hash": condition_config_hash(version, policy)},
     ]
 
+
+
+def _carried_config(package: dict[str, object]) -> dict[str, object]:
+    """The governor config the package carries, for the one scenario it covers.
+
+    The CP used to compile one from the tool manifests, with a compiler that
+    disagreed with the Lab's on every point that mattered. It replays under the
+    carried config now, and so does this report."""
+    configs: dict = package["runtime_configs"]  # type: ignore[assignment]
+    return next(iter(configs.values()))
 
 @pytest.fixture(scope="module")
 def real_cp_deploy() -> dict[str, object]:
@@ -408,12 +412,15 @@ async def test_reference_kernel_pins_stay_skipped_not_substituted(
     assert deploy["pins_created"] == 1
     assert deploy["pins_replayable"] == 0
     assert len(deploy["pins_skipped"]) == 1
-    assert "reference kernel" in deploy["pins_skipped"][0]["reason"]
+    # axor-core is the only kernel now — axor-lab imports it rather than
+    # carrying its own — so a trace naming anything else fails the build
+    # comparison rather than a separate "is this a real kernel" test.
+    assert "kernel build mismatch" in deploy["pins_skipped"][0]["reason"]
     skipped_run_id = deploy["pins_skipped"][0]["run_id"]
 
     report = (await client.post(
         "/v1/regression",
-        json={"config": config_dict_from_manifests(cp_deploy["tool_manifests"])},
+        json={"config": _carried_config(cp_deploy)},
     )).json()
     assert skipped_run_id in report["skipped"]
     assert skipped_run_id not in [r["run_id"] for r in report["rows"]]
@@ -436,7 +443,7 @@ async def test_real_kernel_pins_replay_held_and_passed(
     # replay the corpus under a config compiled from the deployed manifests
     report = (await client.post(
         "/v1/regression",
-        json={"config": config_dict_from_manifests(real_cp_deploy["tool_manifests"])},
+        json={"config": _carried_config(real_cp_deploy)},
     )).json()
     by_run = {r["run_id"]: r for r in report["rows"]}
     lab_rows = {rid: r for rid, r in by_run.items() if rid.startswith("lab:")}
@@ -460,7 +467,7 @@ async def test_real_kernel_deploy_reupload_is_idempotent(
     assert second["pins_replayable"] == first["pins_replayable"]
     report = (await client.post(
         "/v1/regression",
-        json={"config": config_dict_from_manifests(real_cp_deploy["tool_manifests"])},
+        json={"config": _carried_config(real_cp_deploy)},
     )).json()
     # exactly the two lab rows, no duplicates from the second ingest
     assert len([r for r in report["rows"] if r["run_id"].startswith("lab:")]) == 2

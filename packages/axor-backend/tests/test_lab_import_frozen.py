@@ -34,6 +34,7 @@ everything.
 
 from __future__ import annotations
 
+import copy
 import json
 import pathlib
 from typing import Any
@@ -308,3 +309,166 @@ class TestAPinnedVerdictMustAgreeWithItsSequence:
         }])
         reasons = validate_cp_deploy(package)
         assert any("contradicts" in r for r in reasons), reasons
+
+
+# ── the config a pin is replayed under is the one it ran under ────────────────
+
+class TestTheReplayConfigIsCarriedNotRecompiled:
+    """`lab_trace` used to compile a governor config from the tool manifests.
+
+    Its compiler and the Lab's disagreed on every point that mattered. On the
+    same three manifests the Lab produced egress sinks ['send_email'] and the CP
+    produced ['write_file']: the CP read `side_effecting` as egress, never looked
+    at `effect.resolve`, and dropped the allowlist value-policies entirely — it
+    was never even passed the policy they come from. Every pin whose verdict
+    turned on any of that was filed `skipped` with a reason blaming the trace.
+
+    The package carries the config now, and it is checked against the hash
+    recorded beside it.
+    """
+
+    @staticmethod
+    def _plans(package: dict[str, Any]) -> list:
+        return deploy_plans(package, package_id_of(package))
+
+    def test_a_pin_without_its_scenarios_config_is_not_replayed(
+        self, package: dict[str, Any],
+    ) -> None:
+        """Not silently, and not by compiling a substitute."""
+        stripped = {**package, "runtime_configs": {}}
+        plans = self._plans(stripped)
+        assert plans and not any(p.replayable for p in plans)
+        assert all("no runtime config" in str(p.reason) for p in plans), [
+            p.reason for p in plans
+        ]
+
+    def test_a_config_that_is_not_the_one_recorded_is_refused(
+        self, package: dict[str, Any],
+    ) -> None:
+        """The hash travelled with the package long before the config did. A body
+        that does not match it is not what ran, whoever swapped it."""
+        tampered = {
+            **package,
+            "runtime_configs": {
+                sid: {**cfg, "egress_sinks": []}
+                for sid, cfg in package["runtime_configs"].items()
+            },
+        }
+        plans = self._plans(tampered)
+        assert plans and not any(p.replayable for p in plans)
+        assert all("does not match its recorded hash" in str(p.reason)
+                   for p in plans), [p.reason for p in plans]
+
+    def test_the_carried_config_is_what_actually_gates_the_replay(
+        self, package: dict[str, Any],
+    ) -> None:
+        """Drop the egress sink and fix the hash to match: nothing is tampered,
+        the package is internally consistent — and the DENY pin can no longer
+        reproduce, because under that config nothing denies. This is what the
+        recompiled config was silently getting wrong."""
+        from axor_backend.lab_export import content_hash
+
+        neutered = {sid: {**cfg, "egress_sinks": []}
+                    for sid, cfg in package["runtime_configs"].items()}
+        consistent = {
+            **package,
+            "runtime_configs": neutered,
+            "runtime_config_hashes": {sid: content_hash(cfg)
+                                      for sid, cfg in neutered.items()},
+        }
+        plans = {p.side: p for p in self._plans(consistent)}
+        assert not plans["must_block"].replayable
+        assert "would not reproduce" in str(plans["must_block"].reason)
+
+
+# ── a trace body is a trace, and its decisions belong to their own calls ──────
+
+class TestAnEmbeddedBodyIsValidatedBeforeItIsConverted:
+    """The bodies arrive inside an upload and went straight into the converter,
+    which read whatever it was handed. Now that axor-core owns `trace/v1`, the
+    consumer of a trace can check it is one."""
+
+    def test_a_body_that_is_not_a_trace_is_refused(
+        self, package: dict[str, Any],
+    ) -> None:
+        broken = {**package, "regression_traces": {
+            tid: {"trace_id": tid} for tid in package["regression_traces"]
+        }}
+        plans = deploy_plans(broken, package_id_of(broken))
+        # the ref check fires first for a body this different; either refusal is
+        # honest, but none of them may be replayed
+        assert plans and not any(p.replayable for p in plans)
+
+    def test_a_binding_naming_a_value_the_ledger_lacks_is_refused(
+        self, package: dict[str, Any],
+    ) -> None:
+        """It used to be skipped over, and the call replayed with LESS taint than
+        the trace recorded — the one direction of error that turns a DENY into a
+        PASS."""
+        from axor_backend.lab_trace import TraceNotConvertible, lab_trace_to_events
+
+        body = copy.deepcopy(next(iter(package["regression_traces"].values())))
+        for event in body["events"]:
+            if event.get("type") == "tool_call_intent":
+                event["arg_bindings"] = {"recipient": "v_not_in_the_ledger"}
+        with pytest.raises(TraceNotConvertible, match="absent from the ledger"):
+            lab_trace_to_events(body)
+
+    def test_two_decisions_on_one_call_id_are_refused(
+        self, package: dict[str, Any],
+    ) -> None:
+        """`call_id` exists, per its own definition, so a replay can detect a
+        missing or duplicated decision. A dict comprehension detected neither:
+        the second silently replaced the first."""
+        from axor_backend.lab_trace import TraceNotConvertible, lab_trace_to_events
+
+        body = copy.deepcopy(next(iter(package["regression_traces"].values())))
+        decision = next(e for e in body["events"] if e["type"] == "gate_decision")
+        body["events"].append({**decision, "seq": 99,
+                               "decision": {**decision["decision"],
+                                            "verdict": "ALLOW"}})
+        with pytest.raises(TraceNotConvertible, match="share call_id"):
+            lab_trace_to_events(body)
+
+    def test_a_decision_with_no_call_id_is_refused(
+        self, package: dict[str, Any],
+    ) -> None:
+        """`call_id` is OPTIONAL in trace/v1. Every event without one used to
+        collapse into the single key "None", so in a two-call trace BOTH calls
+        took the last decision recorded and an ALLOW came back carrying someone
+        else's DENY."""
+        from axor_backend.lab_trace import TraceNotConvertible, lab_trace_to_events
+
+        body = copy.deepcopy(next(iter(package["regression_traces"].values())))
+        for event in body["events"]:
+            event.pop("call_id", None)
+        with pytest.raises(TraceNotConvertible, match="no call_id"):
+            lab_trace_to_events(body)
+
+    def test_a_call_with_no_recorded_decision_is_refused(
+        self, package: dict[str, Any],
+    ) -> None:
+        from axor_backend.lab_trace import TraceNotConvertible, lab_trace_to_events
+
+        body = copy.deepcopy(next(iter(package["regression_traces"].values())))
+        body["events"] = [e for e in body["events"] if e["type"] != "gate_decision"]
+        with pytest.raises(TraceNotConvertible, match="no gate_decision"):
+            lab_trace_to_events(body)
+
+
+class TestThePinnedSequenceIsWhatMustReproduce:
+    """The pin carries the whole ordered verdict sequence so a multi-call trace
+    cannot match on its final verdict alone. The CP read it once, checked it
+    against `expected_verdict`, and never used it again — reproduction compared
+    only the last TOOL_CALL."""
+
+    def test_a_pin_claiming_more_calls_than_the_trace_has_is_not_replayed(
+        self, package: dict[str, Any],
+    ) -> None:
+        longer = copy.deepcopy(package)
+        for pin in longer["regressions"]:
+            pin["expected_sequence"] = [*pin["expected_sequence"],
+                                        pin["expected_verdict"]]
+        plans = deploy_plans(longer, package_id_of(longer))
+        assert plans and not any(p.replayable for p in plans)
+        assert all("would not reproduce" in str(p.reason) for p in plans)

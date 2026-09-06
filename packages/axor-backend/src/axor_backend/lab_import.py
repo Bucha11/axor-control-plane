@@ -26,7 +26,7 @@ from typing import Any
 from axor_core.contracts.schemas import validate as validate_schema
 
 from axor_backend.errors import BackendError
-from axor_backend.lab_export import condition_config_hash
+from axor_backend.lab_export import condition_config_hash, content_hash
 from axor_backend.limits import MAX_PINS_PER_PACKAGE
 
 # The schema_version const, the verdict pair and the effect classes were all
@@ -264,24 +264,29 @@ def deploy_plans(package: dict[str, Any], package_id: str) -> list[PinDeployPlan
     whether its carried trace can be faithfully replayed on this CP.
 
     A pin is REPLAYABLE only when the package embeds the pin's trace body, the
-    body content-hashes to the pin's ``trace_ref``, the trace was recorded under
-    the REAL axor-core kernel matching THIS backend's installed build, the trace
-    converts to kernel events, AND replaying those events under a config compiled
-    from the package manifests reproduces the pinned verdict.  Otherwise the pin
-    is created exactly as before and left ``skipped`` with an honest reason — the
-    engine is never substituted to force a replay."""
+    body content-hashes to the pin's ``trace_ref`` and is a valid ``trace/v1``,
+    the trace was recorded under the axor-core build installed HERE, it converts
+    to kernel events, the package carries the config that scenario ran under,
+    that config matches its own recorded hash, AND replaying the events under it
+    reproduces the pinned verdict sequence in order.  Otherwise the pin is
+    created exactly as before and left ``skipped`` with a reason that names which
+    of those failed — never a substituted engine and never a re-derived config.
+    """
     from axor_backend.lab_trace import (
+        TraceNotConvertible,
         events_to_lines,
         installed_kernel_pin,
-        is_real_kernel_version,
+        kernel_config_from_governor_config,
         lab_trace_to_events,
         recorded_kernel_of,
-        reproduces_recorded_verdict,
+        reproduces_recorded_sequence,
         trace_matches_ref,
+        trace_schema_errors,
     )
 
     traces: dict[str, Any] = package.get("regression_traces") or {}
-    manifests: list[dict[str, Any]] = package.get("tool_manifests") or []
+    configs: dict[str, Any] = package.get("runtime_configs") or {}
+    config_hashes: dict[str, Any] = package.get("runtime_config_hashes") or {}
     installed = installed_kernel_pin()
     plans: list[PinDeployPlan] = []
     for pin in package.get("regressions", []):
@@ -302,28 +307,48 @@ def deploy_plans(package: dict[str, Any], package_id: str) -> list[PinDeployPlan
         if not trace_matches_ref(trace, str(pin.get("trace_ref", ""))):
             plans.append(skip("embedded trace body does not match the pin trace_ref"))
             continue
-        recorded_kernel = recorded_kernel_of(trace)
-        if not is_real_kernel_version(recorded_kernel):
+        schema_errors = trace_schema_errors(trace)
+        if schema_errors:
             plans.append(skip(
-                f"recorded under reference kernel ({recorded_kernel!r}); CP replays "
-                "the real axor-core kernel and will not substitute it"
+                f"embedded body is not a valid trace/v1: {schema_errors[0]}"
             ))
             continue
+        recorded_kernel = recorded_kernel_of(trace)
         if recorded_kernel != installed:
             plans.append(skip(
                 f"kernel build mismatch (recorded {recorded_kernel!r}, this CP runs "
                 f"{installed!r}); refusing to claim reproduction under a different build"
             ))
             continue
+        scenario_id = str((trace.get("trial") or {}).get("scenario_id", ""))
+        governor_config = configs.get(scenario_id)
+        if not isinstance(governor_config, dict):
+            plans.append(skip(
+                f"package carries no runtime config for scenario {scenario_id!r}; "
+                "the CP replays the control the verdict was recorded under and "
+                "will not compile a second one from the manifests"
+            ))
+            continue
+        recorded_hash = config_hashes.get(scenario_id)
+        if recorded_hash and content_hash(governor_config) != str(recorded_hash):
+            plans.append(skip(
+                f"runtime config for scenario {scenario_id!r} does not match its "
+                "recorded hash — it is not the config that ran"
+            ))
+            continue
         try:
             events = lab_trace_to_events(trace)
-        except Exception as exc:  # noqa: BLE001 - untrusted embedded body
+        except TraceNotConvertible as exc:
             plans.append(skip(f"trace did not convert to kernel events: {exc}"))
             continue
-        if not reproduces_recorded_verdict(events, str(pin["expected_verdict"]), manifests):
+        sequence = [str(v) for v in pin.get("expected_sequence") or []]
+        if not reproduces_recorded_sequence(
+            events, sequence, kernel_config_from_governor_config(governor_config),
+        ):
             plans.append(skip(
-                "recorded verdict would not reproduce under axor-core replay with the "
-                "package's manifests (leaving skipped rather than faking reproduction)"
+                "recorded verdicts would not reproduce under axor-core replay with "
+                "the config this trace ran under (leaving skipped rather than "
+                "faking reproduction)"
             ))
             continue
         plans.append(PinDeployPlan(
