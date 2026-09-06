@@ -21,14 +21,20 @@ def vendor(monkeypatch) -> dict:  # noqa: ANN001
     key = SigningKey.generate()
     pub = key.verify_key.encode().hex()
     monkeypatch.setenv("AXOR_VENDOR_PUBKEY", pub)
-    lic = sign_license(
-        {"organization": "T", "workspace_tier": "team",
-         "modules": {"private_lab": True, "control_plane": False},
-         "governed_node_ceiling": 10, "self_hosted_runner": False,
-         "expires_at": "2999-01-01", "features": []},
-        bytes(key).hex(),
-    )
+    # `control_plane: True` — these are Control Plane features. The fixture said
+    # False and every test below still passed, because `modules` gated nothing:
+    # `require_ee` takes a `module=` and no caller passed one.
+    lic = sign_license(_license(), bytes(key).hex())
     return {"pub": pub, "priv": bytes(key).hex(), "license_json": lic}
+
+
+def _license(**over: object) -> dict:
+    base = {"organization": "T", "workspace_tier": "team",
+            "modules": {"private_lab": True, "control_plane": True},
+            "governed_node_ceiling": 10, "self_hosted_runner": False,
+            "expires_at": "2999-01-01", "features": []}
+    base.update(over)
+    return base
 
 
 @pytest.fixture
@@ -213,3 +219,176 @@ async def test_routed_subscription_persists_with_fields(
     subs = (await client.get("/v1/notifications/subscriptions")).json()
     routed = next(s for s in subs if s["label"] == "team-a")
     assert routed["node_pattern"] == "team-a-*"
+
+
+# ── what a license has to answer, and each of these answered nothing ──────────
+
+def _signed(vendor: dict, **over: object) -> str:
+    return sign_license(_license(**over), vendor["priv"])
+
+
+def _heartbeat(node_id: str) -> dict:
+    """A node reporting in — what puts it in the fleet `list_nodes` counts."""
+    return {"events": [{"schema_version": "1.0", "seq": 0, "node_id": node_id,
+                        "kind": "heartbeat", "ts": "t", "causal_root": None,
+                        "gate": None, "verdict": None,
+                        "payload": {"applied_version": 0, "level": "NORMAL",
+                                    "budget_remaining": None}}]}
+
+class TestALicenseMustCoverTheModule:
+    """`modules` is inside the signed payload and reported by /status, and it
+    gated nothing: every `require_ee` call omitted `module=`, so a license
+    carrying `control_plane: false` opened the Control Plane. The fixture above
+    shipped exactly that license and every test still passed."""
+
+    async def test_a_license_without_control_plane_does_not_unlock_it(
+        self, client: httpx.AsyncClient, vendor: dict,
+    ) -> None:
+        lab_only = _signed(vendor, modules={"private_lab": True,
+                                            "control_plane": False})
+        assert (await client.post("/v1/license/verify",
+                                  json={"license_json": lab_only})).status_code == 200
+        r = await client.get("/v1/regression/history")
+        assert r.status_code == 402
+        assert "control_plane" in r.json()["detail"], r.json()
+
+    async def test_the_same_license_with_the_module_unlocks_it(
+        self, client: httpx.AsyncClient, vendor: dict,
+    ) -> None:
+        await _activate(client, vendor)
+        assert (await client.get("/v1/regression/history")).status_code == 200
+
+
+class TestALicenseMustBeIssuedToThisDeployment:
+    """The signed payload names the organization the license was issued to, and
+    nothing compared that name to anything — so one purchased file activated in
+    any tenant of any deployment. The name is signed precisely so it can be
+    checked."""
+
+    @pytest.fixture
+    async def bound(self, tmp_path: pathlib.Path, vendor: dict):  # noqa: ANN201
+        app = create_app(database_url=f"sqlite+aiosqlite:///{tmp_path}/b.db",
+                         org="T")
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://backend.test",
+        ) as c, app.router.lifespan_context(app):
+            yield c
+
+    async def test_a_license_issued_to_someone_else_is_refused(
+        self, bound: httpx.AsyncClient, vendor: dict,
+    ) -> None:
+        r = await bound.post("/v1/license/verify",
+                             json={"license_json": _signed(vendor, organization="globex")})
+        assert r.status_code == 403
+        assert "issued to 'globex'" in r.json()["detail"]
+        assert (await bound.get("/v1/license/status")).json()["active"] is False
+
+    async def test_our_own_license_activates(
+        self, bound: httpx.AsyncClient, vendor: dict,
+    ) -> None:
+        r = await bound.post("/v1/license/verify",
+                             json={"license_json": vendor["license_json"]})
+        assert r.status_code == 200
+
+    async def test_an_unbound_deployment_says_so(
+        self, client: httpx.AsyncClient, vendor: dict,
+    ) -> None:
+        """A single-tenant install that pins no AXOR_ORG accepts any license.
+        That is a posture, not a secret: /status reports it, and boot warns —
+        the same shape as AXOR_ALLOW_UNSIGNED."""
+        status = (await client.get("/v1/license/status")).json()
+        assert status["licensed_to"] is None
+        r = await client.post("/v1/license/verify",
+                              json={"license_json": _signed(vendor, organization="anyone")})
+        assert r.status_code == 200
+
+
+class TestAnExpiredLicenseIsNeverActivated:
+    """Expiry was checked when a feature was USED, not when a license was
+    STORED, so /verify answered 200 `activated: true` for a license that expired
+    in 2020 and /status immediately said `active: false` — two answers to one
+    question, in one sitting."""
+
+    async def test_verify_refuses_it_and_stores_nothing(
+        self, client: httpx.AsyncClient, vendor: dict,
+    ) -> None:
+        r = await client.post("/v1/license/verify",
+                              json={"license_json": _signed(vendor, expires_at="2020-01-01")})
+        assert r.status_code == 403
+        assert "expired on 2020-01-01" in r.json()["detail"]
+        assert (await client.get("/v1/license/status")).json()["active"] is False
+
+
+class TestExpiryIsNotTheSameAsNeverHavingPaid:
+    """A license that lapses while active produced the same 402 as no license at
+    all — "add a license in Settings" — so a customer whose renewal slipped by a
+    day read that they had never bought one. `active_license` knows the
+    difference and was collapsing it."""
+
+    async def test_the_402_names_the_expiry_date(
+        self, client: httpx.AsyncClient, vendor: dict,
+    ) -> None:
+        from axor_backend.ee.license import verify_license
+        from axor_backend.tenancy import PUBLIC_ORG
+
+        await _activate(client, vendor)
+        app = client._transport.app  # type: ignore[attr-defined]
+        # a license that expired while the process was up — the renewal case,
+        # which /verify cannot produce because it now refuses to store one
+        app.state.licenses[PUBLIC_ORG] = verify_license(
+            _signed(vendor, expires_at="2020-01-01"), vendor["pub"],
+        )
+        r = await client.get("/v1/regression/history")
+        assert r.status_code == 402
+        detail = r.json()["detail"]
+        assert "expired on 2020-01-01" in detail, detail
+        assert "add a license" not in detail, detail
+
+
+class TestTheNodeCeilingIsWatchedNotEnforced:
+    """`allows_nodes` existed and was called from nowhere; `over_ceiling` was
+    computed once, at the moment a license was pasted, so a fleet that grew
+    afterwards was never looked at again. Over-ceiling never refuses — a
+    governed node is a safety surface, and safety never checks a license."""
+
+    async def test_status_recomputes_it_against_the_live_fleet(
+        self, client: httpx.AsyncClient, vendor: dict,
+    ) -> None:
+        assert (await client.post("/v1/license/verify", json={
+            "license_json": _signed(vendor, governed_node_ceiling=1),
+        })).json()["over_ceiling"] is False
+        for node in ("n1", "n2", "n3"):
+            await client.post(f"/v1/plane/{node}/telemetry", json=_heartbeat(node))
+        status = (await client.get("/v1/license/status")).json()
+        assert status["live_nodes"] == 3
+        assert status["over_ceiling"] is True
+
+    async def test_being_over_the_ceiling_refuses_nothing(
+        self, client: httpx.AsyncClient, vendor: dict,
+    ) -> None:
+        """Line 1: safety never checks a license. Neither governance nor the
+        paid feature is switched off — the discrepancy is billing's."""
+        await client.post("/v1/license/verify", json={
+            "license_json": _signed(vendor, governed_node_ceiling=1)})
+        for node in ("n1", "n2"):
+            r = await client.post(f"/v1/plane/{node}/telemetry",
+                                  json=_heartbeat(node))
+            assert r.status_code == 202, r.text
+        assert (await client.get("/v1/regression/history")).status_code == 200
+
+    async def test_the_sweep_warns_about_it(
+        self, client: httpx.AsyncClient, vendor: dict, caplog,  # noqa: ANN001
+    ) -> None:
+        import logging
+
+        from axor_backend.lifecycle import warn_over_ceiling_once
+
+        await client.post("/v1/license/verify", json={
+            "license_json": _signed(vendor, governed_node_ceiling=1)})
+        for node in ("n1", "n2"):
+            await client.post(f"/v1/plane/{node}/telemetry", json=_heartbeat(node))
+        app = client._transport.app  # type: ignore[attr-defined]
+        with caplog.at_level(logging.WARNING, logger="axor.backend"):
+            await warn_over_ceiling_once(app.state)
+        assert any("licensed ceiling" in r.getMessage()
+                   for r in caplog.records), caplog.text

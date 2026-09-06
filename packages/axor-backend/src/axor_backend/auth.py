@@ -261,7 +261,6 @@ class Principal:
     # partition data. None for master/key principals (operator credentials).
     org: str | None = None
     role: str | None = None
-    tier: str | None = None
     user_id: str | None = None
     email: str | None = None
     # A key minted FOR ONE NODE carries its node_id, and the plane refuses to

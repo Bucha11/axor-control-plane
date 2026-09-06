@@ -102,7 +102,6 @@ async def resolve_principal(request: Request) -> Principal | None:
             scopes=auth_mod.scopes_for_role(claims.role),
             org=claims.org,
             role=claims.role,
-            tier=claims.tier,
             user_id=claims.user_id,
             email=claims.email,
         )

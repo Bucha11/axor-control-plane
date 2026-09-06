@@ -73,6 +73,7 @@ def create_app(
     identity_jwks: dict[str, Any] | None = None,
     identity_issuer: str = "axor-identity",
     vendor_pubkey: str | None = None,
+    org: str | None = None,
 ) -> FastAPI:
     """Build a backend. Arguments win over the environment; see `AppConfig`."""
     config = AppConfig.resolve(
@@ -86,6 +87,7 @@ def create_app(
         identity_jwks=identity_jwks,
         identity_issuer=identity_issuer,
         vendor_pubkey=vendor_pubkey,
+        org=org,
     )
     setup_observability()
 

@@ -65,10 +65,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 def warn_about_open_posture(config: Any) -> None:  # noqa: ANN401 - AppConfig
     """Open dev posture must be loud (SECURITY.md).
 
-    All three of these default to off, and silence reads as "the wall is up"
-    when it is not. No token means every endpoint is public; unsigned commands
-    mean no operator integrity; a vault without its own token falls back to the
-    scope ladder alone instead of its separated credential.
+    All of these default to off, and silence reads as "the wall is up" when it
+    is not. No token means every endpoint is public; unsigned commands mean no
+    operator integrity; a vault without its own token falls back to the scope
+    ladder alone instead of its separated credential; and no licensed org means
+    any vendor-signed license activates here, including one issued to somebody
+    else.
     """
     if not config.auth_enabled:
         log.warning(
@@ -90,6 +92,14 @@ def warn_about_open_posture(config: Any) -> None:  # noqa: ANN401 - AppConfig
                 "deployment (spec v2 Ch.5 §3).",
                 subsystem, env,
             )
+    if config.vendor_pubkey and not config.org:
+        log.warning(
+            "NO LICENSED ORGANIZATION (AXOR_ORG unset) — a license names the "
+            "organization it was issued to, and with nothing to compare it "
+            "against ANY vendor-signed license activates here, including one "
+            "issued to another customer. Set AXOR_ORG to the name on your "
+            "license."
+        )
 
 
 async def rehydrate(state: Any) -> None:  # noqa: ANN401 - app.state is dynamic
@@ -142,6 +152,27 @@ async def retention_loop(state: Any) -> None:  # noqa: ANN401
         await asyncio.sleep(RETENTION_SWEEP_SECONDS)
         with contextlib.suppress(Exception):
             await prune_once(state)
+        with contextlib.suppress(Exception):
+            await warn_over_ceiling_once(state)
+
+
+async def warn_over_ceiling_once(state: Any) -> None:  # noqa: ANN401
+    """One pass over the tenants, warning about any fleet past its licensed
+    ceiling.
+
+    Never a refusal: a governed node is a safety surface and safety never checks
+    a license. But `over_ceiling` was answered once, at the moment an operator
+    pasted a license, and a fleet that grew afterwards was never looked at again
+    — so the number existed and meant nothing.
+    """
+    from axor_backend.licensing import warn_over_ceiling
+
+    try:
+        for org in await state.store.list_orgs():
+            set_current_org(org)
+            await warn_over_ceiling(state, org)
+    finally:
+        set_current_org(PUBLIC_ORG)
 
 
 # ── EE scheduled corpus CI ────────────────────────────────────────────────────

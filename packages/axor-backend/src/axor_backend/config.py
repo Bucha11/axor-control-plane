@@ -47,6 +47,13 @@ class AppConfig:
     # ── entitlement (monetization §4) ────────────────────────────────────────
     vendor_pubkey: str = ""
     env_license: str | None = None
+    # The organization this deployment is licensed to. A license names the org
+    # it was issued to and that name is signed, but nothing compared it to
+    # anything, so any vendor-signed license activated anywhere. Set it and a
+    # license issued to someone else is refused; leave it unset on a
+    # single-tenant install and boot says so, the same opt-in posture as
+    # `allow_unsigned`.
+    org: str = ""
     # ── egress ───────────────────────────────────────────────────────────────
     webhook_block_private: bool = False
 
@@ -76,6 +83,7 @@ class AppConfig:
         identity_jwks: dict[str, Any] | None = None,
         identity_issuer: str = "axor-identity",
         vendor_pubkey: str | None = None,
+        org: str | None = None,
     ) -> AppConfig:
         """Argument, else environment, else default — field by field."""
         if operator_keys is None:
@@ -112,6 +120,7 @@ class AppConfig:
                 _number("AXOR_SCHEDULE_SWEEP_SECONDS")
                 or DEFAULT_SCHEDULE_SWEEP_SECONDS
             ),
+            org=(org if org is not None else os.environ.get("AXOR_ORG", "")),
             vendor_pubkey=(
                 vendor_pubkey
                 if vendor_pubkey is not None

@@ -515,7 +515,11 @@ async def test_license_verify_without_a_pinned_key_says_so(
         assert resp.status_code == 400
         assert "AXOR_VENDOR_PUBKEY" in resp.json()["detail"]
         status = (await client.get("/v1/license/status")).json()
-        assert status == {"active": False, "vendor_key_configured": False}
+        assert status["active"] is False
+        assert status["vendor_key_configured"] is False
+        # this deployment pins no organization either, so it would accept a
+        # license issued to anyone — reported, not assumed
+        assert status["licensed_to"] is None
 
 
 def test_license_expiry_degrades_to_readonly() -> None:

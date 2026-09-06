@@ -22,14 +22,29 @@ green summary and no activation, because activation required the pinned key that
 was not set. One route, two ways to show an entitlement nobody held.
 
 Now there is exactly one outcome for a 200: verified against the pinned key,
-stored, active.
+ISSUED TO THIS DEPLOYMENT, in date, stored, active.
+
+The last two were missing, and each broke that sentence on its own. Expiry was
+checked when a feature was USED and not when a license was stored, so a licence
+that expired in 2020 came back 200 `activated: true` and `/status` immediately
+said `active: false` — two answers to one question, in one sitting. And the
+`organization` in the signed payload was compared to nothing at all, so one
+purchased file activated in any tenant of any deployment; the name is signed
+precisely so it can be checked.
 """
 from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException
 
 from axor_backend.deps import ConfigDep, StateDep, StoreDep
-from axor_backend.licensing import active_license, license_payload
+from axor_backend.licensing import (
+    active_license,
+    binding_error,
+    ceiling_status,
+    expected_org,
+    license_payload,
+    today,
+)
 from axor_backend.tenancy import current_org_id
 
 router = APIRouter(prefix="/v1/license", tags=["license"])
@@ -65,6 +80,18 @@ async def license_verify(
         lic = verify_license(body.get("license_json", ""), config.vendor_pubkey)
     except LicenseError as exc:
         raise HTTPException(403, str(exc)) from exc
+    # A signature proves the vendor issued this. It does not prove they issued
+    # it to US, and it does not prove it is still in date. Both are checked
+    # BEFORE anything is stored, so a 200 and `/status` cannot disagree.
+    mismatch = binding_error(lic, config, current_org_id())
+    if mismatch:
+        raise HTTPException(403, mismatch)
+    if lic.is_expired(today()):
+        raise HTTPException(
+            403,
+            f"this license expired on {lic.expires_at} and was not activated. "
+            "Renew it with the vendor; safety features never require one.",
+        )
     # Persist it (survives restarts) and hold it in state so org features unlock
     # immediately. Note this rewrites the deployment's entitlement, which is why
     # the route is `admin` and never open: anyone holding ANY vendor-signed
@@ -75,11 +102,9 @@ async def license_verify(
     # Node-ceiling telemetry (launch-readiness §5): compare the live fleet
     # against the license and WARN — never block; safety never checks a license
     # (monetization Line 1).
-    live_nodes = len(await store.list_nodes())
     return {
         **license_payload(lic),
-        "live_nodes": live_nodes,
-        "over_ceiling": live_nodes > lic.governed_node_ceiling,
+        **await ceiling_status(state, current_org_id()),
         # Always true on a 200 now. Kept in the response because clients read
         # it, and because "verified" and "active" being the same thing is the
         # property worth stating.
@@ -95,9 +120,22 @@ async def license_status(state: StateDep, config: ConfigDep) -> dict:
     ``vendor_key_configured`` is here so the UI can tell "no license yet" from
     "this deployment cannot check one", which are different problems with
     different fixes and used to look identical on screen.
+
+    ``licensed_to`` is the organization this deployment accepts a license for,
+    or null when it accepts any — the state a single-tenant install with no
+    ``AXOR_ORG`` is in, which the operator should be able to see rather than
+    assume. ``over_ceiling`` is recomputed here against the live fleet: it used
+    to be answered once, at the moment a license was pasted, and never again.
     """
-    lic = active_license(state, current_org_id())
-    configured = bool(config.vendor_pubkey)
+    org = current_org_id()
+    lic = active_license(state, org)
+    base = {
+        "vendor_key_configured": bool(config.vendor_pubkey),
+        "licensed_to": expected_org(config, org),
+    }
     if lic is None:
-        return {"active": False, "vendor_key_configured": configured}
-    return {"active": True, "vendor_key_configured": configured, **license_payload(lic)}
+        return {"active": False, **base}
+    return {
+        "active": True, **base, **license_payload(lic),
+        **await ceiling_status(state, org),
+    }
