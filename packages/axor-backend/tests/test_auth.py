@@ -323,3 +323,138 @@ async def test_node_binding_does_not_gate_operator_commands() -> None:
     assert plane_node_of("POST", "/v1/plane/n1/cascade-stop") is None
     assert plane_node_of("GET", "/v1/plane/n1/probe-report") is None
     assert plane_node_of("POST", "/v1/ingest/r1") is None
+
+
+# ── the path the policy is matched on ─────────────────────────────────────────
+
+class TestTheScopeSurvivesTheDeploymentShape:
+    """Every policy table in `auth` matches a prefix of the request path, so the
+    policy is exactly as good as the agreement between the string it matches and
+    the string the router matches.
+
+    Mounted behind a path prefix — `uvicorn --root-path /api`, an ordinary
+    reverse proxy — ASGI hands the app the FULL path and names the mount in
+    `root_path`. The router strips it; the middleware read `request.url.path`
+    and did not. So `/api/v1/keys` matched no entry, fell through the
+    GET-defaults-to-`read` rule, and a READ-ONLY key listed every credential in
+    the deployment. Writes fell to the unknown-path default of `operate`, which
+    mints API keys and enrolls vault credentials. Nothing was logged: the
+    request was authorized, at the wrong bar.
+    """
+
+    @staticmethod
+    async def _asgi(app, method: str, path: str, *, token: str | None = None,  # noqa: ANN001
+                    body: bytes = b"", root_path: str = "") -> int:
+        """A raw ASGI call: an HTTP client normalizes paths and cannot set
+        root_path, so neither can reach what this is about."""
+        headers = [(b"host", b"t"), (b"content-type", b"application/json")]
+        if token:
+            headers.append((b"authorization", f"Bearer {token}".encode()))
+        scope = {
+            "type": "http", "asgi": {"version": "3.0"}, "http_version": "1.1",
+            "method": method, "path": path, "raw_path": path.encode(),
+            "root_path": root_path, "scheme": "http", "query_string": b"",
+            "headers": headers, "client": ("1.2.3.4", 1), "server": ("t", 80),
+        }
+        status: dict[str, int] = {}
+        sent = {"done": False}
+
+        async def receive() -> dict:
+            if sent["done"]:
+                return {"type": "http.disconnect"}
+            sent["done"] = True
+            return {"type": "http.request", "body": body, "more_body": False}
+
+        async def send(message: dict) -> None:
+            if message["type"] == "http.response.start":
+                status["code"] = message["status"]
+
+        await app(scope, receive, send)
+        return status["code"]
+
+    @pytest.fixture
+    async def mounted(self, tmp_path: pathlib.Path):  # noqa: ANN201
+        """The app plus a read-only and an operate key — the two credentials the
+        collapsed bars handed the wrong surfaces to."""
+        app = create_app(database_url=f"sqlite+aiosqlite:///{tmp_path}/m.db",
+                         operator_keys={}, allow_unsigned=True, api_token=TOKEN)
+        async with app.router.lifespan_context(app):
+            async with _client(app) as c:
+                read = await c.post("/v1/keys", json={"scopes": ["read"]},
+                                    headers=_bearer(TOKEN))
+                operate = await c.post("/v1/keys", json={"scopes": ["operate"]},
+                                       headers=_bearer(TOKEN))
+            yield app, read.json()["secret"], operate.json()["secret"]
+
+    async def test_a_read_key_cannot_list_credentials_behind_a_mount(
+        self, mounted: tuple,
+    ) -> None:
+        app, read_key, _ = mounted
+        assert await self._asgi(app, "GET", "/api/v1/keys",
+                                token=read_key, root_path="/api") == 403
+
+    async def test_an_operate_key_cannot_mint_or_enroll_behind_a_mount(
+        self, mounted: tuple,
+    ) -> None:
+        """Writes to an unmatched path fall to the unknown-path default of
+        `operate`, so behind a mount an OPERATE key — an ordinary incident-
+        response credential — could mint itself an admin API key and enroll a
+        tool credential in the vault. A read key would have been refused either
+        way; this is the credential the collapse actually promoted."""
+        app, _, operate_key = mounted
+        assert await self._asgi(app, "POST", "/api/v1/keys", token=operate_key,
+                                body=b'{"scopes":["admin"]}', root_path="/api") == 403
+        assert await self._asgi(app, "POST", "/api/v1/vault/creds/enroll",
+                                token=operate_key, body=b"{}", root_path="/api") == 403
+
+    async def test_the_master_token_still_works_behind_a_mount(
+        self, mounted: tuple,
+    ) -> None:
+        """Fixing the bar must not raise it for the credential that has every
+        scope — otherwise a mounted deployment is simply broken."""
+        app, _, _operate = mounted
+        assert await self._asgi(app, "GET", "/api/v1/keys",
+                                token=TOKEN, root_path="/api") == 200
+
+    async def test_an_open_route_is_still_open_behind_a_mount(
+        self, mounted: tuple,
+    ) -> None:
+        """`is_open` matched the un-stripped path too, so health checks and the
+        share surface stopped being open the moment the app was mounted."""
+        app, _read, _operate = mounted
+        assert await self._asgi(app, "GET", "/api/v1/healthz", root_path="/api") == 200
+
+    def test_redundant_separators_do_not_lower_the_bar(self) -> None:
+        """`//v1/keys` starts with no policy entry at all. Starlette happens not
+        to route it, so it 404s rather than escalating — but that is the router
+        saving the policy, not the policy being right. It is judged as the route
+        it spells."""
+        from axor_backend.auth import policy_path, required_scope
+
+        for path in ("//v1/keys", "/v1//keys", "/v1/./keys"):
+            assert required_scope("GET", policy_path(path)) == "admin", path
+
+
+def test_a_dot_dot_path_is_judged_as_the_route_it_spells() -> None:
+    """`/v1/share/` is served without authentication, and `is_open` matched by
+    prefix on the raw path, so `/v1/share/../keys` read as open. The router
+    404s it, but a policy that calls the credential list open is one proxy
+    normalization away from meaning it."""
+    from axor_backend.auth import is_open, policy_path, required_scope
+
+    canonical = policy_path("/v1/share/../keys")
+    assert canonical == "/v1/keys"
+    assert not is_open("GET", canonical)
+    assert required_scope("GET", canonical) == "admin"
+
+
+def test_a_plane_path_naming_no_node_claims_no_node() -> None:
+    """`plane_node_of` took everything before the last separator, so
+    `/v1/plane/telemetry` — which names no node — yielded the node id
+    "telemetry", and a nested path yielded "a/b", which is not a node id any key
+    can be bound to. Only the single `{node_id}` segment the router binds."""
+    from axor_backend.auth import plane_node_of
+
+    assert plane_node_of("POST", "/v1/plane/n1/telemetry") == "n1"
+    assert plane_node_of("POST", "/v1/plane/telemetry") is None
+    assert plane_node_of("POST", "/v1/plane/a/b/telemetry") is None

@@ -29,9 +29,20 @@ from axor_backend.auth import (
     hash_secret,
     is_open,
     master_principal,
+    policy_path,
     required_scope,
 )
 from axor_backend.tenancy import set_current_org
+
+
+def _path_of(request: Request) -> str:
+    """The canonical path every policy decision in this module is made on.
+
+    Never `request.url.path` directly: that is the path as the client wrote it,
+    including any mount prefix the router strips before matching routes. See
+    `auth.policy_path` for what went wrong when the two disagreed.
+    """
+    return policy_path(request.url.path, request.scope.get("root_path", ""))
 
 
 async def resolve_principal(request: Request) -> Principal | None:
@@ -44,7 +55,7 @@ async def resolve_principal(request: Request) -> Principal | None:
     if header.lower().startswith("bearer "):
         token = header[7:].strip()
     if token is None and auth_mod.accepts_query_token(
-        request.method, request.url.path
+        request.method, _path_of(request)
     ):
         # A token in the query string ends up in access logs, browser history
         # and Referer headers, so it is accepted ONLY where a header is
@@ -101,12 +112,13 @@ async def resolve_principal(request: Request) -> Principal | None:
 async def auth_middleware(request: Request, call_next: Callable) -> Response:
     """The gate. Open posture and open routes pass straight through."""
     config = request.app.state.config
-    if not config.auth_enabled or is_open(request.method, request.url.path):
+    path = _path_of(request)
+    if not config.auth_enabled or is_open(request.method, path):
         return await call_next(request)
     principal = await resolve_principal(request)
     if principal is None:
         return JSONResponse({"error": "unauthorized"}, status_code=401)
-    need = required_scope(request.method, request.url.path)
+    need = required_scope(request.method, path)
     if not principal.may(need):
         return JSONResponse(
             {"error": "forbidden", "need": need, "have": sorted(principal.scopes)},
@@ -114,7 +126,7 @@ async def auth_middleware(request: Request, call_next: Callable) -> Response:
         )
     # A node-bound key may only speak AS its own node (auth.Principal): scopes
     # say what a credential may do, this says who it may do it as.
-    spoke_for = auth_mod.plane_node_of(request.method, request.url.path)
+    spoke_for = auth_mod.plane_node_of(request.method, path)
     if spoke_for is not None and not principal.may_speak_for(spoke_for):
         return JSONResponse(
             {

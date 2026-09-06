@@ -39,6 +39,50 @@ from dataclasses import dataclass
 
 SCOPES = frozenset({"read", "ingest", "operate", "admin"})
 
+
+def policy_path(path: str, root_path: str = "") -> str:
+    """The path the policy tables below are written against.
+
+    Every table here matches on a prefix of the request path, so the policy is
+    only as good as the agreement between the string it matches and the string
+    the router matches. Two ways they came apart:
+
+    * **A deployment mounted under a prefix.** ASGI hands the app the FULL path
+      and names the mount in ``root_path``; the router strips it before matching
+      routes, and this module did not. Behind ``uvicorn --root-path /api`` —
+      an ordinary reverse-proxy setup — ``GET /api/v1/keys`` matched no entry
+      and fell through to the GET-defaults-to-`read` rule, so a READ-ONLY key
+      listed every credential in the deployment. Writes fell to the unknown-path
+      default of `operate`, which mints API keys and enrolls vault credentials.
+      Nothing logged anything: the request was authorized, at the wrong bar.
+    * **Redundant separators.** ``//v1/keys`` starts with neither ``/v1/keys``
+      nor any other entry. Starlette happens not to route it, so it 404s rather
+      than escalating — but that is the router's behaviour saving the policy,
+      not the policy being right, and it would stop being true the day anything
+      in front normalizes.
+
+    So the policy matches a canonical path: mount prefix removed, empty segments
+    dropped, ``.`` and ``..`` resolved without escaping the root. Resolving
+    ``..`` here can only make the policy STRICTER than the router (which does
+    not resolve it): a path the router will 404 may be judged by the scope of
+    the route it spells, never the other way round.
+    """
+    if root_path and path.startswith(root_path):
+        # only if the server has not already stripped it (ASGI says it has not)
+        path = path[len(root_path):]
+    segments: list[str] = []
+    for segment in path.split("/"):
+        if not segment or segment == ".":
+            continue
+        if segment == "..":
+            if segments:
+                segments.pop()
+            continue
+        segments.append(segment)
+    canonical = "/" + "/".join(segments)
+    # a trailing slash is meaningful to `endswith` matching, so it is kept
+    return canonical + "/" if path.endswith("/") and canonical != "/" else canonical
+
 _READ_METHODS = ("GET", "HEAD", "OPTIONS")
 
 # Reads whose CONTENTS are privileged, matched BEFORE the "GET defaults to
@@ -185,8 +229,14 @@ def plane_node_of(method: str, path: str) -> str | None:
         return None
     if not path.endswith(_SPEAKS_AS_NODE_SUFFIXES):
         return None
-    node_id = path[len(_PLANE_PREFIX):].rsplit("/", 1)[0]
-    return node_id or None
+    node_id, _, suffix = path[len(_PLANE_PREFIX):].rpartition("/")
+    # Exactly one segment, matching the `{node_id}` the router binds. Without
+    # the emptiness test `/v1/plane/telemetry` — which names no node at all —
+    # yielded the node id "telemetry"; without the separator test a nested path
+    # yielded "a/b", which is not a node id any key can be bound to.
+    if not node_id or not suffix or "/" in node_id:
+        return None
+    return node_id
 
 
 def hash_secret(secret: str) -> str:
