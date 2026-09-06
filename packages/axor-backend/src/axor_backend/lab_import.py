@@ -23,14 +23,16 @@ import json
 from dataclasses import dataclass
 from typing import Any
 
+from axor_core.contracts.schemas import validate as validate_schema
+
 from axor_backend.errors import BackendError
 from axor_backend.lab_export import condition_config_hash
 from axor_backend.limits import MAX_PINS_PER_PACKAGE
 
-CP_DEPLOY_SCHEMA = "axor-cp-deploy/v1"
+# The schema_version const, the verdict pair and the effect classes were all
+# restated here as frozensets. They are the format's, and the format is
+# `axor_core.contracts.schemas`; what is left below is this backend's own.
 _PIN_PREFIX = "lab:"
-_VALID_VERDICTS = frozenset({"ALLOW", "DENY"})
-_EFFECT_CLASSES = frozenset({"READ", "WRITE", "EXPORT", "EXEC"})
 # pins land in the runs-keyed corpus table; run_id column is 64 chars
 _PIN_RUN_ID_MAX = 64
 
@@ -80,98 +82,90 @@ def package_id_of(package: dict[str, Any]) -> str:
 
 
 def validate_cp_deploy(package: Any) -> list[str]:  # noqa: ANN401 - untrusted upload
-    """Every structural problem with the uploaded package, or []."""
+    """Every problem with the uploaded package, or [].
+
+    Two halves, kept apart on purpose.
+
+    The SHAPE is `axor_core.contracts.schemas`' `cp-deploy` — the format's one
+    definition, which the kernel owns and the Lab's exporter writes to. It used
+    to be restated here by hand, forty lines of it, which is how a producer and
+    a consumer in two repositories drift without either noticing.
+
+    What stays below is what a schema cannot know: that a fingerprint matches the
+    payload it claims to describe, and that a caller-chosen id fits the corpus
+    key and does not repeat. Those are this platform's, and they are the ones
+    that were actually wrong.
+    """
     if not isinstance(package, dict):
         return ["package must be a JSON object (the cp-deploy.json content)"]
-    errors: list[str] = []
-    if package.get("schema_version") != CP_DEPLOY_SCHEMA:
-        errors.append(
-            f"schema_version {package.get('schema_version')!r} is not {CP_DEPLOY_SCHEMA!r}"
-        )
-    # finalized state only: an evidence-backed export sets verified=true; a
-    # template (export_cp_template) is an unverified config dump and is refused
+    errors: list[str] = list(validate_schema("cp-deploy", package))
+    # An unverified TEMPLATE is schema-valid — `verified` is a boolean and the
+    # Lab legitimately emits both — so refusing one is the consumer's policy, not
+    # the format's. A config dump must never be mistaken for a proven handoff.
     if package.get("verified") is not True:
         errors.append(
             "package is not a finalized evidence-backed export (verified must be "
             "true; a template/unverified dump carries no evidence)"
         )
     kernel = package.get("kernel")
-    if not isinstance(kernel, str) or not kernel:
-        errors.append("kernel must be a non-empty string")
     policy = package.get("policy")
-    if not isinstance(policy, dict):
-        errors.append("policy must be an object")
     recorded = package.get("config_hash")
-    if not isinstance(recorded, str) or not recorded:
-        errors.append("config_hash must be a non-empty string")
-    elif isinstance(kernel, str) and isinstance(policy, dict):
-        try:
-            recomputed = condition_config_hash(kernel, policy)
-        except Exception as exc:  # noqa: BLE001 - canonicalization of untrusted input
-            errors.append(f"kernel+policy are not canonicalizable: {exc}")
-        else:
-            if recorded != recomputed:
-                errors.append(
-                    f"config_hash {recorded} does not match the exported "
-                    f"kernel+policy ({recomputed}) — not the measured config"
-                )
-    if not isinstance(package.get("parametric_config_hash"), str) or not package.get(
-        "parametric_config_hash"
-    ):
-        errors.append("parametric_config_hash must be a non-empty string")
-    errors += _manifest_errors(package.get("tool_manifests"))
-    errors += _regression_errors(package.get("regressions"))
-    errors += _regression_traces_errors(package.get("regression_traces"))
-    source = package.get("source")
-    if not isinstance(source, dict) or not source.get("bundle_id") or not source.get(
-        "condition_id"
-    ):
-        errors.append("source must be an object naming bundle_id and condition_id")
+    if isinstance(recorded, str) and recorded:
+        if isinstance(kernel, str) and isinstance(policy, dict):
+            try:
+                recomputed = condition_config_hash(kernel, policy)
+            except Exception as exc:  # noqa: BLE001 - untrusted input
+                errors.append(f"kernel+policy are not canonicalizable: {exc}")
+            else:
+                if recorded != recomputed:
+                    errors.append(
+                        f"config_hash {recorded} does not match the exported "
+                        f"kernel+policy ({recomputed}) — not the measured config"
+                    )
+    errors += _manifest_key_errors(package.get("tool_manifests"))
+    errors += _pin_key_errors(package.get("regressions"))
+    errors += _trace_body_errors(package.get("regression_traces"))
     return errors
 
 
-def _manifest_errors(manifests: Any) -> list[str]:  # noqa: ANN401 - untrusted upload
-    if not isinstance(manifests, list) or not manifests:
-        return ["tool_manifests must be a non-empty list"]
+def _manifest_key_errors(manifests: Any) -> list[str]:  # noqa: ANN401 - untrusted upload
+    """Duplicate tool ids — the one manifest rule the schema cannot state.
+
+    The CP turns the manifest list into a config keyed by tool id, so two
+    manifests sharing an id become one entry and the loser's effect class,
+    driving args and sensitive fields are gone. Everything else about a manifest
+    is `tool-manifest/v1`'s to say, and it says it.
+    """
+    if not isinstance(manifests, list):
+        return []
     errors: list[str] = []
     seen: set[str] = set()
     for i, manifest in enumerate(manifests):
-        where = f"tool_manifests[{i}]"
         if not isinstance(manifest, dict):
-            errors.append(f"{where} is not an object")
             continue
-        if manifest.get("schema_version") != "tool-manifest/v1":
-            errors.append(f"{where}: schema_version is not 'tool-manifest/v1'")
         tool_id = manifest.get("id")
-        if not isinstance(tool_id, str) or not tool_id:
-            errors.append(f"{where}: id must be a non-empty string")
-        elif tool_id in seen:
-            errors.append(f"{where}: duplicate tool id {tool_id!r}")
-        else:
-            seen.add(tool_id)
-        if not isinstance(manifest.get("args_schema"), dict):
-            errors.append(f"{where}: args_schema must be an object")
-        effect = manifest.get("effect")
-        if not isinstance(effect, dict):
-            errors.append(f"{where}: effect must be an object")
-        else:
-            if str(effect.get("default_class")) not in _EFFECT_CLASSES:
-                errors.append(
-                    f"{where}: effect.default_class {effect.get('default_class')!r} "
-                    f"is not one of {sorted(_EFFECT_CLASSES)}"
-                )
-            if not isinstance(effect.get("driving_args"), list):
-                errors.append(f"{where}: effect.driving_args must be a list")
-        if not isinstance(manifest.get("side_effecting"), bool):
-            errors.append(f"{where}: side_effecting must be a boolean")
+        if not isinstance(tool_id, str):
+            continue
+        if tool_id in seen:
+            errors.append(
+                f"tool_manifests[{i}]: duplicate tool id {tool_id!r} — the "
+                "manifests are compiled into a config keyed by id, so one of "
+                "the two would silently replace the other"
+            )
+        seen.add(tool_id)
     return errors
 
 
-def _regression_errors(regressions: Any) -> list[str]:  # noqa: ANN401 - untrusted upload
-    if regressions is None:
-        return ["regressions must be a list (may be empty)"]
+def _pin_key_errors(regressions: Any) -> list[str]:  # noqa: ANN401 - untrusted upload
+    """What the corpus, not the format, requires of the pins.
+
+    The schema types every pin field and bounds `trace_id` at 60. These are the
+    three things it still cannot express: how many pins one request may ask this
+    CP to replay, whether the id fits THIS backend's corpus key, and whether a
+    pin's summary verdict agrees with the sequence it claims to summarize.
+    """
     if not isinstance(regressions, list):
-        return ["regressions must be a list"]
+        return []
     errors: list[str] = []
     if len(regressions) > MAX_PINS_PER_PACKAGE:
         errors.append(
@@ -179,24 +173,21 @@ def _regression_errors(regressions: Any) -> list[str]:  # noqa: ANN401 - untrust
             f"of {MAX_PINS_PER_PACKAGE} (AXOR_MAX_PINS_PER_PACKAGE) — each pin is "
             "hashed, converted and REPLAYED before this request answers"
         )
-    seen_trace_ids: set[str] = set()
+    budget = _PIN_RUN_ID_MAX - len(_PIN_PREFIX)
+    seen: set[str] = set()
     for i, pin in enumerate(regressions):
-        where = f"regressions[{i}]"
         if not isinstance(pin, dict):
-            errors.append(f"{where} is not an object")
             continue
+        where = f"regressions[{i}]"
         trace_id = pin.get("trace_id")
-        if not isinstance(trace_id, str) or not trace_id:
-            errors.append(f"{where}: trace_id must be a non-empty string")
-        else:
-            # A pin is stored under `lab:{trace_id}` in a 64-char column, and the
-            # id used to be TRUNCATED to fit. Two pins agreeing on their first
-            # 60 characters then became one row, the second overwriting the
-            # first — so a package pinning both sides of a case could land only
-            # the must_pass side, in the corpus whose entire premise is that a
-            # config blocking everything must not pass. The route reported both
-            # as created. Refuse the id instead of silently mangling it.
-            budget = _PIN_RUN_ID_MAX - len(_PIN_PREFIX)
+        if isinstance(trace_id, str) and trace_id:
+            # The schema states this bound too, because a sender that only
+            # learns it from a rejection has already built the package. But the
+            # bound exists BECAUSE of this column, so this is where it is
+            # measured: if the corpus key ever narrows, a schema-valid package
+            # is still one this backend cannot store without truncating the id
+            # — and a truncated key merges two pins into one row, losing
+            # whichever side was written first.
             if len(trace_id) > budget:
                 errors.append(
                     f"{where}: trace_id is {len(trace_id)} characters; the corpus "
@@ -204,28 +195,21 @@ def _regression_errors(regressions: Any) -> list[str]:  # noqa: ANN401 - untrust
                     f"{_PIN_RUN_ID_MAX}-character key, so at most {budget} fit. "
                     "Truncating would collide two pins into one."
                 )
-            if trace_id in seen_trace_ids:
+            if trace_id in seen:
                 errors.append(
                     f"{where}: duplicate trace_id {trace_id!r} — two pins on one "
                     "id resolve to a single corpus row, and which side survives "
                     "depends on array order"
                 )
-            seen_trace_ids.add(trace_id)
+            seen.add(trace_id)
         verdict = pin.get("expected_verdict")
-        if verdict not in _VALID_VERDICTS:
-            errors.append(
-                f"{where}: expected_verdict {verdict!r} is not one of "
-                f"{sorted(_VALID_VERDICTS)}"
-            )
-        ref = pin.get("trace_ref")
-        if not isinstance(ref, str) or not ref.startswith("sha256:"):
-            errors.append(f"{where}: trace_ref must be a sha256: content hash")
         sequence = pin.get("expected_sequence")
-        if not isinstance(sequence, list) or not sequence:
-            errors.append(f"{where}: expected_sequence must be a non-empty list")
-        elif any(str(v) not in _VALID_VERDICTS for v in sequence):
-            errors.append(f"{where}: expected_sequence contains a non-verdict entry")
-        elif verdict in _VALID_VERDICTS and str(sequence[-1]) != verdict:
+        if (
+            isinstance(sequence, list)
+            and sequence
+            and isinstance(verdict, str)
+            and str(sequence[-1]) != verdict
+        ):
             errors.append(
                 f"{where}: expected_verdict {verdict} contradicts the final "
                 f"recorded verdict {sequence[-1]}"
@@ -233,27 +217,21 @@ def _regression_errors(regressions: Any) -> list[str]:  # noqa: ANN401 - untrust
     return errors
 
 
-def _regression_traces_errors(
-    regression_traces: Any,  # noqa: ANN401 - untrusted upload
-) -> list[str]:
-    """``regression_traces`` is an ADDITIVE map {trace_id: trace body} the Lab
-    export embeds so the CP can REPLAY the pins (not merely record their hashes).
-    It is optional for backward compatibility — a package without it is valid, its
-    pins simply stay skipped — but when present it must be a JSON object, and every
-    body must be an object naming its own trace_id."""
-    if regression_traces is None:
-        return []
+def _trace_body_errors(regression_traces: Any) -> list[str]:  # noqa: ANN401 - untrusted upload
+    """A carried trace body must be filed under its own id.
+
+    `regression_traces` is the map the CP replays pins from. The schema requires
+    each body to HAVE a trace_id; only a reader holding both can check it is the
+    key it was stored under, and a body under someone else's key would be
+    replayed as evidence for the wrong pin.
+    """
     if not isinstance(regression_traces, dict):
-        return ["regression_traces must be an object mapping trace_id -> trace body"]
-    errors: list[str] = []
-    for trace_id, body in regression_traces.items():
-        where = f"regression_traces[{trace_id!r}]"
-        if not isinstance(body, dict):
-            errors.append(f"{where} is not an object")
-            continue
-        if str(body.get("trace_id", "")) != str(trace_id):
-            errors.append(f"{where}: body trace_id does not match its key")
-    return errors
+        return []
+    return [
+        f"regression_traces[{trace_id!r}]: body trace_id does not match its key"
+        for trace_id, body in regression_traces.items()
+        if isinstance(body, dict) and str(body.get("trace_id", "")) != str(trace_id)
+    ]
 
 
 def _pin_run_id(trace_id: str) -> str:

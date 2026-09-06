@@ -218,3 +218,93 @@ class TestAPinIdCannotCollideWithAnother:
         reasons = validate_cp_deploy(self._package(over))
         assert any("ceiling" in r for r in reasons), reasons
         assert validate_cp_deploy(self._package(over[:MAX_PINS_PER_PACKAGE])) == []
+
+
+# ── the manifests must still be validated, now that we no longer do it here ───
+
+class TestABrokenManifestIsStillRefused:
+    """`validate_cp_deploy` used to restate `tool-manifest/v1` by hand — the
+    required fields, the effect-class enum, the id/args_schema/side_effecting
+    types — forty lines duplicating a schema that lives in the Lab and, now,
+    in axor-core. That restatement is gone; the deploy schema `$ref`s the
+    manifest schema instead.
+
+    The only test that covered this refusal lives in `test_lab_import.py`,
+    which `importorskip`s axor-lab and therefore never runs in CI. Deleting
+    the checks without moving the test here would have removed the guarantee
+    along with the duplication.
+    """
+
+    def _package(self, manifests: list[dict]) -> dict:
+        p = TestAPinIdCannotCollideWithAnother()._package([])
+        return {**p, "tool_manifests": manifests}
+
+    def test_a_manifest_missing_its_required_fields_is_refused(self) -> None:
+        from axor_backend.lab_import import validate_cp_deploy
+
+        reasons = validate_cp_deploy(self._package([{"id": "x"}]))
+        assert reasons and all("tool_manifests[0]" in r for r in reasons), reasons
+
+    def test_an_effect_class_outside_the_four_is_refused(self) -> None:
+        """READ / WRITE / EXPORT / EXEC is the kernel's vocabulary. A fifth
+        would compile into a config the gate cannot reason about."""
+        from axor_backend.lab_import import validate_cp_deploy
+
+        bad = {"schema_version": "tool-manifest/v1", "id": "post",
+               "args_schema": {}, "side_effecting": True,
+               "effect": {"default_class": "TRANSMOGRIFY", "driving_args": []}}
+        assert validate_cp_deploy(self._package([bad])) != []
+
+    def test_two_manifests_sharing_an_id_are_refused(self) -> None:
+        """The schema cannot express this and so it stays here: the manifests
+        are compiled into a config keyed by tool id, so the second silently
+        replaces the first — with a different effect class, different driving
+        args, and different sensitive fields."""
+        from axor_backend.lab_import import validate_cp_deploy
+
+        one = {"schema_version": "tool-manifest/v1", "id": "post",
+               "args_schema": {}, "side_effecting": True,
+               "effect": {"default_class": "EXPORT", "driving_args": ["b"]}}
+        two = {**one, "effect": {"default_class": "READ", "driving_args": []}}
+        reasons = validate_cp_deploy(self._package([one, two]))
+        assert any("duplicate tool id" in r for r in reasons), reasons
+
+    def test_no_manifests_at_all_is_refused(self) -> None:
+        """Evidence produced against no tools is not evidence."""
+        from axor_backend.lab_import import validate_cp_deploy
+
+        assert validate_cp_deploy(self._package([])) != []
+
+
+class TestACarriedTraceMustBeFiledUnderItsOwnId:
+    """`regression_traces` is the map the CP replays pins from. A body stored
+    under someone else's key would be content-hashed against, and replayed as
+    evidence for, the wrong pin. The schema requires each body to HAVE a
+    trace_id; only a reader holding the key as well can check they agree."""
+
+    def test_a_body_under_the_wrong_key_is_refused(self) -> None:
+        from axor_backend.lab_import import validate_cp_deploy
+
+        base = TestAPinIdCannotCollideWithAnother()
+        package = {**base._package([base._pin("t1")]),
+                   "regression_traces": {"t1": {"trace_id": "t9"}}}
+        reasons = validate_cp_deploy(package)
+        assert any("does not match its key" in r for r in reasons), reasons
+
+
+class TestAPinnedVerdictMustAgreeWithItsSequence:
+    """`expected_verdict` summarizes `expected_sequence`; both are pinned so a
+    multi-call trace cannot match on its final verdict alone. A pin whose two
+    halves disagree pins nothing coherent, and the schema — which validates each
+    field on its own — cannot see it."""
+
+    def test_a_verdict_contradicting_the_final_recorded_one_is_refused(self) -> None:
+        from axor_backend.lab_import import validate_cp_deploy
+
+        base = TestAPinIdCannotCollideWithAnother()
+        package = base._package([{
+            "trace_id": "t1", "expected_verdict": "ALLOW",
+            "trace_ref": "sha256:x", "expected_sequence": ["ALLOW", "DENY"],
+        }])
+        reasons = validate_cp_deploy(package)
+        assert any("contradicts" in r for r in reasons), reasons
