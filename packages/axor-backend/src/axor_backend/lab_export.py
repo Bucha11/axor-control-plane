@@ -129,6 +129,11 @@ class _Value:
     derived_from: list[str] = field(default_factory=list)
     decision_value: Any = None
     bound: bool = False
+    # True only for a value the MODEL composed from its context. `trace/v1`'s
+    # `transformations` enum reserves `model_extraction` for exactly that, and a
+    # tool-derived value must not claim it — a summarizer output is not an LLM
+    # extraction, and the constructor set is closed on purpose.
+    model_composed: bool = False
 
     @property
     def untrusted(self) -> bool:
@@ -200,11 +205,27 @@ def build_incident_package(
             "no untrusted source in the recorded run (no tool_result carries a "
             "tainted root) — a Lab scenario needs an injection vector"
         )
+    # The scenario's violation predicate reads `prov(args.<driving>)`, so an
+    # egress sink is only usable if the recording says which argument drives it.
+    # Testing only for `egress` here and the stronger condition later meant a run
+    # was refused for "no egress consequence", the operator added a sink, and it
+    # was refused again — by a DIFFERENT message, raised alone, after the reason
+    # list had already been reported. Every reason, in one list, is this module's
+    # whole contract with its caller.
+    usable_sinks = [t for t in tools.values() if t.egress and t.driving_args]
     if not any(t.egress for t in tools.values()):
         reasons.append(
             "no recorded egress consequence (tool_call with "
-            "normalized.destination_kind external_domain/workspace_share) — a "
-            "Lab scenario needs a WRITE/EXPORT/EXEC sink to breach"
+            "normalized.destination_kind external_domain/workspace_share, or a "
+            "tool the operator declared an egress sink) — a Lab scenario needs a "
+            "WRITE/EXPORT/EXEC sink to breach"
+        )
+    elif not usable_sinks:
+        reasons.append(
+            "every recorded egress sink is missing its driving argument "
+            "(`driving_args` on the tool_call payload) — the Lab scenario's "
+            "violation predicate is written over `prov(args.<driving>)` and "
+            "cannot be expressed without one"
         )
 
     manifests = [_manifest(t) for t in tools.values()]
@@ -264,19 +285,30 @@ def _model_values(
     any.
     """
     provenance: dict[str, Any] = payload.get("arg_provenance") or {}
+    # The untrusted values live in the model's context at this call. trace/v1 is
+    # explicit that a model_extraction's `derived_from` is ALL of them, not a
+    # guessed subset: nobody proved which one the model copied, and the
+    # conservative join is what the soundness argument rests on
+    # (contracts/provenance-semantics.md §2). Without these edges a composed
+    # value had no traceable parent at all, and the ledger ended up naming a
+    # source that does not exist.
+    live_untrusted = sorted(v.value_id for v in values.values() if v.untrusted)
     minted: dict[str, str] = {}
     for arg in declared:
         if arg in arg_refs or arg not in provenance:
             continue
         recorded = provenance[arg] or {}
         value_id = f"m_{node}_{seq}_{arg}"
+        sources = [str(x) for x in (recorded.get("sources") or [])]
         values[value_id] = _Value(
             value_id=value_id,
             tool="",  # no producing tool — it did not come out of one
-            sources=[str(x) for x in (recorded.get("sources") or [])],
+            sources=sources,
             sensitive=bool(recorded.get("sensitive")),
+            derived_from=list(live_untrusted) if sources else [],
             decision_value=args.get(arg),
             bound=True,
+            model_composed=True,
         )
         minted[arg] = value_id
     return minted
@@ -439,6 +471,48 @@ def _tool_table(calls: list[_Call], values: dict[str, _Value]) -> dict[str, _Too
 # ── manifests / condition / scenario synthesis ───────────────────────────────
 
 
+def _origin_sources(
+    value: _Value, values: dict[str, _Value]
+) -> list[dict[str, Any]]:
+    """The external reads whose taint reached this value — its causal ROOT.
+
+    trace/v1 is explicit that `sources` is "the transitive causal_root" while
+    `derived_from` is "the immediate edge". This emitted neither: it named the
+    value's own producing tool as an `external_read`, so a summary of an injected
+    email claimed the injection entered at the SUMMARIZER — pointing an
+    investigator at the tool that carried the taint rather than the one that let
+    it in. A model-composed value, having no producing tool, emitted the dangling
+    `tool_result:` instead.
+
+    Walking `derived_from` back to the values that root a taint (untrusted with
+    no parent) gives the set the schema asks for. A superset is allowed
+    (over-taint); an omission is a soundness bug — so a cycle or a missing parent
+    stops that branch rather than dropping the whole answer.
+    """
+    if not value.untrusted:
+        return []
+    roots: dict[str, dict[str, Any]] = {}
+    seen: set[str] = set()
+    stack = [value.value_id]
+    while stack:
+        vid = stack.pop()
+        if vid in seen:
+            continue
+        seen.add(vid)
+        current = values.get(vid)
+        if current is None or not current.untrusted:
+            continue
+        parents = [p for p in current.derived_from if p in values]
+        if parents:
+            stack.extend(parents)
+        elif current.tool:
+            roots[current.tool] = {
+                "kind": "external_read",
+                "origin_ref": f"tool_result:{current.tool}",
+            }
+    return [roots[tool] for tool in sorted(roots)]
+
+
 def _manifest(t: _Tool) -> dict[str, Any]:
     effect: dict[str, Any] = {
         "default_class": "EXPORT" if t.egress else "READ",
@@ -569,7 +643,13 @@ def _scenario(
 
 
 def _violation_call(calls: list[_Call], tools: dict[str, _Tool]) -> _Call:
-    """The egress call the violation predicate names: prefer the recorded DENY."""
+    """The egress call the violation predicate names: prefer the recorded DENY.
+
+    `build_incident_package` has already refused a run with no usable sink, and
+    with the complete reason list rather than this one on its own — so reaching
+    the raise below means those two checks disagree, which is a bug here and not
+    a property of the run.
+    """
     egress_calls = [c for c in calls if tools[c.tool].egress and tools[c.tool].driving_args]
     denied = [c for c in egress_calls if c.verdict == "deny"]
     if denied:
@@ -577,8 +657,8 @@ def _violation_call(calls: list[_Call], tools: dict[str, _Tool]) -> _Call:
     if egress_calls:
         return egress_calls[0]
     raise LabExportError(
-        ["no egress call with a bound driving argument — cannot express the "
-         "violation predicate over the recorded run"]
+        ["internal: no egress call with a bound driving argument reached scenario "
+         "synthesis, which the convertibility checks should have refused first"]
     )
 
 
@@ -747,10 +827,7 @@ def _trace(
         row: dict[str, Any] = {
             "value_id": value.value_id,
             "labels": value.labels(),
-            "sources": (
-                [{"kind": "external_read", "origin_ref": f"tool_result:{value.tool}"}]
-                if value.untrusted else []
-            ),
+            "sources": _origin_sources(value, values),
             "decision_value": value.decision_value,
             "canonical_value_hash": content_hash(value.decision_value),
         }
@@ -758,6 +835,12 @@ def _trace(
             row["preview"] = value.decision_value[:_PREVIEW_LEN]
         if value.derived_from:
             row["derived_from"] = list(value.derived_from)
+        # `model_extraction` means an LLM produced the value from its context.
+        # A tool-derived value is not that, and the enum has no entry for "a
+        # tool computed it" — so it claims nothing rather than the wrong
+        # constructor. `transformations` is optional; `sources` carries the
+        # provenance either way.
+        if value.model_composed:
             row["transformations"] = ["model_extraction"]
         ledger.append(row)
 
