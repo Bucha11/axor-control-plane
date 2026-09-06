@@ -142,3 +142,79 @@ class TestTheDeployRouteAcceptsIt:
         tampered = {**package, "config_hash": "sha256:" + "0" * 64}
         response = await client.post("/v1/lab/deploy", json=tampered)
         assert response.status_code == 422, response.text
+
+
+# ── the corpus key must survive the column it is stored in ────────────────────
+
+class TestAPinIdCannotCollideWithAnother:
+    """`lab:{trace_id}` goes into a 64-character key and used to be TRUNCATED.
+
+    Two pins agreeing on their first 60 characters became one row, the second
+    overwriting the first — so a package pinning both sides of a case could land
+    only the must_pass side, in the corpus whose entire premise (decision 11) is
+    that a config blocking everything must not pass. The route reported both as
+    created. These are refusals now, with the reason, before anything is stored.
+    """
+
+    KERNEL = "axor-core@0.10.2"
+    POLICY: dict = {"profile": "default"}
+
+    def _package(self, regressions: list[dict]) -> dict:
+        from axor_backend.lab_export import condition_config_hash
+
+        return {
+            "schema_version": "axor-cp-deploy/v1", "verified": True,
+            "kernel": self.KERNEL, "policy": self.POLICY,
+            "config_hash": condition_config_hash(self.KERNEL, self.POLICY),
+            "parametric_config_hash": "pch",
+            "tool_manifests": [{
+                "schema_version": "tool-manifest/v1", "id": "post",
+                "args_schema": {}, "side_effecting": True,
+                "effect": {"default_class": "EXPORT", "driving_args": ["b"]},
+            }],
+            "regressions": regressions,
+            "source": {"bundle_id": "b1", "condition_id": "c1"},
+        }
+
+    @staticmethod
+    def _pin(trace_id: str, verdict: str = "DENY") -> dict:
+        return {"trace_id": trace_id, "expected_verdict": verdict,
+                "trace_ref": "sha256:x", "expected_sequence": [verdict]}
+
+    def test_two_pins_differing_past_the_cut_are_refused(self) -> None:
+        from axor_backend.lab_import import validate_cp_deploy
+
+        reasons = validate_cp_deploy(self._package([
+            self._pin("t" * 60 + "_alpha", "DENY"),
+            self._pin("t" * 60 + "_bravo", "ALLOW"),
+        ]))
+        assert any("characters" in r for r in reasons), reasons
+
+    def test_an_id_that_exactly_fits_is_accepted(self) -> None:
+        """The bound is the column minus the `lab:` prefix — not a round number
+        someone guessed."""
+        from axor_backend.lab_import import validate_cp_deploy
+
+        assert validate_cp_deploy(self._package([self._pin("t" * 60)])) == []
+        assert validate_cp_deploy(self._package([self._pin("t" * 61)])) != []
+
+    def test_a_duplicate_trace_id_in_one_package_is_refused(self) -> None:
+        """Two pins on one id resolve to a single corpus row, and which side
+        survives depends on array order."""
+        from axor_backend.lab_import import validate_cp_deploy
+
+        reasons = validate_cp_deploy(self._package([
+            self._pin("same", "DENY"), self._pin("same", "ALLOW"),
+        ]))
+        assert any("duplicate trace_id" in r for r in reasons), reasons
+
+    def test_a_package_cannot_carry_unbounded_pins(self) -> None:
+        """Every pin is content-hashed, converted to kernel events and REPLAYED
+        before the request answers, so the count is caller-chosen work. 5000 of
+        them took 15 seconds in one request and were accepted."""
+        from axor_backend.lab_import import MAX_PINS_PER_PACKAGE, validate_cp_deploy
+
+        over = [self._pin(f"tr{i}") for i in range(MAX_PINS_PER_PACKAGE + 1)]
+        reasons = validate_cp_deploy(self._package(over))
+        assert any("ceiling" in r for r in reasons), reasons
+        assert validate_cp_deploy(self._package(over[:MAX_PINS_PER_PACKAGE])) == []

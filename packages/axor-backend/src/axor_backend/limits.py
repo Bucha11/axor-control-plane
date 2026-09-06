@@ -23,6 +23,11 @@ from fastapi import HTTPException
 MAX_EVENTS_PER_BATCH = int(os.environ.get("AXOR_MAX_EVENTS_PER_BATCH", "10000"))
 # Cached causal subgraphs held per process (app._subgraph_cache).
 SUBGRAPH_CACHE_MAX = int(os.environ.get("AXOR_SUBGRAPH_CACHE_MAX", "512"))
+# Regression pins one uploaded Lab package may carry. Each one is content-hashed,
+# converted to kernel events and REPLAYED before the request answers, so the
+# per-pin cost is real work and the count is caller-chosen. A genuine bundle pins
+# tens of cases, not thousands.
+MAX_PINS_PER_PACKAGE = int(os.environ.get("AXOR_MAX_PINS_PER_PACKAGE", "500"))
 
 
 def check_batch_size(events: Any, what: str = "events") -> list:  # noqa: ANN401

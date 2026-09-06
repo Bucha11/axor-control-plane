@@ -25,8 +25,10 @@ from typing import Any
 
 from axor_backend.errors import BackendError
 from axor_backend.lab_export import condition_config_hash
+from axor_backend.limits import MAX_PINS_PER_PACKAGE
 
 CP_DEPLOY_SCHEMA = "axor-cp-deploy/v1"
+_PIN_PREFIX = "lab:"
 _VALID_VERDICTS = frozenset({"ALLOW", "DENY"})
 _EFFECT_CLASSES = frozenset({"READ", "WRITE", "EXPORT", "EXEC"})
 # pins land in the runs-keyed corpus table; run_id column is 64 chars
@@ -119,9 +121,7 @@ def validate_cp_deploy(package: Any) -> list[str]:  # noqa: ANN401 - untrusted u
         errors.append("parametric_config_hash must be a non-empty string")
     errors += _manifest_errors(package.get("tool_manifests"))
     errors += _regression_errors(package.get("regressions"))
-    errors += _regression_traces_errors(
-        package.get("regression_traces"), package.get("regressions")
-    )
+    errors += _regression_traces_errors(package.get("regression_traces"))
     source = package.get("source")
     if not isinstance(source, dict) or not source.get("bundle_id") or not source.get(
         "condition_id"
@@ -173,13 +173,44 @@ def _regression_errors(regressions: Any) -> list[str]:  # noqa: ANN401 - untrust
     if not isinstance(regressions, list):
         return ["regressions must be a list"]
     errors: list[str] = []
+    if len(regressions) > MAX_PINS_PER_PACKAGE:
+        errors.append(
+            f"{len(regressions)} regression pins exceeds the per-package ceiling "
+            f"of {MAX_PINS_PER_PACKAGE} (AXOR_MAX_PINS_PER_PACKAGE) — each pin is "
+            "hashed, converted and REPLAYED before this request answers"
+        )
+    seen_trace_ids: set[str] = set()
     for i, pin in enumerate(regressions):
         where = f"regressions[{i}]"
         if not isinstance(pin, dict):
             errors.append(f"{where} is not an object")
             continue
-        if not isinstance(pin.get("trace_id"), str) or not pin.get("trace_id"):
+        trace_id = pin.get("trace_id")
+        if not isinstance(trace_id, str) or not trace_id:
             errors.append(f"{where}: trace_id must be a non-empty string")
+        else:
+            # A pin is stored under `lab:{trace_id}` in a 64-char column, and the
+            # id used to be TRUNCATED to fit. Two pins agreeing on their first
+            # 60 characters then became one row, the second overwriting the
+            # first — so a package pinning both sides of a case could land only
+            # the must_pass side, in the corpus whose entire premise is that a
+            # config blocking everything must not pass. The route reported both
+            # as created. Refuse the id instead of silently mangling it.
+            budget = _PIN_RUN_ID_MAX - len(_PIN_PREFIX)
+            if len(trace_id) > budget:
+                errors.append(
+                    f"{where}: trace_id is {len(trace_id)} characters; the corpus "
+                    f"stores it as `{_PIN_PREFIX}{{trace_id}}` in a "
+                    f"{_PIN_RUN_ID_MAX}-character key, so at most {budget} fit. "
+                    "Truncating would collide two pins into one."
+                )
+            if trace_id in seen_trace_ids:
+                errors.append(
+                    f"{where}: duplicate trace_id {trace_id!r} — two pins on one "
+                    "id resolve to a single corpus row, and which side survives "
+                    "depends on array order"
+                )
+            seen_trace_ids.add(trace_id)
         verdict = pin.get("expected_verdict")
         if verdict not in _VALID_VERDICTS:
             errors.append(
@@ -204,7 +235,6 @@ def _regression_errors(regressions: Any) -> list[str]:  # noqa: ANN401 - untrust
 
 def _regression_traces_errors(
     regression_traces: Any,  # noqa: ANN401 - untrusted upload
-    regressions: Any,  # noqa: ANN401 - untrusted upload
 ) -> list[str]:
     """``regression_traces`` is an ADDITIVE map {trace_id: trace body} the Lab
     export embeds so the CP can REPLAY the pins (not merely record their hashes).
@@ -226,6 +256,16 @@ def _regression_traces_errors(
     return errors
 
 
+def _pin_run_id(trace_id: str) -> str:
+    """The corpus key for a Lab pin.
+
+    No truncation: `validate_cp_deploy` refuses a trace_id that would not fit,
+    because a key silently cut to length turns two pins into one row and loses
+    whichever side was written first.
+    """
+    return f"{_PIN_PREFIX}{trace_id}"
+
+
 def pin_plans(package: dict[str, Any], package_id: str) -> list[PinPlan]:
     """The corpus pins a validated package creates: must_block for DENY pins,
     must_pass for ALLOW, keyed ``lab:{trace_id}`` and labelled with the source
@@ -234,7 +274,7 @@ def pin_plans(package: dict[str, Any], package_id: str) -> list[PinPlan]:
     for pin in package.get("regressions", []):
         side = "must_block" if pin["expected_verdict"] == "DENY" else "must_pass"
         plans.append(PinPlan(
-            run_id=f"lab:{pin['trace_id']}"[:_PIN_RUN_ID_MAX],
+            run_id=_pin_run_id(pin["trace_id"]),
             side=side,
             label=f"lab:{package_id}",
         ))
@@ -269,7 +309,7 @@ def deploy_plans(package: dict[str, Any], package_id: str) -> list[PinDeployPlan
     for pin in package.get("regressions", []):
         trace_id = str(pin["trace_id"])
         side = "must_block" if pin["expected_verdict"] == "DENY" else "must_pass"
-        run_id = f"lab:{trace_id}"[:_PIN_RUN_ID_MAX]
+        run_id = _pin_run_id(trace_id)
         label = f"lab:{package_id}"
 
         def skip(reason: str) -> PinDeployPlan:
