@@ -4,6 +4,9 @@ hand-writing code. Same Ed25519 + JCS stack the plane uses; fully offline.
   axor-license keygen                            → vendor keypair (hex)
   axor-license issue --key-file <path> --org …   → signed license-file JSON
       (key sources, preferred first: --key-file, AXOR_VENDOR_KEY env, --key)
+      prints the customer's .env block alongside, so the organization name is
+      copied rather than retyped — it must match `AXOR_ORG` EXACTLY or the
+      deployment refuses the license, and it is a free-text company name.
   axor-license verify --pubkey <pub> <file>      → validity + fields
 
 Commercial module (ee/) — see ee/LICENSE.
@@ -50,6 +53,18 @@ def _issue(args: argparse.Namespace) -> int:
             file=sys.stderr,
         )
         return 2
+    if args.control_plane and args.governed_nodes <= 0:
+        # The ceiling used to be decorative, so a zero passed unnoticed. It is
+        # checked on every housekeeping sweep now, and a Control Plane license
+        # with a ceiling of zero means a warning on every pass, for a customer
+        # who has paid. It never blocks a node — it just accuses one.
+        print(
+            "--control-plane needs a --governed-nodes ceiling above 0: the "
+            "deployment compares its live fleet against it on every sweep, so "
+            "0 warns forever about a customer who has paid.",
+            file=sys.stderr,
+        )
+        return 2
     lic = {
         "organization": args.org,
         "workspace_tier": args.workspace_tier,
@@ -62,7 +77,21 @@ def _issue(args: argparse.Namespace) -> int:
         "expires_at": args.expires_at,
         "features": args.features or [],
     }
-    print(sign_license(lic, key))
+    signed = sign_license(lic, key)
+    print(signed)
+    if not args.no_env_block:
+        from nacl.signing import SigningKey  # noqa: PLC0415
+
+        pub = SigningKey(bytes.fromhex(key)).verify_key.encode().hex()
+        print(
+            "\n# ── send this to the customer with the license file ──\n"
+            f"# AXOR_ORG must match the license EXACTLY or it is refused.\n"
+            f"AXOR_ORG={args.org}\n"
+            f"AXOR_VENDOR_PUBKEY={pub}\n"
+            f"# expires {args.expires_at} — EE goes read-only after that date;\n"
+            "# safety features are untouched and never require a license.",
+            file=sys.stderr,
+        )
     return 0
 
 
@@ -119,7 +148,12 @@ def main(argv: list[str] | None = None) -> int:
     )
     issue.add_argument(
         "--governed-nodes", type=int, default=0,
-        help="governed-node ceiling (Control Plane); 0 when the module is off",
+        help="governed-node ceiling (Control Plane); must be > 0 when "
+             "--control-plane is set, 0 when the module is off",
+    )
+    issue.add_argument(
+        "--no-env-block", action="store_true",
+        help="suppress the customer .env block printed on stderr",
     )
     issue.add_argument(
         "--self-hosted", action=argparse.BooleanOptionalAction, default=False,

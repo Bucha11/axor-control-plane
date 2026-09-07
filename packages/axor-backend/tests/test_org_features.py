@@ -381,7 +381,7 @@ class TestTheNodeCeilingIsWatchedNotEnforced:
     ) -> None:
         import logging
 
-        from axor_backend.lifecycle import warn_over_ceiling_once
+        from axor_backend.lifecycle import license_sweep_once
 
         await client.post("/v1/license/verify", json={
             "license_json": _signed(vendor, governed_node_ceiling=1)})
@@ -389,6 +389,296 @@ class TestTheNodeCeilingIsWatchedNotEnforced:
             await client.post(f"/v1/plane/{node}/telemetry", json=_heartbeat(node))
         app = client._transport.app  # type: ignore[attr-defined]
         with caplog.at_level(logging.WARNING, logger="axor.backend"):
-            await warn_over_ceiling_once(app.state)
+            await license_sweep_once(app.state)
         assert any("licensed ceiling" in r.getMessage()
                    for r in caplog.records), caplog.text
+
+
+# ── expiry stops being silent ─────────────────────────────────────────────────
+
+def _in_days(n: int) -> str:
+    from datetime import UTC, datetime, timedelta
+
+    return (datetime.now(UTC).date() + timedelta(days=n)).isoformat()
+
+
+class TestAnExpiringLicenseIsAnnounced:
+    """Expiry was entirely silent: EE degraded to read-only and the first anyone
+    heard of it was a 402 on a feature that had worked yesterday. The
+    notification machinery already carried node staleness, level transitions and
+    corpus regressions, and nothing about the thing that pays for it."""
+
+    @staticmethod
+    async def _capture(client: httpx.AsyncClient) -> list:
+        fired: list = []
+
+        async def post(url: str, body: dict) -> int:
+            fired.append(body)
+            return 200
+
+        app = client._transport.app  # type: ignore[attr-defined]
+        app.state.notifier._post = post
+        await client.post("/v1/notifications/subscribe", json={
+            "url": "http://sink.test", "triggers": ["license_expiring"],
+        })
+        return fired
+
+    async def test_the_sweep_announces_a_license_running_out(
+        self, client: httpx.AsyncClient, vendor: dict,
+    ) -> None:
+        from axor_backend.lifecycle import license_sweep_once
+
+        fired = await self._capture(client)
+        assert (await client.post("/v1/license/verify", json={
+            "license_json": _signed(vendor, expires_at=_in_days(5)),
+        })).status_code == 200
+        await license_sweep_once(client._transport.app.state)  # type: ignore[attr-defined]
+        assert len(fired) == 1, fired
+        assert fired[0]["trigger"] == "license_expiring"
+        assert fired[0]["days_remaining"] == 5
+        assert fired[0]["expired"] is False
+
+    async def test_a_license_with_months_left_says_nothing(
+        self, client: httpx.AsyncClient, vendor: dict,
+    ) -> None:
+        from axor_backend.lifecycle import license_sweep_once
+
+        fired = await self._capture(client)
+        await _activate(client, vendor)  # expires 2999
+        await license_sweep_once(client._transport.app.state)  # type: ignore[attr-defined]
+        assert fired == []
+
+    async def test_one_notice_per_threshold_not_one_per_sweep(
+        self, client: httpx.AsyncClient, vendor: dict,
+    ) -> None:
+        """The sweep runs on a timer. A notice per pass is a notice nobody
+        reads, and a plain time debounce would either repeat daily or swallow
+        the 1-day warning after firing the 3-day one."""
+        from axor_backend.lifecycle import license_sweep_once
+
+        fired = await self._capture(client)
+        await client.post("/v1/license/verify",
+                          json={"license_json": _signed(vendor, expires_at=_in_days(5))})
+        state = client._transport.app.state  # type: ignore[attr-defined]
+        for _ in range(4):
+            await license_sweep_once(state)
+        assert len(fired) == 1, fired
+
+    async def test_status_reports_the_days_left_not_only_the_date(
+        self, client: httpx.AsyncClient, vendor: dict,
+    ) -> None:
+        await client.post("/v1/license/verify",
+                          json={"license_json": _signed(vendor, expires_at=_in_days(9))})
+        status = (await client.get("/v1/license/status")).json()
+        assert status["days_remaining"] == 9
+        assert status["expired"] is False
+
+    async def test_status_tells_lapsed_apart_from_never_licensed(
+        self, client: httpx.AsyncClient, vendor: dict,
+    ) -> None:
+        """`active: false` alone cannot say whether the operator never bought a
+        license or let one lapse — the same conflation the 402 used to make."""
+        from axor_backend.ee.license import verify_license
+        from axor_backend.tenancy import PUBLIC_ORG
+
+        await _activate(client, vendor)
+        app = client._transport.app  # type: ignore[attr-defined]
+        app.state.licenses[PUBLIC_ORG] = verify_license(
+            _signed(vendor, expires_at="2020-01-01"), vendor["pub"])
+        status = (await client.get("/v1/license/status")).json()
+        assert status["active"] is False
+        assert status["expired"] is True
+        assert status["days_remaining"] < 0
+        assert status["organization"] == "T"
+
+
+# ── renewal: the deployment fetches its next license, it is never pushed one ──
+
+class TestRenewalIsFetchedAndOnlyMovesForward:
+    """A monthly subscription against an offline license means a new file every
+    month, pasted by hand, or the deployment quietly goes read-only.
+
+    Renewal is a PULL: the control plane dials out for its next license exactly
+    as a governed node dials out for its desired state. A push would need the
+    customer's backend reachable from the vendor's — an inbound write surface on
+    a security product, behind their NAT, for an event that is not time-
+    critical. Everything that comes back passes the checks a pasted license
+    passes, plus one: the expiry may not move backwards.
+    """
+
+    @pytest.fixture
+    async def renewing(self, tmp_path: pathlib.Path, vendor: dict):  # noqa: ANN201
+        app = create_app(database_url=f"sqlite+aiosqlite:///{tmp_path}/r.db",
+                         license_renewal_url="https://vendor.test/renew")
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://backend.test",
+        ) as c, app.router.lifespan_context(app):
+            await c.post("/v1/license/verify", json={
+                "license_json": _signed(vendor, expires_at=_in_days(5))})
+            yield c, app
+
+    @staticmethod
+    def _serving(license_json: str | None):  # noqa: ANN205
+        async def fetch(url: str, org: str, current) -> str | None:  # noqa: ANN001
+            return license_json
+        return fetch
+
+    async def test_a_license_inside_the_window_is_renewed(
+        self, renewing: tuple, vendor: dict,
+    ) -> None:
+        from axor_backend.licensing import renew_once, renewal_due
+        from axor_backend.tenancy import PUBLIC_ORG
+
+        client, app = renewing
+        assert await renewal_due(app.state, PUBLIC_ORG) is True
+        nxt = _signed(vendor, expires_at=_in_days(400))
+        assert await renew_once(app.state, PUBLIC_ORG,
+                                fetch=self._serving(nxt)) is True
+        status = (await client.get("/v1/license/status")).json()
+        assert status["days_remaining"] == 400
+        assert status["auto_renewal"] is True
+
+    async def test_a_renewal_survives_a_restart(
+        self, renewing: tuple, vendor: dict,
+    ) -> None:
+        """It is stored, not only held: a renewal that lives in memory is one
+        the next deploy loses."""
+        from axor_backend.licensing import load_licenses, renew_once
+        from axor_backend.tenancy import PUBLIC_ORG
+
+        _client, app = renewing
+        await renew_once(app.state, PUBLIC_ORG,
+                         fetch=self._serving(_signed(vendor, expires_at=_in_days(400))))
+        app.state.licenses.clear()
+        await load_licenses(app.state)
+        assert app.state.licenses[PUBLIC_ORG].expires_at == _in_days(400)
+
+    async def test_an_older_license_cannot_be_replayed_over_a_newer_one(
+        self, renewing: tuple, vendor: dict,
+    ) -> None:
+        """This is what makes an unauthenticated fetch safe: the only thing the
+        vendor endpoint can do is move a deployment forward."""
+        from axor_backend.licensing import renew_once, stored_license
+        from axor_backend.tenancy import PUBLIC_ORG
+
+        _client, app = renewing
+        await renew_once(app.state, PUBLIC_ORG,
+                         fetch=self._serving(_signed(vendor, expires_at=_in_days(400))))
+        stale = _signed(vendor, expires_at=_in_days(6))
+        assert await renew_once(app.state, PUBLIC_ORG,
+                                fetch=self._serving(stale)) is False
+        assert stored_license(app.state, PUBLIC_ORG).expires_at == _in_days(400)
+
+    async def test_a_license_for_another_org_is_not_installed(
+        self, tmp_path: pathlib.Path, vendor: dict,
+    ) -> None:
+        from axor_backend.licensing import renew_once, stored_license
+
+        app = create_app(database_url=f"sqlite+aiosqlite:///{tmp_path}/r2.db",
+                         org="T", license_renewal_url="https://vendor.test/renew")
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://backend.test",
+        ) as c, app.router.lifespan_context(app):
+            await c.post("/v1/license/verify", json={
+                "license_json": _signed(vendor, expires_at=_in_days(5))})
+            assert await renew_once(app.state, "public", fetch=self._serving(
+                _signed(vendor, organization="globex", expires_at=_in_days(400)),
+            )) is False
+            assert stored_license(app.state, "public").expires_at == _in_days(5)
+
+    async def test_an_unsigned_response_changes_nothing(
+        self, renewing: tuple,
+    ) -> None:
+        from axor_backend.licensing import renew_once, stored_license
+        from axor_backend.tenancy import PUBLIC_ORG
+
+        _client, app = renewing
+        assert await renew_once(app.state, PUBLIC_ORG, fetch=self._serving(
+            '{"license": {"organization": "T", "workspace_tier": "security", '
+            '"modules": {}, "governed_node_ceiling": 99, '
+            '"expires_at": "2099-01-01", "features": []}, "sig": "00"}',
+        )) is False
+        assert stored_license(app.state, PUBLIC_ORG).expires_at == _in_days(5)
+
+    async def test_an_unreachable_vendor_leaves_the_licence_alone(
+        self, renewing: tuple,
+    ) -> None:
+        """A vendor outage must not cost a paying customer their entitlement.
+        The deployment degrades on its own schedule, as if renewal had never
+        been configured."""
+        from axor_backend.licensing import renew_once, stored_license
+        from axor_backend.tenancy import PUBLIC_ORG
+
+        _client, app = renewing
+
+        async def broken(url: str, org: str, current) -> str:  # noqa: ANN001
+            raise ConnectionError("vendor down")
+
+        assert await renew_once(app.state, PUBLIC_ORG, fetch=broken) is False
+        assert stored_license(app.state, PUBLIC_ORG).expires_at == _in_days(5)
+
+    async def test_renewal_is_off_unless_a_url_is_configured(
+        self, client: httpx.AsyncClient, vendor: dict,
+    ) -> None:
+        """Opt-in: an air-gapped deployment has no renewal endpoint to call, and
+        the manual paste flow it depends on is unchanged."""
+        from axor_backend.licensing import renewal_due
+        from axor_backend.tenancy import PUBLIC_ORG
+
+        await client.post("/v1/license/verify",
+                          json={"license_json": _signed(vendor, expires_at=_in_days(5))})
+        app = client._transport.app  # type: ignore[attr-defined]
+        assert await renewal_due(app.state, PUBLIC_ORG) is False
+        assert (await client.get("/v1/license/status")).json()["auto_renewal"] is False
+
+    async def test_a_renewal_resets_the_expiry_notice(
+        self, renewing: tuple, vendor: dict,
+    ) -> None:
+        """The next expiry is a new subject. A high-water mark left over from
+        the old one would swallow its warnings."""
+        from axor_backend.licensing import renew_once
+        from axor_backend.lifecycle import license_sweep_once
+        from axor_backend.tenancy import PUBLIC_ORG
+
+        _client, app = renewing
+        await license_sweep_once(app.state)  # notices the 5-day expiry
+        assert await app.state.store.get_setting("license_expiry_notified")
+        await renew_once(app.state, PUBLIC_ORG,
+                         fetch=self._serving(_signed(vendor, expires_at=_in_days(400))))
+        assert not await app.state.store.get_setting("license_expiry_notified")
+
+
+# ── the vendor CLI ────────────────────────────────────────────────────────────
+
+class TestTheIssuingCliDoesNotProduceAWarningMachine:
+    def test_a_control_plane_license_needs_a_real_ceiling(self) -> None:
+        """The ceiling used to be decorative, so a zero passed unnoticed. It is
+        compared to the live fleet on every sweep now, and 0 warns forever about
+        a customer who has paid."""
+        from axor_backend.ee.cli import main
+
+        assert main(["issue", "--key", _vendor_priv(), "--org", "T",
+                     "--control-plane", "--expires-at", "2099-01-01"]) == 2
+        assert main(["issue", "--key", _vendor_priv(), "--org", "T",
+                     "--control-plane", "--governed-nodes", "25",
+                     "--expires-at", "2099-01-01"]) == 0
+
+    def test_it_prints_the_env_block_the_customer_must_match(
+        self, capsys: pytest.CaptureFixture,
+    ) -> None:
+        """`AXOR_ORG` must equal the license's organization EXACTLY or the
+        deployment refuses it, and it is a free-text company name — so it is
+        handed over, not retyped."""
+        from axor_backend.ee.cli import main
+
+        main(["issue", "--key", _vendor_priv(), "--org", "Acme Corp",
+              "--expires-at", "2099-01-01"])
+        err = capsys.readouterr().err
+        assert "AXOR_ORG=Acme Corp" in err
+        assert "AXOR_VENDOR_PUBKEY=" in err
+
+
+def _vendor_priv() -> str:
+    from nacl.signing import SigningKey
+
+    return bytes(SigningKey.generate()).hex()

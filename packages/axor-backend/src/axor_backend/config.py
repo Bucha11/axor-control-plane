@@ -54,6 +54,10 @@ class AppConfig:
     # single-tenant install and boot says so, the same opt-in posture as
     # `allow_unsigned`.
     org: str = ""
+    # Where to FETCH a renewed license, when the vendor runs one. Optional and
+    # off by default; unset keeps the manual paste flow, which is the only one
+    # an air-gapped deployment can have.
+    license_renewal_url: str = ""
     # ── egress ───────────────────────────────────────────────────────────────
     webhook_block_private: bool = False
 
@@ -84,6 +88,7 @@ class AppConfig:
         identity_issuer: str = "axor-identity",
         vendor_pubkey: str | None = None,
         org: str | None = None,
+        license_renewal_url: str | None = None,
     ) -> AppConfig:
         """Argument, else environment, else default — field by field."""
         if operator_keys is None:
@@ -121,6 +126,11 @@ class AppConfig:
                 or DEFAULT_SCHEDULE_SWEEP_SECONDS
             ),
             org=(org if org is not None else os.environ.get("AXOR_ORG", "")),
+            license_renewal_url=(
+                license_renewal_url
+                if license_renewal_url is not None
+                else os.environ.get("AXOR_LICENSE_RENEWAL_URL", "")
+            ),
             vendor_pubkey=(
                 vendor_pubkey
                 if vendor_pubkey is not None

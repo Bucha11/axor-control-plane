@@ -113,6 +113,11 @@ def check_webhook_url(url: str, block_private: bool = False) -> None:
 TRIGGERS = frozenset({
     "level_transition_up", "heat_threshold", "evidence_run", "node_stale",
     "regression_failed", "behavioral_drift",
+    # An expiring license is the only trigger that is not about a governed
+    # system. It is here because expiry was silent: EE went read-only and the
+    # operator found out from a 402. `node_id` carries the licensed
+    # organization, which is the subject of this one.
+    "license_expiring",
 })
 
 

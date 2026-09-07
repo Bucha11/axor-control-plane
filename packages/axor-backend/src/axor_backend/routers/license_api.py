@@ -41,8 +41,10 @@ from axor_backend.licensing import (
     active_license,
     binding_error,
     ceiling_status,
+    days_until,
     expected_org,
     license_payload,
+    stored_license,
     today,
 )
 from axor_backend.tenancy import current_org_id
@@ -129,13 +131,23 @@ async def license_status(state: StateDep, config: ConfigDep) -> dict:
     """
     org = current_org_id()
     lic = active_license(state, org)
+    held = stored_license(state, org)
     base = {
         "vendor_key_configured": bool(config.vendor_pubkey),
         "licensed_to": expected_org(config, org),
+        "auto_renewal": bool(config.license_renewal_url),
     }
     if lic is None:
+        # An expired license is still held, and saying so is the difference
+        # between "renew this" and "buy one".
+        if held is not None:
+            return {"active": False, **base, **license_payload(held),
+                    "days_remaining": days_until(held.expires_at),
+                    "expired": True}
         return {"active": False, **base}
     return {
         "active": True, **base, **license_payload(lic),
+        "days_remaining": days_until(lic.expires_at),
+        "expired": False,
         **await ceiling_status(state, org),
     }

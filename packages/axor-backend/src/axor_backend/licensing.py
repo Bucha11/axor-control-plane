@@ -30,7 +30,7 @@ What a license actually has to answer, and each of these was a separate hole:
 from __future__ import annotations
 
 import logging
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from typing import Any
 
 from fastapi import HTTPException
@@ -82,6 +82,24 @@ def stored_license(state: Any, org: str) -> Any | None:  # noqa: ANN401
 
 def today() -> str:
     return datetime.now(UTC).date().isoformat()
+
+
+# How long before expiry the operator is told. Three warnings, not one: the
+# first is a reminder, the last is an emergency, and a single notice sent 30
+# days out is one an operator can miss entirely.
+EXPIRY_NOTICE_DAYS = (30, 14, 7, 3, 1)
+
+
+def days_until(expires_at: str, from_day: str | None = None) -> int | None:
+    """Whole days from today to `expires_at`, negative once past. None when the
+    date is not one — a license is vendor-signed, so a malformed date is a
+    vendor bug, and guessing at it is worse than reporting nothing."""
+    try:
+        end = date.fromisoformat(expires_at)
+        start = date.fromisoformat(from_day) if from_day else datetime.now(UTC).date()
+    except (TypeError, ValueError):
+        return None
+    return (end - start).days
 
 
 def active_license(state: Any, org: str) -> Any | None:  # noqa: ANN401
@@ -216,3 +234,161 @@ async def warn_over_ceiling(state: Any, org: str) -> None:  # noqa: ANN401
             "billing discrepancy to settle with the vendor.",
             org, status["live_nodes"], status["governed_node_ceiling"],
         )
+
+
+async def notify_expiring(state: Any, org: str) -> None:  # noqa: ANN401
+    """Tell the operator a license is running out, once per threshold crossed.
+
+    Expiry used to be entirely silent: EE degraded to read-only and the first
+    anyone heard of it was a 402 on a feature that had worked yesterday. The
+    notification machinery already existed and carried nothing about the thing
+    that pays for it.
+
+    The bookkeeping is a stored high-water mark rather than a debounce, because
+    the interesting event is crossing a threshold and there are only a handful
+    of crossings in a license's life — a time-based debounce would either repeat
+    daily or miss the 1-day notice after firing the 3-day one.
+    """
+    lic = stored_license(state, org)
+    if lic is None:
+        return
+    left = days_until(lic.expires_at)
+    if left is None or left > EXPIRY_NOTICE_DAYS[0]:
+        return
+    crossed = min((d for d in EXPIRY_NOTICE_DAYS if left <= d), default=None)
+    if crossed is None:  # already expired: said once, at the 1-day mark
+        crossed = 0
+    already = await state.store.get_setting("license_expiry_notified")
+    if isinstance(already, dict) and already.get("threshold") == crossed \
+            and already.get("expires_at") == lic.expires_at:
+        return
+    await state.store.set_setting("license_expiry_notified", {
+        "threshold": crossed, "expires_at": lic.expires_at,
+    })
+    await state.notifier.emit(
+        "license_expiring", lic.organization,
+        {"expires_at": lic.expires_at, "days_remaining": left,
+         "workspace_tier": lic.workspace_tier, "expired": left < 0},
+        org=org,
+    )
+    log.warning(
+        "license for org %s expires on %s (%d days) — EE goes read-only when "
+        "it lapses; safety features are untouched.",
+        org, lic.expires_at, left,
+    )
+
+
+# ── renewal ───────────────────────────────────────────────────────────────────
+#
+# A monthly subscription against an OFFLINE license means a new file every
+# month, pasted by hand, or the deployment quietly goes read-only. That is the
+# cost of a check that never phones home, and it is worth paying for an
+# air-gapped install and absurd for a hosted one.
+#
+# So renewal is a PULL, not an inbound webhook, and it is opt-in. The control
+# plane fetches its next license the same way a governed node fetches its
+# desired state: it dials out. A push would need the customer's backend to be
+# reachable from the vendor's — an inbound write surface on a security product,
+# behind their NAT, for a payment event that is not time-critical. The whole
+# plane protocol is dial-out for this reason (protocol v0.2: zero listening
+# sockets on customer infrastructure) and licensing does not get an exception.
+#
+# What comes back is verified by exactly the checks a pasted license passes,
+# plus one more: the new expiry may not be EARLIER than the one in force. That
+# makes a replayed old file useless — the only thing this endpoint can do is
+# move a deployment forward, on a license the vendor signed for it.
+
+RENEWAL_WINDOW_DAYS = 21
+
+
+async def renewal_due(state: Any, org: str) -> bool:  # noqa: ANN401
+    """Whether it is time to ask for the next license.
+
+    Inside the window, or already lapsed — a lapsed deployment keeps asking,
+    because the renewal it is waiting for is the one that brings EE back.
+    """
+    if not state.config.license_renewal_url:
+        return False
+    lic = stored_license(state, org)
+    if lic is None:
+        return False  # nothing to renew; a first license is pasted by a human
+    left = days_until(lic.expires_at)
+    return left is not None and left <= RENEWAL_WINDOW_DAYS
+
+
+def renewal_rejection(
+    new: Any, current: Any, config: Any, org: str,  # noqa: ANN401
+) -> str | None:
+    """Why a fetched license must not replace the one in force, or None.
+
+    The signature says the vendor issued it. These say it is ours, it is not
+    already dead on arrival, and it is not a replay of an older file — the last
+    is what keeps a fetch from being a downgrade.
+    """
+    mismatch = binding_error(new, config, org)
+    if mismatch:
+        return mismatch
+    if new.is_expired(today()):
+        return f"the fetched license expired on {new.expires_at}"
+    if current is not None and new.expires_at < current.expires_at:
+        return (
+            f"the fetched license expires on {new.expires_at}, before the one "
+            f"in force ({current.expires_at}) — renewal only moves forward"
+        )
+    return None
+
+
+async def renew_once(state: Any, org: str, *, fetch: Any = None) -> bool:  # noqa: ANN401
+    """Fetch and install this tenant's next license. True when one was installed.
+
+    Never raises and never removes an entitlement: every failure leaves the
+    license in force exactly as it was, and the deployment degrades on its own
+    schedule as if renewal had never been configured.
+    """
+    current = stored_license(state, org)
+    getter = fetch or _fetch_license
+    try:
+        raw = await getter(state.config.license_renewal_url, org, current)
+    except Exception as exc:  # noqa: BLE001 - an unreachable vendor is not an error here
+        log.warning("license renewal fetch failed for org %s: %s", org, exc)
+        return False
+    if not raw:
+        return False
+    try:
+        new = verify_license_str(raw, state.config.vendor_pubkey)
+    except Exception as exc:  # noqa: BLE001 - untrusted response
+        log.warning("fetched license for org %s did not verify: %s", org, exc)
+        return False
+    rejected = renewal_rejection(new, current, state.config, org)
+    if rejected:
+        log.warning("fetched license for org %s rejected: %s", org, rejected)
+        return False
+    await state.store.set_setting("license_json", raw)
+    state.licenses[org] = new
+    # the next expiry is a new subject; the old notice must not suppress it
+    await state.store.set_setting("license_expiry_notified", None)
+    log.info("license for org %s renewed through %s", org, new.expires_at)
+    return True
+
+
+async def _fetch_license(url: str, org: str, current: Any) -> str | None:  # noqa: ANN401
+    """Ask the vendor for this deployment's current license.
+
+    The request carries the license IN FORCE, which is what identifies the
+    caller: it is vendor-signed and names the organization, so the vendor can
+    answer without this deployment holding any additional credential. A CP that
+    has never been licensed does not call at all.
+    """
+    import httpx  # noqa: PLC0415
+
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        response = await client.post(url, json={
+            "organization": current.organization if current else None,
+            "expires_at": current.expires_at if current else None,
+            "org": org,
+        })
+    if response.status_code == 204:
+        return None  # nothing newer
+    response.raise_for_status()
+    body = response.json()
+    return body.get("license_json") if isinstance(body, dict) else None

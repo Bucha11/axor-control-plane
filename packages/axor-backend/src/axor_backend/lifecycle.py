@@ -153,24 +153,36 @@ async def retention_loop(state: Any) -> None:  # noqa: ANN401
         with contextlib.suppress(Exception):
             await prune_once(state)
         with contextlib.suppress(Exception):
-            await warn_over_ceiling_once(state)
+            await license_sweep_once(state)
 
 
-async def warn_over_ceiling_once(state: Any) -> None:  # noqa: ANN401
-    """One pass over the tenants, warning about any fleet past its licensed
-    ceiling.
+async def license_sweep_once(state: Any) -> None:  # noqa: ANN401
+    """The entitlement housekeeping pass, per tenant.
 
-    Never a refusal: a governed node is a safety surface and safety never checks
-    a license. But `over_ceiling` was answered once, at the moment an operator
-    pasted a license, and a fleet that grew afterwards was never looked at again
-    — so the number existed and meant nothing.
+    Three things that all used to be answered once and never again, or never at
+    all: whether the fleet outgrew its licensed ceiling, whether the license is
+    about to run out, and whether a newer one is waiting to be fetched.
+
+    Renewal runs FIRST, so a license that renews in this pass is not also
+    announced as expiring in it. None of the three ever refuses anything: a
+    governed node is a safety surface, and safety never checks a license.
     """
-    from axor_backend.licensing import warn_over_ceiling
+    from axor_backend.licensing import (
+        notify_expiring,
+        renew_once,
+        renewal_due,
+        warn_over_ceiling,
+    )
 
     try:
         for org in await state.store.list_orgs():
             set_current_org(org)
-            await warn_over_ceiling(state, org)
+            if await renewal_due(state, org):
+                await renew_once(state, org)
+            with contextlib.suppress(Exception):
+                await notify_expiring(state, org)
+            with contextlib.suppress(Exception):
+                await warn_over_ceiling(state, org)
     finally:
         set_current_org(PUBLIC_ORG)
 
