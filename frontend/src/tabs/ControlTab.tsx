@@ -138,7 +138,11 @@ function ControlBody({ focusNode, testBench }: { focusNode?: string; testBench: 
   });
 
   const cascade = useMutation({
-    mutationFn: (nodeId: string) => api.cascadeStop(nodeId),
+    // The version the signed command carries is the same one every other
+    // command uses: the node's current desired version plus one. A signed
+    // deployment refuses anything else with a 409 naming what it expected.
+    mutationFn: ({ nodeId, version }: { nodeId: string; version: number }) =>
+      api.cascadeStop(nodeId, version),
     onSuccess: () => {
       setCmdError(null);
       void qc.invalidateQueries({ queryKey: ["nodes"] });
@@ -373,7 +377,10 @@ function ControlBody({ focusNode, testBench }: { focusNode?: string; testBench: 
                 <button
                   onClick={() => {
                     if (!node) return;
-                    cascade.mutate(node.node_id);
+                    cascade.mutate({
+                      nodeId: node.node_id,
+                      version: (node.desired?.version ?? 0) + 1,
+                    });
                   }}
                   disabled={cascade.isPending}
                   style={btn({ color: C.mut, fontSize: 11, padding: "6px 10px" })}

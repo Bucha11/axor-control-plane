@@ -26,6 +26,9 @@ interface ConnOpts {
   testBench?: boolean;
   tools?: { name: string; url: string }[];
   apiToken?: string;
+  // Arms the signed posture: with a key id selected, the client canonicalizes
+  // and signs every operator action through the vault before sending it.
+  signingKeyId?: string;
 }
 
 // Seed the persisted store BEFORE any script on the page runs. Mirrors zustand
@@ -40,6 +43,7 @@ export async function setConnection(page: Page, opts: ConnOpts): Promise<void> {
     },
     lastRunId: null,
     apiToken: opts.apiToken ?? "",
+    signingKeyId: opts.signingKeyId ?? "",
   };
   await page.addInitScript(
     (s) => window.localStorage.setItem("axor-app", JSON.stringify({ state: s, version: 0 })),

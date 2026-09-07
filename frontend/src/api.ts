@@ -699,10 +699,33 @@ export const api = {
     });
     return j<{ appended: boolean }>(r);
   },
-  cascadeStop: (nodeId: string) =>
-    af(`/v1/plane/${nodeId}/cascade-stop`, { method: "POST" }).then(
-      (r) => j<{ stopped: string[]; count: number }>(r),
-    ),
+  // The blast-radius kill switch, and the third operator action the plane
+  // verifies a signature for. It was the one the client did not sign: a bare
+  // POST with no body, which a signed deployment answers 409 ("stale version
+  // None") — so on exactly the deployments the vault exists for, Cascade stop
+  // did not work at all. The dev posture has an empty keyring and takes the BFS
+  // fallback, which ignores the body, so nothing ever surfaced it.
+  //
+  // The signed payload is the delta the backend rebuilds, not one the client
+  // invents: `{stopped: true, cascade: true}` to the subtree ROOT — the tree
+  // distributes the signal child-ward along spawn edges (spec v2 Ch.4 §6).
+  cascadeStop: async (nodeId: string, version: number) => {
+    const timestamp = new Date().toISOString();
+    const sig = signingArmed()
+      ? await vaultSign({
+          node_id: nodeId,
+          version,
+          body: { stopped: true, cascade: true },
+          timestamp,
+        })
+      : "";
+    const r = await af(`/v1/plane/${nodeId}/cascade-stop`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ version, operator: "op_ui", timestamp, sig }),
+    });
+    return j<{ stopped: string[]; count: number; mode?: string }>(r);
+  },
 
   // The node's last behavioral health check, plus the series behind it. `latest`
   // is null until a node has posted one — "no check yet", which is not the same

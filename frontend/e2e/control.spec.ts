@@ -4,7 +4,7 @@
 // the intervention menu. One test drives the REAL end-to-end spawn (proxy +
 // axor-core IntentLoop + plane), the rest use a seeded node for determinism.
 import { expect, test } from "@playwright/test";
-import { goHash, seedDegradedNode, seedNode, setConnection, uniqueNode } from "./helpers";
+import { BACKEND, goHash, seedDegradedNode, seedNode, setConnection, uniqueNode } from "./helpers";
 
 test.describe("control", () => {
   test("greyed with an honest upsell when not on the adapter", async ({ page }) => {
@@ -104,6 +104,39 @@ test.describe("control", () => {
     await expect(
       page.getByText("nothing is holding this node down — no recorded fact to attest."),
     ).toBeVisible();
+  });
+
+  test("cascade stop is signed when the signed posture is armed", async ({ page, request }) => {
+    // Cascade stop is the third operator action the plane verifies a signature
+    // for, and the client did not sign it: a bare POST with no body, which a
+    // signed deployment answers 409 "stale version None". The dev posture takes
+    // the BFS fallback and ignores the body, so the blast-radius kill switch
+    // was broken on exactly the deployments the vault exists for, and green
+    // everywhere it is tested.
+    const node = uniqueNode("gov-cascade");
+    await seedNode(request, node);
+    const keyId = `k-${node}`;
+    const key = await request.post(`${BACKEND}/v1/vault/signing/keys`, {
+      data: { key_id: keyId, operators: ["op_ui"] },
+    });
+    expect(key.ok(), "signing key should be created").toBeTruthy();
+
+    await setConnection(page, { mode: "adapter", signingKeyId: keyId });
+    await goHash(page, "control");
+    await page.getByText(node, { exact: true }).click();
+    await page.getByRole("button", { name: "more…" }).click();
+
+    const sent = page.waitForRequest((r) => r.url().includes("/cascade-stop"));
+    await page.getByRole("button", { name: /Cascade stop/ }).click();
+    const body = JSON.parse((await sent).postData() ?? "{}");
+
+    // The three fields a signed deployment reads. Without them it 409s before
+    // it ever looks at the signature.
+    expect(body.version).toBe(1);
+    expect(body.operator).toBe("op_ui");
+    expect(body.timestamp).toBeTruthy();
+    // ed25519 over the JCS bytes: 64 bytes, hex.
+    expect(body.sig).toMatch(/^[0-9a-f]{128}$/);
   });
 
   test("spawns a REAL governed node end-to-end and shows it live", async ({ page }) => {
