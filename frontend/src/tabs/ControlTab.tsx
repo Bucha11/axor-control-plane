@@ -2,8 +2,9 @@
 // Wired to /v1/plane/nodes; divergence between desired and reported is rendered, not hidden.
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Circle, Gauge, GitBranch, Pause, Play, Shield, Square, Syringe } from "lucide-react";
+import { Circle, Gauge, GitBranch, Pause, Play, Square, Syringe } from "lucide-react";
 import { api, NodeInfo } from "../api";
+import Coverage from "../components/Coverage";
 import TopologyGraph, { PeerCard } from "../components/TopologyGraph";
 import { isAdapter, useApp } from "../store";
 import { C, MONO, btn } from "../theme";
@@ -133,13 +134,6 @@ function ControlBody({ focusNode, testBench }: { focusNode?: string; testBench: 
       setCmdError(null);
       void qc.invalidateQueries({ queryKey: ["nodes"] });
     },
-    onError: (err: Error) => setCmdError(err.message),
-  });
-
-  const attest = useMutation({
-    mutationFn: ({ nodeId, fact }: { nodeId: string; fact: Record<string, unknown> }) =>
-      api.appendFact(nodeId, fact),
-    onSuccess: () => setCmdError(null),
     onError: (err: Error) => setCmdError(err.message),
   });
 
@@ -422,29 +416,13 @@ function ControlBody({ focusNode, testBench }: { focusNode?: string; testBench: 
                   <Syringe size={12} /> Inject next turn
                 </button>
               </Tooltip>
-              <Tooltip content="Vouch for this value's branch — an append-only reputation event that lowers its suspicion. A reason is required and recorded.">
-                <button
-                  onClick={() => {
-                    if (!node) return;
-                    const reason = window.prompt("Attestation reason (required — recorded, append-only):");
-                    if (!reason) { if (reason === "") setCmdError("attestation requires a reason"); return; }
-                    attest.mutate({
-                      nodeId: node.node_id,
-                      fact: {
-                        fact_id: `att_${Date.now()}`,
-                        fact_type: "operator_attestation",
-                        reason, operator: "op_ui",
-                      },
-                    });
-                  }}
-                  disabled={attest.isPending}
-                  style={btn({ color: C.mut, fontSize: 11, padding: "6px 10px" })}
-                >
-                  <Shield size={12} /> Attest branch
-                </button>
-              </Tooltip>
             </div>
           )}
+
+          {/* What is actually holding this node down, and what vouching for it
+              would discharge. `covers` names fact ids (the kernel's contract),
+              so attesting is a choice of which fact — not a gesture. */}
+          <Coverage nodeId={node.node_id} refetchMs={REFETCH_MS} />
 
           {cmdError && (
             <div className="mt-3" style={{ fontFamily: MONO, fontSize: 11, color: C.red }}>

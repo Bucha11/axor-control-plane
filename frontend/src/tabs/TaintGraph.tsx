@@ -44,10 +44,13 @@ export default function TaintGraph({ runId, focus }: { runId: string; focus: str
     queryFn: () => api.runAttestations(runId, current),
   });
 
-  // Attest THIS branch: an append-only operator_attestation fact whose covers[]
-  // names the focus value ref and whose run_id says which run's ref that is —
-  // without the run the coverage would land on every other run's ref of the
-  // same name, and the plane refuses it.
+  // Attest THIS branch: an append-only operator_attestation fact whose
+  // causal_root names the focus value ref — Sentinel's scope for a branch. It
+  // carries no `covers`, because `covers` names FACT IDS (the kernel's
+  // contract, what discharges a degradation fact) and a value ref is not one;
+  // discharging a fact is what Control's coverage panel is for. `run_id` says
+  // which run's ref this is: without it the coverage would land on every other
+  // run's ref of the same name, and the plane refuses it.
   const attest = useMutation({
     mutationFn: (reason: string) =>
       api.appendFact("operator", {
@@ -56,7 +59,7 @@ export default function TaintGraph({ runId, focus }: { runId: string; focus: str
         reason,
         operator: "op_ui",
         run_id: runId,
-        covers: [current],
+        causal_root: current,
       }),
     onSuccess: () => void atts.refetch(),
   });

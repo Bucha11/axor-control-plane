@@ -56,7 +56,7 @@ async def signed(
 def _fact(fact_id: str, **over: object) -> dict:
     fact = {
         "fact_id": fact_id, "fact_type": "operator_attestation",
-        "run_id": "run_a", "covers": ["v_ext_1"],
+        "run_id": "run_a", "causal_root": "v_ext_1",
         "operator": OP, "reason": "checked by hand; the transfer is legitimate",
     }
     fact.update(over)
@@ -106,11 +106,12 @@ class TestTheAdmissionRuleIsSentinels:
 
 
 class TestAnAttestationNamesItsRun:
-    """`covers` names value refs, and the runtime mints those per trace from a
-    counter that restarts at zero — every run has a `v_ext_1`. An attestation
-    scoped to the bare ref covered every other run's ref of the same name, which
-    is the operator-side laundering channel Sentinel's attestation module exists
-    in order not to have."""
+    """An attestation vouches two ways and both are minted per run: `covers`
+    names fact ids (`deg_{seq}`, the kernel's contract) and `causal_root` names
+    a value branch (`v_ext_1`, Sentinel's). Both counters restart at zero every
+    run, so an attestation scoped to the bare name covered every other run's
+    fact or ref of the same name — the operator-side laundering channel
+    Sentinel's attestation module exists in order not to have."""
 
     async def test_an_attestation_without_a_run_is_refused(
         self, client: httpx.AsyncClient
@@ -121,17 +122,28 @@ class TestAnAttestationNamesItsRun:
         assert r.status_code == 400
         assert "run_id" in r.json()["detail"]
 
-    async def test_an_attestation_that_names_no_branch_needs_no_run(
+    async def test_an_attestation_that_vouches_for_nothing_needs_no_run(
         self, client: httpx.AsyncClient
     ) -> None:
-        """A coverless attestation is a recorded operator note on the node: it
-        vouches for no branch, so there is no ref to place in a run — and it
-        appears on no branch's surface."""
-        fact = _fact("a5b", covers=[])
+        """An attestation with neither `covers` nor `causal_root` is a recorded
+        operator note on the node: nothing to place in a run, no fact
+        discharged, and it appears on no branch's surface."""
+        fact = _fact("a5b", causal_root="")
         del fact["run_id"]
         assert (await _append(client, fact)).status_code == 201
         assert (await client.get("/v1/runs/run_a/attestations",
                                  params={"ref": "v_ext_1"})).json() == []
+
+    async def test_a_fact_id_without_a_run_is_refused_too(
+        self, client: httpx.AsyncClient
+    ) -> None:
+        """`covers` names fact ids, which the trace bridge mints as `deg_{seq}`
+        — also from a counter that restarts every run."""
+        fact = _fact("a5c", causal_root="", covers=["deg_5"])
+        del fact["run_id"]
+        r = await _append(client, fact)
+        assert r.status_code == 400
+        assert "run_id" in r.json()["detail"]
 
     async def test_coverage_does_not_reach_another_runs_ref_of_the_same_name(
         self, client: httpx.AsyncClient
@@ -203,7 +215,7 @@ class TestRevocationIsApplied:
         silent no-op — recorded, returned, and ignored."""
         facts = [
             _fact("att"),
-            _fact("rev", revokes="att", covers=[], reason="wrong"),
+            _fact("rev", revokes="att", causal_root="", reason="wrong"),
         ]
         by_id = {a["fact_id"]: a for a in covering(facts, "v_ext_1")}
         assert by_id["att"]["in_effect"] is False
@@ -253,7 +265,7 @@ class TestTheBranchHistory:
         crossing land. Only attestations are read back here."""
         await _append(client, {
             "fact_id": "deg1", "fact_type": "degradation_transition",
-            "run_id": "run_a", "covers": ["v_ext_1"], "severity": 1,
+            "run_id": "run_a", "causal_root": "v_ext_1", "severity": 1,
         })
         assert (await client.get("/v1/runs/run_a/attestations",
                                  params={"ref": "v_ext_1"})).json() == []

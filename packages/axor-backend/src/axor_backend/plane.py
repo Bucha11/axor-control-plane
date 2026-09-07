@@ -32,6 +32,7 @@ from axor_backend.attestations import (
     validate_fact as validate_attestation,
 )
 from axor_backend.clock import now, today
+from axor_backend.coverage import coverage
 from axor_backend.errors import (
     CommandRejected,
     ConcurrentUpdate,
@@ -40,6 +41,7 @@ from axor_backend.errors import (
 from axor_backend.limits import check_batch_size
 from axor_backend.signing import signed_payload
 from axor_backend.tenancy import current_org_id, topic
+from axor_backend.traces import kernel_events_or_empty
 
 router = APIRouter(prefix="/v1/plane")
 
@@ -302,13 +304,17 @@ def _check_attestation(fact: dict, signing_operator: str) -> None:
     * Sentinel's own rule (reason + operator identity, decision 8), imported
       rather than restated, so the plane and Sentinel cannot come to disagree
       about what a valid attestation is.
-    * ``run_id``, whenever the attestation names a branch at all. ``covers``
-      holds value refs, which the runtime mints per trace from a counter that
-      restarts at zero — every run has a ``v_ext_1``. Without the run, the branch
-      this attestation vouches for is not identified, and its coverage lands on
-      every other run's ref of the same name. An attestation with no ``covers``
-      is a recorded operator note on the node: it vouches for no branch, appears
-      on no branch's surface, and needs no run to be placed in.
+    * ``run_id``, whenever the attestation vouches for anything at all. It can
+      vouch two ways, and both are minted per run. ``covers`` names FACT IDS —
+      the kernel's contract (:class:`axor_core.kernel.events.Fact`), and what
+      ``compute_level`` discharges — and the trace bridge mints those as
+      ``deg_{seq}`` / ``quar_{seq}``. ``causal_root`` names a value branch —
+      Sentinel's contract (:class:`AttestationRecord.causal_root`) — and the
+      runtime mints those as ``v_ext_1``. Both counters restart at zero every
+      run, so without the run neither is identified and the coverage lands on
+      every other run's fact or ref of the same name. An attestation with
+      neither is a recorded operator note on the node: it vouches for nothing,
+      appears on no branch's surface, discharges no fact, and needs no run.
     * The fact's ``operator`` must be the operator whose key signed the request.
       The signature covers the fact body, so the two were always transmitted
       together — but nothing compared them, and the attribution the whole surface
@@ -320,10 +326,11 @@ def _check_attestation(fact: dict, signing_operator: str) -> None:
         validate_attestation(fact)
     except AttestationError as exc:
         raise HTTPException(400, str(exc)) from exc
-    if fact.get("covers") and not fact.get("run_id"):
+    if (fact.get("covers") or fact.get("causal_root")) and not fact.get("run_id"):
         raise HTTPException(
-            400, "an attestation that names `covers` requires run_id: value "
-                 "refs are unique only inside the run that minted them",
+            400, "an attestation that vouches for something requires run_id: "
+                 "fact ids and value refs alike are unique only inside the run "
+                 "that minted them",
         )
     claimed = str(fact.get("operator") or "")
     if signing_operator and claimed != signing_operator:
@@ -380,6 +387,39 @@ async def append_fact(node_id: str, body: dict, request: Request) -> dict:
              "permalink": f"/v1/plane/nodes#{node_id}"},
         )
     return {"appended": True}
+
+
+@router.get("/{node_id}/coverage")
+async def node_coverage(node_id: str, request: Request) -> dict:
+    """What this node's level is made of, and what an attestation would change.
+
+    The answer is the kernel's own recompute (``compute_level`` over the facts
+    and their coverage), not a second opinion held here — see
+    :mod:`axor_backend.coverage`. It is what makes "attest branch" an action
+    rather than a gesture: the operator sees the facts holding the node down,
+    which fact ids an attestation would have to name, and what the level becomes
+    once it does.
+
+    ``reported_level`` is the node's own last word and is never overwritten by
+    this. A node converges when the attestation reaches it on its desired-state
+    stream; until then the two differ, and the divergence is rendered rather
+    than hidden (protocol, section 5).
+    """
+    ctx = _ctx(request)
+    run_id = await ctx.store.latest_run_for_node(node_id)
+    reported = await ctx.store.get_reported(node_id)
+    if run_id is None:
+        # Not an error: a node that has never reported has no facts and nothing
+        # to attest. Saying so beats a 404 the panel would have to guess about.
+        return {"node_id": node_id, "run_id": None,
+                "reported_level": (reported or {}).get("level", "NORMAL"),
+                "level": "NORMAL", "facts": [], "covered": []}
+    report = coverage(
+        await kernel_events_or_empty(ctx.store, run_id),
+        await ctx.store.attestation_facts(run_id),
+        reported_level=(reported or {}).get("level", "NORMAL"),
+    )
+    return {"node_id": node_id, "run_id": run_id, **report}
 
 
 @router.post("/{node_id}/consumed", status_code=200)

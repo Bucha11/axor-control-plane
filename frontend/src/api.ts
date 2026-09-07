@@ -120,6 +120,33 @@ export interface GraphKhop {
   edges: GraphEdge[];
 }
 
+// One fact holding a node down. `severity` indexes the degradation ladder
+// (0=NORMAL..4=TERMINAL) and the node's level is max(severity) over the facts
+// no attestation covers — the kernel's own recompute, not the plane's.
+export interface DrivingFact {
+  fact_id: string;
+  fact_type: string;
+  severity: number;
+  reason: string;
+  // The value branch the fact was recorded against, when the trace named one.
+  causal_root: string | null;
+  // Operators whose unrevoked attestation covers this fact. Empty = uncovered,
+  // which is what makes it count toward the level.
+  covered_by: string[];
+}
+
+export interface NodeCoverage {
+  node_id: string;
+  run_id: string | null;
+  // What the node itself last reported. Never overwritten by attesting.
+  reported_level: string;
+  // What the level is once coverage is taken into account. Differs from
+  // reported_level until the node applies the attestation off its stream.
+  level: string;
+  facts: DrivingFact[];
+  covered: string[];
+}
+
 export interface BranchAttestation {
   fact_id: string;
   operator: string;
@@ -701,6 +728,10 @@ export const api = {
     af(`/v1/runs/${encodeURIComponent(runId)}/provenance` +
        `?focus=${encodeURIComponent(focus)}&k=${k}&limit=${limit}`).then(
       (r) => j<GraphKhop>(r),
+    ),
+  nodeCoverage: (nodeId: string) =>
+    af(`/v1/plane/${encodeURIComponent(nodeId)}/coverage`).then(
+      (r) => j<NodeCoverage>(r),
     ),
   runAttestations: (runId: string, ref: string) =>
     af(`/v1/runs/${encodeURIComponent(runId)}/attestations` +

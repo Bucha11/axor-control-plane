@@ -560,6 +560,25 @@ class Store:
             )).all()
         return [_run_row(r) for r in rows]
 
+    async def latest_run_for_node(self, node_id: str) -> str | None:
+        """The node's most recent run, or None if it has never reported.
+
+        A governed node's telemetry defaults its run id to the node id, so this
+        is usually one long-lived keepalive run — but a node that names its runs
+        gets the newest, which is the one an operator is looking at.
+        """
+        async with self.engine.connect() as conn:
+            row = (await conn.execute(
+                select(runs.c.run_id)
+                .where(
+                    runs.c.node_id == node_id,
+                    runs.c.org_id == current_org_id(),
+                )
+                .order_by(runs.c.created_ts.desc())
+                .limit(1)
+            )).first()
+        return row.run_id if row else None
+
     async def set_evidence(self, run_id: str, evidence: list[dict[str, Any]]) -> None:
         async with self.engine.begin() as conn:
             await conn.execute(

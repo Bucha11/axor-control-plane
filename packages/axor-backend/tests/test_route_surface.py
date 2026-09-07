@@ -100,6 +100,7 @@ EXPECTED: dict[tuple[str, str], str] = {
     ("POST", "/v1/plane/{node_id}/consumed"): "ingest",
     ("POST", "/v1/plane/{node_id}/probe-report"): "ingest",
     ("GET", "/v1/plane/{node_id}/probe-report"): "read",
+    ("GET", "/v1/plane/{node_id}/coverage"): "read",
     ("GET", "/v1/plane/topology"): "read",
     ("GET", "/v1/plane/nodes"): "read",
     # ── code analysis ────────────────────────────────────────────────────────

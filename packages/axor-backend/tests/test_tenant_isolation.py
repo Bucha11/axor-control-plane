@@ -185,7 +185,7 @@ async def test_attestations_do_not_cross_orgs(
     org_a, org_b = _tok(priv, "org_a"), _tok(priv, "org_b")
     await client.post("/v1/plane/n/facts", headers=_bearer(org_a), json={"fact": {
         "fact_id": "att_a", "fact_type": "operator_attestation",
-        "run_id": "secret_run", "covers": ["v_query"], "operator": "op_a",
+        "run_id": "secret_run", "causal_root": "v_query", "operator": "op_a",
         "reason": "payroll pull reviewed with the CFO",
     }})
     path = "/v1/runs/secret_run/attestations?ref=v_query"

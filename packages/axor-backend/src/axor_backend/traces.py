@@ -35,3 +35,27 @@ async def events_for(store: Store, run_id: str) -> list:
         raise HTTPException(
             422, f"run {run_id} is not a replayable kernel trace: {exc}"
         ) from exc
+
+
+async def kernel_events_or_empty(store: Store, run_id: str) -> list:
+    """The run's kernel events, with "there are none" as an answer, not a 4xx.
+
+    :func:`events_for` serves replay, where a run with no kernel trace is a
+    request that cannot be honoured. The plane's coverage view is the other
+    case: a governed node's keepalive run is heartbeat-only for as long as
+    nothing goes wrong, and "no facts, level NORMAL, nothing to attest" is the
+    correct answer about a healthy node — not a 422.
+
+    A run whose kernel lines are there but do not parse is still a 422: that is
+    a broken trace, and answering "no facts" for it would report a node as
+    healthy because its trace could not be read.
+    """
+    lines = [ln for ln in await store.run_events(run_id) if json.loads(ln).get("schema_version")]
+    if not lines:
+        return []
+    try:
+        return parse_trace(lines)
+    except Exception as exc:  # kernel parse errors are client data errors here
+        raise HTTPException(
+            422, f"run {run_id} is not a replayable kernel trace: {exc}"
+        ) from exc

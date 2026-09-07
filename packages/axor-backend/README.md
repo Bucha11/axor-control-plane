@@ -23,6 +23,7 @@ Modules:
 | `replay_api.py` | config→`KernelConfig`, scrubber/counterfactual payloads |
 | `provenance.py` | value provenance inside ONE run, derived from that run's events on request — no store, because value refs are minted per trace and repeat across runs |
 | `attestations.py` | operator attestations: recorded in the fact log here, given their meaning (append-only, revocation-as-an-event, same-keyset revocation) by `axor_sentinel.sentinel.attestation` |
+| `coverage.py` | what an attestation discharges: `covers` names fact ids and `level = max(severity(uncovered))`, both imported from `axor_core.kernel.degradation` — the plane holds no second opinion about what an operator's signature bought |
 | `signing.py` | operator command signing — delegates JCS to `axor_core.kernel.canonicalize` |
 | `notifications.py` / `monitor.py` | webhook triggers (retries + dead-letter); node-stale sweep |
 | `share.py` | EvidenceCase HTML + dependency-free PDF receipt, revocable links |

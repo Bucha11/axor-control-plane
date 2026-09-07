@@ -4,7 +4,7 @@
 // the intervention menu. One test drives the REAL end-to-end spawn (proxy +
 // axor-core IntentLoop + plane), the rest use a seeded node for determinism.
 import { expect, test } from "@playwright/test";
-import { goHash, seedNode, setConnection, uniqueNode } from "./helpers";
+import { goHash, seedDegradedNode, seedNode, setConnection, uniqueNode } from "./helpers";
 
 test.describe("control", () => {
   test("greyed with an honest upsell when not on the adapter", async ({ page }) => {
@@ -66,23 +66,44 @@ test.describe("control", () => {
     await page.getByText(node, { exact: true }).click();
     await page.getByRole("button", { name: "more…" }).click();
     await expect(page.getByRole("button", { name: /Cascade stop/ })).toBeVisible();
-    await expect(page.getByRole("button", { name: /Attest branch/ })).toBeVisible();
     // Injection is test-bench only — disabled on a plain adapter connection.
     await expect(page.getByRole("button", { name: /Inject next turn/ })).toBeDisabled();
   });
 
-  test("attesting a branch records an operator fact", async ({ page, request }) => {
+  test("attesting a fact discharges it and lowers the level", async ({ page, request }) => {
+    // The panel exists because `covers` names FACT IDS: attesting is a choice
+    // of which recorded fact you are vouching for, and the level is the
+    // kernel's recompute over what is left uncovered.
     const node = uniqueNode("gov-attest");
+    await seedDegradedNode(request, node);
+    await setConnection(page, { mode: "adapter" });
+    await goHash(page, "control");
+    await page.getByText(node, { exact: true }).click();
+
+    await expect(page.getByText("facts behind this node's level")).toBeVisible();
+    await expect(page.getByText(/source_quarantined/)).toBeVisible();
+    await expect(page.getByText(/with coverage: RESTRICTED/)).toBeVisible();
+
+    // The reason is required and recorded (decision 8).
+    page.once("dialog", (d) => d.accept("verified by e2e: our own canary"));
+    await page.getByRole("button", { name: /attest this/ }).click();
+
+    // Discharged: the level recomputes, and the node's own report is unchanged
+    // until it applies the fact off its stream.
+    await expect(page.getByText(/discharged · attested by op_ui/)).toBeVisible();
+    await expect(page.getByText(/with coverage: NORMAL/)).toBeVisible();
+    await expect(page.getByText(/node still reports RESTRICTED/)).toBeVisible();
+  });
+
+  test("a healthy node says there is nothing to attest", async ({ page, request }) => {
+    const node = uniqueNode("gov-clean");
     await seedNode(request, node);
     await setConnection(page, { mode: "adapter" });
     await goHash(page, "control");
     await page.getByText(node, { exact: true }).click();
-    await page.getByRole("button", { name: "more…" }).click();
-    // Attest uses a prompt for the required reason (decision 8).
-    page.once("dialog", (d) => d.accept("verified by e2e"));
-    await page.getByRole("button", { name: /Attest branch/ }).click();
-    // No error surfaces (a missing reason would show one).
-    await expect(page.getByText("attestation requires a reason")).toHaveCount(0);
+    await expect(
+      page.getByText("nothing is holding this node down — no recorded fact to attest."),
+    ).toBeVisible();
   });
 
   test("spawns a REAL governed node end-to-end and shows it live", async ({ page }) => {
