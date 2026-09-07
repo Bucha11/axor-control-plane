@@ -340,8 +340,9 @@ export default function Pricing() {
         Hosted plans meter an included <span style={{ color: C.mut }}>hosted-trial allowance</span> as
         cost-control, never the headline — EvidenceCases are included, and inference is BYOK (we don't resell
         tokens). Self-hosted is an annual license with unlimited local execution within the purchased tier —
-        no phone-home, offline Ed25519 license. Control Plane is a per-node add-on on a workspace, never a
-        second Team/Enterprise tier.
+        no phone-home, offline Ed25519 license. Control Plane is not a separate purchase: a rung carries the
+        evidence workspace and production enforcement together, with an included governed-node count and a
+        per-node rate above it.
         <br />
         Items marked{" "}
         <span style={{ border: `1px solid ${C.line}`, borderRadius: 20, padding: "1px 6px", fontSize: 8.5 }}>
