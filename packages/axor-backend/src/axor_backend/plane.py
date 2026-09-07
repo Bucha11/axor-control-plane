@@ -24,7 +24,7 @@ from typing import Any
 from fastapi import APIRouter, Header, HTTPException, Request
 from sse_starlette.sse import EventSourceResponse
 
-from axor_backend.clock import now
+from axor_backend.clock import now, today
 from axor_backend.errors import (
     CommandRejected,
     ConcurrentUpdate,
@@ -194,6 +194,12 @@ async def telemetry(
     result = await ctx.store.ingest_events(run_id, node_id, lines, idempotency_key)
     if not result.replayed:
         await _fold_reported(ctx, node_id, run_id, lines)
+    # A node that dials in is a node the customer is running today. Recorded on
+    # every delivery, replays included: the record is per (node, day) and a
+    # replay means the day was already noted, so noting it again costs one cache
+    # hit and gating it on `replayed` would lose the day of a node whose only
+    # successful delivery that day was a resend.
+    await _note_active(ctx, node_id)
     # Each stored event carries the id a reconnecting subscriber resumes from.
     for event_id, line in result.rows:
         ctx.broadcast.publish(
@@ -201,6 +207,29 @@ async def telemetry(
             {"type": "event", "id": event_id, "line": line},
         )
     return {"stored": len(result.rows)}
+
+
+async def _note_active(ctx: Any, node_id: str) -> None:  # noqa: ANN401
+    """Record that this node reported today, for the governed-node meter.
+
+    `ctx.active_today` maps (org, node) to the UTC day already written by THIS
+    deployment. A heartbeat every ten seconds must not be a write every ten
+    seconds; the row is idempotent by primary key anyway, so the cache saves a
+    round trip and never decides correctness — a restart simply re-records
+    today, and a stale entry costs at most one missing write for a day that is
+    already recorded.
+
+    It lives on app.state rather than in a module global because a module
+    global outlives the database it was describing: two apps in one process
+    (every test file here, and any embedding) would share one cache over two
+    stores, and the second would silently record nothing.
+    """
+    org = current_org_id()
+    day = today()
+    if ctx.active_today.get((org, node_id)) == day:
+        return
+    await ctx.store.record_node_activity(node_id, day)
+    ctx.active_today[(org, node_id)] = day
 
 
 async def _fold_reported(

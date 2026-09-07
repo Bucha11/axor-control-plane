@@ -28,12 +28,17 @@ What a license actually has to answer, and each of these was a separate hole:
 * **How much of it?** ``allows_nodes`` existed and was called from nowhere, and
   ``over_ceiling`` was computed once, at paste time. Over-ceiling never blocks —
   a governed node is safety — but it must be visible, so it is recomputed on the
-  housekeeping sweep and reported by ``/status``.
+  housekeeping sweep and reported by ``/status``. It counts the PEAK of the
+  current billing month, from `node_activity`; it used to count
+  ``list_nodes()``, the union of desired and reported state, which has no time
+  in it at all and therefore only ever grew — a customer who replaced one node
+  was over their allowance forever, and no invoice could have been drawn from
+  it.
 """
 from __future__ import annotations
 
 import logging
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
 from fastapi import HTTPException
@@ -196,25 +201,48 @@ def license_payload(lic: Any) -> dict:  # noqa: ANN401
     }
 
 
+def billing_month(day: str | None = None) -> tuple[str, str]:
+    """The inclusive UTC-day range of the calendar month `day` falls in.
+
+    A calendar month because that is the unit an invoice is written in; a
+    rolling window would make "this month's peak" mean something different on
+    every day it was asked.
+    """
+    on = date.fromisoformat(day) if day else datetime.now(UTC).date()
+    first = on.replace(day=1)
+    last = (first + timedelta(days=32)).replace(day=1) - timedelta(days=1)
+    return first.isoformat(), last.isoformat()
+
+
 async def ceiling_status(state: Any, org: str) -> dict[str, Any]:  # noqa: ANN401
-    """The live fleet against this tenant's licensed ceiling.
+    """This month's fleet against this tenant's licensed ceiling.
 
     Never a refusal. A governed node is a safety surface, and safety never
     checks a license (Line 1) — so being over the ceiling is reported, loudly
-    and repeatedly, and nothing is turned off. `allows_nodes` existed for this
-    and was called from nowhere; `over_ceiling` was computed once, at the moment
-    a license was pasted, so a fleet that grew afterwards was never looked at
-    again.
+    and repeatedly, and nothing is turned off.
+
+    The number is the PEAK number of nodes that reported on any one day of the
+    current billing month. It used to be `len(list_nodes())` — the union of
+    desired and reported state, which contains no time and therefore never
+    shrinks, so a customer who replaced one node was over their allowance
+    forever, and the figure could not have been billed from either.
     """
     lic = active_license(state, org)
-    live = len(await state.store.list_nodes())
+    start, end = billing_month()
+    usage = await state.store.node_usage(start, end)
+    peak = int(usage["peak_nodes"])
+    common = {
+        "billing_month": start[:7],
+        "peak_nodes": peak,
+        "peak_day": usage["peak_day"],
+        "distinct_nodes": usage["distinct_nodes"],
+    }
     if lic is None:
-        return {"live_nodes": live, "governed_node_ceiling": None,
-                "over_ceiling": False}
+        return {**common, "governed_node_ceiling": None, "over_ceiling": False}
     return {
-        "live_nodes": live,
+        **common,
         "governed_node_ceiling": lic.governed_node_ceiling,
-        "over_ceiling": not lic.allows_nodes(live),
+        "over_ceiling": not lic.allows_nodes(peak),
     }
 
 
@@ -223,10 +251,11 @@ async def warn_over_ceiling(state: Any, org: str) -> None:  # noqa: ANN401
     status = await ceiling_status(state, org)
     if status["over_ceiling"]:
         log.warning(
-            "org %s runs %d governed nodes against a licensed ceiling of %d — "
-            "governance is untouched (safety never checks a license); this is a "
-            "billing discrepancy to settle with the vendor.",
-            org, status["live_nodes"], status["governed_node_ceiling"],
+            "org %s peaked at %d governed nodes on %s against a licensed ceiling "
+            "of %d — governance is untouched (safety never checks a license); "
+            "this is a billing discrepancy to settle with the vendor.",
+            org, status["peak_nodes"], status["peak_day"],
+            status["governed_node_ceiling"],
         )
 
 

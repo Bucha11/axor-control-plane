@@ -25,6 +25,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import pathlib
 import uuid
 from collections.abc import AsyncIterator
 
@@ -75,6 +76,22 @@ def _line(node: str, seq: int, kind: str = "tool_call") -> dict:
             "schema_version": "1", "payload": {}}
 
 
+def _script_head() -> str:
+    """The head revision alembic itself would migrate to."""
+    import axor_backend
+    from alembic.config import Config
+    from alembic.script import ScriptDirectory
+
+    # `migrations` is a namespace package (no __init__), so it has no __file__;
+    # locate it from the package that contains it.
+    config = Config()
+    config.set_main_option(
+        "script_location",
+        str(pathlib.Path(axor_backend.__file__).parent / "migrations"),
+    )
+    return ScriptDirectory.from_config(config).get_current_head()
+
+
 async def test_the_migration_chain_reaches_head(pg_store: Store) -> None:
     """The fixture already ran it; this asserts the outcome explicitly, because
     the failure it guards against was a hard error partway through the chain
@@ -89,8 +106,12 @@ async def test_the_migration_chain_reaches_head(pg_store: Store) -> None:
                 "WHERE table_schema = current_schema()"
             ))).all()
         }
-    assert version == "0010"
-    assert {"runs", "events", "notification_subs", "dead_letters"} <= tables
+    # The literal used to be written here, so every migration broke this test
+    # and the fix was to retype the number — which is not what "reaches head"
+    # means. Head is whatever the script directory says it is.
+    assert version == _script_head()
+    assert {"runs", "events", "notification_subs", "dead_letters",
+            "node_activity"} <= tables
     # And no scratch table survived the rebuild.
     assert not [t for t in tables if t.endswith(("_pre0009", "_pre0010"))]
 
@@ -192,3 +213,32 @@ async def test_concurrent_idempotent_writes_do_not_raise(pg_store: Store) -> Non
         for _ in range(8)
     ])
     assert len(await pg_store.node_facts("n")) == 1
+
+
+async def test_the_node_meter_is_idempotent_on_postgres(pg_store: Store) -> None:
+    """The meter's whole shape is a composite primary key doing the deduping —
+    a heartbeat every ten seconds must write one row a day. SQLite tolerates
+    plenty that Postgres refuses, and the constraint is the feature here, so it
+    is exercised on the engine a deployment actually runs."""
+    for _ in range(10):
+        await pg_store.record_node_activity("n1", "2026-05-01")
+    await pg_store.record_node_activity("n2", "2026-05-01")
+    await pg_store.record_node_activity("n1", "2026-05-02")
+    usage = await pg_store.node_usage("2026-05-01", "2026-05-31")
+    assert usage["peak_nodes"] == 2
+    assert usage["peak_day"] == "2026-05-01"
+    assert usage["distinct_nodes"] == 2
+    assert usage["days"] == [{"day": "2026-05-01", "nodes": 2},
+                             {"day": "2026-05-02", "nodes": 1}]
+
+
+async def test_the_meter_range_is_a_date_range_not_a_string_prefix(
+    pg_store: Store,
+) -> None:
+    """`day` is a CHAR-shaped column and the range is compared as text, which is
+    only correct because ISO dates sort as dates. Postgres collation is not
+    SQLite's, so the assumption is checked here rather than assumed."""
+    for day in ("2025-12-31", "2026-01-01", "2026-01-31", "2026-02-01"):
+        await pg_store.record_node_activity("n1", day)
+    january = await pg_store.node_usage("2026-01-01", "2026-01-31")
+    assert [d["day"] for d in january["days"]] == ["2026-01-01", "2026-01-31"]

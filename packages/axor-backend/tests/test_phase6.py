@@ -530,7 +530,7 @@ def test_license_expiry_degrades_to_readonly() -> None:
 async def test_license_verify_reports_node_ceiling_telemetry(
     tmp_path: pathlib.Path,
 ) -> None:
-    """§5: verify returns live_nodes/over_ceiling — a warning, never a block."""
+    """§5: verify reports the month's peak / over_ceiling — a warning, never a block."""
     from axor_backend.ee.license import sign_license
 
     priv, pub = _vendor_keypair()
@@ -548,7 +548,7 @@ async def test_license_verify_reports_node_ceiling_telemetry(
         r = (await client.post("/v1/license/verify", json={
             "license_json": lic,
         })).json()
-    assert r["live_nodes"] >= 2 and r["over_ceiling"] is True
+    assert r["peak_nodes"] >= 2 and r["over_ceiling"] is True
 
 
 def test_license_cli_roundtrip(tmp_path, capsys) -> None:  # noqa: ANN001

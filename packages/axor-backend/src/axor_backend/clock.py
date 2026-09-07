@@ -12,3 +12,13 @@ from datetime import UTC, datetime
 def now() -> str:
     """The current instant as an ISO-8601 UTC string."""
     return datetime.now(UTC).isoformat()
+
+
+def today() -> str:
+    """The current UTC date as ``YYYY-MM-DD``.
+
+    Usage is metered per UTC day rather than per local day so that a fleet
+    spanning time zones is counted once, on one calendar, and a customer and
+    the vendor reading the same invoice see the same days.
+    """
+    return datetime.now(UTC).date().isoformat()

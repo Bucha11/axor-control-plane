@@ -43,11 +43,14 @@ operator now says which tenant, and the license still has to be issued to it.
 """
 from __future__ import annotations
 
+from datetime import date, timedelta
+
 from fastapi import APIRouter, HTTPException
 
 from axor_backend.deps import ConfigDep, PrincipalDep, StateDep, StoreDep
 from axor_backend.licensing import (
     active_license,
+    billing_month,
     binding_error,
     ceiling_status,
     days_until,
@@ -185,3 +188,44 @@ async def license_status(state: StateDep, config: ConfigDep) -> dict:
         "expired": False,
         **await ceiling_status(state, org),
     }
+
+
+@router.get("/usage")
+async def license_usage(state: StateDep, store: StoreDep, months: int = 3) -> dict:
+    """Governed-node usage per billing month — what a per-node line is drawn from.
+
+    The Control Plane could previously say how many nodes it had EVER seen and
+    nothing else: `list_nodes()` is the union of desired and reported state,
+    with no time in it, so the figure only ever grew. It could not be invoiced
+    from, and as a ceiling check it was a ratchet — replace one node and you are
+    over your allowance for good.
+
+    Each month reports its PEAK (the most nodes on any one day, and which day)
+    and its DISTINCT count. The peak is the billing basis: a fleet is as big as
+    it ever ran, and the customer can point at the day. Distinct exceeds it
+    whenever nodes are replaced rather than added, which is exactly why it must
+    not be the invoice — a fleet of five recycled daily would bill as a hundred
+    and fifty.
+
+    Reported, never enforced. Being over the ceiling is a conversation with the
+    vendor; it never turns governance off, because safety never checks a
+    license.
+    """
+    span = max(1, min(int(months), 24))
+    lic = active_license(state, current_org_id())
+    ceiling = lic.governed_node_ceiling if lic else None
+    on = date.today()
+    periods = []
+    for _ in range(span):
+        start, end = billing_month(on.isoformat())
+        usage = await store.node_usage(start, end)
+        periods.append({
+            "month": start[:7],
+            "peak_nodes": usage["peak_nodes"],
+            "peak_day": usage["peak_day"],
+            "distinct_nodes": usage["distinct_nodes"],
+            "days": usage["days"],
+            "over_ceiling": ceiling is not None and usage["peak_nodes"] > ceiling,
+        })
+        on = date.fromisoformat(start) - timedelta(days=1)
+    return {"governed_node_ceiling": ceiling, "months": periods}

@@ -377,7 +377,7 @@ class TestTheNodeCeilingIsWatchedNotEnforced:
         for node in ("n1", "n2", "n3"):
             await client.post(f"/v1/plane/{node}/telemetry", json=_heartbeat(node))
         status = (await client.get("/v1/license/status")).json()
-        assert status["live_nodes"] == 3
+        assert status["peak_nodes"] == 3
         assert status["over_ceiling"] is True
 
     async def test_being_over_the_ceiling_refuses_nothing(
@@ -754,3 +754,134 @@ def _vendor_priv() -> str:
     from nacl.signing import SigningKey
 
     return bytes(SigningKey.generate()).hex()
+
+
+# ── the governed-node meter: what a per-node line is drawn from ───────────────
+
+class TestGovernedNodeUsageIsMeasuredNotGuessed:
+    """The Control Plane could say how many nodes it had EVER seen and nothing
+    else. `list_nodes()` is the union of desired and reported state, with no
+    time in it at all, so the number only ever grew: a customer who replaced one
+    node was over their allowance forever, and no invoice could be drawn from it
+    because nobody bills for a node decommissioned in March.
+
+    `node_activity` records one row per (tenant, node, UTC day) a node reported.
+    Everything else is derived from those rows, so a disputed line on an invoice
+    resolves by looking rather than by arguing.
+    """
+
+    @staticmethod
+    async def _report(client: httpx.AsyncClient, node: str) -> None:
+        r = await client.post(f"/v1/plane/{node}/telemetry", json=_heartbeat(node))
+        assert r.status_code == 202, r.text
+
+    async def test_a_node_is_recorded_once_a_day_however_often_it_dials_in(
+        self, client: httpx.AsyncClient,
+    ) -> None:
+        """A heartbeat is every ten seconds. The meter counts nodes, not
+        heartbeats."""
+        store = client._transport.app.state.store  # type: ignore[attr-defined]
+        for _ in range(5):
+            await self._report(client, "n1")
+        usage = await store.node_usage("2000-01-01", "2999-12-31")
+        assert usage["peak_nodes"] == 1
+        assert usage["distinct_nodes"] == 1
+        assert len(usage["days"]) == 1
+
+    async def test_the_peak_is_the_most_nodes_on_any_one_day(
+        self, client: httpx.AsyncClient,
+    ) -> None:
+        store = client._transport.app.state.store  # type: ignore[attr-defined]
+        for node in ("n1", "n2", "n3"):
+            await self._report(client, node)
+        # a quieter day before, and a busier one after, written directly: the
+        # HTTP path can only ever record today
+        await store.record_node_activity("n1", "2026-01-01")
+        for node in ("a", "b", "c", "d", "e"):
+            await store.record_node_activity(node, "2026-02-01")
+        usage = await store.node_usage("2026-01-01", "2999-12-31")
+        assert usage["peak_nodes"] == 5
+        assert usage["peak_day"] == "2026-02-01"
+
+    async def test_distinct_is_reported_but_is_not_the_bill(
+        self, client: httpx.AsyncClient,
+    ) -> None:
+        """A fleet of five recycled daily would bill as a hundred and fifty if
+        distinct were the basis. Both numbers are reported so the difference is
+        visible rather than decided silently."""
+        store = client._transport.app.state.store  # type: ignore[attr-defined]
+        for day in ("2026-03-01", "2026-03-02", "2026-03-03"):
+            for i in range(5):
+                await store.record_node_activity(f"{day}-node{i}", day)
+        usage = await store.node_usage("2026-03-01", "2026-03-31")
+        assert usage["peak_nodes"] == 5
+        assert usage["distinct_nodes"] == 15
+
+    async def test_the_ceiling_is_checked_against_the_peak_not_the_ledger(
+        self, client: httpx.AsyncClient, vendor: dict,
+    ) -> None:
+        """Three nodes seen over three days, never more than one at a time, is a
+        one-node fleet. The cumulative count called it three and put a paying
+        customer permanently over a ceiling of two."""
+        store = client._transport.app.state.store  # type: ignore[attr-defined]
+        await client.post("/v1/license/verify", json={
+            "license_json": _signed(vendor, governed_node_ceiling=2)})
+        month, _ = __import__(
+            "axor_backend.licensing", fromlist=["billing_month"]).billing_month()
+        for i, day in enumerate((month, month[:-2] + "02", month[:-2] + "03")):
+            await store.record_node_activity(f"replaced-{i}", day)
+        status = (await client.get("/v1/license/status")).json()
+        assert status["peak_nodes"] == 1
+        assert status["distinct_nodes"] == 3
+        assert status["over_ceiling"] is False
+
+    async def test_usage_reports_the_months_and_the_days_behind_them(
+        self, client: httpx.AsyncClient, vendor: dict,
+    ) -> None:
+        await client.post("/v1/license/verify", json={
+            "license_json": _signed(vendor, governed_node_ceiling=1)})
+        for node in ("n1", "n2"):
+            await self._report(client, node)
+        body = (await client.get("/v1/license/usage?months=2")).json()
+        assert body["governed_node_ceiling"] == 1
+        assert len(body["months"]) == 2
+        current = body["months"][0]
+        assert current["peak_nodes"] == 2
+        assert current["over_ceiling"] is True
+        # the days are there so the peak can be checked rather than believed
+        assert current["days"] == [{"day": current["peak_day"], "nodes": 2}]
+
+    async def test_usage_never_refuses_anything(
+        self, client: httpx.AsyncClient, vendor: dict,
+    ) -> None:
+        """Line 1: a governed node is a safety surface, and safety never checks
+        a license. Being over the ceiling is a conversation, not a shutdown."""
+        await client.post("/v1/license/verify", json={
+            "license_json": _signed(vendor, governed_node_ceiling=1)})
+        for node in ("n1", "n2", "n3"):
+            await self._report(client, node)
+        assert (await client.get("/v1/license/status")).json()["over_ceiling"] is True
+        # the fourth node still reports, and the paid features still answer
+        await self._report(client, "n4")
+        assert (await client.get("/v1/regression/history")).status_code == 200
+
+    async def test_one_tenants_fleet_is_not_anothers(
+        self, client: httpx.AsyncClient,
+    ) -> None:
+        """The meter is the invoice basis, so a tenant boundary crossed here is
+        a customer billed for someone else's nodes."""
+        from axor_backend.tenancy import set_current_org
+
+        store = client._transport.app.state.store  # type: ignore[attr-defined]
+        await self._report(client, "public-node")
+        try:
+            set_current_org("acme")
+            await store.record_node_activity("acme-node", "2026-04-01")
+            acme = await store.node_usage("2000-01-01", "2999-12-31")
+        finally:
+            set_current_org("public")
+        public = await store.node_usage("2000-01-01", "2999-12-31")
+        assert acme["distinct_nodes"] == 1
+        assert public["distinct_nodes"] == 1
+        assert acme["peak_day"] == "2026-04-01"
+        assert public["peak_day"] != "2026-04-01"

@@ -243,6 +243,26 @@ dead_letters = Table(
 # eval answers "does my agent lie under fault?", and the two must never be
 # blended into one score (ui-spec 8.2). The summary columns are what the list
 # surface reads; payload_json is axor-probe's health_payload verbatim.
+# One row per (tenant, node, UTC day) the node reported in. The billing
+# evidence, and the only honest answer to "how many nodes did they run".
+#
+# `list_nodes()` — the union of desired and reported state — is CUMULATIVE: it
+# names every node ever seen, with no time in it at all. Counting it made
+# `over_ceiling` a ratchet, so a customer who replaced one node was over their
+# allowance forever, and it could never have been an invoice: nobody bills for
+# a node decommissioned in March because its row is still there in November.
+#
+# A day is the grain because it is the coarsest one that still supports a peak:
+# a fleet that ran 40 nodes on one day and 5 on the rest is a 40-node fleet for
+# that day and the customer can see which day. Finer would meter a heartbeat.
+node_activity = Table(
+    "node_activity", metadata,
+    Column("org_id", String(64), nullable=False, server_default=PUBLIC_ORG),
+    Column("node_id", String(128), nullable=False),
+    Column("day", String(10), nullable=False),  # YYYY-MM-DD, UTC
+    PrimaryKeyConstraint("org_id", "node_id", "day", name="pk_node_activity"),
+)
+
 probe_reports = Table(
     "probe_reports", metadata,
     Column("id", Integer, primary_key=True, autoincrement=True),
@@ -816,6 +836,68 @@ class Store:
                 .order_by(events.c.run_id, events.c.node_id, events.c.seq)
             )).all()
         return [r.line for r in rows]
+
+    # ── governed-node usage (the invoice basis) ───────────────────────────────
+
+    async def record_node_activity(self, node_id: str, day: str) -> None:
+        """Note that this node reported today. Idempotent by primary key, so a
+        heartbeat every ten seconds writes one row a day and no more.
+
+        Deliberately not a counter: a count cannot be audited and cannot answer
+        "which nodes, on which day" when a customer disputes a line on an
+        invoice. The rows are the evidence; every number below is derived.
+        """
+        org = current_org_id()
+        async with self.engine.begin() as conn:
+            existing = (await conn.execute(
+                select(node_activity.c.node_id).where(
+                    node_activity.c.org_id == org,
+                    node_activity.c.node_id == node_id,
+                    node_activity.c.day == day,
+                )
+            )).first()
+            if existing is None:
+                await conn.execute(insert(node_activity).values(
+                    org_id=org, node_id=node_id, day=day,
+                ))
+
+    async def node_usage(self, start_day: str, end_day: str) -> dict[str, Any]:
+        """This tenant's governed-node usage over an inclusive day range.
+
+        Three numbers, because they answer different questions and a single one
+        would be a choice made silently:
+
+        * ``peak_nodes`` — the most nodes that reported on any one day, and the
+          day it happened. This is the billing basis: a fleet is as big as it
+          ever ran, and the customer can point at the day.
+        * ``distinct_nodes`` — how many different node ids appeared at all. It
+          exceeds the peak whenever nodes are replaced rather than added, which
+          is why it must not be the invoice: a daily-recycled fleet of five
+          would bill as a hundred and fifty.
+        * ``days`` — the count per day, so the peak can be checked rather than
+          believed.
+        """
+        async with self.engine.connect() as conn:
+            rows = (await conn.execute(
+                select(node_activity.c.day, node_activity.c.node_id).where(
+                    node_activity.c.org_id == current_org_id(),
+                    node_activity.c.day >= start_day,
+                    node_activity.c.day <= end_day,
+                )
+            )).all()
+        by_day: dict[str, set[str]] = {}
+        for row in rows:
+            by_day.setdefault(row.day, set()).add(row.node_id)
+        days = [{"day": d, "nodes": len(n)} for d, n in sorted(by_day.items())]
+        peak = max(days, key=lambda d: (d["nodes"], d["day"]), default=None)
+        return {
+            "start_day": start_day,
+            "end_day": end_day,
+            "days": days,
+            "peak_nodes": peak["nodes"] if peak else 0,
+            "peak_day": peak["day"] if peak else None,
+            "distinct_nodes": len({r.node_id for r in rows}),
+        }
 
     async def list_nodes(self) -> list[str]:
         async with self.engine.connect() as conn:

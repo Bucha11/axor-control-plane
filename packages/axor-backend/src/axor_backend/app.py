@@ -103,6 +103,10 @@ def create_app(
     app.state.shares = ShareRegistry()
     app.state.subgraph_cache = SubgraphCache()
     app.state.licenses = {}
+    # (org, node) -> the UTC day already written to the governed-node meter, so
+    # a heartbeat every ten seconds is not a write every ten seconds. Per app,
+    # not per process: a module global would outlive the store it describes.
+    app.state.active_today = {}
     app.state.notifier = _notifier(app)
 
     app.add_exception_handler(Exception, unhandled_error)
