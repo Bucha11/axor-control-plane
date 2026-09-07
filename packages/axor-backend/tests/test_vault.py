@@ -505,3 +505,48 @@ def test_the_subsystem_tokens_are_not_compared_byte_by_byte() -> None:
         and any(isinstance(op, (ast.Eq, ast.NotEq)) for op in n.ops)
     ]
     assert not equality, "_gate compares a secret with ==/!= again"
+
+
+class TestTheInjectionHeaderIsValidatedNotTrusted:
+    """The header name is written into every request this credential is
+    injected into (`axor_proxy.vault.Credential.applied_to`). One carrying CR/LF
+    would let an enrollment smuggle additional headers into all of them — an
+    enrollment is operator config, but "operator config" is not a reason to
+    build a request out of an unchecked string."""
+
+    @pytest.mark.parametrize("header", [
+        "X-Api-Key\r\nX-Smuggled: yes",
+        "X Api Key",
+        "X:Api",
+        "\nAuthorization",
+    ])
+    async def test_a_header_name_that_is_not_one_is_refused(
+        self, client: httpx.AsyncClient, header: str
+    ) -> None:
+        r = await client.post("/v1/vault/creds/enroll", headers=CH, json={
+            "tool": "t", "endpoint": "e", "secret": "s",
+            "scope_nodes": ["n"], "header": header})
+        assert r.status_code == 400, (header, r.status_code)
+        assert "header name" in r.json()["detail"]
+
+    async def test_a_scheme_may_not_break_the_line_either(
+        self, client: httpx.AsyncClient
+    ) -> None:
+        r = await client.post("/v1/vault/creds/enroll", headers=CH, json={
+            "tool": "t", "endpoint": "e", "secret": "s",
+            "scope_nodes": ["n"], "header": "Authorization",
+            "scheme": "Bearer\r\nX-Smuggled: yes"})
+        assert r.status_code == 400
+        assert "CR or LF" in r.json()["detail"]
+
+    async def test_a_real_api_key_header_is_accepted_and_dispensed(
+        self, client: httpx.AsyncClient
+    ) -> None:
+        await client.post("/v1/vault/creds/enroll", headers=CH, json={
+            "tool": "t", "endpoint": "e", "secret": "s", "scope_nodes": ["n"],
+            "header": "X-Api-Key", "scheme": ""})
+        r = await client.post("/v1/vault/creds/dispense", headers=CH, json={
+            "node_id": "n", "tool": "t", "endpoint": "e"})
+        assert r.status_code == 200
+        assert r.json()["header"] == "X-Api-Key"
+        assert r.json()["scheme"] == ""
