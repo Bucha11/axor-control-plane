@@ -885,3 +885,207 @@ class TestGovernedNodeUsageIsMeasuredNotGuessed:
         assert public["distinct_nodes"] == 1
         assert acme["peak_day"] == "2026-04-01"
         assert public["peak_day"] != "2026-04-01"
+
+
+# ── the statement: a measurement turned into a line somebody pays ────────────
+
+class TestTheInvoiceIsDrawnFromTheMeter:
+    """`node_activity` says how big the fleet was. This says what that costs.
+
+    The two are kept apart on purpose: the meter is evidence and the statement
+    is an opinion about it, and a customer disputing the second is entitled to
+    check the first without taking anything on trust — so the days behind the
+    peak travel with the bill.
+    """
+
+    @staticmethod
+    async def _fleet(store, day: str, count: int) -> None:  # noqa: ANN001
+        for i in range(count):
+            await store.record_node_activity(f"n{i}", day)
+
+    async def test_a_fleet_inside_its_allowance_is_the_rung_and_nothing_else(
+        self, client: httpx.AsyncClient, vendor: dict,
+    ) -> None:
+        store = client._transport.app.state.store  # type: ignore[attr-defined]
+        await client.post("/v1/license/verify", json={
+            "license_json": _signed(vendor, governed_node_ceiling=10)})
+        await self._fleet(store, "2026-08-12", 10)
+        r = (await client.get("/v1/license/invoice?month=2026-08")).json()
+        assert r["billable_nodes"] == 0
+        assert r["overage_cents"] == 0
+        assert r["total_cents"] == 299_00
+        assert r["total"] == "$299.00"
+
+    async def test_a_fleet_past_it_is_charged_per_node_over(
+        self, client: httpx.AsyncClient, vendor: dict,
+    ) -> None:
+        store = client._transport.app.state.store  # type: ignore[attr-defined]
+        await client.post("/v1/license/verify", json={
+            "license_json": _signed(vendor, governed_node_ceiling=10)})
+        await self._fleet(store, "2026-08-12", 14)
+        await self._fleet(store, "2026-08-20", 6)
+        r = (await client.get("/v1/license/invoice?month=2026-08")).json()
+        assert r["peak_nodes"] == 14 and r["peak_day"] == "2026-08-12"
+        assert r["billable_nodes"] == 4
+        assert r["overage_cents"] == 4 * 75_00
+        assert r["total_cents"] == 299_00 + 300_00
+
+    async def test_the_allowance_is_the_licences_own_not_the_rungs_list(
+        self, client: httpx.AsyncClient, vendor: dict,
+    ) -> None:
+        """A customer who negotiated 200 nodes is billed against 200, not
+        against the 10 the Team rung is listed with."""
+        store = client._transport.app.state.store  # type: ignore[attr-defined]
+        await client.post("/v1/license/verify", json={
+            "license_json": _signed(vendor, governed_node_ceiling=200)})
+        await self._fleet(store, "2026-08-12", 50)
+        r = (await client.get("/v1/license/invoice?month=2026-08")).json()
+        assert r["included_nodes"] == 200
+        assert r["billable_nodes"] == 0
+        assert r["total_cents"] == 299_00
+
+    async def test_the_bill_carries_the_days_it_was_computed_from(
+        self, client: httpx.AsyncClient, vendor: dict,
+    ) -> None:
+        store = client._transport.app.state.store  # type: ignore[attr-defined]
+        await client.post("/v1/license/verify", json={
+            "license_json": _signed(vendor, governed_node_ceiling=1)})
+        await self._fleet(store, "2026-08-12", 3)
+        await self._fleet(store, "2026-08-13", 2)
+        r = (await client.get("/v1/license/invoice?month=2026-08")).json()
+        assert r["evidence"]["days"] == [{"day": "2026-08-12", "nodes": 3},
+                                         {"day": "2026-08-13", "nodes": 2}]
+
+    async def test_a_month_still_running_is_not_a_bill(
+        self, client: httpx.AsyncClient, vendor: dict,
+    ) -> None:
+        """Its peak can only rise, so a total for it is a guess wearing a
+        currency symbol."""
+        from datetime import UTC, datetime
+
+        await _activate(client, vendor)
+        this_month = datetime.now(UTC).strftime("%Y-%m")
+        r = (await client.get(f"/v1/license/invoice?month={this_month}")).json()
+        assert r["provisional"] is True
+        assert "still running" in r["note"]
+
+    async def test_a_closed_month_is_final(
+        self, client: httpx.AsyncClient, vendor: dict,
+    ) -> None:
+        await _activate(client, vendor)
+        r = (await client.get("/v1/license/invoice?month=2026-08")).json()
+        assert r["provisional"] is False
+        assert r["note"] == "final"
+
+    async def test_it_defaults_to_the_month_there_is_a_bill_for(
+        self, client: httpx.AsyncClient, vendor: dict,
+    ) -> None:
+        from datetime import UTC, date, datetime, timedelta
+
+        await _activate(client, vendor)
+        r = (await client.get("/v1/license/invoice")).json()
+        expected = (date(datetime.now(UTC).year, datetime.now(UTC).month, 1)
+                    - timedelta(days=1)).strftime("%Y-%m")
+        assert r["month"] == expected
+        assert r["provisional"] is False
+
+    async def test_a_contracted_rung_is_measured_and_not_totalled(
+        self, client: httpx.AsyncClient, vendor: dict,
+    ) -> None:
+        """`enterprise` has no list price. Putting a number in front of a
+        customer that nobody agreed to is worse than declining to."""
+        store = client._transport.app.state.store  # type: ignore[attr-defined]
+        await client.post("/v1/license/verify", json={
+            "license_json": _signed(vendor, workspace_tier="enterprise",
+                                    governed_node_ceiling=200)})
+        await self._fleet(store, "2026-08-12", 240)
+        r = (await client.get("/v1/license/invoice?month=2026-08")).json()
+        assert r["priced"] is False
+        assert r["total_cents"] == 0
+        assert r["peak_nodes"] == 240 and r["billable_nodes"] == 40
+        assert "contracted" in r["note"]
+
+    async def test_the_free_rung_can_never_owe_anything(
+        self, client: httpx.AsyncClient, vendor: dict,
+    ) -> None:
+        """Line 1: the free rung is where safety lives, and safety never costs
+        — including when the fleet on it is past its allowance."""
+        store = client._transport.app.state.store  # type: ignore[attr-defined]
+        await client.post("/v1/license/verify", json={
+            "license_json": _signed(vendor, workspace_tier="community",
+                                    governed_node_ceiling=1)})
+        await self._fleet(store, "2026-08-12", 25)
+        r = (await client.get("/v1/license/invoice?month=2026-08")).json()
+        assert r["billable_nodes"] == 24
+        assert r["total_cents"] == 0
+
+    async def test_no_license_is_not_a_zero_bill(
+        self, client: httpx.AsyncClient,
+    ) -> None:
+        """Nothing is owed and nothing is claimed: a $0.00 statement would read
+        as an invoice that was issued and settled."""
+        r = await client.get("/v1/license/invoice?month=2026-08")
+        assert r.status_code == 404
+        assert "nothing to bill" in r.json()["detail"]
+
+    async def test_money_never_becomes_a_float(
+        self, client: httpx.AsyncClient, vendor: dict,
+    ) -> None:
+        """Every amount crosses the wire as integer cents beside its rendering.
+        A cent that cannot be represented exactly is a cent somebody argues
+        about later."""
+        store = client._transport.app.state.store  # type: ignore[attr-defined]
+        await client.post("/v1/license/verify", json={
+            "license_json": _signed(vendor, workspace_tier="security",
+                                    governed_node_ceiling=50)})
+        await self._fleet(store, "2026-08-12", 63)
+        r = (await client.get("/v1/license/invoice?month=2026-08")).json()
+        for field in ("base_cents", "overage_cents", "total_cents"):
+            assert isinstance(r[field], int), (field, r[field])
+        assert r["total_cents"] == 1_500_00 + 13 * 50_00
+        assert r["total"] == "$2,150.00"
+
+    async def test_one_tenants_bill_is_not_anothers(
+        self, client: httpx.AsyncClient, vendor: dict,
+    ) -> None:
+        from axor_backend.tenancy import set_current_org
+
+        store = client._transport.app.state.store  # type: ignore[attr-defined]
+        await client.post("/v1/license/verify", json={
+            "license_json": _signed(vendor, governed_node_ceiling=10)})
+        try:
+            set_current_org("acme")
+            for i in range(99):
+                await store.record_node_activity(f"acme{i}", "2026-08-12")
+        finally:
+            set_current_org("public")
+        r = (await client.get("/v1/license/invoice?month=2026-08")).json()
+        assert r["peak_nodes"] == 0
+        assert r["total_cents"] == 299_00
+
+
+def test_the_rate_card_and_the_pricing_page_state_one_ladder() -> None:
+    """The page a customer reads and the table that charges them are two
+    statements of one thing, in two languages, in two directories.
+
+    Everything in this session has been one of those coming apart: two schema
+    copies, two config compilers, a module flag that meant something on one
+    side and nothing on the other. A price is the worst one to get wrong, so it
+    is checked rather than remembered.
+    """
+    import pathlib
+
+    from axor_backend.ee.license import TIER_NODE_CEILING
+    from axor_backend.ee.pricing import RATE_CARD, money
+
+    page = (pathlib.Path(__file__).resolve().parents[3]
+            / "frontend" / "src" / "tabs" / "Pricing.tsx").read_text()
+    for tier, (base_cents, over_cents) in RATE_CARD.items():
+        if tier == "community":
+            continue  # free: the page states $0 without a rate or an allowance
+        base = money(base_cents).removesuffix(".00")
+        over = money(over_cents).removesuffix(".00")
+        included = TIER_NODE_CEILING[tier]
+        assert f"{base} / mo" in page, (tier, base)
+        assert f"+{over} / governed node / mo" in page, (tier, over)
+        assert f"{included} governed nodes" in page, (tier, included)

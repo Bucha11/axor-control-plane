@@ -84,6 +84,9 @@ EXPECTED: dict[tuple[str, str], str] = {
     # per-node line on their invoice. Their data, so `read` — the same bar as
     # the license status it sits next to.
     ("GET", "/v1/license/usage"): "read",
+    # The statement drawn from that usage. Their own bill, so `read` — the same
+    # bar as the usage it is computed from.
+    ("GET", "/v1/license/invoice"): "read",
     # ── API keys: listing them is credential enumeration ─────────────────────
     ("POST", "/v1/keys"): "admin",
     ("GET", "/v1/keys"): "admin",

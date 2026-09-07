@@ -48,6 +48,7 @@ from datetime import date, timedelta
 from fastapi import APIRouter, HTTPException
 
 from axor_backend.deps import ConfigDep, PrincipalDep, StateDep, StoreDep
+from axor_backend.ee.pricing import statement
 from axor_backend.licensing import (
     active_license,
     billing_month,
@@ -229,3 +230,55 @@ async def license_usage(state: StateDep, store: StoreDep, months: int = 3) -> di
         })
         on = date.fromisoformat(start) - timedelta(days=1)
     return {"governed_node_ceiling": ceiling, "months": periods}
+
+
+@router.get("/invoice")
+async def license_invoice(
+    state: StateDep, store: StoreDep, month: str | None = None,
+) -> dict:
+    """The statement for one month: the rung's price, the fleet past its
+    allowance, and the evidence both are drawn from.
+
+    Defaults to the month just ended, because that is the one there is a bill
+    for. A month still running is returned marked `provisional` — its peak can
+    only rise — so the number is never mistaken for a final one.
+
+    The allowance is the license's OWN ceiling rather than the rung's list
+    allowance, so a customer who negotiated 200 nodes is billed against 200.
+    A contracted rung is measured and not totalled: it has no list price, and
+    inventing one would put a figure nobody agreed to in front of a customer.
+    """
+    org = current_org_id()
+    lic = active_license(state, org) or stored_license(state, org)
+    if lic is None:
+        raise HTTPException(
+            404,
+            "no license for this organization, so there is nothing to bill. "
+            "Usage is still measured — see /v1/license/usage.",
+        )
+    if month is None:
+        first_of_this = date.today().replace(day=1)
+        month = (first_of_this - timedelta(days=1)).strftime("%Y-%m")
+    try:
+        start, end = billing_month(f"{month}-01")
+    except ValueError as exc:
+        raise HTTPException(400, f"month must be YYYY-MM: {exc}") from exc
+    usage = await store.node_usage(start, end)
+    line = statement(
+        month=month,
+        organization=lic.organization,
+        workspace_tier=lic.workspace_tier,
+        included_nodes=lic.governed_node_ceiling,
+        peak_nodes=int(usage["peak_nodes"]),
+        peak_day=usage["peak_day"],
+    )
+    return {
+        **line.as_dict(),
+        # the days behind the peak travel WITH the statement: a customer asked
+        # to pay for a peak is entitled to see the day it happened without
+        # having to ask a second endpoint for it
+        "evidence": {
+            "days": usage["days"],
+            "distinct_nodes": usage["distinct_nodes"],
+        },
+    }
