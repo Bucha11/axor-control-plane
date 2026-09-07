@@ -476,3 +476,32 @@ class TestConcurrentVaultWritesDoNotEraseEachOther:
         assert sum(r.status_code == 409 for r in results) == 7
         keys = (await client.get("/v1/vault/signing/keys", headers=SH)).json()
         assert len(keys) == 1
+
+
+def test_the_subsystem_tokens_are_not_compared_byte_by_byte() -> None:
+    """`_gate` compared the vault tokens with `!=`, which returns at the first
+    differing byte, while `constant_time_eq` guarded the API token and every
+    scoped key in security.py. These are the two tokens in front of credential
+    dispense and delegated signing.
+
+    A source property, so checked in the source — the same shape as the import
+    wall above, and for the same reason: a timing assertion would be flaky, and
+    the thing that must not come back is the `==`.
+    """
+    src = pathlib.Path(__file__).parents[1] / "src" / "axor_backend"
+    tree = ast.parse((src / "routers" / "vault.py").read_text("utf-8"))
+    gate = next(
+        n for n in ast.walk(tree)
+        if isinstance(n, ast.FunctionDef) and n.name == "_gate"
+    )
+    calls = {
+        n.func.id for n in ast.walk(gate)
+        if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+    }
+    assert "constant_time_eq" in calls, "_gate must compare in constant time"
+    equality = [
+        n for n in ast.walk(gate)
+        if isinstance(n, ast.Compare)
+        and any(isinstance(op, (ast.Eq, ast.NotEq)) for op in n.ops)
+    ]
+    assert not equality, "_gate compares a secret with ==/!= again"
