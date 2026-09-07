@@ -361,6 +361,55 @@ def renewal_rejection(
     return None
 
 
+# The fields a usage report carries. Written out rather than serialized from
+# whatever the meter happens to hold, because the difference between them is the
+# whole point: `node_activity` knows every node id a customer runs, and a node
+# id is the name of a machine on their infrastructure. The vendor needs a COUNT
+# to raise an invoice and has no business knowing the topology, so the report is
+# a fixed list of numbers and never a dump.
+# `included_nodes`, not `governed_node_ceiling`: it is the same number as the
+# license's ceiling, but this is a billing document and so is the invoice an
+# operator reads beside it. One fact under two names in two documents a customer
+# compares is the drift this codebase keeps finding in itself.
+USAGE_REPORT_FIELDS = (
+    "month", "workspace_tier", "included_nodes",
+    "peak_nodes", "peak_day", "distinct_nodes", "billable_nodes",
+)
+
+
+async def usage_report(state: Any, org: str) -> dict[str, Any] | None:  # noqa: ANN401
+    """What this deployment would send the vendor about its fleet, or None.
+
+    None whenever it must not send: reporting off, no license to bill against,
+    or no closed month yet. The CURRENT month is never reported — its peak can
+    still rise, so sending it would be reporting a number that is going to
+    change, and the vendor would be invoicing from a draft.
+
+    Exposed rather than inlined so an operator can see exactly what leaves,
+    before deciding to let it: `GET /v1/license/invoice` is a superset of every
+    field here.
+    """
+    if not state.config.usage_reporting:
+        return None
+    lic = stored_license(state, org)
+    if lic is None:
+        return None
+    on = datetime.now(UTC).date()
+    last_month = (on.replace(day=1) - timedelta(days=1)).strftime("%Y-%m")
+    start, end = billing_month(f"{last_month}-01")
+    usage = await state.store.node_usage(start, end)
+    peak = int(usage["peak_nodes"])
+    return {
+        "month": last_month,
+        "workspace_tier": lic.workspace_tier,
+        "included_nodes": lic.governed_node_ceiling,
+        "peak_nodes": peak,
+        "peak_day": usage["peak_day"],
+        "distinct_nodes": usage["distinct_nodes"],
+        "billable_nodes": max(0, peak - lic.governed_node_ceiling),
+    }
+
+
 async def renew_once(state: Any, org: str, *, fetch: Any = None) -> bool:  # noqa: ANN401
     """Fetch and install this tenant's next license. True when one was installed.
 
@@ -370,8 +419,12 @@ async def renew_once(state: Any, org: str, *, fetch: Any = None) -> bool:  # noq
     """
     current = stored_license(state, org)
     getter = fetch or _fetch_license
+    # Rides the renewal request rather than opening a second channel, and is
+    # None unless the operator switched reporting on separately. Enabling
+    # renewal does not enable this.
+    report = await usage_report(state, org)
     try:
-        raw = await getter(state.config.license_renewal_url, org, current)
+        raw = await getter(state.config.license_renewal_url, org, current, report)
     except Exception as exc:  # noqa: BLE001 - an unreachable vendor is not an error here
         log.warning("license renewal fetch failed for org %s: %s", org, exc)
         return False
@@ -394,22 +447,32 @@ async def renew_once(state: Any, org: str, *, fetch: Any = None) -> bool:  # noq
     return True
 
 
-async def _fetch_license(url: str, org: str, current: Any) -> str | None:  # noqa: ANN401
+async def _fetch_license(
+    url: str, org: str, current: Any, report: dict[str, Any] | None = None,  # noqa: ANN401
+) -> str | None:
     """Ask the vendor for this deployment's current license.
 
     The request carries the license IN FORCE, which is what identifies the
     caller: it is vendor-signed and names the organization, so the vendor can
     answer without this deployment holding any additional credential. A CP that
     has never been licensed does not call at all.
+
+    `report` is the closed month's governed-node usage — counts, never node ids
+    — and is present only when the operator turned reporting on, which is a
+    switch of its own. The key is omitted entirely when it is not, so a vendor
+    reading the request can tell "not reported" from "reported as nothing".
     """
     import httpx  # noqa: PLC0415
 
+    payload: dict[str, Any] = {
+        "organization": current.organization if current else None,
+        "expires_at": current.expires_at if current else None,
+        "org": org,
+    }
+    if report is not None:
+        payload["usage"] = report
     async with httpx.AsyncClient(timeout=15.0) as client:
-        response = await client.post(url, json={
-            "organization": current.organization if current else None,
-            "expires_at": current.expires_at if current else None,
-            "org": org,
-        })
+        response = await client.post(url, json=payload)
     if response.status_code == 204:
         return None  # nothing newer
     response.raise_for_status()

@@ -535,8 +535,12 @@ class TestRenewalIsFetchedAndOnlyMovesForward:
             yield c, app
 
     @staticmethod
-    def _serving(license_json: str | None):  # noqa: ANN205
-        async def fetch(url: str, org: str, current) -> str | None:  # noqa: ANN001
+    def _serving(license_json: str | None, seen: list | None = None):  # noqa: ANN205
+        async def fetch(
+            url: str, org: str, current: object, report: dict | None = None,
+        ) -> str | None:
+            if seen is not None:
+                seen.append(report)
             return license_json
         return fetch
 
@@ -628,7 +632,9 @@ class TestRenewalIsFetchedAndOnlyMovesForward:
 
         _client, app = renewing
 
-        async def broken(url: str, org: str, current) -> str:  # noqa: ANN001
+        async def broken(
+            url: str, org: str, current: object, report: dict | None = None,
+        ) -> str:
             raise ConnectionError("vendor down")
 
         assert await renew_once(app.state, PUBLIC_ORG, fetch=broken) is False
@@ -1089,3 +1095,166 @@ def test_the_rate_card_and_the_pricing_page_state_one_ladder() -> None:
         assert f"{base} / mo" in page, (tier, base)
         assert f"+{over} / governed node / mo" in page, (tier, over)
         assert f"{included} governed nodes" in page, (tier, included)
+
+
+# ── reporting usage outward: a separate decision, on a shared channel ─────────
+
+class TestUsageLeavesOnlyWhenItWasAgreedTo:
+    """Renewal is the vendor answering a question about the deployment. Usage
+    reporting is the deployment volunteering something about the customer.
+    Those are different things to agree to, so they are different switches —
+    turning on `AXOR_LICENSE_RENEWAL_URL` must never turn this on.
+
+    They share the outbound call because opening a second one buys nothing: the
+    renewal request already goes to the vendor, already carries the license that
+    identifies the caller, and already tolerates failure.
+    """
+
+    @staticmethod
+    def _fetch(seen: list):  # noqa: ANN205
+        async def fetch(
+            url: str, org: str, current: object, report: dict | None = None,
+        ) -> str | None:
+            seen.append(report)
+            return None
+        return fetch
+
+    async def _app(self, tmp_path: pathlib.Path, vendor: dict, *, reporting: bool):  # noqa: ANN202
+        app = create_app(database_url=f"sqlite+aiosqlite:///{tmp_path}/u.db",
+                         license_renewal_url="https://vendor.test/renew",
+                         usage_reporting=reporting)
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://backend.test",
+        ) as c, app.router.lifespan_context(app):
+            await c.post("/v1/license/verify", json={
+                "license_json": _signed(vendor, governed_node_ceiling=10)})
+            yield c, app
+
+    async def test_renewal_alone_sends_nothing(
+        self, tmp_path: pathlib.Path, vendor: dict,
+    ) -> None:
+        """The one that matters: a customer who wanted their license renewed
+        automatically has not thereby agreed to be metered."""
+        from axor_backend.licensing import renew_once
+        from axor_backend.tenancy import PUBLIC_ORG
+
+        async for client, app in self._app(tmp_path, vendor, reporting=False):
+            store = app.state.store
+            for i in range(14):
+                await store.record_node_activity(f"n{i}", _last_month_day())
+            seen: list = []
+            await renew_once(app.state, PUBLIC_ORG, fetch=self._fetch(seen))
+            assert seen == [None]
+            status = (await client.get("/v1/license/status")).json()
+            assert status["auto_renewal"] is True
+            assert status["usage_reporting"] is False
+
+    async def test_switched_on_it_reports_the_closed_month(
+        self, tmp_path: pathlib.Path, vendor: dict,
+    ) -> None:
+        from axor_backend.licensing import renew_once
+        from axor_backend.tenancy import PUBLIC_ORG
+
+        async for client, app in self._app(tmp_path, vendor, reporting=True):
+            store = app.state.store
+            day = _last_month_day()
+            for i in range(14):
+                await store.record_node_activity(f"n{i}", day)
+            seen: list = []
+            await renew_once(app.state, PUBLIC_ORG, fetch=self._fetch(seen))
+            report = seen[0]
+            assert report is not None
+            assert report["month"] == day[:7]
+            assert report["peak_nodes"] == 14
+            assert report["peak_day"] == day
+            assert report["included_nodes"] == 10
+            assert report["billable_nodes"] == 4
+            assert (await client.get("/v1/license/status")).json()[
+                "usage_reporting"] is True
+
+    async def test_it_never_carries_a_node_id(
+        self, tmp_path: pathlib.Path, vendor: dict,
+    ) -> None:
+        """A node id is the name of a machine on the customer's infrastructure.
+        The vendor needs a count to raise an invoice and has no business
+        knowing the topology — so the report is a fixed list of fields, not a
+        serialization of whatever the meter happens to hold."""
+        import json as _json
+
+        from axor_backend.licensing import USAGE_REPORT_FIELDS, renew_once
+        from axor_backend.tenancy import PUBLIC_ORG
+
+        async for _client, app in self._app(tmp_path, vendor, reporting=True):
+            store = app.state.store
+            for name in ("prod-eu-west-1", "secret-project-node", "hr-payroll"):
+                await store.record_node_activity(name, _last_month_day())
+            seen: list = []
+            await renew_once(app.state, PUBLIC_ORG, fetch=self._fetch(seen))
+            rendered = _json.dumps(seen[0])
+            for name in ("prod-eu-west-1", "secret-project-node", "hr-payroll"):
+                assert name not in rendered, rendered
+            assert set(seen[0]) == set(USAGE_REPORT_FIELDS)
+
+    async def test_the_month_still_running_is_never_reported(
+        self, tmp_path: pathlib.Path, vendor: dict,
+    ) -> None:
+        """Its peak can still rise, so sending it would have the vendor
+        invoicing from a draft."""
+        from axor_backend.licensing import renew_once, usage_report
+        from axor_backend.tenancy import PUBLIC_ORG
+
+        async for _client, app in self._app(tmp_path, vendor, reporting=True):
+            store = app.state.store
+            await store.record_node_activity("n1", _today())      # this month
+            await store.record_node_activity("n2", _last_month_day())
+            await store.record_node_activity("n3", _last_month_day())
+            report = await usage_report(app.state, PUBLIC_ORG)
+            assert report["month"] != _today()[:7]
+            assert report["peak_nodes"] == 2  # last month's, not this one's
+            seen: list = []
+            await renew_once(app.state, PUBLIC_ORG, fetch=self._fetch(seen))
+            assert seen[0]["peak_nodes"] == 2
+
+    async def test_nothing_is_reported_without_a_license_to_bill_against(
+        self, tmp_path: pathlib.Path, vendor: dict,
+    ) -> None:
+        from axor_backend.licensing import usage_report
+        from axor_backend.tenancy import PUBLIC_ORG
+
+        async for _client, app in self._app(tmp_path, vendor, reporting=True):
+            app.state.licenses.clear()
+            assert await usage_report(app.state, PUBLIC_ORG) is None
+
+    async def test_the_operator_can_read_what_would_leave_before_agreeing(
+        self, tmp_path: pathlib.Path, vendor: dict,
+    ) -> None:
+        """Consent an operator cannot inspect is a checkbox, not consent. Every
+        field the report carries is on the invoice they can already read."""
+        from axor_backend.licensing import USAGE_REPORT_FIELDS
+
+        async for client, app in self._app(tmp_path, vendor, reporting=False):
+            store = app.state.store
+            day = _last_month_day()
+            for i in range(3):
+                await store.record_node_activity(f"n{i}", day)
+            invoice = (await client.get(f"/v1/license/invoice?month={day[:7]}")).json()
+            # `distinct_nodes` sits under `evidence` on the invoice, where it
+            # belongs: it is what the peak is checked against, not a line
+            # somebody pays. Readable is the claim, not top-level.
+            readable = {**invoice, **invoice["evidence"]}
+            for field in USAGE_REPORT_FIELDS:
+                assert field in readable, field
+
+
+def _today() -> str:
+    from datetime import UTC, datetime
+
+    return datetime.now(UTC).date().isoformat()
+
+
+def _last_month_day() -> str:
+    """The 12th of the month just ended — a closed month, whatever today is."""
+    from datetime import UTC, datetime, timedelta
+
+    first = datetime.now(UTC).date().replace(day=1)
+    return (first - timedelta(days=1)).replace(day=12).isoformat()

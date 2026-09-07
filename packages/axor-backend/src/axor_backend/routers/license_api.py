@@ -161,6 +161,11 @@ async def license_status(state: StateDep, config: ConfigDep) -> dict:
     "this deployment cannot check one", which are different problems with
     different fixes and used to look identical on screen.
 
+    ``usage_reporting`` says whether the fleet size is volunteered to the vendor
+    on the renewal call. `GET /v1/license/invoice` shows every field such a
+    report would carry, and more — an operator can see exactly what would leave
+    before deciding to let it.
+
     ``licensed_to`` is the organization this deployment accepts a license for,
     or null when it accepts any — the state a single-tenant install with no
     ``AXOR_ORG`` is in, which the operator should be able to see rather than
@@ -174,6 +179,12 @@ async def license_status(state: StateDep, config: ConfigDep) -> dict:
         "vendor_key_configured": bool(config.vendor_pubkey),
         "licensed_to": expected_org(config, org),
         "auto_renewal": bool(config.license_renewal_url),
+        # Whether this deployment volunteers its fleet size to the vendor.
+        # Reported next to `auto_renewal` and separate from it, because they
+        # are separate decisions: renewal is the vendor answering a question
+        # about the deployment, reporting is the deployment telling the vendor
+        # something about the customer.
+        "usage_reporting": bool(config.usage_reporting),
     }
     if lic is None:
         # An expired license is still held, and saying so is the difference

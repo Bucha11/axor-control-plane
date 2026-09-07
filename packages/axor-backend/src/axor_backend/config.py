@@ -58,6 +58,12 @@ class AppConfig:
     # off by default; unset keeps the manual paste flow, which is the only one
     # an air-gapped deployment can have.
     license_renewal_url: str = ""
+    # Whether this deployment REPORTS its governed-node usage to the vendor.
+    # Deliberately its own switch and not implied by `license_renewal_url`:
+    # renewal is the vendor answering a question about the deployment, usage
+    # reporting is the deployment volunteering something about the customer, and
+    # a customer who wanted the first has not thereby agreed to the second.
+    usage_reporting: bool = False
     # ── egress ───────────────────────────────────────────────────────────────
     webhook_block_private: bool = False
 
@@ -89,6 +95,7 @@ class AppConfig:
         vendor_pubkey: str | None = None,
         org: str | None = None,
         license_renewal_url: str | None = None,
+        usage_reporting: bool | None = None,
     ) -> AppConfig:
         """Argument, else environment, else default — field by field."""
         if operator_keys is None:
@@ -126,6 +133,11 @@ class AppConfig:
                 or DEFAULT_SCHEDULE_SWEEP_SECONDS
             ),
             org=(org if org is not None else os.environ.get("AXOR_ORG", "")),
+            usage_reporting=(
+                usage_reporting
+                if usage_reporting is not None
+                else _flag("AXOR_USAGE_REPORTING")
+            ),
             license_renewal_url=(
                 license_renewal_url
                 if license_renewal_url is not None
