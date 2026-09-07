@@ -3,7 +3,11 @@
 Rules, in order of importance:
 - Auth is passthrough, byte-for-byte: the Authorization header (and everything
   else except hop-by-hop headers) is forwarded untouched, never parsed, never
-  stored.
+  stored. The ONE exception is vault mode (ui-spec §14.2), opt-in per tool via
+  AXOR_VAULT_TOOLS: for those tools and no others the proxy fetches the
+  credential at call time and injects it at the sink, so the agent never holds
+  it. §14.2 names that reversal and its price; `axor_proxy.vault` carries the
+  reasoning and the bounds.
 - Exactly two intervention points: inject fault (armed scenario), record
   observation. Everything else is clean passthrough.
 - Observe-only: the proxy never blocks the agent.
@@ -34,6 +38,7 @@ from axor_proxy.mock_tools import mock_tools_app
 from axor_proxy.runs import RunManager, evidence_to_dict, sha256_hex
 from axor_proxy.stdio_mcp import StdioMcpServer, discover_stdio
 from axor_proxy.upload import BackendUploader
+from axor_proxy.vault import CredentialDenied, CredentialVault, vault_tools
 
 # Hop-by-hop headers never forwarded in either direction (RFC 9110 s7.6.1).
 _HOP_BY_HOP = frozenset({
@@ -61,6 +66,8 @@ class ProxyState:
         agent_client: httpx.AsyncClient | None = None,
         ingest_key: str | None = None,
         control_token: str | None = None,
+        vault: CredentialVault | None = None,
+        vault_tool_names: frozenset[str] | None = None,
     ) -> None:
         import os as _os
 
@@ -99,6 +106,17 @@ class ProxyState:
         self.ingest_key = ingest_key
         # Live governed nodes (node_id -> keepalive task) so they are not GC'd.
         self.governed: dict[str, Any] = {}
+        # Vault mode (§14.2): the tools whose credentials this proxy injects,
+        # and the client that fetches them. Both empty by default — §6
+        # passthrough is what runs unless an operator opted a tool in, and a
+        # proxy with no backend has nothing to fetch from.
+        self.vault_tools: frozenset[str] = (
+            vault_tool_names if vault_tool_names is not None else vault_tools()
+        )
+        self.vault = vault or (
+            CredentialVault(backend_url, ingest_key=ingest_key)
+            if backend_url and self.vault_tools else None
+        )
 
 
 async def _stdio_dispatch(
@@ -246,7 +264,63 @@ def create_app(state: ProxyState) -> Starlette:
             call_payload["rpc"] = rpc
             if rpc.get("tool"):
                 call_payload["tool"] = f"{tool}:{rpc['tool']}"
+        # ── vault mode (§14.2), opt-in per tool: fetch the credential now and
+        # inject it at the sink, so the agent never holds it. Fail closed —
+        # every refusal ends the call here, before any upstream request. ──
+        credential = None
+        if tool in state.vault_tools:
+            denial: str | None = None
+            if state.vault is None:
+                denial = (
+                    f"{tool} is in AXOR_VAULT_TOOLS but this proxy has no "
+                    "backend to dispense from"
+                )
+            elif isinstance(upstream_base, StdioMcpServer):
+                # A stdio MCP server has no request headers to inject into.
+                # Passing the call through unauthenticated would be the
+                # fail-open the whole feature exists to remove.
+                denial = (
+                    f"{tool} is a stdio MCP tool: there is no header to inject "
+                    "a credential into, and vault mode does not fall back to "
+                    "passthrough"
+                )
+            else:
+                try:
+                    credential = await state.vault.dispense(
+                        run.node_id, tool, upstream_base,
+                    )
+                except CredentialDenied as exc:
+                    denial = exc.reason
+            if denial is not None:
+                call_payload["credential"] = {"injected": False, "reason": denial}
+                await state.runs.record(run, EventKind.TOOL_CALL, call_payload)
+                await state.runs.record(run, EventKind.DENIAL, {
+                    "tool": tool, "category": "vault", "reason": denial,
+                    "intent_kind": "tool_call",
+                })
+                run.call_counts[tool] = run.call_counts.get(tool, 0) + 1
+                return JSONResponse(
+                    {"error": "credential_denied", "tool": tool, "detail": denial},
+                    status_code=403,
+                )
+            # Recorded, never the key material (§14.2): which tool, which
+            # endpoint, which version — enough for replay to show "this call was
+            # made WITH credential X injected" and nothing more.
+            call_payload["credential"] = {
+                "injected": True,
+                "endpoint": upstream_base,
+                "header": credential.header,
+                "version": credential.version,
+            }
+
         await state.runs.record(run, EventKind.TOOL_CALL, call_payload)
+
+        def outgoing() -> list[tuple[bytes, bytes]]:
+            """Headers for the upstream call. Byte-for-byte passthrough, except
+            that a vault-mode tool's injection header is REPLACED — the agent's
+            own value there is not a fallback, it is what is being removed."""
+            headers = _forward_headers(request.headers)
+            return credential.applied_to(headers) if credential else headers
 
         spec = state.runs.fault_for_call(run, tool)
 
@@ -266,7 +340,7 @@ def create_app(state: ProxyState) -> Starlette:
                     upstream = await state.client.request(
                         request.method, url,
                         params=request.query_params,
-                        headers=_forward_headers(request.headers),
+                        headers=outgoing(),
                         content=body,
                     )
                 except httpx.HTTPError as exc:
@@ -310,7 +384,7 @@ def create_app(state: ProxyState) -> Starlette:
         req = state.client.build_request(
             request.method, url,
             params=request.query_params,
-            headers=_forward_headers(request.headers),
+            headers=outgoing(),
             content=body,
         )
         try:

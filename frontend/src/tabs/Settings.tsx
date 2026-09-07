@@ -518,8 +518,10 @@ function FederationVault() {
           FEDERATION VAULT · TOOL CREDENTIALS
         </div>
         <div style={{ fontFamily: MONO, fontSize: 10.5, color: C.mut, marginBottom: 10, lineHeight: 1.6 }}>
-          dispensed at the sink, per-node scope, fail-closed. rotation is config;
-          the plane may revoke, never grant.
+          fetched at call time and injected at the sink by the proxy, for the
+          tools its AXOR_VAULT_TOOLS opts in — so the agent never holds the key.
+          per-node scope, fail-closed, no cache. rotation is config; the plane
+          may revoke, never grant.
         </div>
         {(creds.data?.enrolled ?? []).length === 0 ? (
           <div style={{ fontFamily: MONO, fontSize: 11, color: C.dim }}>no credentials enrolled</div>
@@ -529,6 +531,7 @@ function FederationVault() {
               <span style={{ color: e.revoked ? C.dim : C.text, textDecoration: e.revoked ? "line-through" : "none" }}>{e.tool}</span>
               <span style={{ color: C.dim, fontSize: 10 }}>v{e.version}</span>
               <span style={{ color: C.dim, fontSize: 10 }}>scope: {e.scope_nodes.join(", ") || "none"}</span>
+              <span style={{ color: C.dim, fontSize: 10 }}>→ {e.header}{e.scheme ? ` ${e.scheme}` : ""}</span>
               {e.revoked && <span style={{ color: C.red, fontSize: 10 }}>revoked</span>}
             </div>
           ))

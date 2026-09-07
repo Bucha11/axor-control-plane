@@ -1,7 +1,8 @@
 """Federation tool-credential vault (spec v2 Ch.5 §1) — the DISPENSE side.
 
 One vault holds tool credentials for all nodes in the federation; a node
-fetches by (tool, endpoint) at call time, injected at the sink. Federation-wide
+fetches by (tool, endpoint) at call time and the proxy injects it at the sink
+(``axor_proxy.vault``). Federation-wide
 STORAGE does not mean federation-wide ACCESS: enrollment scope is per node,
 checked at dispense — a compromised web-scraper cannot pull the payments
 credential just because both live in the same vault. Shared storage,
@@ -29,6 +30,7 @@ property — do not change with the backend.
 """
 from __future__ import annotations
 
+import re
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
@@ -62,6 +64,21 @@ class EnrollmentInvalid(Exception):
         self.reason = reason
 
 
+# Where a dispensed credential goes in the outgoing request. "Inject at the
+# sink" is not a complete instruction without it: the vault has to say WHICH
+# header carries the secret and what precedes it. Defaults are the common case
+# (`Authorization: Bearer <secret>`); an API-key tool enrolls with its own
+# header and an empty scheme.
+DEFAULT_HEADER = "Authorization"
+DEFAULT_SCHEME = "Bearer"
+
+# RFC 9110 field names: visible ASCII, no separators. Checked at enrollment
+# rather than trusted, because this string is written into a request the proxy
+# builds — a header name carrying CR/LF would let an enrollment smuggle
+# additional headers into every call the credential is injected into.
+_HEADER_NAME = re.compile(r"^[!#$%&'*+.^_`|~0-9A-Za-z-]+$")
+
+
 @dataclass(frozen=True)
 class Enrollment:
     tool: str
@@ -70,6 +87,8 @@ class Enrollment:
     version: int
     revoked: bool
     scope_nodes: tuple[str, ...]  # node ids allowed to dispense this credential
+    header: str = DEFAULT_HEADER
+    scheme: str = DEFAULT_SCHEME
 
 
 def _key(tool: str, endpoint: str) -> str:
@@ -104,7 +123,8 @@ class ToolCredentialVault:
         return out[0]
 
     async def enroll(
-        self, tool: str, endpoint: str, secret: str, scope_nodes: list[str]
+        self, tool: str, endpoint: str, secret: str, scope_nodes: list[str],
+        header: str = DEFAULT_HEADER, scheme: str = DEFAULT_SCHEME,
     ) -> dict:
         """The grant path (the plane may narrow, never grant), and the only one.
 
@@ -123,6 +143,14 @@ class ToolCredentialVault:
                 f"({tool}, {endpoint}) needs at least one node in scope_nodes — "
                 "an empty scope is a credential no node may dispense"
             )
+        header = header or DEFAULT_HEADER
+        if not _HEADER_NAME.match(header):
+            raise EnrollmentInvalid(
+                f"{header!r} is not a valid header name — the injection header "
+                "is written into every request this credential is injected into"
+            )
+        if any(c in scheme for c in "\r\n"):
+            raise EnrollmentInvalid("the auth scheme may not contain CR or LF")
 
         def change(data: dict[str, dict]) -> dict:
             prior = data.get(_key(tool, endpoint))
@@ -130,6 +158,7 @@ class ToolCredentialVault:
             data[_key(tool, endpoint)] = {
                 "tool": tool, "endpoint": endpoint, "secret": secret,
                 "version": version, "revoked": False, "scope_nodes": scope,
+                "header": header, "scheme": scheme,
             }
             return {"tool": tool, "endpoint": endpoint, "version": version}
 
@@ -149,7 +178,16 @@ class ToolCredentialVault:
                 f"node {node_id!r} is not in the dispense scope for "
                 f"({tool}, {endpoint}) — scope mismatch"
             )
-        return {"secret": entry["secret"], "version": entry["version"]}
+        return {
+            "secret": entry["secret"],
+            "version": entry["version"],
+            # Placement travels WITH the secret: the caller injecting it must
+            # not have to hold a second copy of the enrollment to know where it
+            # goes, and a rotation that moves the header takes effect at the
+            # next call rather than after a redeploy.
+            "header": entry.get("header", DEFAULT_HEADER),
+            "scheme": entry.get("scheme", DEFAULT_SCHEME),
+        }
 
     async def rotate(self, tool: str, endpoint: str, new_secret: str) -> dict:
         """New secret, same scope, same revocation state.
@@ -198,7 +236,9 @@ class ToolCredentialVault:
             "enrolled": [
                 {"tool": e["tool"], "endpoint": e["endpoint"],
                  "version": e["version"], "revoked": e["revoked"],
-                 "scope_nodes": e["scope_nodes"]}
+                 "scope_nodes": e["scope_nodes"],
+                 "header": e.get("header", DEFAULT_HEADER),
+                 "scheme": e.get("scheme", DEFAULT_SCHEME)}
                 for e in data.values()
             ],
         }

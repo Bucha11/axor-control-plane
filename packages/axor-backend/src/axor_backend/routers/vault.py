@@ -87,6 +87,8 @@ async def vault_enroll(body: dict, request: Request, store: StoreDep) -> dict:
             str(body.get("endpoint", "")),
             str(body.get("secret", "")),
             [str(n) for n in body.get("scope_nodes", [])],
+            header=str(body.get("header", "") or "Authorization"),
+            scheme=str(body.get("scheme", "Bearer")),
         )
     except EnrollmentInvalid as exc:
         raise HTTPException(400, exc.reason) from exc

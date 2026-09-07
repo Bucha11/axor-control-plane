@@ -105,6 +105,20 @@ async def rehydrate(state: Any) -> None:  # noqa: ANN401 - app.state is dynamic
     # at all: it is derived from one run's events when a request asks for it
     # (see axor_backend.provenance). A projection keyed on value refs was a
     # projection keyed on names that repeat in every run.
+    # Decision #13 says it in terms: "own crypto storage is a red flag in a
+    # security product; the differentiator is scoped sink-side injection, not
+    # storage." What ships is the lightweight dev backend that decision allows —
+    # the settings KV, and not even encrypted at rest. Silence would read as "a
+    # secret store is underneath"; it is not.
+    creds = await state.store.get_setting("vault_creds/v1")
+    if creds:
+        log.warning(
+            "TOOL CREDENTIALS ARE IN THE DEV BACKEND (%d enrolled) — the "
+            "settings table, in plaintext. Fine for a test bench; a real "
+            "deployment plugs a Vault/KMS-class store behind the same "
+            "interface (ui-spec §14.2 decision #13).",
+            len(creds),
+        )
     # Share links and notification subscriptions are primary data: rebuild their
     # in-memory holders so a restart keeps permalinks live and keeps
     # notifications firing (see storage.share_links / _subs).
