@@ -29,6 +29,14 @@ SUBGRAPH_CACHE_MAX = int(os.environ.get("AXOR_SUBGRAPH_CACHE_MAX", "512"))
 # tens of cases, not thousands.
 MAX_PINS_PER_PACKAGE = int(os.environ.get("AXOR_MAX_PINS_PER_PACKAGE", "500"))
 
+# k-hop bounds. `k` is capped at 30 because Kuzu refuses a variable-length
+# pattern longer than that — unbounded, `?k=31` raised a Binder exception out of
+# the store and answered 500 to a request that was merely too greedy. `k=20`
+# already costs a third of a second on a 60-value chain, so the cap is a
+# resource bound as much as a compatibility one.
+MAX_KHOP_K = int(os.environ.get("AXOR_MAX_KHOP_K", "30"))
+MAX_KHOP_LIMIT = int(os.environ.get("AXOR_MAX_KHOP_LIMIT", "1000"))
+
 
 def check_batch_size(events: Any, what: str = "events") -> list:  # noqa: ANN401
     """Validate a caller-supplied event batch, or raise a 4xx that says why."""

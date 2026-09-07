@@ -160,3 +160,163 @@ async def test_attestation_surface_route(client: httpx.AsyncClient) -> None:
     atts = r.json()
     assert len(atts) == 1 and atts[0]["fact_id"] == "att1"
     assert atts[0]["reason"] == "checked"
+
+
+# ── a call belongs to the node that made it ──────────────────────────────────
+
+class TestDerivationsArePairedPerNode:
+    """A run can carry several nodes (migration 0004), and a kernel event has no
+    call id — only `seq`, `node_id` and the payload — so a call is paired with
+    its result by node plus order.
+
+    One pending list for the whole run did not merely miss edges when two nodes
+    interleaved. It recorded a WRONG one: with A calling, B calling, A
+    answering, B answering, it wrote `B's input -> A's output`, declaring one
+    node's value the origin of another node's, in the index whose entire job is
+    origin.
+    """
+
+    @staticmethod
+    def _call(node: str, ref: str) -> dict:
+        return {"kind": "tool_call", "node_id": node,
+                "payload": {"arg_refs": {"a": ref}}}
+
+    @staticmethod
+    def _result(node: str, ref: str) -> dict:
+        return {"kind": "tool_result", "node_id": node,
+                "payload": {"value_ref": ref}}
+
+    async def test_interleaved_nodes_do_not_borrow_each_others_inputs(self) -> None:
+        from axor_backend.graph import InMemoryGraphStore, register_trace_derivations
+
+        graph = InMemoryGraphStore()
+        registered = await register_trace_derivations(graph, "run1", [
+            self._call("A", "v_a"), self._call("B", "v_b"),
+            self._result("A", "out_a"), self._result("B", "out_b"),
+        ])
+        assert registered == 2
+        edges = {(e["src"], e["dst"]) for e in (await graph.khop("v_a", 3, 50))["edges"]}
+        edges |= {(e["src"], e["dst"]) for e in (await graph.khop("v_b", 3, 50))["edges"]}
+        assert edges == {("v_a", "out_a"), ("v_b", "out_b")}
+
+    async def test_a_single_node_trace_is_unchanged(self) -> None:
+        from axor_backend.graph import InMemoryGraphStore, register_trace_derivations
+
+        graph = InMemoryGraphStore()
+        assert await register_trace_derivations(graph, "run1", [
+            self._call("A", "v1"), self._result("A", "v2"),
+        ]) == 1
+
+    async def test_a_result_with_no_call_of_its_own_derives_from_nothing(
+        self,
+    ) -> None:
+        """Node B answering without having called claims no provenance, even
+        while node A has a call outstanding."""
+        from axor_backend.graph import InMemoryGraphStore, register_trace_derivations
+
+        graph = InMemoryGraphStore()
+        assert await register_trace_derivations(graph, "run1", [
+            self._call("A", "v_a"), self._result("B", "out_b"),
+        ]) == 0
+
+    async def test_a_node_consumes_its_pending_inputs_once(self) -> None:
+        """The second result on a node whose call was already answered derives
+        from nothing — it is a different call, and its own arg_refs would have
+        been recorded had it made one."""
+        from axor_backend.graph import InMemoryGraphStore, register_trace_derivations
+
+        graph = InMemoryGraphStore()
+        assert await register_trace_derivations(graph, "run1", [
+            self._call("A", "v_a"), self._result("A", "out1"),
+            self._result("A", "out2"),
+        ]) == 1
+
+
+class TestKhopArgumentsAreBoundedBeforeTheStoreSeesThem:
+    """`k` and `limit` went from the query string into the store untouched. The
+    in-memory store returned an empty neighbourhood for nonsense; Kuzu raised
+    out of the driver, so `k=0`, `k=-1`, `k=31` and a negative limit each
+    answered 500 to a caller who had only asked for too much."""
+
+    @staticmethod
+    async def _client(tmp_path):  # noqa: ANN001, ANN205
+        import httpx
+        from axor_backend.app import create_app
+
+        app = create_app(database_url=f"sqlite+aiosqlite:///{tmp_path}/g.db",
+                         operator_keys={}, allow_unsigned=True)
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://t",
+        ) as c, app.router.lifespan_context(app):
+            yield c
+
+    async def test_out_of_range_arguments_are_refused_with_a_reason(
+        self, tmp_path,  # noqa: ANN001
+    ) -> None:
+        from axor_backend.limits import MAX_KHOP_K, MAX_KHOP_LIMIT
+
+        async for client in self._client(tmp_path):
+            for query in (f"k={MAX_KHOP_K + 1}", "k=0", "k=-1",
+                          f"limit={MAX_KHOP_LIMIT + 1}", "limit=0", "limit=-5"):
+                r = await client.get(f"/v1/graph/khop?focus=v1&{query}")
+                assert r.status_code == 422, (query, r.status_code)
+
+    async def test_the_bounds_themselves_are_accepted(
+        self, tmp_path,  # noqa: ANN001
+    ) -> None:
+        from axor_backend.limits import MAX_KHOP_K, MAX_KHOP_LIMIT
+
+        async for client in self._client(tmp_path):
+            r = await client.get(
+                f"/v1/graph/khop?focus=v1&k={MAX_KHOP_K}&limit={MAX_KHOP_LIMIT}")
+            assert r.status_code == 200
+
+    async def test_kuzu_can_serve_every_k_the_route_allows(
+        self, tmp_path,  # noqa: ANN001
+    ) -> None:
+        """The cap is not a guess: Kuzu refuses a variable-length pattern longer
+        than 30, so a route that allowed more would be promising something the
+        hosted store cannot do."""
+        import pytest
+
+        pytest.importorskip("kuzu")
+        from axor_backend.graph import KuzuGraphStore
+        from axor_backend.limits import MAX_KHOP_K
+
+        store = KuzuGraphStore(tmp_path, "t")
+        await store.register_derivation("v1", "v2", "r")
+        assert (await store.khop("v1", MAX_KHOP_K, 100))["nodes"] == ["v1", "v2"]
+
+
+async def test_folding_an_attestation_again_does_not_double_it() -> None:
+    """Parity with the Kuzu store: `fact_id` is the identity of an attestation
+    in both, so folding the fact log twice is folding it once. The in-memory
+    store kept a list and appended, which read as correct only because nothing
+    re-folded in one process."""
+    import json
+
+    from axor_backend.graph import InMemoryGraphStore
+
+    graph = InMemoryGraphStore()
+    fact = json.dumps({"fact_id": "f1", "operator": "op", "reason": "checked",
+                       "covers": ["v2"]})
+    for _ in range(3):
+        await graph.append_attestation(fact)
+    assert len(await graph.branch_attestations("v2")) == 1
+
+
+async def test_two_attestations_on_one_branch_are_both_kept() -> None:
+    """Deduplication is on the fact id, not the branch: two operators attesting
+    the same value are two facts, and an audit trail that collapses them is
+    worse than none."""
+    import json
+
+    from axor_backend.graph import InMemoryGraphStore
+
+    graph = InMemoryGraphStore()
+    for fact_id, operator in (("f1", "alice"), ("f2", "bob")):
+        await graph.append_attestation(json.dumps({
+            "fact_id": fact_id, "operator": operator, "reason": "checked",
+            "covers": ["v2"]}))
+    assert {a["operator"] for a in await graph.branch_attestations("v2")} == {
+        "alice", "bob"}

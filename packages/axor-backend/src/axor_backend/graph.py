@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from collections import OrderedDict
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any, Protocol
@@ -29,22 +30,35 @@ async def register_trace_derivations(
     value derives from the input refs of the TOOL_CALL it answers. This is the
     same arg_refs → value_ref provenance the replay kernel folds (see
     replay._derive_driving_root), so the graph and the counterfactual agree on
-    what flows where. Returns the number of edges registered."""
-    pending_inputs: list[str] = []
+    what flows where. Returns the number of edges registered.
+
+    A call is paired with its result PER NODE. A kernel event carries no call
+    id — only `seq`, `node_id` and the payload — so the pairing is node plus
+    order, which is exactly the ordering the kernel guarantees.
+
+    This used to hold one pending list for the whole run, and a run can carry
+    several nodes (migration 0004). Interleaved, the graph did not merely miss
+    an edge, it recorded a WRONG one: with A calling, B calling, A answering,
+    B answering, it wrote `B's input -> A's output` — one node's value declared
+    the origin of another's, in the index whose entire job is origin — and lost
+    both real edges.
+    """
+    pending: dict[str, list[str]] = {}
     registered = 0
     for line in events:
         kind = line.get("kind")
         payload = line.get("payload", line)
+        node = str(line.get("node_id") or "")
         if kind == "tool_call":
             arg_refs = payload.get("arg_refs") or {}
-            pending_inputs = [r for r in arg_refs.values() if r]
+            pending[node] = [r for r in arg_refs.values() if r]
         elif kind == "tool_result":
             dst = payload.get("value_ref") or line.get("causal_root")
             if dst:
-                for src in pending_inputs:
+                for src in pending.get(node, ()):
                     await graph.register_derivation(src, dst, run_id)
                     registered += 1
-            pending_inputs = []
+            pending.pop(node, None)
     return registered
 
 
@@ -94,22 +108,52 @@ class GraphRegistry:
     deployment passes a factory returning :class:`KuzuGraphStore` with a
     per-tenant DB file — the isolation that class's docstring already promised
     and that only a registry can deliver.
+
+    ``max_open`` bounds how many stores are held at once, closing the least
+    recently used beyond it. Only a PERSISTENT store is ever evicted: a Kuzu
+    store's data is in its file and reopens on the next request, while an
+    in-memory store IS the data and nothing rebuilds it outside boot — evicting
+    one would silently empty a tenant's provenance graph, which is worse than
+    holding it. So the cap is a bound on open database handles, not a cache
+    policy, and it does nothing at all on the in-memory default.
     """
 
     def __init__(
-        self, factory: Callable[[str], GraphStore] | None = None
+        self,
+        factory: Callable[[str], GraphStore] | None = None,
+        max_open: int | None = None,
     ) -> None:
         self._factory: Callable[[str], GraphStore] = (
             factory if factory is not None else lambda _org: InMemoryGraphStore()
         )
-        self._graphs: dict[str, GraphStore] = {}
+        self._graphs: OrderedDict[str, GraphStore] = OrderedDict()
+        self._max_open = max_open
 
     def for_org(self, org: str) -> GraphStore:
         graph = self._graphs.get(org)
         if graph is None:
             graph = self._factory(org)
             self._graphs[org] = graph
+            self._evict_beyond_cap()
+        else:
+            self._graphs.move_to_end(org)
         return graph
+
+    def _evict_beyond_cap(self) -> None:
+        if self._max_open is None:
+            return
+        while len(self._graphs) > self._max_open:
+            evictable = next(
+                (o for o, g in self._graphs.items()
+                 if getattr(g, "persistent", False)),
+                None,
+            )
+            if evictable is None:
+                return  # nothing here can be reopened; holding beats losing
+            closing = self._graphs.pop(evictable)
+            close = getattr(closing, "close", None)
+            if close is not None:
+                close()
 
     def current(self) -> GraphStore:
         """The graph of the tenant this request belongs to."""
@@ -137,17 +181,30 @@ class InMemoryGraphStore:
     the same Protocol. State is process-local and not persisted."""
 
     def __init__(self) -> None:
-        # dst_ref → list of (src_ref, run_id) derivations INTO it, and the reverse
-        # so k-hop can walk both directions (a taint graph is explored up and down).
-        self._edges: list[dict[str, str]] = []
-        self._attestations: list[dict] = []
+        # (src, dst, run_id) -> the edge. A dict rather than a list because the
+        # dedupe used to be `if edge not in self._edges`, a linear scan of a
+        # growing list on every edge: 0.011 ms/edge at 500 edges and 0.157 at
+        # 8000, which is boot time, before the first request is answered.
+        self._edge_index: dict[tuple[str, str, str], dict[str, str]] = {}
+        # adjacency, both directions — a taint graph is explored up (provenance)
+        # and down (what this tainted), and rebuilding it per khop was a second
+        # full pass over every edge on every request.
+        self._adj: dict[str, set[str]] = {}
+        self._attestations: dict[str, dict] = {}
         self._lock = asyncio.Lock()
+
+    @property
+    def _edges(self) -> list[dict[str, str]]:
+        return list(self._edge_index.values())
 
     async def register_derivation(self, src_ref: str, dst_ref: str, run_id: str) -> None:
         async with self._lock:
-            edge = {"src": src_ref, "dst": dst_ref, "run_id": run_id}
-            if edge not in self._edges:
-                self._edges.append(edge)
+            key = (src_ref, dst_ref, run_id)
+            if key in self._edge_index:
+                return
+            self._edge_index[key] = {"src": src_ref, "dst": dst_ref, "run_id": run_id}
+            self._adj.setdefault(src_ref, set()).add(dst_ref)
+            self._adj.setdefault(dst_ref, set()).add(src_ref)
 
     async def khop(self, focus: str, k: int, limit: int) -> dict[str, object]:
         """Undirected k-hop neighbourhood of `focus` (spec decision 6). Explores
@@ -155,10 +212,7 @@ class InMemoryGraphStore:
         (downstream) — expand-on-click, capped at `limit` nodes."""
         k = int(k)
         limit = int(limit)
-        adj: dict[str, set[str]] = {}
-        for e in self._edges:
-            adj.setdefault(e["src"], set()).add(e["dst"])
-            adj.setdefault(e["dst"], set()).add(e["src"])
+        adj = self._adj
         seen = {focus}
         frontier = {focus}
         for _ in range(max(k, 0)):
@@ -174,31 +228,46 @@ class InMemoryGraphStore:
                 seen.add(node)
             frontier = nxt & seen
         edges = [
-            e for e in self._edges if e["src"] in seen and e["dst"] in seen
+            e for e in self._edge_index.values()
+            if e["src"] in seen and e["dst"] in seen
         ]
         return {"focus": focus, "nodes": sorted(seen), "edges": edges}
 
     async def append_attestation(self, fact_json: str) -> None:
+        """Idempotent on `fact_id`: the graph is rebuilt from the fact log at
+        every boot, so folding the same attestation twice must be folding it
+        once."""
         async with self._lock:
             fact = json.loads(fact_json)
-            self._attestations.append({
+            self._attestations[str(fact["fact_id"])] = {
                 "fact_id": fact["fact_id"],
                 "operator": fact.get("operator") or "",
                 "reason": fact.get("reason") or "",
                 "revokes": fact.get("revokes") or None,
                 "covers": list(fact.get("covers", ())),
-            })
+            }
 
     async def branch_attestations(self, ref: str) -> list[dict]:
         return [
             {"fact_id": a["fact_id"], "operator": a["operator"],
              "reason": a["reason"], "revokes": a["revokes"]}
-            for a in self._attestations if ref in a["covers"]
+            for a in self._attestations.values() if ref in a["covers"]
         ]
 
 
 class KuzuGraphStore:
-    """One writer per tenant DB file; reads share the same connection."""
+    """One writer per tenant DB file; reads share the same connection.
+
+    Every write here is idempotent, because this store is PERSISTENT and the
+    graph is rebuilt from the event log at every boot. It was not: derivations
+    used `CREATE`, so a restart duplicated every edge it had already stored,
+    and attestations used `CREATE` against a `fact_id` primary key, so the
+    second boot of any deployment where an operator had ever attested a branch
+    raised a duplicate-key error out of `rehydrate` — which lifespan does not
+    catch. The backend did not start.
+    """
+
+    persistent = True
 
     def __init__(self, db_dir: str | Path, tenant: str) -> None:
         import kuzu
@@ -208,6 +277,13 @@ class KuzuGraphStore:
         self._conn = kuzu.Connection(self._db)
         self._write_lock = asyncio.Lock()
         self._ensure_schema()
+
+    def close(self) -> None:
+        """Release the connection and the database handle. The data is in the
+        file: the registry reopens this store the next time the tenant is
+        served."""
+        self._conn.close()
+        self._db.close()
 
     def _ensure_schema(self) -> None:
         for ddl in (
@@ -229,9 +305,13 @@ class KuzuGraphStore:
             self._conn.execute(
                 "MERGE (v:Value {ref: $ref})", parameters={"ref": ref}
             )
+        # MERGE, not CREATE: the same derivation is folded again on every boot,
+        # and the in-memory store has always deduplicated. Two implementations
+        # of one Protocol disagreeing about whether an edge is a set member is
+        # the same defect twice.
         self._conn.execute(
             "MATCH (a:Value {ref: $src}), (b:Value {ref: $dst}) "
-            "CREATE (a)-[:DERIVES {run_id: $run_id}]->(b)",
+            "MERGE (a)-[:DERIVES {run_id: $run_id}]->(b)",
             parameters={"src": src_ref, "dst": dst_ref, "run_id": run_id},
         )
 
@@ -268,9 +348,14 @@ class KuzuGraphStore:
 
     def _append_attestation(self, fact_json: str) -> None:
         fact = json.loads(fact_json)
+        # MERGE on the primary key and set the rest: `fact_id` IS the identity
+        # of an attestation, and re-folding the fact log is the normal case, not
+        # an error. `CREATE` here is what stopped a hosted deployment booting a
+        # second time.
         self._conn.execute(
-            "CREATE (a:Attestation {fact_id: $fact_id, operator: $operator, "
-            "reason: $reason, sig: $sig, revokes: $revokes})",
+            "MERGE (a:Attestation {fact_id: $fact_id}) "
+            "SET a.operator = $operator, a.reason = $reason, "
+            "a.sig = $sig, a.revokes = $revokes",
             parameters={
                 "fact_id": fact["fact_id"],
                 "operator": fact.get("operator") or "",
@@ -285,7 +370,7 @@ class KuzuGraphStore:
             )
             self._conn.execute(
                 "MATCH (a:Attestation {fact_id: $fact_id}), (v:Value {ref: $ref}) "
-                "CREATE (a)-[:ATTESTS]->(v)",
+                "MERGE (a)-[:ATTESTS]->(v)",
                 parameters={"fact_id": fact["fact_id"], "ref": ref},
             )
 
