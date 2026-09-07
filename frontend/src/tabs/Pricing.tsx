@@ -1,9 +1,12 @@
 // Pricing — canonical ladder from axor-packaging.md (SINGLE SOURCE OF TRUTH).
-// One ladder, two modules, not two products: Private Lab is the security /
-// evidence workspace, Control Plane is the production-enforcement add-on on top
-// of a workspace. Static, no backend. Safety and hobby-scale privacy are free
-// forever; you pay for hosted collaboration, the security workflow, and
-// production runtime.
+// ONE LADDER. Private Lab (the security / evidence workspace) and Control Plane
+// (production enforcement) are one product sold on one ladder: a rung entitles
+// both. They used to be a rung plus a separately-licensed add-on, which asked
+// every buyer a question they could not answer before trying the thing — and
+// the entitlement code carried a module flag that was signed, displayed, and
+// decided nothing. Static, no backend. Safety and hobby-scale privacy are free
+// forever; you pay for hosted collaboration, the security workflow, and the
+// size of the governed fleet.
 import { C, MONO } from "../theme";
 import Coach from "../components/Coach";
 
@@ -17,7 +20,7 @@ interface Feature {
   plus?: boolean; // section divider, not a feature
 }
 
-type Kind = "free" | "paid" | "addon" | "contract";
+type Kind = "free" | "paid" | "contract";
 
 interface Tier {
   name: string;
@@ -35,7 +38,6 @@ interface Tier {
 const KIND_META: Record<Kind, { label: string; color: string }> = {
   free: { label: "free", color: C.green },
   paid: { label: "paid", color: C.steel },
-  addon: { label: "add-on", color: C.violet },
   contract: { label: "contract", color: C.amber },
 };
 
@@ -44,7 +46,7 @@ const TIERS: Tier[] = [
     name: "Community",
     price: "$0",
     priceNote: "open source · local & public",
-    module: "Private Lab (free)",
+    module: "Private Lab + Control Plane",
     who: "local/public research · single-user security workflows",
     features: [
       { text: "local runner + BYOK (your keys, we never resell tokens)" },
@@ -56,37 +58,46 @@ const TIERS: Tier[] = [
       { text: "statistics + reproduction bundle + verification" },
       { text: "PDF / HTML artifacts" },
       { text: "Config Builder" },
+      { text: "runtime enforcement — gates, degradation, denials" },
+      { text: "1 governed node" },
     ],
     kind: "free",
-    note: "free forever — safety and hobby-scale privacy never cost",
+    note: "free forever — safety never checks a license, at any scale",
   },
   {
     name: "Team Workspace",
     price: "$299 / mo",
-    priceNote: "card · hosted or self-hosted",
-    module: "Private Lab",
-    who: "small teams · hosted private collaboration",
+    priceNote: "card · hosted or self-hosted · 10 governed nodes included",
+    module: "Private Lab + Control Plane",
+    who: "small teams · hosted private collaboration · production enforcement",
     features: [
       { text: "everything in Community, plus:", plus: true },
+      { text: "Control Plane runtime enforcement (pause / stop / intervene)" },
+      { text: "production connections (axor-core adapter)" },
+      { text: "runtime intervention (inject / excise / replan / budget cap)" },
+      { text: "production attestations" },
+      { text: "10 governed nodes included" },
+      { text: "scheduled regression CI + run history" },
       { text: "hosted private workspace", roadmap: true },
       { text: "multiple members", roadmap: true },
       { text: "shared scenarios", roadmap: true },
-      { text: "scheduled regression CI + run history" },
       { text: "private artifact links", roadmap: true },
       { text: "limited retention", roadmap: true },
       { text: "includes 10,000 hosted trials", roadmap: true },
+      { text: "+$75 / governed node / mo beyond 10", roadmap: true },
     ],
     kind: "paid",
-    note: "paid — the self-serve first step",
+    note: "paid — the self-serve first step, workspace and runtime together",
   },
   {
     name: "Security Workspace",
     price: "$1,500 / mo",
-    priceNote: "card · the standalone Lab security unit",
-    module: "Private Lab",
-    who: "security teams · incident-to-regression workflow",
+    priceNote: "card · the security unit · 50 governed nodes included",
+    module: "Private Lab + Control Plane",
+    who: "security teams · incident-to-regression workflow at fleet scale",
     features: [
       { text: "everything in Team, plus:", plus: true },
+      { text: "50 governed nodes included" },
       { text: "incident intake + EvidenceCase collaboration", roadmap: true },
       { text: "incident → regression conversion" },
       { text: "scheduled regression suites" },
@@ -95,49 +106,31 @@ const TIERS: Tier[] = [
       { text: "compliance / report exports", roadmap: true },
       { text: "longer history + integration hooks", roadmap: true },
       { text: "includes 50,000 hosted trials", roadmap: true },
+      { text: "+$50 / governed node / mo beyond 50", roadmap: true },
     ],
     kind: "paid",
-    note: "paid — Lab's primary standalone commercial unit",
+    note: "paid — the primary commercial unit",
     highlight: true,
-  },
-  {
-    name: "Production Governance",
-    price: "from $500 / mo",
-    priceNote: "add-on · $500/mo includes 5 governed nodes · +$75 / node / mo",
-    module: "Control Plane (add-on)",
-    who: "add production enforcement to an existing workspace",
-    features: [
-      { text: "activated on a Team / Security workspace — not a separate journey", plus: true },
-      { text: "Control Plane runtime enforcement (pause / stop / intervene)" },
-      { text: "production connections (axor-core adapter)" },
-      { text: "governed-node allowance (5 included)" },
-      { text: "production attestations" },
-      { text: "runtime intervention (inject / excise / replan / budget cap)" },
-      { text: "per-node metering + billing", roadmap: true },
-      { text: "production integrations", roadmap: true },
-    ],
-    kind: "addon",
-    note: "add-on — priced per governed node, on top of a workspace",
   },
   {
     name: "Enterprise Platform",
     price: "from $30k / yr",
-    priceNote: "contracted · Security Workspace + Control Plane + org controls",
-    module: "both modules",
+    priceNote: "contracted · the top rung · negotiated fleet size",
+    module: "Private Lab + Control Plane",
     who: "org-wide contract · self-hosted / VPC / air-gapped",
     features: [
-      { text: "everything in Security + Production, plus:", plus: true },
+      { text: "everything in Security, plus:", plus: true },
       { text: "SSO / SAML / SCIM", roadmap: true },
       { text: "RBAC", roadmap: true },
       { text: "self-hosted backend (Postgres / SQLite)" },
       { text: "VPC / air-gapped deployment", roadmap: true },
-      { text: "negotiated governed-node band (10 included)", roadmap: true },
+      { text: "negotiated governed-node band" },
       { text: "audit + retention policies · compliance exports", roadmap: true },
       { text: "private benchmark registry", roadmap: true },
       { text: "SLA + support", roadmap: true },
     ],
     kind: "contract",
-    note: "contracted — wraps a Security Workspace, never replaces it",
+    note: "contracted — the top rung of the same ladder, not a separate product",
   },
 ];
 
@@ -160,7 +153,6 @@ function ctaHref(tier: Tier): string {
 
 function ctaLabel(tier: Tier): string {
   if (tier.kind === "free") return "Run it now — compose up";
-  if (tier.kind === "addon") return "Add Production Governance";
   if (tier.kind === "contract") return "Talk to us";
   return `Get ${tier.name}`;
 }
@@ -168,12 +160,13 @@ function ctaLabel(tier: Tier): string {
 export default function Pricing() {
   return (
     <div style={{ maxWidth: 1040, margin: "0 auto" }}>
-      <Coach id="pricing" title="Pricing — one ladder, two modules">
-        Private Lab and Control Plane are two modules within one Axor workspace and
-        one commercial ladder. Control Plane adds production enforcement to an
-        existing security workflow rather than starting a separate customer journey.
-        Features marked <span style={{ color: C.text }}>planned</span> don't exist
-        yet — the page refuses to over-claim.
+      <Coach id="pricing" title="Pricing — one ladder">
+        Private Lab and Control Plane are one product on one ladder: a rung gives
+        you the evidence workspace and production enforcement together. They used
+        to be a rung plus a separately-licensed add-on, which asked every buyer a
+        question they could not answer before trying the thing. Features marked{" "}
+        <span style={{ color: C.text }}>planned</span> don't exist yet — the page
+        refuses to over-claim.
       </Coach>
       <h1 style={{ fontSize: 26, fontWeight: 700, lineHeight: 1.25, margin: "0 0 8px" }}>
         Pricing
@@ -181,14 +174,17 @@ export default function Pricing() {
       <div style={{ fontFamily: MONO, fontSize: 11.5, color: C.dim, marginBottom: 20, lineHeight: 1.6 }}>
         Line 1 — anything that makes an agent safer is free forever.
         <br />
-        Line 2 — you pay for capabilities and organizational maturity, never for volume.
+        Line 2 — you pay for capabilities, organizational maturity and fleet size,
+        never for how much you run.
       </div>
 
       <div
         style={{ fontFamily: MONO, fontSize: 10.5, color: C.mut, marginBottom: 24, lineHeight: 1.7 }}
       >
-        Community&nbsp;→&nbsp;Team Workspace&nbsp;→&nbsp;Security Workspace&nbsp;→&nbsp;
-        <span style={{ color: C.violet }}>+ Production Governance</span>&nbsp;→&nbsp;Enterprise Platform
+        Community&nbsp;→&nbsp;Team Workspace&nbsp;→&nbsp;Security Workspace&nbsp;→&nbsp;Enterprise Platform
+        <br />
+        Every rung: the workspace and the Control Plane together. What grows with
+        the rung is the governed fleet, not the feature matrix.
       </div>
 
       <div className="flex gap-4" style={{ flexWrap: "wrap" }}>

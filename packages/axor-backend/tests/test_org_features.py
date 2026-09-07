@@ -668,17 +668,61 @@ class TestRenewalIsFetchedAndOnlyMovesForward:
 # ── the vendor CLI ────────────────────────────────────────────────────────────
 
 class TestTheIssuingCliDoesNotProduceAWarningMachine:
-    def test_a_paid_license_needs_a_real_ceiling(self) -> None:
+    def test_a_zero_ceiling_is_refused(self) -> None:
         """The ceiling used to be decorative, so a zero passed unnoticed. It is
         compared to the live fleet on every sweep now, and 0 warns forever about
         a customer who has paid."""
         from axor_backend.ee.cli import main
 
         assert main(["issue", "--key", _vendor_priv(), "--org", "T",
-                     "--expires-at", "2099-01-01"]) == 2
+                     "--governed-nodes", "0", "--expires-at", "2099-01-01"]) == 2
+
+    def test_a_rung_carries_its_standard_fleet_without_being_told(
+        self, capsys: pytest.CaptureFixture,
+    ) -> None:
+        """One number per rung is the sale (Pricing.tsx). Retyping it per license
+        is how a Team customer ends up with a Security allowance."""
+        import json as _json
+
+        from axor_backend.ee.cli import main
+        from axor_backend.ee.license import TIER_NODE_CEILING
+
+        for tier, standard in TIER_NODE_CEILING.items():
+            assert main(["issue", "--key", _vendor_priv(), "--org", "T",
+                         "--workspace-tier", tier,
+                         "--expires-at", "2099-01-01"]) == 0, tier
+            out = capsys.readouterr()
+            assert _json.loads(out.out)["license"]["governed_node_ceiling"] == standard
+            assert "note:" not in out.err
+
+    def test_the_negotiated_rung_refuses_to_guess(
+        self, capsys: pytest.CaptureFixture,
+    ) -> None:
+        """Enterprise has no list price and no standard fleet, so inventing one
+        would put a number nobody agreed to inside a signed license."""
+        from axor_backend.ee.cli import main
+
         assert main(["issue", "--key", _vendor_priv(), "--org", "T",
-                     "--governed-nodes", "25",
+                     "--workspace-tier", "enterprise",
+                     "--expires-at", "2099-01-01"]) == 2
+        assert "negotiated" in capsys.readouterr().err
+        assert main(["issue", "--key", _vendor_priv(), "--org", "T",
+                     "--workspace-tier", "enterprise", "--governed-nodes", "200",
                      "--expires-at", "2099-01-01"]) == 0
+
+    def test_departing_from_the_standard_is_announced(
+        self, capsys: pytest.CaptureFixture,
+    ) -> None:
+        """Deliberate is fine, silent is not — a Team license with 500 nodes
+        should be a decision, not a typo that ships."""
+        from axor_backend.ee.cli import main
+
+        assert main(["issue", "--key", _vendor_priv(), "--org", "T",
+                     "--workspace-tier", "team", "--governed-nodes", "500",
+                     "--expires-at", "2099-01-01"]) == 0
+        err = capsys.readouterr().err
+        assert "sold with 10 governed nodes" in err
+        assert "issued with 500" in err
 
     def test_every_rung_the_identity_service_can_issue_is_accepted(self) -> None:
         """The two services shared a name and not a vocabulary: identity could

@@ -38,6 +38,13 @@ from axor_backend.signing import jcs_canonical
 _TIER_ORDER = {"community": 0, "team": 1, "security": 2, "enterprise": 3}
 TIERS = ("community", "team", "security", "enterprise")
 
+# The governed-node allowance each rung is SOLD with (Pricing.tsx). The ceiling
+# is still a number inside each license — a rung can be sold with the fleet it
+# was negotiated for — but the standard sale should not be retyped, and a Team
+# license accidentally issued with 500 nodes should be visibly off-standard
+# rather than merely unusual. `enterprise` is negotiated and has no standard.
+TIER_NODE_CEILING: dict[str, int] = {"community": 1, "team": 10, "security": 50}
+
 
 class LicenseError(Exception):
     """License missing, malformed, badly signed, or from an untrusted vendor key."""
