@@ -40,6 +40,13 @@ def get_config(request: Request) -> AppConfig:
     return request.app.state.config
 
 
+def get_principal(request: Request) -> Any:  # noqa: ANN401 - auth.Principal | None
+    """Who is calling, as `security.auth_middleware` resolved them, or None on
+    an open deployment. A route needs this only when the ANSWER differs by
+    caller rather than by tenant — the tenant is already ambient."""
+    return getattr(request.state, "principal", None)
+
+
 def get_store(request: Request) -> Store:
     return request.app.state.store
 
@@ -67,6 +74,7 @@ def get_subgraph_cache(request: Request) -> SubgraphCache:
 
 StateDep = Annotated[Any, Depends(get_state)]
 ConfigDep = Annotated[AppConfig, Depends(get_config)]
+PrincipalDep = Annotated[Any, Depends(get_principal)]
 StoreDep = Annotated[Store, Depends(get_store)]
 BroadcastDep = Annotated[Broadcast, Depends(get_broadcast)]
 NotifierDep = Annotated[Notifier, Depends(get_notifier)]

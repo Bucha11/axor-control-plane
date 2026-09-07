@@ -267,3 +267,124 @@ async def test_share_link_resolves_for_an_identity_org(
     assert (await client.delete(f"/v1/share/{token}",
                                 headers=_bearer(org_a))).status_code == 200
     assert (await client.get(f"/v1/share/{token}")).status_code == 404
+
+
+# ── entitlement is per tenant, and the operator is not a tenant ───────────────
+
+class TestLicensingAcrossTenants:
+    """The control plane is not only self-hosted: one process, many tenants, is
+    what `tenancy.py` and the identity login exist for. Entitlement has to
+    follow the tenant, and installing it has to be possible for whoever runs the
+    deployment.
+
+    It was not. The operator's master token is fleet-wide and therefore resolves
+    to the PUBLIC organization, so an operator installing a customer's license
+    got a 200 naming that customer and quietly wrote it to `public` — licensing
+    the wrong tenant with someone else's file, and leaving the customer with
+    nothing. Now an operator names the tenant; a login cannot.
+    """
+
+    @staticmethod
+    def _vendor() -> tuple[str, str]:
+        from nacl.signing import SigningKey
+
+        key = SigningKey.generate()
+        return bytes(key).hex(), bytes(key.verify_key).hex()
+
+    @staticmethod
+    def _license(priv: str, org: str) -> str:
+        from axor_backend.ee.license import sign_license
+
+        return sign_license(
+            {"organization": org, "workspace_tier": "team",
+             "modules": {"private_lab": True, "control_plane": True},
+             "governed_node_ceiling": 10, "self_hosted_runner": False,
+             "expires_at": "2099-01-01", "features": []},
+            priv,
+        )
+
+    @pytest.fixture
+    async def hosted(self, tmp_path: pathlib.Path, priv: Ed25519PrivateKey):  # noqa: ANN201
+        vpriv, vpub = self._vendor()
+        app = create_app(database_url=f"sqlite+aiosqlite:///{tmp_path}/h.db",
+                         operator_keys={}, allow_unsigned=True, api_token=TOKEN,
+                         identity_jwks=_jwks(priv), vendor_pubkey=vpub)
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://cp.test",
+        ) as c, app.router.lifespan_context(app):
+            yield c, vpriv, app
+
+    async def test_the_operator_licenses_the_tenant_it_names(
+        self, hosted: tuple, priv: Ed25519PrivateKey,
+    ) -> None:
+        client, vpriv, app = hosted
+        r = await client.post("/v1/license/verify",
+                              headers={"Authorization": f"Bearer {TOKEN}"},
+                              json={"license_json": self._license(vpriv, "acme"),
+                                    "org": "acme"})
+        assert r.status_code == 200, r.text
+        assert r.json()["org"] == "acme"
+        # the tenant has it …
+        acme = {"Authorization": f"Bearer {_tok(priv, 'acme')}"}
+        status = (await client.get("/v1/license/status", headers=acme)).json()
+        assert status["active"] is True
+        # … and the public tenant, which the operator's own token resolves to,
+        # did NOT quietly get someone else's license
+        operator = (await client.get("/v1/license/status",
+                                     headers={"Authorization": f"Bearer {TOKEN}"})).json()
+        assert operator["active"] is False
+        assert "public" not in app.state.licenses
+
+    async def test_a_tenant_cannot_license_another_tenant(
+        self, hosted: tuple, priv: Ed25519PrivateKey,
+    ) -> None:
+        client, vpriv, _app = hosted
+        r = await client.post(
+            "/v1/license/verify",
+            headers={"Authorization": f"Bearer {_tok(priv, 'acme')}"},
+            json={"license_json": self._license(vpriv, "globex"), "org": "globex"},
+        )
+        assert r.status_code == 403
+        assert "operator" in r.json()["detail"]
+
+    async def test_naming_a_tenant_does_not_bypass_the_licences_own_name(
+        self, hosted: tuple,
+    ) -> None:
+        """The operator says WHERE it goes; the signed payload still says whose
+        it is, and the two must agree."""
+        client, vpriv, _app = hosted
+        r = await client.post("/v1/license/verify",
+                              headers={"Authorization": f"Bearer {TOKEN}"},
+                              json={"license_json": self._license(vpriv, "acme"),
+                                    "org": "globex"})
+        assert r.status_code == 403
+        assert "issued to 'acme'" in r.json()["detail"]
+
+    async def test_one_tenants_entitlement_is_not_anothers(
+        self, hosted: tuple, priv: Ed25519PrivateKey,
+    ) -> None:
+        client, vpriv, _app = hosted
+        await client.post("/v1/license/verify",
+                          headers={"Authorization": f"Bearer {TOKEN}"},
+                          json={"license_json": self._license(vpriv, "acme"),
+                                "org": "acme"})
+        paid = "/v1/regression/history"
+        assert (await client.get(paid, headers={
+            "Authorization": f"Bearer {_tok(priv, 'acme')}"})).status_code == 200
+        assert (await client.get(paid, headers={
+            "Authorization": f"Bearer {_tok(priv, 'globex')}"})).status_code == 402
+
+    async def test_a_tenant_still_installs_its_own_without_naming_it(
+        self, hosted: tuple, priv: Ed25519PrivateKey,
+    ) -> None:
+        """The self-serve path is unchanged: no `org` in the body, and the
+        caller's own tenant is the answer."""
+        client, vpriv, app = hosted
+        r = await client.post(
+            "/v1/license/verify",
+            headers={"Authorization": f"Bearer {_tok(priv, 'acme')}"},
+            json={"license_json": self._license(vpriv, "acme")},
+        )
+        assert r.status_code == 200
+        assert r.json()["org"] == "acme"
+        assert set(app.state.licenses) == {"acme"}

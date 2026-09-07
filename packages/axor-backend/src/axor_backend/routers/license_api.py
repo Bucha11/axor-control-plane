@@ -22,7 +22,8 @@ green summary and no activation, because activation required the pinned key that
 was not set. One route, two ways to show an entitlement nobody held.
 
 Now there is exactly one outcome for a 200: verified against the pinned key,
-ISSUED TO THIS DEPLOYMENT, in date, stored, active.
+ISSUED TO THIS DEPLOYMENT, in date, stored, active — and stored for the tenant
+it names rather than whichever one happened to be ambient.
 
 The last two were missing, and each broke that sentence on its own. Expiry was
 checked when a feature was USED and not when a license was stored, so a licence
@@ -31,12 +32,20 @@ said `active: false` — two answers to one question, in one sitting. And the
 `organization` in the signed payload was compared to nothing at all, so one
 purchased file activated in any tenant of any deployment; the name is signed
 precisely so it can be checked.
+
+`org` in the body is the hosted case. A tenant is confined to its own — an
+identity login writes its own entitlement and nobody else's. But the operator
+of a MULTI-TENANT deployment is not a tenant: the master token resolves to the
+public organization, so an operator installing a customer's license got a 200
+naming that customer and quietly wrote it to `public`, licensing the wrong
+tenant with someone else's file and leaving the customer with nothing. An
+operator now says which tenant, and the license still has to be issued to it.
 """
 from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException
 
-from axor_backend.deps import ConfigDep, StateDep, StoreDep
+from axor_backend.deps import ConfigDep, PrincipalDep, StateDep, StoreDep
 from axor_backend.licensing import (
     active_license,
     binding_error,
@@ -47,7 +56,7 @@ from axor_backend.licensing import (
     stored_license,
     today,
 )
-from axor_backend.tenancy import current_org_id
+from axor_backend.tenancy import current_org_id, set_current_org
 
 router = APIRouter(prefix="/v1/license", tags=["license"])
 
@@ -55,6 +64,10 @@ _NO_PIN = (
     "this deployment pins no vendor public key, so a license signature cannot "
     "be checked against anything. Set AXOR_VENDOR_PUBKEY (see .env.example) and "
     "restart; the key is published with the distribution."
+)
+_NOT_YOURS = (
+    "only the deployment operator may install a license for another tenant; a "
+    "login installs its own organization's license and no other."
 )
 _WRONG_PIN = (
     "vendor_pubkey does not match the key this deployment pins. The trust root "
@@ -64,15 +77,34 @@ _WRONG_PIN = (
 )
 
 
+def _target_org(body: dict, principal: object) -> str:
+    """The tenant this license is being installed for.
+
+    The caller's own, unless the OPERATOR names another. `kind == "master"` is
+    the deployment operator, whose token is fleet-wide and therefore resolves to
+    the public organization — which is exactly why they need to say which tenant
+    rather than have `public` assumed for them.
+    """
+    named = body.get("org")
+    if not named:
+        return current_org_id()
+    if getattr(principal, "kind", None) != "master":
+        raise HTTPException(403, _NOT_YOURS)
+    return str(named)
+
+
 @router.post("/verify")
 async def license_verify(
-    body: dict, state: StateDep, store: StoreDep, config: ConfigDep
+    body: dict, state: StateDep, store: StoreDep, config: ConfigDep,
+    principal: PrincipalDep,
 ) -> dict:
-    """Verify a license against the pinned vendor key, then activate it."""
+    """Verify a license against the pinned vendor key, then activate it — for
+    the calling tenant, or for the one an operator names."""
     from axor_backend.ee.license import LicenseError, verify_license
 
     if not config.vendor_pubkey:
         raise HTTPException(400, _NO_PIN)
+    target = _target_org(body, principal)
     # An older client echoes the pinned key back; that is harmless. A DIFFERENT
     # key is a request to move the trust root, which this route does not do.
     supplied = body.get("vendor_pubkey")
@@ -85,7 +117,7 @@ async def license_verify(
     # A signature proves the vendor issued this. It does not prove they issued
     # it to US, and it does not prove it is still in date. Both are checked
     # BEFORE anything is stored, so a 200 and `/status` cannot disagree.
-    mismatch = binding_error(lic, config, current_org_id())
+    mismatch = binding_error(lic, config, target)
     if mismatch:
         raise HTTPException(403, mismatch)
     if lic.is_expired(today()):
@@ -99,14 +131,16 @@ async def license_verify(
     # the route is `admin` and never open: anyone holding ANY vendor-signed
     # license could otherwise swap a paid tier for a community one and silently
     # switch EE features off.
+    set_current_org(target)
     await store.set_setting("license_json", body.get("license_json", ""))
-    state.licenses[current_org_id()] = lic
+    state.licenses[target] = lic
     # Node-ceiling telemetry (launch-readiness §5): compare the live fleet
     # against the license and WARN — never block; safety never checks a license
     # (monetization Line 1).
     return {
         **license_payload(lic),
-        **await ceiling_status(state, current_org_id()),
+        "org": target,
+        **await ceiling_status(state, target),
         # Always true on a 200 now. Kept in the response because clients read
         # it, and because "verified" and "active" being the same thing is the
         # property worth stating.
