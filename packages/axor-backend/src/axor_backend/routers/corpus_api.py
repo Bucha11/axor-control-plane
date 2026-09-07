@@ -9,6 +9,8 @@ instead of when somebody remembers.
 """
 from __future__ import annotations
 
+from typing import Any
+
 from fastapi import APIRouter, HTTPException
 
 from axor_backend.corpus import record_corpus_run, regression_report
@@ -97,11 +99,17 @@ async def put_regression_schedule(
         raise HTTPException(400, "config must be an object")
     # Setting a schedule validates the config now, not at 3am.
     kernel_config_from_json(config)
-    prior = await store.get_setting("regression_schedule")
-    await store.set_setting("regression_schedule", {
-        "enabled": enabled,
-        "interval_hours": interval,
-        "config": config,
-        "last_run_ts": (prior or {}).get("last_run_ts"),
-    })
+    # One atomic read-modify-write: `last_run_ts` belongs to the sweep, which
+    # may be stamping it right now, and the rest belongs to the operator. Read
+    # then write dropped whichever of the two lost the race — either the new
+    # schedule, or the stamp that stops the sweep running again immediately.
+    def write(stored: Any) -> dict:  # noqa: ANN401
+        return {
+            "enabled": enabled,
+            "interval_hours": interval,
+            "config": config,
+            "last_run_ts": (stored or {}).get("last_run_ts"),
+        }
+
+    await store.mutate_setting("regression_schedule", write)
     return {"enabled": enabled, "interval_hours": interval}

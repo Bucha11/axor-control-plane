@@ -273,3 +273,38 @@ async def test_attestation_facts_filter_inside_the_database(
 
     rows = await pg_store.attestation_facts("run_a")
     assert [f["fact_id"] for f in rows] == ["att"]
+
+
+async def test_mutate_setting_is_a_real_compare_and_set(pg_store: Store) -> None:
+    """The KV holds whole blobs — the federation vault's credentials, its
+    signing keys, its sign-request audit — so a lost write there loses all of
+    them, not one field. `mutate_setting` reads the revision, writes with
+    `WHERE revision = the one I read`, and retries when zero rows change.
+
+    That is dialect-independent by design (no `FOR UPDATE`, no isolation-level
+    assumption), and this is where the claim is checked: SQLite serializes
+    writers itself, Postgres does not, and the whole point of the compare-and-set
+    is that neither has to.
+    """
+    async def append(n: int) -> None:
+        await pg_store.mutate_setting(
+            "concurrent", lambda stored: [*(stored or []), n]
+        )
+
+    await asyncio.gather(*[append(i) for i in range(40)])
+    assert sorted(await pg_store.get_setting("concurrent")) == list(range(40))
+
+
+async def test_an_unconditional_set_still_moves_the_revision(
+    pg_store: Store,
+) -> None:
+    """`set_setting` writes without reading, so it must bump the revision too —
+    otherwise a `mutate_setting` in flight would compare against a row that had
+    changed underneath it and overwrite the plain set."""
+    await pg_store.set_setting("k", {"a": 1})
+    await pg_store.set_setting("k", {"a": 2})
+    async with pg_store.engine.connect() as conn:
+        revision = (await conn.execute(text(
+            "SELECT revision FROM settings WHERE key = 'k'"
+        ))).scalar()
+    assert revision == 2

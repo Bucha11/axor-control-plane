@@ -223,8 +223,13 @@ async def run_due_schedule(state: Any, org: str) -> None:  # noqa: ANN401
             return
         report = await regression_report(state.store, sched.get("config", {}))
         await record_corpus_run(state, report, "scheduled")
-        sched["last_run_ts"] = now_ts.isoformat()
-        await state.store.set_setting("regression_schedule", sched)
+        # Stamp the run time WITHOUT storing back the schedule read above: the
+        # regression report between the two takes real time, and an operator who
+        # changed the schedule meanwhile would have had it erased by this write.
+        def stamp(stored: Any) -> dict:  # noqa: ANN401
+            return {**(stored or {}), "last_run_ts": now_ts.isoformat()}
+
+        await state.store.mutate_setting("regression_schedule", stamp)
         log.info(
             "scheduled corpus run (org %s): %d rows, regressed=%d escaped=%d",
             org, len(report["rows"]), report["regressed"], report["escaped"],

@@ -180,6 +180,11 @@ settings = Table(
     "settings", metadata,
     Column("key", String(64), nullable=False),
     Column("value", _JSON, nullable=False),
+    # Bumped on every write, so a read-modify-write can compare-and-set instead
+    # of clobbering (see `mutate_setting`). Same role `desired_state.version`
+    # plays for the plane: this KV holds whole blobs — the vault's credentials,
+    # its signing keys, its audit — and a lost write there loses all of them.
+    Column("revision", Integer, nullable=False, server_default="0"),
     Column("org_id", String(64), nullable=False, server_default=PUBLIC_ORG),
     PrimaryKeyConstraint("org_id", "key"),
 )
@@ -1256,7 +1261,7 @@ class Store:
             )).first()
             if existing is None:
                 await conn.execute(insert(settings).values(
-                    key=key, value=value, org_id=current_org_id(),
+                    key=key, value=value, revision=1, org_id=current_org_id(),
                 ))
             else:
                 await conn.execute(
@@ -1265,8 +1270,79 @@ class Store:
                         settings.c.key == key,
                         settings.c.org_id == current_org_id(),
                     )
-                    .values(value=value)
+                    # Bumped here too: an unconditional set is still a write, and
+                    # a concurrent mutate_setting must see that its row moved.
+                    .values(value=value, revision=settings.c.revision + 1)
                 )
+
+    async def mutate_setting(
+        self, key: str, mutate: Callable[[Any], Any], attempts: int = 24,
+    ) -> Any:  # noqa: ANN401 - JSON value
+        """Read-modify-write ONE entry atomically. Returns the stored value.
+
+        ``get_setting`` then ``set_setting`` is two transactions on two
+        connections, and every entry here is a whole blob a caller loads,
+        changes one field of, and stores back. A second request that loaded the
+        same old blob in between erased the first write — not one field, the
+        whole entry. The federation vault was written entirely this way:
+        measured, twenty concurrent enrollments left ONE credential (all twenty
+        answered 200), a revoke racing a rotate left the credential live, and
+        twenty-five signatures left ONE audit row.
+
+        Compare-and-set on ``revision``, the same shape ``bump_desired`` uses
+        for the plane: read it, write with ``WHERE revision = the one I read``,
+        and when zero rows change, somebody else got there first — re-read and
+        re-apply. Dialect-independent, so SQLite and Postgres behave alike.
+
+        ``mutate`` receives the stored value (``None`` when absent) and returns
+        what to store. It is called again on every retry, so it must be a pure
+        function of what it is given: deriving from anything it captured is how
+        the retry re-applies a stale change.
+
+        Losers back off with jitter, for the reason ``bump_desired`` gives and
+        this method proved on a real Postgres: retrying in lockstep is how
+        optimistic concurrency livelocks, and forty writers appending to one
+        audit blob exhausted a fixed retry count without any of them being
+        wrong. One row per subsystem is a lot of contenders for one row —
+        SQLite serializes them itself and never showed it.
+        """
+        org = current_org_id()
+        for attempt in range(attempts):
+            if attempt:
+                await asyncio.sleep(random.uniform(0, _BACKOFF_CEILING_SECONDS))
+            async with self.engine.connect() as conn:
+                row = (await conn.execute(
+                    select(settings.c.value, settings.c.revision).where(
+                        settings.c.key == key, settings.c.org_id == org,
+                    )
+                )).first()
+            value = mutate(row.value if row is not None else None)
+            try:
+                async with self.engine.begin() as conn:
+                    if row is None:
+                        await conn.execute(insert(settings).values(
+                            key=key, value=value, revision=1, org_id=org,
+                        ))
+                        return value
+                    result = await conn.execute(
+                        update(settings)
+                        .where(
+                            settings.c.key == key,
+                            settings.c.org_id == org,
+                            # The whole point: this row must still be the one
+                            # the value above was computed from.
+                            settings.c.revision == row.revision,
+                        )
+                        .values(value=value, revision=row.revision + 1)
+                    )
+                    if result.rowcount:
+                        return value
+            except IntegrityError:
+                continue  # lost the create race; the next pass updates instead
+        raise ConcurrentUpdate(
+            f"setting {key!r} was changed concurrently {attempts} times "
+            f"running; the change was not applied"
+        )
 
     async def orgs_with_setting(self, key: str) -> list[str]:
         """Every org that has stored `key`. A process-wide sweep (the EE
