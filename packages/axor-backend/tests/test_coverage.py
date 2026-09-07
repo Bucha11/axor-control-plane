@@ -169,11 +169,30 @@ async def test_a_node_that_has_never_reported_has_nothing_to_attest(
                     "level": "NORMAL", "facts": [], "covered": []}
 
 
-async def test_a_healthy_node_reporting_only_heartbeats_is_not_an_error(
+async def test_a_run_carrying_only_plane_telemetry_is_not_an_error(
     client: httpx.AsyncClient
 ) -> None:
-    """A governed node's keepalive run is heartbeat-only for as long as nothing
-    goes wrong. Replay refuses such a run (422); this view must not."""
+    """A client that is not axor-wrap's plane client posts lines with no kernel
+    schema. Replay refuses such a run (422, "plane telemetry only"); this view
+    must not — the node recorded no facts, and that is an answer, not an error.
+    """
+    r = await client.post(f"/v1/plane/{NODE}/telemetry", json={
+        "run_id": "run_live",
+        "events": [{"seq": 0, "kind": "heartbeat",
+                    "payload": {"applied_version": 0, "level": "NORMAL"}}],
+    })
+    assert r.status_code == 202, r.text
+    assert (await client.get("/v1/replay/run_live")).status_code == 422
+    body = await _coverage(client)
+    assert body["run_id"] == "run_live"
+    assert body["facts"] == []
+    assert body["level"] == "NORMAL"
+
+
+async def test_a_healthy_kernel_run_has_nothing_to_attest(
+    client: httpx.AsyncClient
+) -> None:
+    """The ordinary case: a governed node heartbeating with nothing wrong."""
     await _report(client, level="NORMAL")
     body = await _coverage(client)
     assert body["run_id"] == "run_live"

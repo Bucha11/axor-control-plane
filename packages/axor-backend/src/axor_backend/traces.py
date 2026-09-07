@@ -42,9 +42,11 @@ async def kernel_events_or_empty(store: Store, run_id: str) -> list:
 
     :func:`events_for` serves replay, where a run with no kernel trace is a
     request that cannot be honoured. The plane's coverage view is the other
-    case: a governed node's keepalive run is heartbeat-only for as long as
-    nothing goes wrong, and "no facts, level NORMAL, nothing to attest" is the
-    correct answer about a healthy node — not a 422.
+    case: a node whose telemetry carries no kernel schema at all — a proxy, or
+    any client that is not axor-wrap's plane client, which stamps
+    ``schema_version`` on every line it sends — has recorded no facts, and "no
+    facts, level NORMAL, nothing to attest" is the correct answer about it. A
+    422 there would put an error in the panel where the truth is "nothing".
 
     A run whose kernel lines are there but do not parse is still a 422: that is
     a broken trace, and answering "no facts" for it would report a node as
