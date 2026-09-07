@@ -62,6 +62,18 @@ from outside. Then point GitHub Pages at the domain (step 3).
 3. Verify: Pricing → "Get Team" opens Stripe checkout. A stranger can pay —
    launch outcome #2 done.
 
+## 5a. Vendor licensing service — **NOT BUILT, deliberately deferred**
+
+The one piece of the money path that is not in this repository, and cannot be:
+it holds the vendor's Ed25519 private key, and `axor-identity` — the obvious
+place to put it — ships to customers in `docker-compose.yml`. Full rationale,
+the wire contract the Control Plane already implements, and what works without
+it: **`docs/vendor-licensing-service.md`**.
+
+Nothing is blocked on it today. Licenses are issued with `axor-license issue`
+on a machine outside the customer stack; only self-hosted AUTO-renewal needs
+the service, and it is one endpoint of about a hundred lines when it is wanted.
+
 ## 6. VPS dress rehearsal (half a day — the highest-value item)
 
 Rent a clean Ubuntu 24.04 box (Hetzner CX22-class, 2 vCPU/4 GB is enough).
