@@ -21,16 +21,12 @@ def vendor(monkeypatch) -> dict:  # noqa: ANN001
     key = SigningKey.generate()
     pub = key.verify_key.encode().hex()
     monkeypatch.setenv("AXOR_VENDOR_PUBKEY", pub)
-    # `control_plane: True` — these are Control Plane features. The fixture said
-    # False and every test below still passed, because `modules` gated nothing:
-    # `require_ee` takes a `module=` and no caller passed one.
     lic = sign_license(_license(), bytes(key).hex())
     return {"pub": pub, "priv": bytes(key).hex(), "license_json": lic}
 
 
 def _license(**over: object) -> dict:
     base = {"organization": "T", "workspace_tier": "team",
-            "modules": {"private_lab": True, "control_plane": True},
             "governed_node_ceiling": 10, "self_hosted_runner": False,
             "expires_at": "2999-01-01", "features": []}
     base.update(over)
@@ -99,7 +95,6 @@ async def test_community_tier_license_does_not_unlock_team_features(
     from axor_backend.ee.license import sign_license
     community = sign_license(
         {"organization": "T", "workspace_tier": "community",
-         "modules": {"private_lab": True, "control_plane": False},
          "governed_node_ceiling": 0, "self_hosted_runner": False,
          "expires_at": "2999-01-01", "features": []},
         vendor["priv"],
@@ -235,28 +230,50 @@ def _heartbeat(node_id: str) -> dict:
                         "payload": {"applied_version": 0, "level": "NORMAL",
                                     "budget_remaining": None}}]}
 
-class TestALicenseMustCoverTheModule:
-    """`modules` is inside the signed payload and reported by /status, and it
-    gated nothing: every `require_ee` call omitted `module=`, so a license
-    carrying `control_plane: false` opened the Control Plane. The fixture above
-    shipped exactly that license and every test still passed."""
+class TestOneRungEntitlesTheWholeProduct:
+    """Private Lab and the Control Plane were separately licensed flags on top of
+    a tier, so a paid customer could hold a workspace without production
+    governance or the reverse, and `require_ee` took a `module=` that no caller
+    passed — the flag was signed, reported, and decided nothing.
 
-    async def test_a_license_without_control_plane_does_not_unlock_it(
+    They are one product on one ladder now. The rung is the whole answer, and
+    the flag is gone from the format rather than pinned to `{true, true}`.
+    """
+
+    async def test_a_team_rung_opens_the_control_plane_features(
         self, client: httpx.AsyncClient, vendor: dict,
     ) -> None:
-        lab_only = _signed(vendor, modules={"private_lab": True,
-                                            "control_plane": False})
-        assert (await client.post("/v1/license/verify",
-                                  json={"license_json": lab_only})).status_code == 200
+        await _activate(client, vendor)  # team
+        assert (await client.get("/v1/regression/history")).status_code == 200
+
+    async def test_the_rung_below_opens_nothing(
+        self, client: httpx.AsyncClient, vendor: dict,
+    ) -> None:
+        await client.post("/v1/license/verify", json={
+            "license_json": _signed(vendor, workspace_tier="community")})
         r = await client.get("/v1/regression/history")
         assert r.status_code == 402
-        assert "control_plane" in r.json()["detail"], r.json()
+        assert "team workspace tier" in r.json()["detail"]
 
-    async def test_the_same_license_with_the_module_unlocks_it(
+    async def test_the_top_rung_is_a_rung_and_not_an_unknown_string(
         self, client: httpx.AsyncClient, vendor: dict,
     ) -> None:
-        await _activate(client, vendor)
+        """axor-identity has always had `enterprise`; this ladder did not, so
+        `tier_at_least("team")` read -1 and the most expensive customer failed
+        the cheapest gate."""
+        await client.post("/v1/license/verify", json={
+            "license_json": _signed(vendor, workspace_tier="enterprise")})
         assert (await client.get("/v1/regression/history")).status_code == 200
+
+    async def test_the_format_no_longer_carries_a_module_flag(
+        self, client: httpx.AsyncClient, vendor: dict,
+    ) -> None:
+        """A field that cannot vary decides nothing, and this one was read as
+        though it did."""
+        r = await client.post("/v1/license/verify",
+                              json={"license_json": vendor["license_json"]})
+        assert "modules" not in r.json()
+        assert "modules" not in (await client.get("/v1/license/status")).json()
 
 
 class TestALicenseMustBeIssuedToThisDeployment:
@@ -595,7 +612,7 @@ class TestRenewalIsFetchedAndOnlyMovesForward:
         _client, app = renewing
         assert await renew_once(app.state, PUBLIC_ORG, fetch=self._serving(
             '{"license": {"organization": "T", "workspace_tier": "security", '
-            '"modules": {}, "governed_node_ceiling": 99, '
+            '"governed_node_ceiling": 99, '
             '"expires_at": "2099-01-01", "features": []}, "sig": "00"}',
         )) is False
         assert stored_license(app.state, PUBLIC_ORG).expires_at == _in_days(5)
@@ -651,17 +668,28 @@ class TestRenewalIsFetchedAndOnlyMovesForward:
 # ── the vendor CLI ────────────────────────────────────────────────────────────
 
 class TestTheIssuingCliDoesNotProduceAWarningMachine:
-    def test_a_control_plane_license_needs_a_real_ceiling(self) -> None:
+    def test_a_paid_license_needs_a_real_ceiling(self) -> None:
         """The ceiling used to be decorative, so a zero passed unnoticed. It is
         compared to the live fleet on every sweep now, and 0 warns forever about
         a customer who has paid."""
         from axor_backend.ee.cli import main
 
         assert main(["issue", "--key", _vendor_priv(), "--org", "T",
-                     "--control-plane", "--expires-at", "2099-01-01"]) == 2
+                     "--expires-at", "2099-01-01"]) == 2
         assert main(["issue", "--key", _vendor_priv(), "--org", "T",
-                     "--control-plane", "--governed-nodes", "25",
+                     "--governed-nodes", "25",
                      "--expires-at", "2099-01-01"]) == 0
+
+    def test_every_rung_the_identity_service_can_issue_is_accepted(self) -> None:
+        """The two services shared a name and not a vocabulary: identity could
+        set `enterprise` and this CLI could not sign it."""
+        from axor_backend.ee.cli import main
+        from axor_backend.ee.license import TIERS
+
+        for tier in TIERS:
+            assert main(["issue", "--key", _vendor_priv(), "--org", "T",
+                         "--workspace-tier", tier, "--governed-nodes", "5",
+                         "--expires-at", "2099-01-01"]) == 0, tier
 
     def test_it_prints_the_env_block_the_customer_must_match(
         self, capsys: pytest.CaptureFixture,
@@ -672,7 +700,7 @@ class TestTheIssuingCliDoesNotProduceAWarningMachine:
         from axor_backend.ee.cli import main
 
         main(["issue", "--key", _vendor_priv(), "--org", "Acme Corp",
-              "--expires-at", "2099-01-01"])
+              "--governed-nodes", "5", "--expires-at", "2099-01-01"])
         err = capsys.readouterr().err
         assert "AXOR_ORG=Acme Corp" in err
         assert "AXOR_VENDOR_PUBKEY=" in err

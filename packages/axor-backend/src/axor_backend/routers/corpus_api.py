@@ -62,8 +62,7 @@ async def regression_history(
 ) -> list[dict]:
     """Corpus-run history — the org surface (EE): "when did this config last
     regress"."""
-    require_ee(state, current_org_id(), "regression history",
-               module="control_plane")
+    require_ee(state, current_org_id(), "regression history")
     return await store.list_regression_reports(limit)
 
 
@@ -85,8 +84,7 @@ async def put_regression_schedule(
 ) -> dict:
     """Scheduled corpus CI (EE): store {enabled, interval_hours, config}; the
     sweep loop fires it when due and regression_failed gets loud."""
-    require_ee(state, current_org_id(), "scheduled corpus CI",
-               module="control_plane")
+    require_ee(state, current_org_id(), "scheduled corpus CI")
     enabled = bool(body.get("enabled"))
     try:
         interval = float(body.get("interval_hours", 24))

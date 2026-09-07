@@ -7,10 +7,18 @@ crypto that guards your command channel, and it never calls us" is itself a
 selling point.
 
 One license carries the whole ladder (axor-packaging.md §4): the workspace tier
-(community | team | security), the enabled modules (private_lab, control_plane),
-the governed-node ceiling, and whether a self-hosted runner is licensed. Modules
-are FLAGS on one license, never separate licenses. Expiry degrades EE to
-read-only; it never disables safety features (Line 1). The canonical signed
+(community | team | security | enterprise), the governed-node ceiling, and
+whether a self-hosted runner is licensed.
+
+**One ladder, not one ladder plus a module matrix.** Private Lab and Control
+Plane used to be separately licensed flags on top of a tier, so a paid customer
+could hold a workspace without production governance or the reverse. They are
+one product on one ladder now: a rung that entitles the Lab entitles the
+Control Plane, and the reverse. The `modules` field is gone rather than pinned
+to `{true, true}` — a field that cannot vary decides nothing, and this one was
+read as though it did.
+
+Expiry degrades EE to read-only; it never disables safety features (Line 1). The canonical signed
 payload is JCS-subset JSON, identical to plane commands, so one canonicalizer
 covers both.
 """
@@ -21,41 +29,24 @@ from dataclasses import dataclass
 
 from axor_backend.signing import jcs_canonical
 
-# The modules the ladder recognizes (axor-packaging.md §0): Private Lab (the
-# experiment/evidence workspace) and Control Plane (production enforcement).
-KNOWN_MODULES = ("private_lab", "control_plane")
-# Workspace tiers, ordered — a higher tier includes everything below it.
-_TIER_ORDER = {"community": 0, "team": 1, "security": 2}
+# Workspace tiers, ordered — a higher tier includes everything below it, and
+# every rung covers the whole product. `enterprise` is here because
+# axor-identity has always had it: a hosted organization on the top plan
+# carried `tier: enterprise`, which this table did not know, so
+# `tier_at_least("team")` read -1 and the most expensive customer failed the
+# cheapest gate. Two services, one vocabulary.
+_TIER_ORDER = {"community": 0, "team": 1, "security": 2, "enterprise": 3}
+TIERS = ("community", "team", "security", "enterprise")
 
 
 class LicenseError(Exception):
     """License missing, malformed, badly signed, or from an untrusted vendor key."""
 
 
-def _enabled_modules(raw: object) -> tuple[str, ...]:
-    """The enabled module names from either a ``{name: bool}`` object or a list
-    of names — normalized to the canonical order, unknown names dropped."""
-    if isinstance(raw, dict):
-        return tuple(m for m in KNOWN_MODULES if bool(raw.get(m)))
-    if isinstance(raw, (list, tuple)):
-        named = {str(x) for x in raw}
-        return tuple(m for m in KNOWN_MODULES if m in named)
-    return ()
-
-
-def _modules_payload(raw: object) -> dict[str, bool]:
-    """The canonical, fixed-key ``{module: bool}`` object that gets signed — a
-    stable key set (every known module, default false) so the signature does not
-    depend on which modules the issuer happened to spell out."""
-    enabled = _enabled_modules(raw)
-    return {m: (m in enabled) for m in KNOWN_MODULES}
-
-
 @dataclass(frozen=True)
 class License:
     organization: str
-    workspace_tier: str  # "community" | "team" | "security"
-    modules: tuple[str, ...]  # enabled module names (subset of KNOWN_MODULES)
+    workspace_tier: str  # community | team | security | enterprise
     governed_node_ceiling: int
     expires_at: str  # ISO date; compared lexicographically against `today`
     self_hosted_runner: bool = False
@@ -84,14 +75,10 @@ class License:
     def is_expired(self, today: str) -> bool:
         return today > self.expires_at
 
-    def has_module(self, module: str) -> bool:
-        """Whether this license enables a product module (private_lab /
-        control_plane). A module a license does not carry stays locked."""
-        return module in self.modules
-
     def tier_at_least(self, tier: str) -> bool:
         """Whether the workspace tier is at least `tier` (community < team <
-        security) — the workspace-feature gate for Private Lab."""
+        security < enterprise) — the whole entitlement gate. A rung entitles
+        the Lab and the Control Plane alike."""
         return _TIER_ORDER.get(self.workspace_tier, -1) >= _TIER_ORDER.get(tier, 99)
 
     def allows_nodes(self, count: int) -> bool:
@@ -108,7 +95,6 @@ def _license_payload(lic: dict) -> bytes:
     return jcs_canonical({
         "organization": lic["organization"],
         "workspace_tier": lic["workspace_tier"],
-        "modules": _modules_payload(lic.get("modules", {})),
         "governed_node_ceiling": lic["governed_node_ceiling"],
         "self_hosted_runner": bool(lic.get("self_hosted_runner", False)),
         "expires_at": lic["expires_at"],
@@ -146,7 +132,6 @@ def verify_license(license_json: str, vendor_pubkey_hex: str) -> License:
         return License(
             organization=str(lic["organization"]),
             workspace_tier=str(lic["workspace_tier"]),
-            modules=_enabled_modules(lic.get("modules", {})),
             governed_node_ceiling=int(lic["governed_node_ceiling"]),
             expires_at=str(lic["expires_at"]),
             self_hosted_runner=bool(lic.get("self_hosted_runner", False)),

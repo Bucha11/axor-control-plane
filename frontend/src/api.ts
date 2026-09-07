@@ -246,7 +246,6 @@ export interface DeadLetter {
 export interface LicenseInfo {
   organization: string;
   workspace_tier: string; // "community" | "team" | "security"
-  modules: { private_lab: boolean; control_plane: boolean };
   governed_node_ceiling: number;
   self_hosted_runner: boolean;
   expires_at: string;
@@ -647,7 +646,6 @@ export const api = {
         vendor_key_configured: boolean;
         organization?: string;
         workspace_tier?: string;
-        modules?: { private_lab: boolean; control_plane: boolean };
         governed_node_ceiling?: number;
         self_hosted_runner?: boolean;
         expires_at?: string;

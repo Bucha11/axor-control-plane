@@ -404,10 +404,9 @@ async def test_valid_license_verifies_offline(tmp_path: pathlib.Path) -> None:
     from axor_backend.ee.license import sign_license
 
     priv, pub = _vendor_keypair()
-    # Enterprise Platform = Security workspace + both modules + self-hosted
+    # Enterprise Platform = the top rung + a self-hosted runner
     # (axor-packaging.md §5); it is a security workspace_tier, not its own tier.
     lic = {"organization": "Acme", "workspace_tier": "security",
-           "modules": {"private_lab": True, "control_plane": True},
            "governed_node_ceiling": 50, "self_hosted_runner": True,
            "expires_at": "2027-01-01", "features": ["sso", "compliance_exports"]}
     license_json = sign_license(lic, priv)
@@ -421,7 +420,6 @@ async def test_valid_license_verifies_offline(tmp_path: pathlib.Path) -> None:
     assert body["activated"] is True
     assert body["organization"] == "Acme"
     assert body["workspace_tier"] == "security"
-    assert body["modules"] == {"private_lab": True, "control_plane": True}
     assert body["governed_node_ceiling"] == 50
     assert "sso" in body["features"]
 
@@ -431,7 +429,6 @@ async def test_tampered_license_rejected(tmp_path: pathlib.Path) -> None:
 
     priv, pub = _vendor_keypair()
     lic = {"organization": "Acme", "workspace_tier": "team",
-           "modules": {"private_lab": True, "control_plane": False},
            "governed_node_ceiling": 5, "self_hosted_runner": False,
            "expires_at": "2027-01-01", "features": []}
     license_json = sign_license(lic, priv)
@@ -451,7 +448,7 @@ async def test_license_verify_refuses_a_vendor_key_from_the_request(
 
     The route used to accept a caller-supplied `vendor_pubkey`, verify against
     it, activate nothing, and return the parsed license anyway with
-    `activated: false` — organization, tier, modules and node ceiling included.
+    `activated: false` — organization, tier and node ceiling included.
     The Settings panel renders those fields, so a self-signed license displayed
     an enterprise entitlement that did not exist. Refused now, and nothing about
     the deployment's entitlement moves.
@@ -462,7 +459,6 @@ async def test_license_verify_refuses_a_vendor_key_from_the_request(
     forged_priv, forged_pub = _vendor_keypair()
     forged = sign_license(
         {"organization": "Attacker", "workspace_tier": "security",
-         "modules": {"private_lab": True, "control_plane": True},
          "governed_node_ceiling": 9999, "self_hosted_runner": True,
          "expires_at": "2999-01-01", "features": ["sso"]},
         forged_priv,
@@ -482,7 +478,6 @@ async def test_license_verify_refuses_a_vendor_key_from_the_request(
         # Echoing the pinned key back is harmless — older clients send it.
         real = sign_license(
             {"organization": "Acme", "workspace_tier": "team",
-             "modules": {"private_lab": True, "control_plane": False},
              "governed_node_ceiling": 5, "self_hosted_runner": False,
              "expires_at": "2999-01-01", "features": []},
             pinned_priv,
@@ -505,7 +500,6 @@ async def test_license_verify_without_a_pinned_key_says_so(
     priv, _pub = _vendor_keypair()
     lic = sign_license(
         {"organization": "Acme", "workspace_tier": "team",
-         "modules": {"private_lab": True, "control_plane": False},
          "governed_node_ceiling": 5, "self_hosted_runner": False,
          "expires_at": "2999-01-01", "features": []},
         priv,
@@ -525,7 +519,7 @@ async def test_license_verify_without_a_pinned_key_says_so(
 def test_license_expiry_degrades_to_readonly() -> None:
     from axor_backend.ee.license import License
 
-    lic = License(organization="A", workspace_tier="team", modules=(),
+    lic = License(organization="A", workspace_tier="team",
                   governed_node_ceiling=5, expires_at="2026-01-01",
                   features=("sso",))
     assert lic.enables("sso", today="2025-06-01") is True
@@ -541,7 +535,6 @@ async def test_license_verify_reports_node_ceiling_telemetry(
 
     priv, pub = _vendor_keypair()
     lic = sign_license({"organization": "A", "workspace_tier": "team",
-                        "modules": {"private_lab": True, "control_plane": True},
                         "governed_node_ceiling": 1, "self_hosted_runner": False,
                         "expires_at": "2999-01-01", "features": []}, priv)
     async with _client_pinned_to(tmp_path, pub) as client:
@@ -566,7 +559,7 @@ def test_license_cli_roundtrip(tmp_path, capsys) -> None:  # noqa: ANN001
     assert main(["keygen"]) == 0
     keys = _json.loads(capsys.readouterr().out)
     assert main(["issue", "--key", keys["vendor_private_key"], "--org", "T",
-                 "--expires-at", "2999-01-01"]) == 0
+                 "--governed-nodes", "5", "--expires-at", "2999-01-01"]) == 0
     lic_file = tmp_path / "l.json"
     lic_file.write_text(capsys.readouterr().out)
     assert main(["verify", "--pubkey", keys["vendor_public_key"],
@@ -589,11 +582,12 @@ def test_license_cli_reads_key_from_file_and_env(
     key_file = tmp_path / "vendor.key"
     key_file.write_text(keys["vendor_private_key"] + "\n")
     assert main(["issue", "--key-file", str(key_file), "--org", "F",
-                 "--expires-at", "2999-01-01"]) == 0
+                 "--governed-nodes", "5", "--expires-at", "2999-01-01"]) == 0
     assert '"organization"' in capsys.readouterr().out
 
     monkeypatch.setenv("AXOR_VENDOR_KEY", keys["vendor_private_key"])
-    assert main(["issue", "--org", "E", "--expires-at", "2999-01-01"]) == 0
+    assert main(["issue", "--org", "E", "--governed-nodes", "5",
+                 "--expires-at", "2999-01-01"]) == 0
     assert '"organization"' in capsys.readouterr().out
 
     monkeypatch.delenv("AXOR_VENDOR_KEY")

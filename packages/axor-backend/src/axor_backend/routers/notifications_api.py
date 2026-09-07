@@ -39,7 +39,6 @@ async def notif_subscribe(
         require_ee(
             state, current_org_id(),
             "notification routing (channels / node patterns)",
-            module="control_plane",
         )
     # Persist BEFORE registering in memory. The other order let a subscription
     # start firing and then fail to be written, so it delivered until the next

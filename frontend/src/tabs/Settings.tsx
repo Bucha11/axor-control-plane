@@ -454,13 +454,10 @@ export default function Settings() {
           <>
             <div className="mt-2" style={{ fontFamily: MONO, fontSize: 11, color: C.green }}>
               active · {license.data.organization} · {license.data.workspace_tier} workspace ·{" "}
-              {[
-                license.data.modules?.private_lab && "Private Lab",
-                license.data.modules?.control_plane &&
-                  `Control Plane (up to ${license.data.governed_node_ceiling} nodes)`,
-              ]
-                .filter(Boolean)
-                .join(" + ") || "no modules"}
+              {/* One ladder: a rung entitles the Private Lab and the Control
+                  Plane alike, so there are no module flags left to render —
+                  only how many nodes the rung was sold with. */}
+              {`up to ${license.data.governed_node_ceiling} governed nodes`}
               {license.data.self_hosted_runner ? " · self-hosted" : ""} · expires{" "}
               {license.data.expires_at} · {license.data.features.join(", ") || "no EE features"}
             </div>

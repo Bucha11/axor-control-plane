@@ -297,7 +297,6 @@ class TestLicensingAcrossTenants:
 
         return sign_license(
             {"organization": org, "workspace_tier": "team",
-             "modules": {"private_lab": True, "control_plane": True},
              "governed_node_ceiling": 10, "self_hosted_runner": False,
              "expires_at": "2099-01-01", "features": []},
             priv,

@@ -18,7 +18,7 @@ import json
 import sys
 from datetime import UTC, datetime
 
-from axor_backend.ee.license import KNOWN_MODULES, LicenseError, sign_license, verify_license
+from axor_backend.ee.license import TIERS, LicenseError, sign_license, verify_license
 
 
 def _keygen(_args: argparse.Namespace) -> int:
@@ -53,13 +53,13 @@ def _issue(args: argparse.Namespace) -> int:
             file=sys.stderr,
         )
         return 2
-    if args.control_plane and args.governed_nodes <= 0:
+    if args.workspace_tier != "community" and args.governed_nodes <= 0:
         # The ceiling used to be decorative, so a zero passed unnoticed. It is
-        # checked on every housekeeping sweep now, and a Control Plane license
-        # with a ceiling of zero means a warning on every pass, for a customer
-        # who has paid. It never blocks a node — it just accuses one.
+        # compared to the live fleet on every housekeeping sweep now, and a paid
+        # license with a ceiling of zero means a warning every pass about a
+        # customer who has paid. It never blocks a node — it just accuses one.
         print(
-            "--control-plane needs a --governed-nodes ceiling above 0: the "
+            "a paid tier needs a --governed-nodes ceiling above 0: the "
             "deployment compares its live fleet against it on every sweep, so "
             "0 warns forever about a customer who has paid.",
             file=sys.stderr,
@@ -68,10 +68,6 @@ def _issue(args: argparse.Namespace) -> int:
     lic = {
         "organization": args.org,
         "workspace_tier": args.workspace_tier,
-        "modules": {
-            "private_lab": args.private_lab,
-            "control_plane": args.control_plane,
-        },
         "governed_node_ceiling": args.governed_nodes,
         "self_hosted_runner": args.self_hosted,
         "expires_at": args.expires_at,
@@ -108,7 +104,6 @@ def _verify(args: argparse.Namespace) -> int:
         "status": status,
         "organization": lic.organization,
         "workspace_tier": lic.workspace_tier,
-        "modules": {m: lic.has_module(m) for m in KNOWN_MODULES},
         "governed_node_ceiling": lic.governed_node_ceiling,
         "self_hosted_runner": lic.self_hosted_runner,
         "expires_at": lic.expires_at,
@@ -135,21 +130,13 @@ def main(argv: list[str] | None = None) -> int:
     )
     issue.add_argument("--org", required=True, help="organization name")
     issue.add_argument(
-        "--workspace-tier", default="team", choices=["community", "team", "security"],
-        help="Private Lab workspace tier (axor-packaging.md §1)",
-    )
-    issue.add_argument(
-        "--private-lab", action=argparse.BooleanOptionalAction, default=True,
-        help="enable the Private Lab module (on by default for paid tiers)",
-    )
-    issue.add_argument(
-        "--control-plane", action=argparse.BooleanOptionalAction, default=False,
-        help="enable the Control Plane production-governance module (add-on)",
+        "--workspace-tier", default="team", choices=list(TIERS),
+        help="the ladder rung (axor-packaging.md §1). One ladder: a rung "
+             "entitles the Private Lab and the Control Plane alike.",
     )
     issue.add_argument(
         "--governed-nodes", type=int, default=0,
-        help="governed-node ceiling (Control Plane); must be > 0 when "
-             "--control-plane is set, 0 when the module is off",
+        help="governed-node ceiling; must be > 0 on any paid tier",
     )
     issue.add_argument(
         "--no-env-block", action="store_true",

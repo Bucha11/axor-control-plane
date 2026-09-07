@@ -19,9 +19,12 @@ What a license actually has to answer, and each of these was a separate hole:
 * **Is it current?** Expiry was checked when a feature was USED and not when the
   license was stored, so ``/verify`` answered 200 ``activated: true`` for a
   license that expired in 2020 and ``/status`` then said ``active: false``.
-* **Does it cover this?** ``modules`` is signed and reported and gated nothing:
-  every ``require_ee`` call omitted ``module=``, so a licence with
-  ``control_plane: false`` opened the Control Plane.
+* **Does it cover this?** The tier answers it, and only the tier. Private Lab
+  and the Control Plane were separately licensed flags on top of a rung; they
+  are one product on one ladder now, so a rung that entitles one entitles the
+  other. ``modules`` is gone from the format rather than pinned to
+  ``{true, true}`` — it was signed, reported, and read as though it decided
+  something while every ``require_ee`` call omitted ``module=``.
 * **How much of it?** ``allows_nodes`` existed and was called from nowhere, and
   ``over_ceiling`` was computed once, at paste time. Over-ceiling never blocks —
   a governed node is safety — but it must be visible, so it is recomputed on the
@@ -149,16 +152,15 @@ def require_ee(
     what: str,
     *,
     min_tier: str = "team",
-    module: str | None = None,
 ) -> None:
-    """Gate a paid org feature by the license's workspace tier and module, not
-    merely by a license being present (axor-packaging.md §1). A community-tier
-    license does not unlock a team feature, and a license that does not carry a
-    module does not unlock it. Safety features never call this.
+    """Gate a paid org feature by the license's workspace tier, not merely by a
+    license being present (axor-packaging.md §1): a community-tier license does
+    not unlock a team feature. Safety features never call this.
 
-    The 402 names which of the four reasons applies. They used to collapse: an
-    expired license and no license at all produced the same "add a license",
-    so a customer whose renewal slipped read that they had never bought one.
+    The 402 names which of the three reasons applies. Two of them used to
+    collapse: an expired license and no license at all produced the same "add a
+    license", so a customer whose renewal slipped read that they had never
+    bought one.
     """
     lic = stored_license(state, org)
     if lic is None:
@@ -180,21 +182,13 @@ def require_ee(
             f"{what} needs the {min_tier} workspace tier or higher; this license "
             f"is '{lic.workspace_tier}'.",
         )
-    if module is not None and not lic.has_module(module):
-        raise HTTPException(
-            402,
-            f"{what} needs the {module} module, which this license does not enable.",
-        )
 
 
 def license_payload(lic: Any) -> dict:  # noqa: ANN401
     """The public shape of a license — what both /verify and /status report."""
-    from axor_backend.ee.license import KNOWN_MODULES
-
     return {
         "organization": lic.organization,
         "workspace_tier": lic.workspace_tier,
-        "modules": {m: lic.has_module(m) for m in KNOWN_MODULES},
         "governed_node_ceiling": lic.governed_node_ceiling,
         "self_hosted_runner": lic.self_hosted_runner,
         "expires_at": lic.expires_at,
