@@ -4,7 +4,7 @@
 #   docker compose up --build
 #
 # Then open http://localhost:8080 — the frontend reverse-proxies the backend and
-# proxy, so the browser talks to a single origin. Kùzu is embedded (no container).
+# proxy, so the browser talks to a single origin. Postgres is the only store.
 #
 # The backend + proxy share one image (built from ./Dockerfile, the uv
 # workspace); the frontend is an nginx image serving the built SPA. The private
@@ -37,9 +37,9 @@ services:
     command: ["uvicorn", "axor_backend.main:app", "--factory", "--host", "0.0.0.0", "--port", "8400"]
     environment:
       AXOR_DATABASE_URL: postgresql+asyncpg://axor:${AXOR_PG_PASSWORD}@postgres/axor
-      # The taint graph is a derived index over the persisted event log — the
-      # backend rebuilds it from Postgres at boot (no graph DB). A per-tenant
-      # embedded Kùzu store is available for hosted; it is not wired by default.
+      # Postgres is the only store the backend needs: value provenance and
+      # causal subgraphs are derived from a run's own events when a request asks
+      # for them, so there is no graph database in this deployment.
       # Dev convenience: the UI sends unsigned plane commands. For a real
       # deployment set AXOR_OPERATOR_KEYS (JSON op->pubkey) and drop this.
       AXOR_ALLOW_UNSIGNED: ${AXOR_ALLOW_UNSIGNED:-1}

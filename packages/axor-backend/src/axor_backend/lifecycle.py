@@ -1,11 +1,10 @@
 """Startup, shutdown, and the loops that run between them.
 
-The backend keeps four derived things in process memory — the provenance graph,
-the share registry, the notifier's subscriptions, and the verified licenses —
-and all four are rebuilt here from the database at boot. The event log is the
-system of record; memory is a working copy. That is also why the deployment is
-one process: a second worker would hold a second, independent copy of all four,
-plus its own event bus.
+The backend keeps three things in process memory — the share registry, the
+notifier's subscriptions, and the verified licenses — and all three are rebuilt
+here from the database at boot. The database is the system of record; memory is
+a working copy. That is also why the deployment is one process: a second worker
+would hold a second, independent copy of all three, plus its own event bus.
 
 Every background loop faces the same hazard, and each one names it: a task has
 no request, so the ambient tenant is the public one. Sweeping under it would
@@ -25,7 +24,6 @@ from typing import Any
 from fastapi import FastAPI
 
 from axor_backend.corpus import record_corpus_run, regression_report
-from axor_backend.graph import rehydrate_all_graphs
 from axor_backend.licensing import active_license, load_licenses
 from axor_backend.monitor import running_stale_monitor
 from axor_backend.storage import init_db
@@ -42,8 +40,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     warn_about_open_posture(app.state.config)
     await init_db(app.state.store.engine)
     # Retention runs at boot BEFORE the projections are rebuilt: pruning deletes
-    # runs, and a graph rehydrated first would carry edges for events that no
-    # longer exist.
+    # runs, and a share link rehydrated first would point at one that is gone.
     await prune_once(app.state)
     await rehydrate(app.state)
     tasks = [asyncio.create_task(regression_schedule_loop(app.state))]
@@ -104,10 +101,10 @@ def warn_about_open_posture(config: Any) -> None:  # noqa: ANN401 - AppConfig
 
 async def rehydrate(state: Any) -> None:  # noqa: ANN401 - app.state is dynamic
     """Rebuild every in-memory projection from the database."""
-    # The taint graph is a derived index over the persisted event log — rebuild
-    # it so it survives restarts (and a fresh instance catches up) without a
-    # graph database being part of the deployment.
-    await rehydrate_all_graphs(state.store, state.graphs)
+    # Value provenance is NOT rebuilt here, and no longer exists as a projection
+    # at all: it is derived from one run's events when a request asks for it
+    # (see axor_backend.provenance). A projection keyed on value refs was a
+    # projection keyed on names that repeat in every run.
     # Share links and notification subscriptions are primary data: rebuild their
     # in-memory holders so a restart keeps permalinks live and keeps
     # notifications firing (see storage.share_links / _subs).

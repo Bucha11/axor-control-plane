@@ -321,9 +321,11 @@ intra first, inter on first real cross-org demand).
   protocol's shape; criterion — 100-node tree at heartbeat cadence within one backend
   instance. If it breaks: per-host *telemetry* aggregator only; the command path stays
   per-node-addressable (an aggregator must never become a command intermediary, §12.0).
-- **Kùzu single-writer under multi-node ingest.** The per-tenant writer lock (plan v0.1,
-  loose end 4) now serializes N nodes' derivation writes; watch it in the M1 demo-tree load;
-  fallback remains the queue, not a different database.
+- **Kùzu single-writer under multi-node ingest.** *Retired — there is no writer.* The stored
+  provenance graph was removed: it keyed value refs as global node ids, and the runtime mints
+  those per trace from a counter that restarts at zero, so it merged unrelated values across
+  runs. Provenance is derived from one run's events on request, so ingest writes nothing but
+  the event log and there is nothing to serialize.
 - **Ablation cost on deep chains** (M3): bounded by chain length in theory; cap it and render
   honestly ("not computed") rather than approximating — an approximate influence ranking is
   worse than none (it's evidence).

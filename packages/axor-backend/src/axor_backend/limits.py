@@ -29,11 +29,11 @@ SUBGRAPH_CACHE_MAX = int(os.environ.get("AXOR_SUBGRAPH_CACHE_MAX", "512"))
 # tens of cases, not thousands.
 MAX_PINS_PER_PACKAGE = int(os.environ.get("AXOR_MAX_PINS_PER_PACKAGE", "500"))
 
-# k-hop bounds. `k` is capped at 30 because Kuzu refuses a variable-length
-# pattern longer than that — unbounded, `?k=31` raised a Binder exception out of
-# the store and answered 500 to a request that was merely too greedy. `k=20`
-# already costs a third of a second on a 60-value chain, so the cap is a
-# resource bound as much as a compatibility one.
+# k-hop bounds for the per-run provenance walk. Both are resource bounds on a
+# caller-chosen number: without them `?k=` and `?limit=` sized the walk from the
+# query string. 30 hops is far past any real value chain in one run — the walk
+# stops early when the frontier empties, so the cap only ever binds a request
+# that was asking for the whole run anyway.
 MAX_KHOP_K = int(os.environ.get("AXOR_MAX_KHOP_K", "30"))
 MAX_KHOP_LIMIT = int(os.environ.get("AXOR_MAX_KHOP_LIMIT", "1000"))
 

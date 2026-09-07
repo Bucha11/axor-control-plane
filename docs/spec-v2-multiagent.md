@@ -454,7 +454,7 @@ Resolved during v2 drafting. Chapter references use the v2 numbering above.
 - N outbound plane connections for 100+ node trees (Ch.4): optional per-host telemetry aggregator, command path stays per-node. [experiment]
 - Signing-custody latency on command path (Ch.5): confirm off the enforcement path entirely. [design]
 - HSM vs software-KMS custody backend at self-hosted tier (Ch.5): pluggable, posture per deployment. [decision-pending]
-- Kùzu single-writer, TS typegen, heartbeat cadence: carried from architecture v0.1. [experiment]
+- ~~Kùzu single-writer~~ (closed: the stored graph was removed — value refs repeat across runs); TS typegen, heartbeat cadence: carried from architecture v0.1. [experiment]
 
 ## Build order
 

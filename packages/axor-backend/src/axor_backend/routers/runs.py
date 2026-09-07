@@ -1,10 +1,10 @@
 """Run ingest and read — the upload path and the live audit stream.
 
-A trace arriving here becomes three things at once: rows in the event log, edges
-in the tenant's provenance graph, and messages on the SSE bus. The log is the
-system of record; the other two are derived, and both are rebuilt from it at
-boot (``rehydrate_all_graphs``) — so a failure after the write leaves the
-process stale, never the data wrong.
+A trace arriving here becomes two things at once: rows in the event log and
+messages on the SSE bus. The log is the system of record and the only copy —
+value provenance and causal subgraphs are derived from these rows when a request
+asks for them, so there is no second index that a failure after the write could
+leave disagreeing with the first.
 """
 from __future__ import annotations
 
@@ -17,12 +17,10 @@ from sse_starlette.sse import EventSourceResponse
 from axor_backend.clock import now
 from axor_backend.deps import (
     BroadcastDep,
-    GraphDep,
     NotifierDep,
     StoreDep,
     SubgraphCacheDep,
 )
-from axor_backend.graph import register_trace_derivations
 from axor_backend.limits import check_batch_size
 from axor_backend.tenancy import current_org_id, topic
 
@@ -34,7 +32,6 @@ async def ingest(
     run_id: str,
     body: dict,
     store: StoreDep,
-    graph: GraphDep,
     bus: BroadcastDep,
     cache: SubgraphCacheDep,
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
@@ -43,8 +40,6 @@ async def ingest(
     events = check_batch_size(body.get("events", []))
     await store.upsert_run(run_id, node_id, body.get("scenario", "custom"), now())
     result = await store.ingest_events(run_id, node_id, events, idempotency_key)
-    # Fold the trace's value provenance into the taint graph (spec decision 6).
-    await register_trace_derivations(graph, run_id, events)
     # This run's causal subgraphs were derived from a shorter event list.
     cache.drop_run(current_org_id(), run_id)
     # Only what was actually STORED goes on the wire, carrying the id a

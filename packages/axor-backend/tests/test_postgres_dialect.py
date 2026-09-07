@@ -242,3 +242,34 @@ async def test_the_meter_range_is_a_date_range_not_a_string_prefix(
         await pg_store.record_node_activity("n1", day)
     january = await pg_store.node_usage("2026-01-01", "2026-01-31")
     assert [d["day"] for d in january["days"]] == ["2026-01-01", "2026-01-31"]
+
+
+async def test_attestation_facts_filter_inside_the_database(
+    pg_store: Store,
+) -> None:
+    """`attestation_facts` filters on two keys INSIDE `fact_json` rather than
+    loading the tenant's whole fact log and sorting it out in Python — facts are
+    also where every node's degradation transition and heat crossing land, so
+    that log grows with fleet chatter, not with operator actions.
+
+    SQLAlchemy renders that filter as `json_extract` on SQLite and `->>` on
+    JSONB. Two dialects, one expression: the assumption is checked here rather
+    than assumed, which is the whole reason this file exists.
+    """
+    await pg_store.append_fact("n1", {
+        "fact_id": "att", "fact_type": "operator_attestation",
+        "run_id": "run_a", "covers": ["v_ext_1"], "operator": "op",
+        "reason": "checked",
+    }, "2026-05-01T00:00:00Z")
+    await pg_store.append_fact("n1", {
+        "fact_id": "att_other_run", "fact_type": "operator_attestation",
+        "run_id": "run_b", "covers": ["v_ext_1"], "operator": "op",
+        "reason": "checked",
+    }, "2026-05-01T00:00:01Z")
+    await pg_store.append_fact("n1", {
+        "fact_id": "deg", "fact_type": "degradation_transition",
+        "run_id": "run_a", "severity": 1,
+    }, "2026-05-01T00:00:02Z")
+
+    rows = await pg_store.attestation_facts("run_a")
+    assert [f["fact_id"] for f in rows] == ["att"]

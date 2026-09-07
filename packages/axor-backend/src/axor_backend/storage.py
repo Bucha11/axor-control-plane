@@ -948,6 +948,31 @@ class Store:
             )).all()
         return [r.fact_json for r in rows]
 
+    async def attestation_facts(self, run_id: str) -> list[dict[str, Any]]:
+        """One run's operator attestations (and their revocations), oldest first.
+
+        Filtered in the database rather than by loading the tenant's whole fact
+        log: facts are also where every node's degradation transition, source
+        quarantine and heat crossing land, so "read them all and keep the
+        attestations" grows with fleet chatter, not with operator actions.
+
+        ``fact_json`` is native JSON on both dialects (JSONB on Postgres, JSON1
+        on SQLite), so this is one indexed column expression, not a scan of
+        decoded rows in Python.
+        """
+        async with self.engine.connect() as conn:
+            rows = (await conn.execute(
+                select(facts.c.fact_json)
+                .where(
+                    facts.c.org_id == current_org_id(),
+                    facts.c.fact_json["fact_type"].as_string()
+                    == "operator_attestation",
+                    facts.c.fact_json["run_id"].as_string() == run_id,
+                )
+                .order_by(facts.c.created_ts)
+            )).all()
+        return [r.fact_json for r in rows]
+
     async def all_facts(self) -> list[dict[str, Any]]:
         """Every fact across all nodes, oldest first — the graph rehydrator folds
         attestations from here (a fact can exist for a node with no plane state)."""

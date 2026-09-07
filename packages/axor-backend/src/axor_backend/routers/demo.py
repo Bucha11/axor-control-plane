@@ -12,8 +12,7 @@ from __future__ import annotations
 from fastapi import APIRouter
 
 from axor_backend.clock import now
-from axor_backend.deps import GraphDep, StoreDep, SubgraphCacheDep
-from axor_backend.graph import register_trace_derivations
+from axor_backend.deps import StoreDep, SubgraphCacheDep
 from axor_backend.tenancy import current_org_id
 
 router = APIRouter(prefix="/v1/demo", tags=["demo"])
@@ -21,7 +20,7 @@ router = APIRouter(prefix="/v1/demo", tags=["demo"])
 
 @router.post("/seed-adapter-runs")
 async def seed_adapter_runs(
-    store: StoreDep, graph: GraphDep, cache: SubgraphCacheDep
+    store: StoreDep, cache: SubgraphCacheDep
 ) -> dict:
     """Two adapter-fidelity runs: one denied at the boundary, one clean."""
     from axor_backend import demo
@@ -33,7 +32,6 @@ async def seed_adapter_runs(
     ):
         await store.upsert_run(run_id, node, "adapter-demo", now())
         await store.ingest_events(run_id, node, events, f"seed-{run_id}")
-        await register_trace_derivations(graph, run_id, events)
         cache.drop_run(current_org_id(), run_id)
         if evidence:
             await store.set_evidence(run_id, evidence)
@@ -45,7 +43,7 @@ async def seed_adapter_runs(
 
 @router.post("/seed-tree-run")
 async def seed_tree_run(
-    store: StoreDep, graph: GraphDep, cache: SubgraphCacheDep
+    store: StoreDep, cache: SubgraphCacheDep
 ) -> dict:
     """The canned multi-agent tree run (spec v2): 4 nodes, carried taint up two
     delegation hops, one lateral edge, export denied at the orchestrator — the
@@ -57,7 +55,6 @@ async def seed_tree_run(
     await store.ingest_events(
         "ex_tree", demo.TREE_ORCH, demo.TREE_EVENTS, "seed-ex_tree"
     )
-    await register_trace_derivations(graph, "ex_tree", demo.TREE_EVENTS)
     cache.drop_run(current_org_id(), "ex_tree")
     await store.set_evidence("ex_tree", demo.TREE_EVIDENCE)
     return {"seeded": ["ex_tree"], "config": demo.TREE_CONFIG}

@@ -140,7 +140,8 @@ async def test_attestation_requires_reason_and_is_append_only(
 ) -> None:
     ts = datetime.now(UTC).isoformat()
     fact = {"fact_id": "a1", "fact_type": "operator_attestation",
-            "severity": 0, "covers": ["f1"], "operator": OP, "reason": ""}
+            "severity": 0, "run_id": "r0", "covers": ["f1"],
+            "operator": OP, "reason": ""}
     body = {"fact": fact, "operator": OP, "timestamp": ts,
             "sig": _sign(signing_key, "n0", 0, fact, ts)}
     resp = await client.post("/v1/plane/n0/facts", json=body)

@@ -7,7 +7,7 @@ import { createJSONStorage, persist } from "zustand/middleware";
 
 // The connection model (spec section 2). Depth determines the availability
 // ladder: demo/proxy see the Eval core; adapter additionally unlocks Control,
-// the taint graph, Probe health, and branch attestation.
+// value provenance, Probe health, and branch attestation.
 export type ConnectionMode = "none" | "demo" | "proxy" | "adapter";
 
 export interface ConnectionState {

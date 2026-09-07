@@ -23,12 +23,6 @@ lifetime longer than one request:
     the system of record.
 ``broadcast``
     the in-process SSE bus.
-``graphs``
-    the taint/provenance graph, ONE PER TENANT (spec decision 6). In-memory by
-    default — the same dev posture as SQLite; a hosted deployment passes a
-    factory returning ``KuzuGraphStore`` behind the same ``GraphStore``
-    protocol. A single process-wide store would hand one tenant's value refs and
-    run ids to every other tenant that guessed a ref.
 ``licenses``
     verified EE licenses per organization. A license entitles ONE tenant, so a
     process-wide slot would let whichever org pasted last decide everyone else's
@@ -36,9 +30,9 @@ lifetime longer than one request:
 ``shares``, ``notifier``, ``subgraph_cache``
     share links, webhook subscriptions, and derived causal subgraphs.
 
-All of it lives in one process on purpose: ``graphs``, ``broadcast``, ``shares``
-and ``notifier`` are per-process, so a second worker would hold a second,
-divergent copy of each (see docs/ops-limits.md).
+All of it lives in one process on purpose: ``broadcast``, ``shares`` and
+``notifier`` are per-process, so a second worker would hold a second, divergent
+copy of each (see docs/ops-limits.md).
 """
 from __future__ import annotations
 
@@ -50,7 +44,6 @@ from axor_backend.broadcast import Broadcast
 from axor_backend.clock import now
 from axor_backend.config import AppConfig
 from axor_backend.errors import unhandled_error
-from axor_backend.graph import GraphRegistry
 from axor_backend.lifecycle import lifespan
 from axor_backend.limits import SubgraphCache
 from axor_backend.notifications import Notifier
@@ -101,7 +94,6 @@ def create_app(
     app.state.broadcast = Broadcast()
     app.state.keyring = OperatorKeyring(config.operator_keys or {})
     app.state.allow_unsigned = config.allow_unsigned
-    app.state.graphs = GraphRegistry()
     app.state.shares = ShareRegistry()
     app.state.subgraph_cache = SubgraphCache()
     app.state.licenses = {}

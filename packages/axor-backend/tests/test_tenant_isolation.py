@@ -145,11 +145,16 @@ async def test_two_orgs_may_run_a_node_of_the_same_name(
     assert b.json()[0]["desired"]["state"] == {"paused": False}
 
 
-async def test_taint_graph_does_not_cross_orgs(
+async def test_provenance_does_not_cross_orgs(
         client: httpx.AsyncClient, priv: Ed25519PrivateKey) -> None:
-    """Regression (F-02): one InMemoryGraphStore served the whole process, and
-    `/v1/graph/khop` never filtered — so a guessed value ref returned another
-    tenant's provenance edges, complete with the run id they came from."""
+    """Regression (F-02): one process-wide provenance store served every org and
+    `/v1/graph/khop` never filtered, so a guessed value ref returned another
+    tenant's derivation edges complete with the run id they came from.
+
+    There is no store now. Provenance is derived from ONE run's events, and the
+    events table is tenant-scoped — so the other org does not get an empty
+    neighbourhood for the run, it does not get the run.
+    """
     org_a, org_b = _tok(priv, "org_a"), _tok(priv, "org_b")
     await client.post("/v1/ingest/secret_run", headers=_bearer(org_a), json={
         "node_id": "n", "events": [
@@ -163,11 +168,31 @@ async def test_taint_graph_does_not_cross_orgs(
              "payload": {"tool": "read_payroll", "value_ref": "v_salaries",
                          "root": {"sources": ["web"], "sensitive": True}}},
         ]})
-    mine = await client.get("/v1/graph/khop?focus=v_query&k=2", headers=_bearer(org_a))
-    theirs = await client.get("/v1/graph/khop?focus=v_query&k=2", headers=_bearer(org_b))
+    path = "/v1/runs/secret_run/provenance?focus=v_query&k=2"
+    mine = await client.get(path, headers=_bearer(org_a))
     assert mine.json()["edges"], "the owning org still sees its own derivation"
-    assert theirs.json()["edges"] == []
-    assert "v_salaries" not in theirs.json()["nodes"]
+    theirs = await client.get(path, headers=_bearer(org_b))
+    assert theirs.status_code == 404
+    assert "v_salaries" not in theirs.text
+
+
+async def test_attestations_do_not_cross_orgs(
+        client: httpx.AsyncClient, priv: Ed25519PrivateKey) -> None:
+    """An attestation names an operator and a reason — who looked at what, and
+    what they concluded. It is read back from the fact log, which is tenant
+    scoped; the branch ref it covers is guessable, and by itself must open
+    nothing."""
+    org_a, org_b = _tok(priv, "org_a"), _tok(priv, "org_b")
+    await client.post("/v1/plane/n/facts", headers=_bearer(org_a), json={"fact": {
+        "fact_id": "att_a", "fact_type": "operator_attestation",
+        "run_id": "secret_run", "covers": ["v_query"], "operator": "op_a",
+        "reason": "payroll pull reviewed with the CFO",
+    }})
+    path = "/v1/runs/secret_run/attestations?ref=v_query"
+    mine = (await client.get(path, headers=_bearer(org_a))).json()
+    assert [a["fact_id"] for a in mine] == ["att_a"]
+    theirs = await client.get(path, headers=_bearer(org_b))
+    assert theirs.json() == []
 
 
 async def test_settings_kv_does_not_cross_orgs(tmp_path: pathlib.Path) -> None:

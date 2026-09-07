@@ -1,12 +1,15 @@
-// Taint / provenance graph panel (spec decision 6): the k-hop neighbourhood of a
-// value ref, expand-on-click. Each edge is a derivation that happened in some
-// run; clicking an edge jumps to that run's replay (edge → EvidenceCase). Nodes
-// re-focus the graph on click. Attestations covering the focus are listed below —
-// the same append-only surface the fact log shows.
+// Value provenance panel (spec decision 6): the k-hop neighbourhood of a value
+// ref INSIDE ONE RUN, expand-on-click. Nodes re-focus on click. Attestations
+// covering the focus are listed below — the same append-only surface the fact
+// log shows, with revoked coverage struck through rather than removed.
+//
+// The run is not a filter, it is the scope. Value refs are minted per trace from
+// a counter that restarts at zero, so `v_ext_1` names a different value in every
+// run; the cross-run graph this panel used to draw merged unrelated values and
+// showed one run's edges under another's ref.
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { api, GraphKhop } from "../api";
-import { navigate } from "../router";
 import { C, MONO } from "../theme";
 import Tooltip from "../components/Tooltip";
 
@@ -27,30 +30,32 @@ function layout(g: GraphKhop, w: number, h: number) {
   return pos;
 }
 
-export default function TaintGraph({ focus }: { focus: string }) {
+export default function TaintGraph({ runId, focus }: { runId: string; focus: string }) {
   const [current, setCurrent] = useState(focus);
   const W = 460;
   const H = 300;
 
   const khop = useQuery({
-    queryKey: ["khop", current],
-    queryFn: () => api.graphKhop(current, 2, 60),
+    queryKey: ["provenance", runId, current],
+    queryFn: () => api.runProvenance(runId, current, 2, 60),
   });
   const atts = useQuery({
-    queryKey: ["attestations", current],
-    queryFn: () => api.graphAttestations(current),
+    queryKey: ["attestations", runId, current],
+    queryFn: () => api.runAttestations(runId, current),
   });
 
   // Attest THIS branch: an append-only operator_attestation fact whose covers[]
-  // names the focus value ref, so it lands on this exact branch's surface (the
-  // fact append feeds the graph when fact_type is operator_attestation).
+  // names the focus value ref and whose run_id says which run's ref that is —
+  // without the run the coverage would land on every other run's ref of the
+  // same name, and the plane refuses it.
   const attest = useMutation({
     mutationFn: (reason: string) =>
       api.appendFact("operator", {
-        fact_id: `att_${current}_${Date.now()}`,
+        fact_id: `att_${runId}_${current}_${Date.now()}`,
         fact_type: "operator_attestation",
         reason,
         operator: "op_ui",
+        run_id: runId,
         covers: [current],
       }),
     onSuccess: () => void atts.refetch(),
@@ -61,7 +66,8 @@ export default function TaintGraph({ focus }: { focus: string }) {
   return (
     <div className="mt-3 p-4" style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 8 }}>
       <div style={{ fontFamily: MONO, fontSize: 12, color: C.text, marginBottom: 8 }}>
-        provenance graph · focus <span style={{ color: C.steel }}>{short(current)}</span>
+        provenance · run <span style={{ color: C.steel }}>{runId}</span> · focus{" "}
+        <span style={{ color: C.steel }}>{short(current)}</span>
         {current !== focus && (
           <button
             onClick={() => setCurrent(focus)}
@@ -90,7 +96,7 @@ export default function TaintGraph({ focus }: { focus: string }) {
         <div style={{ fontFamily: MONO, fontSize: 11, color: C.red }}>{(khop.error as Error).message}</div>
       ) : khop.data && khop.data.nodes.length <= 1 && khop.data.edges.length === 0 ? (
         <div style={{ fontFamily: MONO, fontSize: 11.5, color: C.mut }}>
-          no recorded derivations touch this value — it is a graph of one.
+          no derivation in this run touches this value.
         </div>
       ) : khop.data ? (
         (() => {
@@ -105,9 +111,9 @@ export default function TaintGraph({ focus }: { focus: string }) {
                 const mx = (a.x + b.x) / 2;
                 const my = (a.y + b.y) / 2;
                 return (
-                  <g key={i} style={{ cursor: "pointer" }} onClick={() => navigate(`replay/${e.run_id}`)}>
+                  <g key={i}>
                     <line x1={a.x} y1={a.y} x2={b.x} y2={b.y} stroke={C.line} strokeWidth={1.5} />
-                    <title>{`derived in ${e.run_id} — click to open its replay`}</title>
+                    <title>{`${e.src} → ${e.dst}`}</title>
                     <circle cx={mx} cy={my} r={2.5} fill={C.steel} />
                   </g>
                 );
@@ -131,7 +137,7 @@ export default function TaintGraph({ focus }: { focus: string }) {
       ) : null}
 
       <div style={{ fontFamily: MONO, fontSize: 10, color: C.dim, marginTop: 6 }}>
-        click a node to expand · click an edge to open the run it was derived in
+        click a node to expand · derivations recorded in this run
       </div>
 
       {atts.data && atts.data.length > 0 && (
@@ -140,8 +146,17 @@ export default function TaintGraph({ focus }: { focus: string }) {
             attestations covering this branch
           </div>
           {atts.data.map((a) => (
-            <div key={a.fact_id} style={{ fontFamily: MONO, fontSize: 10.5, color: C.mut, marginBottom: 3 }}>
-              <span style={{ color: a.revokes ? C.amber : C.green }}>{a.revokes ? "revokes" : "attests"}</span>
+            <div
+              key={a.fact_id}
+              style={{
+                fontFamily: MONO, fontSize: 10.5, marginBottom: 3,
+                color: a.in_effect || a.revokes ? C.mut : C.dim,
+                textDecoration: a.revokes || a.in_effect ? "none" : "line-through",
+              }}
+            >
+              <span style={{ color: a.revokes ? C.amber : a.in_effect ? C.green : C.dim }}>
+                {a.revokes ? "revokes" : a.in_effect ? "attests" : "revoked"}
+              </span>
               {" · "}{a.operator} — {a.reason}
               {a.revokes && <span style={{ color: C.dim }}> (of {a.revokes})</span>}
             </div>

@@ -66,9 +66,9 @@ EXPECTED: dict[tuple[str, str], str] = {
     ("GET", "/v1/regression/history"): "read",
     ("GET", "/v1/regression/schedule"): "read",
     ("PUT", "/v1/regression/schedule"): "operate",
-    # ── graph ────────────────────────────────────────────────────────────────
-    ("GET", "/v1/graph/khop"): "read",
-    ("GET", "/v1/graph/attestations"): "read",
+    # ── per-run provenance & attestations ────────────────────────────────────
+    ("GET", "/v1/runs/{run_id}/provenance"): "read",
+    ("GET", "/v1/runs/{run_id}/attestations"): "read",
     # ── notifications ────────────────────────────────────────────────────────
     ("POST", "/v1/notifications/subscribe"): "operate",
     ("GET", "/v1/notifications/subscriptions"): "read",

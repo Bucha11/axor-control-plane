@@ -24,6 +24,13 @@ from typing import Any
 from fastapi import APIRouter, Header, HTTPException, Request
 from sse_starlette.sse import EventSourceResponse
 
+from axor_backend.attestations import (
+    ATTESTATION_FACT_TYPE,
+    AttestationError,
+)
+from axor_backend.attestations import (
+    validate_fact as validate_attestation,
+)
 from axor_backend.clock import now, today
 from axor_backend.errors import (
     CommandRejected,
@@ -286,6 +293,47 @@ async def _fold_reported(
         )
 
 
+def _check_attestation(fact: dict, signing_operator: str) -> None:
+    """Admit an operator attestation, or say exactly why not.
+
+    Three refusals, all 400 — an attestation the plane stores but cannot place
+    or attribute is worse than one it never took:
+
+    * Sentinel's own rule (reason + operator identity, decision 8), imported
+      rather than restated, so the plane and Sentinel cannot come to disagree
+      about what a valid attestation is.
+    * ``run_id``, whenever the attestation names a branch at all. ``covers``
+      holds value refs, which the runtime mints per trace from a counter that
+      restarts at zero — every run has a ``v_ext_1``. Without the run, the branch
+      this attestation vouches for is not identified, and its coverage lands on
+      every other run's ref of the same name. An attestation with no ``covers``
+      is a recorded operator note on the node: it vouches for no branch, appears
+      on no branch's surface, and needs no run to be placed in.
+    * The fact's ``operator`` must be the operator whose key signed the request.
+      The signature covers the fact body, so the two were always transmitted
+      together — but nothing compared them, and the attribution the whole surface
+      exists to record is the field that was not checked. Unsigned deployments
+      (no keyring, ``allow_unsigned``) have no signing operator to compare
+      against; there the fact's own claim is all there is.
+    """
+    try:
+        validate_attestation(fact)
+    except AttestationError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    if fact.get("covers") and not fact.get("run_id"):
+        raise HTTPException(
+            400, "an attestation that names `covers` requires run_id: value "
+                 "refs are unique only inside the run that minted them",
+        )
+    claimed = str(fact.get("operator") or "")
+    if signing_operator and claimed != signing_operator:
+        raise HTTPException(
+            403,
+            f"attestation claims operator {claimed!r} but is signed by "
+            f"{signing_operator!r}",
+        )
+
+
 @router.post("/{node_id}/facts", status_code=201)
 async def append_fact(node_id: str, body: dict, request: Request) -> dict:
     ctx = _ctx(request)
@@ -295,8 +343,8 @@ async def append_fact(node_id: str, body: dict, request: Request) -> dict:
     operator = body.get("operator", "")
     timestamp = body.get("timestamp", "")
     sig = body.get("sig", "")
-    if fact.get("fact_type") == "operator_attestation" and not fact.get("reason"):
-        raise HTTPException(400, "attestation requires a reason (decision 8)")
+    if fact.get("fact_type") == ATTESTATION_FACT_TYPE:
+        _check_attestation(fact, operator)
     if not ctx.keyring.empty:
         try:
             ctx.keyring.verify(
@@ -309,15 +357,6 @@ async def append_fact(node_id: str, body: dict, request: Request) -> dict:
     appended = await ctx.store.append_fact(node_id, fact, now())
     if not appended:
         raise HTTPException(409, "fact_id already exists (append-only)")
-    # An operator attestation is an append-only node over the branch it covers
-    # (spec 8.1.1) — mirror it into THIS TENANT's taint graph so the graph's
-    # attestation surface and the fact log stay one story. Not behind a
-    # getattr() default: a missing registry is a wiring bug, and silently
-    # skipping the mirror is how an attestation stops reaching the graph
-    # without anything failing.
-    if fact.get("fact_type") == "operator_attestation":
-        import json as _json
-        await ctx.graphs.current().append_attestation(_json.dumps(fact))
     ctx.broadcast.publish(
         topic("plane", node_id),
         {"type": "fact", "node_id": node_id, "fact": fact,

@@ -21,7 +21,8 @@ Modules:
 | `plane.py` | plane service (protocol v0.2): `/command`, `/desired` (SSE), `/telemetry`, `/facts`, `/cascade-stop` |
 | `storage.py` | append-only events + runs/desired/reported/facts/pins/keys/share-links/notification-subs; JSON→JSONB on Postgres. Events read back in append order (`events.id`), which is causal order — per-node `seq` is not. Desired-state writes are versioned CAS: a signed command lands only at the version it was signed for. |
 | `replay_api.py` | config→`KernelConfig`, scrubber/counterfactual payloads |
-| `graph.py` | taint graph — a derived index over the event log; `InMemoryGraphStore` (default, rebuilt from the DB at boot) + `KuzuGraphStore`; trace→derivation folding |
+| `provenance.py` | value provenance inside ONE run, derived from that run's events on request — no store, because value refs are minted per trace and repeat across runs |
+| `attestations.py` | operator attestations: recorded in the fact log here, given their meaning (append-only, revocation-as-an-event, same-keyset revocation) by `axor_sentinel.sentinel.attestation` |
 | `signing.py` | operator command signing — delegates JCS to `axor_core.kernel.canonicalize` |
 | `notifications.py` / `monitor.py` | webhook triggers (retries + dead-letter); node-stale sweep |
 | `share.py` | EvidenceCase HTML + dependency-free PDF receipt, revocable links |

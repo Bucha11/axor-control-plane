@@ -20,7 +20,7 @@ Everything below is sequenced for a solo developer. Phases are ordered by the fu
 | `axor-core` | Mature: `governor`, `taint/`, `degradation/`, `capability/`, `policy/`, `trace/`, `budget/`, `federation/`, `contracts/`, plus `kernel/` containing **adjudicator, decidability, registration** (NOT the staging kernel) | Merge target for the staging kernel; source of the gate pipeline to port |
 | `axor-eval` | Real package: `deprivation/`, `runner/`, `replay/`, `audit/`, `governed/`, `contracts.py` | Proxy interprets its scenario specs; backend imports its scorers |
 | `axor-probe` | Real package: `probes/`, `shadow/`, `comparator/`, `repair/` (self-heal), `pipeline/`, `signals/` | Health panel verdicts; self-heal → context excision wiring |
-| `axor-sentinel` | Real package + `bench_run.py`, docs | Graph semantics behind `GraphStore`; attestation + heat |
+| `axor-sentinel` | Real package + `bench_run.py`, docs | Attestation semantics imported by the plane; graph + heat stay Sentinel's |
 | `axor-daemon` | Real package: process-isolated capability executor | External dep; out of platform scope (note in §6) |
 | `axor-classifier-simple` | Real package: ML classifiers implementing axor-core protocols | External dep; out of platform scope |
 | `axor-control-plane` | **Empty** (README only) | Everything in this plan lands here unless stated otherwise |
@@ -29,7 +29,7 @@ Bundle's deliberate loose ends, restated as work items:
 1. Gate pipeline port axor-core → kernel + replay fold loop → **Phase 1**
 2. `context_excision` missing from protocol note → **Phase 0** (doc) + **Phase 1** (event/fold)
 3. Spec title still "Axor Eval" → **Phase 0**
-4. Kùzu single-writer-per-tenant vs ingest path → **Phase 3 spike, before committing layout**
+4. ~~Kùzu single-writer-per-tenant vs ingest path~~ → **closed: the stored graph was removed**
 
 ---
 
@@ -148,11 +148,12 @@ vectors), facts path (attestation append-only), LISTEN/NOTIFY → SSE fan-out, s
 (re)subscribe, telemetry ingest with Idempotency-Key dedupe, heartbeat/stale tracking,
 desired-vs-reported divergence surfaced.
 
-**3d. GraphStore spike (do this before the layout is fixed — loose end 4):** confirm Kùzu's
-single-writer-per-tenant model fits the ingest path. Mitigation if it doesn't: one writer
-task per tenant DB behind an in-process queue (readers unaffected). Then implement
-`GraphStore` (k-hop neighborhood cut, hottest-branches lens, attestation events as
-first-class nodes) with `axor_sentinel` semantics.
+**3d. GraphStore spike (loose end 4) — outcome: no store.** The spike's premise was that
+value refs identify values across runs. They do not: the runtime mints them per trace from a
+counter that restarts at zero, so a store keyed on them merged unrelated values and returned
+one run's edges under another run's ref. The k-hop neighbourhood cut is a walk over one run's
+events (`axor_backend.provenance`), and attestation events are rows in the fact log read
+through `axor_sentinel.sentinel.attestation` — its semantics imported, not reimplemented.
 
 Exit: proxy uploads traces; UI-facing APIs exist for every Phase 4 screen; signed pause/stop
 round-trips against a stub adapter.
@@ -205,8 +206,10 @@ Work lands in ecosystem repos, platform consumes releases (dependency direction 
   the kernel's provenance guard; heal command arrives as signed plane command; auto re-probe
   of affected families; refusal diagnosis when drift attributes to operator-config segments.
 - **axor-sentinel: attestation.** `operator_attestation` facts (append-only, revocation as
-  new event), heat recompute over coverage, branch-scoped with node-wide as visible sugar;
-  storage through the platform `GraphStore`.
+  new event), heat recompute over coverage, branch-scoped with node-wide as visible sugar.
+  Stored in the plane's fact log and read back through `axor_sentinel.sentinel.attestation` —
+  its rules imported, not restated. Heat stays Sentinel's: the plane records who vouched for
+  what, and consumes the score as a signed `heat_crossing` fact.
 
 Exit: the governed/ungoverned split-screen (§7A) runs live: same fault, denial vs
 fabrication, one timeline — the strongest demo in the product.
@@ -219,7 +222,7 @@ fabrication, one timeline — the strongest demo in the product.
 4. Expert view as opt-in mode (`expert-view-reference.jsx`).
 5. Monetization scaffolding: `/ee` directory + Ed25519 license file check (reuses protocol §6
    crypto); pricing page. Line 1 (safety) stays free — enforced by the doc, checked at review.
-6. Hosted deploy (Fly.io/Railway-class, sticky sessions); Kùzu-hosted tenancy layout.
+6. Hosted deploy (Fly.io/Railway-class, sticky sessions); hosted tenancy layout.
 7. Future scope §14: A2A, Key Vault — each re-opens the trust story; separate specs first.
 
 ---
@@ -244,8 +247,8 @@ fabrication, one timeline — the strongest demo in the product.
   shrink scope (fewer gates in kernel v1) rather than fork logic.
 - **Module collision in `axor_core.kernel`.** Existing adjudicator/decidability/registration
   must be reconciled by layout decision *before* code moves (Phase 1 step 1).
-- **Kùzu writer model** (loose end 4). Spike before layout commitment; fallback is a
-  per-tenant writer queue, not a different database.
+- ~~**Kùzu writer model** (loose end 4).~~ *Closed by removal:* the graph it would have
+  written is gone (value refs repeat across runs, so the store merged unrelated values).
 - **Solo bandwidth.** The proxy path (Phases 0–2 + landing) is a complete, shippable product
   slice on its own. If anything slips, cut from the bottom of Phase 4, never from Phase 1
   exit criteria.
@@ -286,7 +289,7 @@ Executed in one pass, all branches `claude/design-mockups-plan-jgqwup`:
 | 0 Bootstrap | done | skeleton imported; kernel tests first-ever run; CI; spec v0.14 rename; protocol v0.2 (`pending_excision`, JCS, T=10s) |
 | 1 Kernel | done | `axor_core.kernel.{events,state,degradation,replay}` additive; golden-trace zero-divergence test; counterfactuals (no-capability, synthetic taint, excision, budget); purity contracts; axor-core suite 912 passed unmodified |
 | 2 Proxy | done | passthrough + axor-eval fault engine + mock tools + EvidenceCase; trace folds through kernel replay (rule 0 e2e test); 8 tests |
-| 3 Backend | done | plane service (signed commands, SSE, facts), replay/regression APIs, Kuzu GraphStore (loose end 4 resolved: per-tenant single writer behind a lock); 14 tests |
+| 3 Backend | done | plane service (signed commands, SSE, facts), replay/regression APIs, per-run value provenance derived on request (the stored graph was retired: value refs repeat across runs, so it merged unrelated values); 14 tests |
 | 4 Frontend | done | all seven mockups live over the real API; strict tsc + vite build green; E2E smoke with screenshots (eval receipt, replay fork, control round-trip, regression report) |
 | 5 Adapter | mostly done | axor-core PlaneSession/PlaneClient (sig-verify, lattice, narrowing, one-shots, provenance guard); axor-probe excision shapes + heal→re-probe unit; axor-sentinel attestation recompute. **Remaining:** wiring PlaneSession polling into GovernedSession/IntentLoop and emitting kernel events from TraceCollector (runtime adoption), Sentinel cycle reading `effective_score` |
 

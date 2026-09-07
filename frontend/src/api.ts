@@ -109,9 +109,11 @@ export interface ScrubberStep {
 export interface GraphEdge {
   src: string;
   dst: string;
-  run_id: string;
 }
 
+// Provenance is scoped to one run: value refs are minted per trace from a
+// counter that restarts at zero, so `v_ext_1` names a different value in every
+// run and there is no edge that spans two of them.
 export interface GraphKhop {
   focus: string;
   nodes: string[];
@@ -123,6 +125,9 @@ export interface BranchAttestation {
   operator: string;
   reason: string;
   revokes: string | null;
+  // Whether this coverage still stands. A revoked attestation stays in the
+  // history — append-only, nothing is deleted — and reads `false`.
+  in_effect: boolean;
 }
 
 export interface ScrubberPayload {
@@ -691,13 +696,15 @@ export const api = {
       (r) => j<{ seeded: string[]; config: Record<string, unknown> }>(r),
     ),
 
-  // ── taint / provenance graph (spec decision 6) ─────────────────────────────
-  graphKhop: (focus: string, k = 2, limit = 100) =>
-    af(`/v1/graph/khop?focus=${encodeURIComponent(focus)}&k=${k}&limit=${limit}`).then(
+  // ── per-run value provenance & attestations (spec decision 6) ──────────────
+  runProvenance: (runId: string, focus: string, k = 2, limit = 100) =>
+    af(`/v1/runs/${encodeURIComponent(runId)}/provenance` +
+       `?focus=${encodeURIComponent(focus)}&k=${k}&limit=${limit}`).then(
       (r) => j<GraphKhop>(r),
     ),
-  graphAttestations: (ref: string) =>
-    af(`/v1/graph/attestations?ref=${encodeURIComponent(ref)}`).then(
+  runAttestations: (runId: string, ref: string) =>
+    af(`/v1/runs/${encodeURIComponent(runId)}/attestations` +
+       `?ref=${encodeURIComponent(ref)}`).then(
       (r) => j<BranchAttestation[]>(r),
     ),
 
