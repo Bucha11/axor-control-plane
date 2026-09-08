@@ -35,4 +35,48 @@ test.describe("settings", () => {
     // A 4xx from the verify endpoint surfaces as a red error line.
     await expect(page.getByText(/^\d{3}\b/)).toBeVisible();
   });
+
+  test("every trigger the backend emits can be subscribed to", async ({ page }) => {
+    // A trigger that fires and cannot be subscribed to is a notification
+    // nobody receives — which is how license_expiring and behavioral_drift sat
+    // here, emitted by the backend and absent from this list.
+    await goHash(page, "settings");
+    for (const label of [
+      /degradation level rises/,
+      /run completes with an EvidenceCase/,
+      /Sentinel heat crosses a threshold/,
+      /a node goes stale/,
+      /Probe reports behavioral drift/,
+      /a corpus run regresses/,
+      /the license nears expiry/,
+    ]) {
+      await expect(page.getByText(label)).toBeVisible();
+    }
+  });
+
+  test("the meter and the statement drawn from it are visible", async ({ page }) => {
+    // Measured, priced, tested — and reachable only by curl, so a customer
+    // could not see their own fleet history or their own bill.
+    await goHash(page, "settings");
+    const usage = page.getByTestId("usage-billing");
+    await expect(usage).toBeVisible();
+    await expect(usage.getByText(/A month is billed on its PEAK/)).toBeVisible();
+    await expect(usage.getByText("STATEMENT", { exact: false })).toBeVisible();
+    // No license on the e2e deployment: the statement says so honestly rather
+    // than rendering an empty bill, and usage is still measured.
+    // Deliberately not asserting the meter is empty: the suite seeds governed
+    // nodes elsewhere, and a test that only passes when it runs first is a test
+    // about ordering, not about this panel.
+    await expect(usage.getByText(/there is nothing to bill/)).toBeVisible();
+  });
+
+  test("the license panel reports the live posture, not just a paste", async ({ page }) => {
+    // It rendered only the response to a verify, so a deployment licensed
+    // months ago showed nothing until somebody pasted again — and the fields
+    // with a deadline attached were not rendered at all.
+    await goHash(page, "settings");
+    await expect(page.getByText("no license active on this deployment")).toBeVisible();
+    await expect(page.getByText(/no auto-renewal/)).toBeVisible();
+    await expect(page.getByText(/usage not reported/)).toBeVisible();
+  });
 });

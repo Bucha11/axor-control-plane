@@ -56,6 +56,10 @@ export default function ToolCredentials() {
   const health = useQuery({ queryKey: ["vault-creds"], queryFn: api.vaultCredsHealth });
   const sealing = useQuery({ queryKey: ["vault-sealing"], queryFn: api.vaultSealingKey });
   const audit = useQuery({ queryKey: ["vault-creds-audit"], queryFn: api.vaultCredsAudit });
+  // Which nodes sign their dispenses. Registering one was possible and seeing
+  // what was registered was not, which makes "is this node signing?" a question
+  // the panel could not answer about the deployment it is showing.
+  const nodeKeys = useQuery({ queryKey: ["vault-node-keys"], queryFn: api.vaultNodeKeys });
 
   const [open, setOpen] = useState(false);
   const [draft, setDraft] = useState({
@@ -115,7 +119,11 @@ export default function ToolCredentials() {
 
   const registerNode = useMutation({
     mutationFn: () => api.registerNodeKey(nodeKey.node.trim(), nodeKey.pub.trim()),
-    onSuccess: () => { setErr(null); setNodeKey({ node: "", pub: "" }); },
+    onSuccess: () => {
+      setErr(null);
+      setNodeKey({ node: "", pub: "" });
+      void qc.invalidateQueries({ queryKey: ["vault-node-keys"] });
+    },
     onError: fail,
   });
 
@@ -281,6 +289,19 @@ export default function ToolCredentials() {
             register
           </button>
         </div>
+        {Object.keys(nodeKeys.data ?? {}).length > 0 && (
+          <div className="mt-2">
+            {Object.entries(nodeKeys.data ?? {}).map(([node, pub]) => (
+              <div key={node} className="flex items-center gap-2" style={{ fontFamily: MONO, fontSize: 10, color: C.mut }}>
+                <span style={{ color: C.text }}>{node}</span>
+                <span style={{ color: C.dim }}>{pub.slice(0, 16)}…</span>
+                <Tooltip content="This node signs its dispense attestations. An unsigned fetch from it is refused — registering a key is the deployment saying so.">
+                  <span style={{ color: C.green }}>signs</span>
+                </Tooltip>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
 
       {(audit.data ?? []).length > 0 && (

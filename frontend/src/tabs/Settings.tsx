@@ -11,14 +11,20 @@ import { MODE_LABEL, useApp } from "../store";
 import { C, MONO, btn } from "../theme";
 import Coach from "../components/Coach";
 import ToolCredentials from "../components/ToolCredentials";
+import UsageAndBilling from "../components/UsageAndBilling";
 import { useStartTour } from "../components/Tour";
 
+// Every trigger the backend emits. A trigger that fires and cannot be
+// subscribed to is a notification nobody receives — which is how
+// `license_expiring` and `behavioral_drift` sat here, emitted and unreachable.
 const TRIGGERS = [
   { id: "level_transition_up", label: "degradation level rises" },
   { id: "evidence_run", label: "run completes with an EvidenceCase" },
   { id: "heat_threshold", label: "Sentinel heat crosses a threshold" },
   { id: "node_stale", label: "a node goes stale" },
+  { id: "behavioral_drift", label: "Probe reports behavioral drift" },
   { id: "regression_failed", label: "a corpus run regresses (config CI)" },
+  { id: "license_expiring", label: "the license nears expiry (30/14/7/3/1 days)" },
 ];
 
 const KEY_SCOPES = ["read", "ingest", "operate", "admin"];
@@ -414,6 +420,11 @@ export default function Settings() {
         )}
       </Section>
 
+      {/* Their fleet history and their own bill. */}
+      <Section title="GOVERNED-NODE USAGE & BILLING">
+        <UsageAndBilling />
+      </Section>
+
       {/* License */}
       <Section title="ENTERPRISE LICENSE">
         <div style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim, marginBottom: 10 }}>
@@ -421,6 +432,48 @@ export default function Settings() {
           channel, and it never calls us. Expiry degrades EE to read-only; safety is
           never gated.
         </div>
+        {/* The ACTIVE license, from /v1/license/status. The panel used to show
+            only the response to a paste, so a deployment that had been licensed
+            for months showed nothing until somebody pasted again — and the
+            fields with a deadline attached (days left, expired, whether this
+            deployment renews itself at all) were not rendered anywhere. */}
+        {licenseStatus.data && (
+          <div className="mb-3" style={{ fontFamily: MONO, fontSize: 11 }}>
+            {licenseStatus.data.active ? (
+              <div style={{ color: (licenseStatus.data.days_remaining ?? 99) <= 14 ? C.amber : C.green }}>
+                active · {licenseStatus.data.organization} ·{" "}
+                {licenseStatus.data.workspace_tier} · expires{" "}
+                {licenseStatus.data.expires_at}
+                {typeof licenseStatus.data.days_remaining === "number" && (
+                  <> · {licenseStatus.data.days_remaining} days left</>
+                )}
+              </div>
+            ) : licenseStatus.data.expired ? (
+              <div style={{ color: C.red }}>
+                EXPIRED on {licenseStatus.data.expires_at} — EE surfaces are
+                read-only. Safety is not gated and never was.
+              </div>
+            ) : (
+              <div style={{ color: C.dim }}>no license active on this deployment</div>
+            )}
+            <div style={{ color: C.dim, fontSize: 10, marginTop: 3 }}>
+              {licenseStatus.data.auto_renewal
+                ? "auto-renewal configured (AXOR_LICENSE_RENEWAL_URL)"
+                : "no auto-renewal — a new license has to be pasted here each term"}
+              {" · "}
+              {licenseStatus.data.usage_reporting
+                ? "usage reported on the renewal channel"
+                : "usage not reported"}
+            </div>
+            {licenseStatus.data.vendor_key_configured && !licenseStatus.data.licensed_to && (
+              <div style={{ color: C.amber, fontSize: 10, marginTop: 3 }}>
+                AXOR_ORG is unset, so ANY vendor-signed license activates here —
+                including one issued to another customer. Set it to the name on
+                your license.
+              </div>
+            )}
+          </div>
+        )}
         <textarea
           value={licenseJson}
           onChange={(e) => setLicenseJson(e.target.value)}

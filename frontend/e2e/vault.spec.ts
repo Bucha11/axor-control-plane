@@ -84,6 +84,19 @@ test.describe("federation vault", () => {
     ).toBeVisible();
   });
 
+  test("a registered node key is listed, so 'does this node sign?' is answerable", async ({ page }) => {
+    await setConnection(page, { mode: "adapter" });
+    await goHash(page, "settings");
+    await page.getByLabel("node id").fill("billing-agent");
+    await page.getByLabel("node pubkey (signs its dispenses)").fill("3c".repeat(32));
+    await page.getByRole("button", { name: "register" }).last().click();
+    // The pubkey prefix, not the node id: "billing-agent" also appears as the
+    // dispense scope of a credential enrolled earlier in this file.
+    const pane = page.getByTestId("tool-credentials");
+    await expect(pane.getByText("3c3c3c3c3c3c3c3c…")).toBeVisible();
+    await expect(pane.getByText("signs", { exact: true })).toBeVisible();
+  });
+
   test("in envelope mode the plaintext never leaves the browser", async ({ page }) => {
     await setConnection(page, { mode: "adapter" });
     await goHash(page, "settings");
