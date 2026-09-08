@@ -310,3 +310,84 @@ async def test_a_stdio_tool_in_vault_mode_is_denied_not_passed_through(
     r = await proxy.post("/t/web_search/", json={})
     assert r.status_code == 403
     assert "stdio" in r.json()["detail"]
+
+
+# ── the dispense says what it is for, and can prove it ───────────────────────
+
+SEED = "0b" * 32
+
+
+async def test_the_dispense_names_the_run_it_belongs_to(
+    proxy: httpx.AsyncClient, backend: httpx.AsyncClient
+) -> None:
+    """A node-bound credential used to be a standing licence to drain its scope
+    with nothing tying any of it to work the node did. Every fetch now leaves a
+    row naming the run."""
+    await enroll(backend)
+    run_id = await arm(proxy)
+    await proxy.get("/t/web_search/")
+    log = (await backend.get("/v1/vault/creds/audit",
+                             headers={"Authorization": f"Bearer {MASTER}", **CREDS})).json()
+    assert len(log) == 1
+    assert log[0]["run_id"] == run_id
+    assert log[0]["node_id"] == NODE and log[0]["tool"] == "web_search"
+
+
+async def test_an_observe_only_proxy_states_no_verdict(
+    proxy: httpx.AsyncClient, backend: httpx.AsyncClient
+) -> None:
+    """It never gates, so it has no kernel decision to attest. Claiming `pass`
+    would assert an approval nothing computed."""
+    await enroll(backend)
+    await arm(proxy)
+    await proxy.get("/t/web_search/")
+    log = (await backend.get("/v1/vault/creds/audit",
+                             headers={"Authorization": f"Bearer {MASTER}", **CREDS})).json()
+    assert log[0]["verdict"] is None
+
+
+async def test_a_seeded_proxy_signs_and_the_plane_verifies(
+    tmp_path: Path, seen: list[dict], backend: httpx.AsyncClient
+) -> None:
+    """The two sides build the signed envelope independently — the proxy with
+    axor-core's JCS, the plane with the backend's, which delegates to the same
+    kernel. This is where those bytes are proved equal in practice."""
+    from nacl.signing import SigningKey
+
+    pub = SigningKey(bytes.fromhex(SEED)).verify_key.encode().hex()
+    r = await backend.post(
+        "/v1/vault/creds/node-keys",
+        headers={"Authorization": f"Bearer {MASTER}", **CREDS},
+        json={"node_id": NODE, "public_key_hex": pub})
+    assert r.status_code == 200, r.text
+
+    vault = CredentialVault(
+        "http://backend.test", ingest_key=await node_key(backend),
+        client=backend, creds_token="creds-tok", signing_seed=SEED,
+    )
+    proxy = make_proxy(tmp_path / "signed", seen, vault)
+    await enroll(backend)
+    await arm(proxy)
+    assert (await proxy.get("/t/web_search/")).status_code == 200
+    log = (await backend.get("/v1/vault/creds/audit",
+                             headers={"Authorization": f"Bearer {MASTER}", **CREDS})).json()
+    assert log[0]["signed"] is True
+
+
+async def test_an_unseeded_proxy_is_refused_once_the_node_has_a_key(
+    proxy: httpx.AsyncClient, backend: httpx.AsyncClient, seen: list[dict]
+) -> None:
+    """Registering a key is the deployment saying this node signs; after that an
+    unsigned fetch is a downgrade, and fail-closed means no call."""
+    from nacl.signing import SigningKey
+
+    await backend.post(
+        "/v1/vault/creds/node-keys",
+        headers={"Authorization": f"Bearer {MASTER}", **CREDS},
+        json={"node_id": NODE,
+              "public_key_hex": SigningKey(bytes.fromhex(SEED)).verify_key.encode().hex()})
+    await enroll(backend)
+    await arm(proxy)
+    r = await proxy.get("/t/web_search/")
+    assert r.status_code == 403
+    assert seen == []

@@ -51,6 +51,13 @@ EXPECTED: dict[tuple[str, str], str] = {
     ("POST", "/v1/vault/creds/rotate"): "admin",
     ("POST", "/v1/vault/creds/revoke"): "operate",
     ("GET", "/v1/vault/creds/health"): "admin",
+    # Node pubkeys are config, not secrets — but registering one decides whose
+    # attestations verify, so writing is admin and reading sits with health.
+    ("POST", "/v1/vault/creds/node-keys"): "admin",
+    ("GET", "/v1/vault/creds/node-keys"): "admin",
+    # What every dispensed credential was fetched for. Same bar as the signing
+    # vault's audit next to it.
+    ("GET", "/v1/vault/creds/audit"): "admin",
     ("POST", "/v1/vault/signing/keys"): "admin",
     ("GET", "/v1/vault/signing/keys"): "operate",
     ("POST", "/v1/vault/signing/sign"): "operate",

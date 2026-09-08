@@ -21,7 +21,16 @@ import binascii
 from fastapi import APIRouter, HTTPException, Request
 
 from axor_backend.auth import constant_time_eq
+from axor_backend.clock import now
 from axor_backend.deps import StoreDep
+from axor_backend.vault_dispense import (
+    DISPENSE_LOG_CAP,
+    DISPENSE_LOG_SETTING,
+    NODE_KEYS_SETTING,
+    AttestationRefused,
+)
+from axor_backend.vault_dispense import log_entry as dispense_row
+from axor_backend.vault_dispense import verify as verify_attestation
 
 router = APIRouter(prefix="/v1/vault", tags=["vault"])
 
@@ -98,25 +107,53 @@ async def vault_enroll(body: dict, request: Request, store: StoreDep) -> dict:
 async def vault_dispense(body: dict, request: Request, store: StoreDep) -> dict:
     """The one read path: a governed node fetches its OWN credential.
 
-    Two checks, and the order matters. First: may this caller speak as the node
-    it named (`_speaking_as`)? Then: is that node in the credential's dispense
-    scope (`ToolCredentialVault`)? The second was doing the work of both.
+    Four checks, in this order, and each one is doing its own job. May this
+    caller speak as the node it named (`_speaking_as`)? Does the attestation
+    name the call actually being fetched, and was that call approved
+    (`vault_dispense`)? Is the node in the credential's dispense scope
+    (`ToolCredentialVault`)? Then, and only then, the secret — and a row saying
+    what it was for.
+
+    The scope check used to do the work of all four.
     """
     _gate(request, "creds")
     from axor_backend.vault_creds import DispenseDenied, ToolCredentialVault
 
     node_id = str(body.get("node_id", ""))
+    tool = str(body.get("tool", ""))
+    endpoint = str(body.get("endpoint", ""))
     if not node_id:
         raise HTTPException(400, "dispense requires the node_id fetching the credential")
     _speaking_as(request, node_id)
+
+    pubkeys = (await store.get_setting(NODE_KEYS_SETTING)) or {}
+    attestation = body.get("attestation")
     try:
-        return await ToolCredentialVault(store).dispense(
-            node_id,
-            str(body.get("tool", "")),
-            str(body.get("endpoint", "")),
+        signed = verify_attestation(
+            attestation, node_id=node_id, tool=tool, endpoint=endpoint,
+            pubkey_hex=pubkeys.get(node_id),
+        )
+    except AttestationRefused as exc:
+        raise HTTPException(403, exc.reason) from exc
+
+    try:
+        credential = await ToolCredentialVault(store).dispense(
+            node_id, tool, endpoint,
         )
     except DispenseDenied as exc:
         raise HTTPException(403, exc.reason) from exc
+
+    principal = getattr(request.state, "principal", None)
+    row = dispense_row(
+        attestation, version=int(credential["version"]), signed=signed,
+        principal=getattr(principal, "key_id", "") if principal else "",
+        ts=now(),
+    )
+    await store.mutate_setting(
+        DISPENSE_LOG_SETTING,
+        lambda stored: [*(stored or []), row][-DISPENSE_LOG_CAP:],
+    )
+    return credential
 
 
 @router.post("/creds/rotate")
@@ -157,6 +194,43 @@ async def vault_revoke(body: dict, request: Request, store: StoreDep) -> dict:
         )
     except NotEnrolled as exc:
         raise HTTPException(404, exc.reason) from exc
+
+
+@router.post("/creds/node-keys")
+async def vault_register_node_key(
+    body: dict, request: Request, store: StoreDep
+) -> dict:
+    """Register a node's ed25519 pubkey, so its dispense attestations verify.
+
+    Config, like every other public key here: pubkeys are not secrets, and the
+    one thing that makes them useful is living where verification happens. A
+    node without a registered key still dispenses — its rows just read
+    `signed: false`, which is the honest record of what happened.
+    """
+    _gate(request, "creds")
+    node_id = str(body.get("node_id", ""))
+    pubkey = str(body.get("public_key_hex", ""))
+    if not node_id or len(pubkey) != 64 or not _is_hex(pubkey):
+        raise HTTPException(
+            400, "requires node_id and public_key_hex (32-byte ed25519, hex)",
+        )
+    await store.mutate_setting(
+        NODE_KEYS_SETTING, lambda stored: {**(stored or {}), node_id: pubkey},
+    )
+    return {"node_id": node_id, "registered": True}
+
+
+@router.get("/creds/node-keys")
+async def vault_node_keys(request: Request, store: StoreDep) -> dict:
+    _gate(request, "creds")
+    return (await store.get_setting(NODE_KEYS_SETTING)) or {}
+
+
+@router.get("/creds/audit")
+async def vault_creds_audit(request: Request, store: StoreDep) -> list[dict]:
+    """What every dispensed credential was fetched for. Never the credential."""
+    _gate(request, "creds")
+    return (await store.get_setting(DISPENSE_LOG_SETTING)) or []
 
 
 @router.get("/creds/health")
@@ -234,3 +308,11 @@ def _payload(payload_b64: str) -> bytes:
         raise HTTPException(
             400, f"payload_b64 is not valid base64: {exc}"
         ) from exc
+
+
+def _is_hex(value: str) -> bool:
+    try:
+        bytes.fromhex(value)
+    except ValueError:
+        return False
+    return True

@@ -23,6 +23,18 @@ injects credentials, becoming a high-value target") and bounds it:
   redirecting a call at attacker.example is asking for a credential enrolled
   against a different endpoint, and is refused. Scope is operator config,
   inaccessible from runtime reads.
+* **Every fetch says what it is for.** The dispense carries an attestation
+  naming the call — node, tool, endpoint, and the run it belongs to — which the
+  plane checks against what is being fetched and records. This proxy states no
+  VERDICT, and that is the honest answer rather than a missing field: it is
+  observe-only, it never gates, so it has no kernel decision to attest. A
+  wrapped runtime does, and states it.
+* **Signed when there is a key to sign with.** ``AXOR_NODE_SIGNING_SEED`` makes
+  the attestation non-repudiable — on a hosted deployment the customer can
+  verify their own dispense log against their own node's key without trusting
+  the backend that stored it. Absent a seed the dispense still works and the
+  row reads ``signed: false``; what must not happen is an unsigned fetch that
+  looks signed.
 
 What the agent sees is what §14.2 is for: a credential it never held cannot be
 exfiltrated by anything it says. The proxy REPLACES the injection header rather
@@ -33,8 +45,11 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from datetime import UTC, datetime
+from typing import Any
 
 import httpx
+from axor_core.kernel.jcs import canonicalize
 
 
 class CredentialDenied(Exception):
@@ -80,6 +95,7 @@ class CredentialVault:
         client: httpx.AsyncClient | None = None,
         creds_token: str | None = None,
         timeout: float = 10.0,
+        signing_seed: str | None = None,
     ) -> None:
         self._base = backend_url.rstrip("/")
         self._client = client
@@ -95,8 +111,47 @@ class CredentialVault:
         )
         if token:
             self._headers["X-Vault-Creds-Token"] = token
+        # ed25519 seed, hex. Node keys are the node's own — this one never
+        # leaves the process, and only its public half is registered with the
+        # plane (POST /v1/vault/creds/node-keys).
+        self._seed = (
+            signing_seed if signing_seed is not None
+            else os.environ.get("AXOR_NODE_SIGNING_SEED", "")
+        ) or ""
 
-    async def dispense(self, node_id: str, tool: str, endpoint: str) -> Credential:
+    def attest(
+        self, node_id: str, tool: str, endpoint: str,
+        *, run_id: str | None = None, seq: int | None = None,
+        verdict: str | None = None, causal_root: str | None = None,
+    ) -> dict[str, Any]:
+        """What this fetch is for, signed when a node seed is configured.
+
+        `verdict` is left unset by this proxy on purpose — it observes, it does
+        not gate, so it has no kernel decision to state. Claiming `pass` would
+        be asserting an approval nothing computed.
+        """
+        attestation: dict[str, Any] = {
+            "node_id": node_id, "tool": tool, "endpoint": endpoint,
+            "timestamp": datetime.now(UTC).isoformat(),
+        }
+        for key, value in (("run_id", run_id), ("seq", seq),
+                           ("verdict", verdict), ("causal_root", causal_root)):
+            if value is not None:
+                attestation[key] = value
+        if self._seed:
+            from cryptography.hazmat.primitives.asymmetric.ed25519 import (
+                Ed25519PrivateKey,
+            )
+
+            key = Ed25519PrivateKey.from_private_bytes(bytes.fromhex(self._seed))
+            attestation["sig"] = key.sign(canonicalize(attestation)).hex()
+        return attestation
+
+    async def dispense(
+        self, node_id: str, tool: str, endpoint: str,
+        *, run_id: str | None = None, seq: int | None = None,
+        verdict: str | None = None, causal_root: str | None = None,
+    ) -> Credential:
         """Fetch the credential for this exact (tool, endpoint), or refuse.
 
         Every failure is a `CredentialDenied` — a refused dispense, an
@@ -108,7 +163,13 @@ class CredentialVault:
         try:
             response = await client.post(
                 f"{self._base}/v1/vault/creds/dispense",
-                json={"node_id": node_id, "tool": tool, "endpoint": endpoint},
+                json={
+                    "node_id": node_id, "tool": tool, "endpoint": endpoint,
+                    "attestation": self.attest(
+                        node_id, tool, endpoint, run_id=run_id, seq=seq,
+                        verdict=verdict, causal_root=causal_root,
+                    ),
+                },
                 headers=self._headers,
             )
         except httpx.HTTPError as exc:

@@ -287,7 +287,7 @@ def create_app(state: ProxyState) -> Starlette:
             else:
                 try:
                     credential = await state.vault.dispense(
-                        run.node_id, tool, upstream_base,
+                        run.node_id, tool, upstream_base, run_id=run.run_id,
                     )
                 except CredentialDenied as exc:
                     denial = exc.reason

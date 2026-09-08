@@ -97,6 +97,13 @@ _READ_POLICY: tuple[tuple[str, str], ...] = (
     ("/v1/vault/creds/health", "admin"),
     # The record of who requested a signature over what.
     ("/v1/vault/signing/audit", "admin"),
+    # The same record for the other subsystem: what every dispensed credential
+    # was fetched for, which run, and whether the attestation was signed.
+    ("/v1/vault/creds/audit", "admin"),
+    # Which node's attestations verify against which key. Pubkeys are not
+    # secrets, but the map of registered nodes is the same operational config as
+    # the enrolment inventory above.
+    ("/v1/vault/creds/node-keys", "admin"),
     # Pubkeys are explicitly NOT secrets (vault_signing module docstring), but
     # the per-key operator allowlist is operational config, so: not `read`.
     ("/v1/vault/signing/keys", "operate"),
