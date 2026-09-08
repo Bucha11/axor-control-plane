@@ -32,6 +32,7 @@ async def client(tmp_path: pathlib.Path) -> httpx.AsyncClient:
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app), base_url="http://backend.test"
     ) as c:
+        c._app = app  # type: ignore[attr-defined]
         async with app.router.lifespan_context(app):
             yield c
 
@@ -747,3 +748,102 @@ class TestSignedAttestations:
     ) -> None:
         r = await client.post("/v1/vault/creds/node-keys", headers=CH, json=body)
         assert r.status_code == 400
+
+
+class TestEnvelopeModeStorage:
+    """What the row actually holds. The health surface cannot answer this — it
+    never returns a secret either way — so these read the stored entry."""
+
+    @staticmethod
+    async def _stored(client: httpx.AsyncClient) -> dict:
+        store = client._app.state.store  # type: ignore[attr-defined]
+        return (await store.get_setting("vault_creds/v1"))["t\x1fe"]
+
+    @staticmethod
+    async def _sealing_on(client: httpx.AsyncClient) -> str:
+        from nacl.public import PrivateKey
+
+        public = bytes(PrivateKey.generate().public_key).hex()
+        r = await client.post("/v1/vault/creds/sealing-key", headers=CH,
+                              json={"public_key_hex": public})
+        assert r.status_code == 200, r.text
+        return public
+
+    @staticmethod
+    def _sealed(public: str, secret: str = "s1") -> str:
+        import base64
+
+        from nacl.public import PublicKey, SealedBox
+
+        return base64.b64encode(
+            SealedBox(PublicKey(bytes.fromhex(public))).encrypt(secret.encode())
+        ).decode()
+
+    async def test_a_sealed_entry_holds_no_plaintext(
+        self, client: httpx.AsyncClient
+    ) -> None:
+        public = await self._sealing_on(client)
+        await client.post("/v1/vault/creds/enroll", headers=CH, json={
+            "tool": "t", "endpoint": "e", "scope_nodes": ["n"],
+            "sealed_secret": self._sealed(public)})
+        entry = await self._stored(client)
+        assert "secret" not in entry
+        assert entry["sealed_secret"]
+
+    async def test_switching_to_envelope_mode_drops_the_plaintext(
+        self, client: httpx.AsyncClient
+    ) -> None:
+        """A deployment that switched must not still carry the plaintext of
+        everything enrolled before it — the entry holds exactly one of the two."""
+        await client.post("/v1/vault/creds/enroll", headers=CH, json={
+            "tool": "t", "endpoint": "e", "secret": "s1", "scope_nodes": ["n"]})
+        assert (await self._stored(client))["secret"] == "s1"
+        public = await self._sealing_on(client)
+        await client.post("/v1/vault/creds/enroll", headers=CH, json={
+            "tool": "t", "endpoint": "e", "scope_nodes": ["n"],
+            "sealed_secret": self._sealed(public, "s2")})
+        entry = await self._stored(client)
+        assert "secret" not in entry
+
+    async def test_rotating_in_envelope_mode_leaves_no_plaintext_either(
+        self, client: httpx.AsyncClient
+    ) -> None:
+        public = await self._sealing_on(client)
+        await client.post("/v1/vault/creds/enroll", headers=CH, json={
+            "tool": "t", "endpoint": "e", "scope_nodes": ["n"],
+            "sealed_secret": self._sealed(public, "s1")})
+        r = await client.post("/v1/vault/creds/rotate", headers=CH, json={
+            "tool": "t", "endpoint": "e",
+            "sealed_secret": self._sealed(public, "s2")})
+        assert r.status_code == 200, r.text
+        entry = await self._stored(client)
+        assert "secret" not in entry and entry["version"] == 2
+
+    async def test_rotating_a_plaintext_entry_into_a_sealed_one_drops_it(
+        self, client: httpx.AsyncClient
+    ) -> None:
+        """The migration path: a deployment turns envelope mode on and rotates
+        what it already had. The old plaintext must not survive the rotation —
+        it is the one copy the switch exists to remove."""
+        await client.post("/v1/vault/creds/enroll", headers=CH, json={
+            "tool": "t", "endpoint": "e", "secret": "s1", "scope_nodes": ["n"]})
+        public = await self._sealing_on(client)
+        r = await client.post("/v1/vault/creds/rotate", headers=CH, json={
+            "tool": "t", "endpoint": "e",
+            "sealed_secret": self._sealed(public, "s2")})
+        assert r.status_code == 200, r.text
+        entry = await self._stored(client)
+        assert "secret" not in entry
+        assert entry["sealed_secret"]
+
+    @pytest.mark.parametrize("sealed", ["not base64!!", "YWJj", "", "AAAA"])
+    async def test_a_sealed_secret_that_is_not_one_is_refused(
+        self, client: httpx.AsyncClient, sealed: str
+    ) -> None:
+        """The vault cannot open it, but it can refuse to store garbage as it.
+        Otherwise the mistake surfaces at the sink, at call time, on the node —
+        the furthest possible point from where it was made."""
+        r = await client.post("/v1/vault/creds/enroll", headers=CH, json={
+            "tool": "t", "endpoint": "e", "scope_nodes": ["n"],
+            "sealed_secret": sealed})
+        assert r.status_code == 400, (sealed, r.status_code)
