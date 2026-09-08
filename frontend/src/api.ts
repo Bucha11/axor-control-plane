@@ -747,7 +747,10 @@ export const api = {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ files }),
-    }).then((r) => j<{ tools: WrapTool[] }>(r)),
+      // `skipped` names the .py files the parser could not read. They are part
+      // of the answer: a tool in a skipped file is absent from the config, and
+      // undeclared is denied.
+    }).then((r) => j<{ tools: WrapTool[]; skipped: { path: string; reason: string }[] }>(r)),
   wrapManifests: (tools: (Omit<Partial<WrapTool>, "guess"> & { id: string; effect: WrapEffect })[]) =>
     af("/v1/wrap/manifests", {
       method: "POST",

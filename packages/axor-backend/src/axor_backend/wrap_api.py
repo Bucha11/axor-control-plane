@@ -15,6 +15,7 @@ code, not an operational plane command (see auth._WRITE_POLICY).
 """
 from __future__ import annotations
 
+import ast
 import asyncio
 import tempfile
 from pathlib import Path, PurePosixPath
@@ -27,6 +28,11 @@ router = APIRouter(prefix="/v1/wrap")
 
 # Upload ceiling for one scan request (sum of file contents, UTF-8 bytes).
 MAX_SCAN_BYTES = 2 * 1024 * 1024
+# ...and a ceiling on the COUNT, because the byte ceiling does not bound it: a
+# zero-byte file adds nothing to the total, so any number of them passed. The
+# work per file (mkdir, write, rglob, parse) is what the scan actually costs —
+# 50 000 empty files answered 200 after 18s of it, on one request.
+MAX_SCAN_FILES = 2000
 EFFECT_CLASSES = ("READ", "WRITE", "EXPORT", "EXEC")
 
 _NOT_INSTALLED = (
@@ -65,12 +71,32 @@ def _validated_files(body: dict) -> list[tuple[PurePosixPath, str]]:
     files = body.get("files")
     if not isinstance(files, list) or not files:
         raise HTTPException(400, "body must be {files: [{path, content}, ...]} (non-empty)")
+    if len(files) > MAX_SCAN_FILES:
+        raise HTTPException(
+            413, f"upload exceeds the scan limit of {MAX_SCAN_FILES} files "
+                 f"({len(files)} sent)"
+        )
     total = 0
     entries: list[tuple[PurePosixPath, str]] = []
+    seen: set[str] = set()
     for item in files:
         if not isinstance(item, dict):
             raise HTTPException(400, "each file must be an object {path, content}")
         rel = _safe_relpath(item.get("path"))
+        # Two uploads under one path used to overwrite each other in the temp
+        # tree, and the tools of whichever lost simply were not in the answer —
+        # a scan that reports "1 tool" for an agent that has two. The browser's
+        # plain file picker produces exactly this (it exposes no directory, so
+        # every path is a bare filename), so it is refused here and the picker
+        # sends real relative paths.
+        if str(rel) in seen:
+            raise HTTPException(
+                400,
+                f"two uploaded files share the path {str(rel)!r} — the scan "
+                f"cannot tell them apart; send each file under its path "
+                f"relative to the project root",
+            )
+        seen.add(str(rel))
         content = item.get("content")
         if not isinstance(content, str):
             raise HTTPException(400, f"file {str(rel)!r} needs a string `content`")
@@ -81,6 +107,31 @@ def _validated_files(body: dict) -> list[tuple[PurePosixPath, str]]:
             )
         entries.append((rel, content))
     return entries
+
+
+def _unparseable(entries: list[tuple[PurePosixPath, str]]) -> list[dict[str, str]]:
+    """The uploaded files ``ast`` cannot read, with the reason.
+
+    ``scan_project`` skips them (``except SyntaxError ...: continue``) — honest
+    inside the engine, which has no way to report anything but tools. The API
+    used to drop that fact on the floor, so a file with a stray syntax error, a
+    newer grammar than the backend's Python, or a bad encoding vanished from a
+    200 that named only what parsed. Its tools are then absent from the config,
+    undeclared is denied, and the agent breaks at runtime with nothing pointing
+    at the file.
+
+    A second parse, not a hook into the engine: the engine's contract is a list
+    of tools and pinning a richer one would couple this route to a version of
+    axor-wrap that is not released yet. The cost is one more ast.parse per file,
+    the same order as the scan itself.
+    """
+    skipped: list[dict[str, str]] = []
+    for rel, content in entries:
+        try:
+            ast.parse(content)
+        except (SyntaxError, ValueError) as exc:
+            skipped.append({"path": str(rel), "reason": f"{type(exc).__name__}: {exc}"})
+    return skipped
 
 
 def _scan_tree(engine: ModuleType, entries: list[tuple[PurePosixPath, str]]) -> list[dict]:
@@ -119,17 +170,52 @@ def _scan_tree(engine: ModuleType, entries: list[tuple[PurePosixPath, str]]) -> 
 
 @router.post("/scan")
 async def wrap_scan(body: dict) -> dict:
-    """Scan uploaded .py sources for tools; classification stays a human step."""
+    """Scan uploaded .py sources for tools; classification stays a human step.
+
+    ``skipped`` names the files the parser could not read. It is part of the
+    answer, not a log line: "we found these tools" is only true alongside "and
+    we could not read these files".
+    """
     engine = _engine()
     entries = _validated_files(body)
-    tools = await asyncio.to_thread(_scan_tree, engine, entries)
-    return {"tools": tools}
+    tools, skipped = await asyncio.to_thread(_scan_and_skips, engine, entries)
+    return {"tools": tools, "skipped": skipped}
 
 
-def _str_list(value: object) -> list[str]:
-    if not isinstance(value, list):
+def _scan_and_skips(
+    engine: ModuleType, entries: list[tuple[PurePosixPath, str]],
+) -> tuple[list[dict], list[dict[str, str]]]:
+    return _scan_tree(engine, entries), _unparseable(entries)
+
+
+def _str_list(value: object, field: str, tool_id: str) -> list[str]:
+    """A list of names from the request — absent is empty, wrong is refused.
+
+    This used to answer ``[]`` for anything that was not a list, which is the
+    quietest failure in the file: ``driving_args: "to"`` (a string, not a list)
+    compiled to a manifest that validates, a 200, and a governance.yaml with no
+    driving_args and no untrusted_sources at all. The same typo in
+    ``sensitive_fields`` drops ``sensitive_sources``, i.e. the confidentiality
+    floor never arms — silently, in the artifact the operator then ships.
+    """
+    if value is None:
         return []
-    return [str(v) for v in value]
+    if isinstance(value, (str, bytes, dict)) or not isinstance(value, (list, tuple)):
+        kind = "null" if value is None else type(value).__name__
+        hint = f" — wrap {value!r} in a list" if isinstance(value, str) else ""
+        raise HTTPException(
+            400,
+            f"tool {tool_id!r}: effect.{field} must be a list of names, "
+            f"got {kind}{hint}",
+        )
+    for item in value:
+        if not isinstance(item, str):
+            raise HTTPException(
+                400,
+                f"tool {tool_id!r}: effect.{field} entries must be names, "
+                f"got {type(item).__name__}",
+            )
+    return list(value)
 
 
 @router.post("/manifests")
@@ -172,11 +258,14 @@ async def wrap_manifests(body: dict) -> dict:
             default_class=default_class,
             confidence="high",
             reason="operator-classified in the config builder",
-            driving_args=tuple(_str_list(effect.get("driving_args"))),
-            untrusted_fields=tuple(_str_list(effect.get("untrusted_fields"))),
+            driving_args=tuple(_str_list(
+                effect.get("driving_args"), "driving_args", tool_id)),
+            untrusted_fields=tuple(_str_list(
+                effect.get("untrusted_fields"), "untrusted_fields", tool_id)),
         )
         manifest = engine.build_manifest(detected, guess)
-        sensitive = _str_list(effect.get("sensitive_fields"))
+        sensitive = _str_list(
+            effect.get("sensitive_fields"), "sensitive_fields", tool_id)
         if sensitive:
             manifest["sensitive_fields"] = sensitive
         errors = engine.validate_manifest(manifest)

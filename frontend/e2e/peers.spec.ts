@@ -27,7 +27,7 @@ test.describe("inter-federation peers", () => {
     await goHash(page, "config-builder");
     // The drop zone opens a native file chooser; drive the hidden input
     // directly, the same way config-builder.spec.ts feeds the scanner.
-    await page.locator('input[type="file"]').setInputFiles({
+    await page.getByTestId("wrap-files").setInputFiles({
       name: "tools.py",
       mimeType: "text/x-python",
       buffer: Buffer.from(AGENT_PY),

@@ -156,6 +156,68 @@ function Container({ children }: { children: React.ReactNode }) {
   return <div style={{ maxWidth: 680, margin: "0 auto" }}>{children}</div>;
 }
 
+type PickedFile = { path: string; content: string };
+
+// Directories the scanner skips server-side anyway (axor_wrap.detect._SKIP_DIRS):
+// walking them only spends the upload's file budget.
+const SKIP_DIRS = new Set([
+  ".git", ".eggs", ".mypy_cache", ".ruff_cache", ".tox", ".venv", "__pycache__",
+  "build", "dist", "node_modules", "venv",
+]);
+
+// A dropped FOLDER is not in `dataTransfer.files` — browsers expose its
+// contents only through the entry API — so the drop zone's own promise ("drop
+// your agent folder") needed this. It also yields each file's path relative to
+// what was dropped, which is what keeps two different tools.py apart: the
+// backend refuses two uploads under one path, because writing them into one
+// temp tree silently lost whichever came first.
+async function collectEntry(
+  entry: FileSystemEntry, prefix: string, out: PickedFile[],
+): Promise<void> {
+  const path = prefix + entry.name;
+  if (entry.isFile) {
+    if (!entry.name.endsWith(".py")) return;
+    const file = await new Promise<File>((resolve, reject) =>
+      (entry as FileSystemFileEntry).file(resolve, reject));
+    out.push({ path, content: await file.text() });
+    return;
+  }
+  if (SKIP_DIRS.has(entry.name)) return;
+  const reader = (entry as FileSystemDirectoryEntry).createReader();
+  // readEntries yields at most 100 per call and signals the end with an empty
+  // batch — a single call reads a truncated directory.
+  for (;;) {
+    const batch = await new Promise<FileSystemEntry[]>((resolve, reject) =>
+      reader.readEntries(resolve, reject));
+    if (batch.length === 0) return;
+    for (const child of batch) await collectEntry(child, `${path}/`, out);
+  }
+}
+
+async function filesFromDrop(dt: DataTransfer): Promise<PickedFile[]> {
+  const entries = Array.from(dt.items)
+    .map((i) => (i.webkitGetAsEntry ? i.webkitGetAsEntry() : null))
+    .filter((e): e is FileSystemEntry => e !== null);
+  if (entries.length === 0) return filesFromList(dt.files);
+  const out: PickedFile[] = [];
+  for (const entry of entries) await collectEntry(entry, "", out);
+  return out;
+}
+
+async function filesFromList(picked: FileList | File[] | null): Promise<PickedFile[]> {
+  const out: PickedFile[] = [];
+  for (const f of Array.from(picked ?? [])) {
+    if (!f.name.endsWith(".py")) continue;
+    // webkitRelativePath is populated only by the folder picker. The plain
+    // multi-file picker exposes no directory at all, so two files named
+    // tools.py arrive under one path and the backend refuses the upload — the
+    // folder entry point below is the way out, and it is why it exists.
+    if (f.webkitRelativePath.split("/").some((part) => SKIP_DIRS.has(part))) continue;
+    out.push({ path: f.webkitRelativePath || f.name, content: await f.text() });
+  }
+  return out;
+}
+
 export default function ConfigBuilder() {
   const [stage, setStage] = useState<Stage>("entry");
   const [sinks, setSinks] = useState<Sink[]>([]);
@@ -169,27 +231,29 @@ export default function ConfigBuilder() {
   const [wrapTools, setWrapTools] = useState<WrapTool[]>([]);
   const [wrapMissing, setWrapMissing] = useState(false);
   const [scanError, setScanError] = useState<string | null>(null);
+  // Files the scanner could not parse. Kept beside the tools, because "we found
+  // these tools" is only true next to "and we could not read these files" — a
+  // tool in a skipped file is absent from the config, and undeclared is denied.
+  const [skipped, setSkipped] = useState<{ path: string; reason: string }[]>([]);
   const fileInput = useRef<HTMLInputElement>(null);
+  const folderInput = useRef<HTMLInputElement | null>(null);
 
   // Real upload: read the picked/dropped .py files in the browser, send them to
   // the wrap engine, and turn detected tools into sink rows.
-  const analyze = async (picked: FileList | File[] | null) => {
-    const files: { path: string; content: string }[] = [];
-    for (const f of Array.from(picked ?? [])) {
-      if (!f.name.endsWith(".py")) continue;
-      files.push({ path: f.webkitRelativePath || f.name, content: await f.text() });
-    }
+  const analyze = async (files: PickedFile[]) => {
     if (files.length === 0) {
       setScanError("no .py files selected — the scanner reads Python sources only");
       return;
     }
     setScanError(null);
     setWrapMissing(false);
+    setSkipped([]);
     setStage("analyzing");
     try {
-      const { tools } = await api.wrapScan(files);
-      setWrapTools(tools);
-      setSinks(tools.map(toSink));
+      const scan = await api.wrapScan(files);
+      setWrapTools(scan.tools);
+      setSinks(scan.tools.map(toSink));
+      setSkipped(scan.skipped ?? []);
       setStage("build");
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
@@ -278,11 +342,24 @@ export default function ConfigBuilder() {
         <div style={{ fontFamily: MONO, fontSize: 11.5, color: C.mut, marginBottom: 24 }}>
           Drop the code — we find its tools, you tell us what they can do, you download the wrapped package.
         </div>
-        <input ref={fileInput} type="file" multiple accept=".py" style={{ display: "none" }}
-          onChange={(e) => { void analyze(e.target.files); e.target.value = ""; }} />
+        <input ref={fileInput} data-testid="wrap-files" type="file" multiple accept=".py" style={{ display: "none" }}
+          onChange={(e) => { void filesFromList(e.target.files).then(analyze); e.target.value = ""; }} />
+        <input
+          ref={(el) => {
+            folderInput.current = el;
+            // React has no typed prop for it; the attribute is what turns the
+            // picker into a folder picker AND what populates webkitRelativePath.
+            el?.setAttribute("webkitdirectory", "");
+          }}
+          data-testid="wrap-folder" type="file" multiple style={{ display: "none" }}
+          onChange={(e) => { void filesFromList(e.target.files).then(analyze); e.target.value = ""; }} />
         <div onClick={stage === "entry" ? () => fileInput.current?.click() : undefined}
           onDragOver={(e) => e.preventDefault()}
-          onDrop={(e) => { e.preventDefault(); if (stage === "entry") void analyze(e.dataTransfer.files); }}
+          onDrop={(e) => {
+            e.preventDefault();
+            if (stage === "entry") void filesFromDrop(e.dataTransfer).then(analyze);
+          }}
+          data-testid="wrap-dropzone"
           className="p-8 flex flex-col items-center gap-3"
           style={{ background: C.panel, border: `1px dashed ${stage === "analyzing" ? C.steel : C.line}`, borderRadius: 8, cursor: stage === "entry" ? "pointer" : "default" }}>
           {stage === "analyzing" ? (
@@ -295,6 +372,14 @@ export default function ConfigBuilder() {
               <span style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim }}>.py files · LangChain / MCP / plain Python (click to choose)</span></>
           )}
         </div>
+        {stage === "entry" && (
+          <Tooltip content="Picking individual files gives the browser no directory, so two files named tools.py collide and the upload is refused. A folder keeps each file's real path.">
+            <button onClick={() => folderInput.current?.click()} className="mt-2"
+              style={{ background: "none", border: "none", color: C.mut, fontFamily: MONO, fontSize: 11, cursor: "pointer", padding: 0 }}>
+              or choose a whole folder (keeps each file's path)
+            </button>
+          </Tooltip>
+        )}
         {stage === "entry" && wrapMissing && (
           <div className="flex items-start gap-2 mt-4 p-3" style={{ background: C.panel2, border: `1px solid ${C.amber}`, borderRadius: 6 }}>
             <AlertTriangle size={13} color={C.amber} style={{ marginTop: 1 }} />
@@ -343,6 +428,21 @@ export default function ConfigBuilder() {
             ? <>Detection reads names, never intent — <span style={{ color: C.amber }}>you assign the class</span>. Unclassified stays denied.</>
             : <>Declare its tools as sinks. Everything you don't declare will be denied.</>}
         </div>
+        {skipped.length > 0 && (
+          <div className="flex items-start gap-2 mb-5 p-3" style={{ background: C.panel2, border: `1px solid ${C.amber}`, borderRadius: 6 }}>
+            <AlertTriangle size={13} color={C.amber} style={{ marginTop: 1 }} />
+            <div style={{ fontFamily: MONO, fontSize: 11, color: C.mut, lineHeight: 1.6 }}>
+              {skipped.length} file{skipped.length === 1 ? "" : "s"} could not be
+              parsed and {skipped.length === 1 ? "was" : "were"} not scanned — any
+              tool defined there is missing from this list, and undeclared is denied:
+              {skipped.map((f) => (
+                <div key={f.path} style={{ color: C.dim }}>
+                  · <span style={{ color: C.text }}>{f.path}</span> — {f.reason}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
 
         <div style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 8 }}>
           {sinks.map((s, i) => (
