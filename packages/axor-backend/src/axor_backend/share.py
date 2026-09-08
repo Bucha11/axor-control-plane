@@ -14,71 +14,68 @@ from __future__ import annotations
 import html
 import secrets
 import textwrap
-from dataclasses import dataclass, field
 from typing import Any
 
-from axor_backend.tenancy import PUBLIC_ORG
+
+def new_token() -> str:
+    """A share token: 128 bits from `secrets`, urlsafe.
+
+    There is no registry to put it in. The `share_links` table is the only
+    place a link lives — see routers.share_api.resolve_share for what the
+    in-process index cost.
+    """
+    return secrets.token_urlsafe(16)
 
 
-@dataclass
-class ShareLink:
-    token: str
-    run_id: str
-    case_index: int
-    revoked: bool = False
-    # The tenant the case belongs to. `GET /v1/share/{token}` is served without
-    # auth, so there is no principal to take an org from — the LINK carries it,
-    # and the route adopts it before looking the case up. Without this the
-    # lookup ran under the public tenant and 404'd every link an identity user
-    # had created.
-    org: str = PUBLIC_ORG
+# Keys stripped from every export, matched case-insensitively at any depth.
+#
+# Two groups, and the difference matters. The first is the platform's own
+# contract with its own producers: these are what a proxy detector calls a
+# captured body, and they are the reason the content rule exists. The second is
+# credential-shaped names, added because `observed_reality` is free-form (a
+# detector, or any client with `ingest`, writes whatever it observed) and the
+# other end of this is an unauthenticated public URL.
+#
+# It is a denylist, so it is not a proof — and it is deliberately not wider.
+# Names like `text`, `payload` or `prompt` are frequently the observation
+# ITSELF, and dropping them would gut the receipt the export exists to produce.
+# What makes it honest is not its length: every removal is NAMED in the export
+# (see `_scrub`), so a reader can tell "nothing was here" from "something was
+# taken out".
+_BODY_KEYS = frozenset({
+    "request_body", "response_body", "raw", "body", "content",
+    "authorization", "cookie", "set-cookie", "credentials", "password",
+    "secret", "private_key", "api_key", "apikey", "access_token",
+    "refresh_token",
+})
 
 
-@dataclass
-class ShareRegistry:
-    _links: dict[str, ShareLink] = field(default_factory=dict)
+def _scrub(value: Any, path: str = "") -> tuple[Any, list[str]]:  # noqa: ANN401
+    """Strip the denied keys and report WHICH paths were stripped.
 
-    def create(self, run_id: str, case_index: int, org: str = PUBLIC_ORG) -> ShareLink:
-        token = secrets.token_urlsafe(16)
-        link = ShareLink(
-            token=token, run_id=run_id, case_index=case_index, org=org,
-        )
-        self._links[token] = link
-        return link
-
-    def load(self, token: str, run_id: str, case_index: int, revoked: bool,
-             org: str = PUBLIC_ORG) -> None:
-        """Rehydrate one persisted link at boot (the store is the source of
-        truth; this in-memory index is rebuilt from it, like the taint graph)."""
-        self._links[token] = ShareLink(
-            token=token, run_id=run_id, case_index=case_index, revoked=revoked,
-            org=org,
-        )
-
-    def resolve(self, token: str) -> ShareLink | None:
-        link = self._links.get(token)
-        if link is None or link.revoked:
-            return None
-        return link
-
-    def revoke(self, token: str) -> bool:
-        link = self._links.get(token)
-        if link is None:
-            return False
-        link.revoked = True
-        return True
-
-
-# Fields that may NEVER appear in an export even if some upstream stored them.
-_BODY_KEYS = frozenset({"request_body", "response_body", "raw", "body", "content"})
-
-
-def _scrub(value: Any) -> Any:  # noqa: ANN401 - arbitrary EvidenceCase JSON
+    The removal used to be invisible: a shared receipt gave its reader no way
+    to tell a case that carried nothing from a case something was taken out of.
+    Paths only — never the values, which is the whole point.
+    """
+    removed: list[str] = []
     if isinstance(value, dict):
-        return {k: _scrub(v) for k, v in value.items() if k not in _BODY_KEYS}
+        kept: dict[str, Any] = {}
+        for key, sub in value.items():
+            at = f"{path}.{key}" if path else str(key)
+            if str(key).lower() in _BODY_KEYS:
+                removed.append(at)
+                continue
+            kept[key], sub_removed = _scrub(sub, at)
+            removed += sub_removed
+        return kept, removed
     if isinstance(value, list):
-        return [_scrub(v) for v in value]
-    return value
+        out = []
+        for i, item in enumerate(value):
+            cleaned, sub_removed = _scrub(item, f"{path}[{i}]")
+            out.append(cleaned)
+            removed += sub_removed
+        return out, removed
+    return value, removed
 
 
 def evidence_receipt_html(
@@ -86,7 +83,7 @@ def evidence_receipt_html(
 ) -> str:
     """A self-contained HTML receipt — the caught discrepancy, fully legible,
     no external assets, observations only."""
-    c = _scrub(case)
+    c, removed = _scrub(case)
     deviation = str(c.get("deviation") or "no deviation")
     verdict_source = str(c.get("verdict_source", ""))
     confidence = c.get("confidence", "")
@@ -98,6 +95,11 @@ def evidence_receipt_html(
         f"{html.escape(str(f.get('tool_name')))} — {html.escape(str(f.get('influence')))}</li>"
         for f in faults
     )
+    withheld = (
+        "<p class=\"mono dim\">withheld by the export content rule: "
+        + html.escape(", ".join(removed))
+        + "</p>"
+    ) if removed else ""
     return _TEMPLATE.format(
         run_id=html.escape(run_id),
         scenario=html.escape(scenario),
@@ -107,6 +109,7 @@ def evidence_receipt_html(
         observed=observed,
         claim=claim,
         fault_rows=fault_rows or "<li>—</li>",
+        withheld=withheld,
     )
 
 
@@ -124,12 +127,45 @@ def _render(value: Any) -> str:  # noqa: ANN401
 # Helvetica font (no embedding needed), observations only — the same scrubbed
 # content the HTML receipt carries.
 
+# Page geometry. Text starts at the top margin and steps down by the leading;
+# the last line whose baseline still clears the bottom margin is the last one
+# on the page. Everything past it used to be written anyway — off the bottom of
+# a MediaBox that is 792pt tall, into a PDF that is perfectly valid and simply
+# does not show it.
+_TOP = 760
+_LEADING = 14
+_BOTTOM = 56
+_LINES_PER_PAGE = (_TOP - _BOTTOM) // _LEADING + 1  # 51
+
+# The receipt embeds no font (that is what "dependency-free" costs), so the
+# only glyphs it can name are the ones WinAnsiEncoding has. Anything else used
+# to become "?" through `encode("latin-1", "replace")` — silently, which turned
+# a Cyrillic or CJK receipt into rows of question marks and mangled the em dash
+# in this module's own boilerplate. Now it is marked and counted.
+_UNRENDERABLE = "[?]"
+
+
 def _pdf_escape(text: str) -> str:
     return text.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
 
 
+def _winansi(line: str) -> tuple[str, int]:
+    """One line as WinAnsi, with the characters it could not carry counted."""
+    out: list[str] = []
+    dropped = 0
+    for ch in line:
+        try:
+            ch.encode("cp1252")
+        except UnicodeEncodeError:
+            out.append(_UNRENDERABLE)
+            dropped += 1
+        else:
+            out.append(ch)
+    return "".join(out), dropped
+
+
 def _receipt_lines(run_id: str, case: dict[str, Any], scenario: str) -> list[str]:
-    c = _scrub(case)
+    c, removed = _scrub(case)
     deviation = str(c.get("deviation") or "no deviation").replace("_", " ").upper()
     lines = [
         "AXOR EVIDENCECASE",
@@ -159,31 +195,89 @@ def _receipt_lines(run_id: str, case: dict[str, Any], scenario: str) -> list[str
         "",
         "observations only — no raw request/response bodies are exported (spec 8.3).",
     ]
+    if removed:
+        lines.append("")
+        for raw in textwrap.wrap(
+            "withheld by the export content rule: " + ", ".join(removed), 92
+        ):
+            lines.append(raw)
     return lines
+
+
+def _text_object(lines: list[str]) -> bytes:
+    body = ["BT", "/F1 11 Tf", f"{_LEADING} TL", f"56 {_TOP} Td"]
+    for line in lines:
+        body.append(f"({_pdf_escape(line)}) Tj")
+        body.append("T*")  # next line
+    body.append("ET")
+    return "\n".join(body).encode("cp1252", "replace")
 
 
 def evidence_receipt_pdf(
     run_id: str, case: dict[str, Any], scenario: str = ""
 ) -> bytes:
-    """A minimal, valid, dependency-free PDF receipt for one EvidenceCase."""
-    lines = _receipt_lines(run_id, case, scenario)
-    # Build the text content stream: 11pt Helvetica, 14pt leading, from the top.
-    leading = 14
-    body = ["BT", "/F1 11 Tf", f"{leading} TL", "56 760 Td"]
-    for line in lines:
-        body.append(f"({_pdf_escape(line)}) Tj")
-        body.append("T*")  # next line
-    body.append("ET")
-    content = "\n".join(body).encode("latin-1", "replace")
+    """A minimal, valid, dependency-free PDF receipt for one EvidenceCase.
 
+    Paginated: a receipt is the artifact an operator prints and attaches, so
+    content that does not fit must run onto another page, not off the bottom of
+    the first one. The single-page version silently lost everything past line
+    55 — on a 40-observation case that was the whole claim, the fault
+    attribution, and the line stating the content rule.
+    """
+    lines = [line for line in _receipt_lines(run_id, case, scenario)]
+    rendered: list[str] = []
+    dropped = 0
+    for line in lines:
+        text, missing = _winansi(line)
+        rendered.append(text)
+        dropped += missing
+    if dropped:
+        rendered += ["", *textwrap.wrap(
+            f"NOTE: {dropped} character(s) are shown as {_UNRENDERABLE} — this "
+            f"receipt embeds no font, so it can only draw WinAnsi glyphs. The "
+            f"HTML export of this case carries the text intact.", 92,
+        )]
+
+    def chunk(per_page: int) -> list[list[str]]:
+        return [
+            rendered[i:i + per_page]
+            for i in range(0, max(len(rendered), 1), per_page)
+        ] or [[]]
+
+    pages = chunk(_LINES_PER_PAGE)
+    if len(pages) > 1:
+        # A "page k of n" footer only exists once there is more than one page,
+        # and it needs room of its own — appended to a full page it is exactly
+        # the overflow this function is here to stop.
+        pages = chunk(_LINES_PER_PAGE - 2)
+        n = len(pages)
+        for i, page in enumerate(pages):
+            page.append("")
+            page.append(f"— page {i + 1} of {n} —")
+    n = len(pages)
+
+    # Object layout: 1 catalog, 2 page tree, 3 font, then one Page per page and
+    # one content stream per page. Numbering is fixed so /Kids and /Contents can
+    # reference forward without a second pass.
+    first_page, first_stream = 4, 4 + n
+    kids = " ".join(f"{first_page + i} 0 R" for i in range(n))
     objects: list[bytes] = [
         b"<< /Type /Catalog /Pages 2 0 R >>",
-        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
-        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] "
-        b"/Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>",
-        b"<< /Length %d >>\nstream\n%s\nendstream" % (len(content), content),
-        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+        b"<< /Type /Pages /Kids [%s] /Count %d >>" % (kids.encode("ascii"), n),
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica "
+        b"/Encoding /WinAnsiEncoding >>",
     ]
+    for i in range(n):
+        objects.append(
+            b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] "
+            b"/Resources << /Font << /F1 3 0 R >> >> /Contents %d 0 R >>"
+            % (first_stream + i)
+        )
+    for page in pages:
+        content = _text_object(page)
+        objects.append(
+            b"<< /Length %d >>\nstream\n%s\nendstream" % (len(content), content)
+        )
 
     out = bytearray(b"%PDF-1.4\n")
     offsets = [0]
@@ -238,6 +332,7 @@ _TEMPLATE = """<!doctype html>
   <ul class="mono mut">{fault_rows}</ul>
   <p class="mono dim">observations only — no raw request/response bodies are
   exported (spec section 8.3).</p>
+  {withheld}
   <p class="mono dim">Caught by
   <a href="https://axor.dev" style="color:#7FA8CC;text-decoration:none">Axor</a>
   — runtime governance for LLM agents. Catch the lie, replay it, govern the fleet.</p>

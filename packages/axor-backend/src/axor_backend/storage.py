@@ -1167,6 +1167,24 @@ class Store:
                 revoked=False, created_ts=ts, org_id=current_org_id(),
             ))
 
+    async def get_share_link(self, token: str) -> dict[str, Any] | None:
+        """One link by token, across tenants — deliberately unscoped.
+
+        ``GET /v1/share/{token}`` is served without auth, so there is no
+        principal to take an org from; the ROW carries the org and the route
+        adopts it. The token is the credential, exactly as it is for the
+        in-process index this replaced.
+        """
+        async with self.engine.connect() as conn:
+            row = (await conn.execute(
+                select(share_links).where(share_links.c.token == token)
+            )).first()
+        if row is None:
+            return None
+        return {"token": row.token, "run_id": row.run_id,
+                "case_index": row.case_index, "revoked": row.revoked,
+                "org_id": row.org_id}
+
     async def revoke_share_link(self, token: str) -> bool:
         """Revoking is org-scoped: a token is unguessable, but knowing one must
         not let another tenant burn it."""

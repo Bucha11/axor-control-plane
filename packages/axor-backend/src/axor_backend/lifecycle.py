@@ -128,14 +128,11 @@ async def rehydrate(state: Any) -> None:  # noqa: ANN401 - app.state is dynamic
             "class store behind the same interface (decision #13).",
             len(plaintext), len(creds),
         )
-    # Share links and notification subscriptions are primary data: rebuild their
-    # in-memory holders so a restart keeps permalinks live and keeps
-    # notifications firing (see storage.share_links / _subs).
-    for link in await state.store.list_share_links():
-        state.shares.load(
-            link["token"], link["run_id"], link["case_index"], link["revoked"],
-            org=link["org_id"],
-        )
+    # Notification subscriptions are primary data held in process: rebuild the
+    # notifier so a restart keeps them firing (see storage._subs). Share links
+    # need nothing here — they are read from the table on every resolve, which
+    # is what keeps a revoke and a retention prune from being one restart away
+    # from taking effect.
     for sub in await state.store.all_subscriptions():
         state.notifier.subscribe(
             sub["url"], sub["triggers"], sub["debounce_seconds"],

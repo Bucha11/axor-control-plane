@@ -23,7 +23,6 @@ from axor_backend.broadcast import Broadcast
 from axor_backend.config import AppConfig
 from axor_backend.limits import SubgraphCache
 from axor_backend.notifications import Notifier
-from axor_backend.share import ShareRegistry
 from axor_backend.storage import Store
 
 
@@ -56,10 +55,6 @@ def get_notifier(request: Request) -> Notifier:
     return request.app.state.notifier
 
 
-def get_shares(request: Request) -> ShareRegistry:
-    return request.app.state.shares
-
-
 def get_subgraph_cache(request: Request) -> SubgraphCache:
     return request.app.state.subgraph_cache
 
@@ -70,5 +65,4 @@ PrincipalDep = Annotated[Any, Depends(get_principal)]
 StoreDep = Annotated[Store, Depends(get_store)]
 BroadcastDep = Annotated[Broadcast, Depends(get_broadcast)]
 NotifierDep = Annotated[Notifier, Depends(get_notifier)]
-SharesDep = Annotated[ShareRegistry, Depends(get_shares)]
 SubgraphCacheDep = Annotated[SubgraphCache, Depends(get_subgraph_cache)]

@@ -27,12 +27,14 @@ lifetime longer than one request:
     verified EE licenses per organization. A license entitles ONE tenant, so a
     process-wide slot would let whichever org pasted last decide everyone else's
     tier.
-``shares``, ``notifier``, ``subgraph_cache``
-    share links, webhook subscriptions, and derived causal subgraphs.
+``notifier``, ``subgraph_cache``
+    webhook subscriptions and derived causal subgraphs. Share links are NOT
+    here: they live only in the ``share_links`` table, because an in-process
+    index of them went stale against retention and against a revoke.
 
-All of it lives in one process on purpose: ``broadcast``, ``shares`` and
-``notifier`` are per-process, so a second worker would hold a second, divergent
-copy of each (see docs/ops-limits.md).
+All of it lives in one process on purpose: ``broadcast`` and ``notifier`` are
+per-process, so a second worker would hold a second, divergent copy of each
+(see docs/ops-limits.md).
 """
 from __future__ import annotations
 
@@ -50,7 +52,6 @@ from axor_backend.notifications import Notifier
 from axor_backend.observability import setup_observability
 from axor_backend.routers import ALL_ROUTERS
 from axor_backend.security import auth_middleware
-from axor_backend.share import ShareRegistry
 from axor_backend.signing import OperatorKeyring
 from axor_backend.storage import Store, make_engine
 
@@ -94,7 +95,6 @@ def create_app(
     app.state.broadcast = Broadcast()
     app.state.keyring = OperatorKeyring(config.operator_keys or {})
     app.state.allow_unsigned = config.allow_unsigned
-    app.state.shares = ShareRegistry()
     app.state.subgraph_cache = SubgraphCache()
     app.state.licenses = {}
     # (org, node) -> the UTC day already written to the governed-node meter, so

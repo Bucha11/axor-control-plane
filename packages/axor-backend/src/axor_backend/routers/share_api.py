@@ -17,10 +17,10 @@ from fastapi import APIRouter, HTTPException, Response
 from fastapi.responses import HTMLResponse
 
 from axor_backend.clock import now
-from axor_backend.deps import SharesDep, StoreDep
-from axor_backend.share import evidence_receipt_html, evidence_receipt_pdf
+from axor_backend.deps import StoreDep
+from axor_backend.share import evidence_receipt_html, evidence_receipt_pdf, new_token
 from axor_backend.storage import Store
-from axor_backend.tenancy import current_org_id, set_current_org
+from axor_backend.tenancy import set_current_org
 
 router = APIRouter(prefix="/v1", tags=["share"])
 
@@ -37,39 +37,46 @@ async def _case_run(store: Store, run_id: str, case_index: int) -> dict:
 
 @router.post("/runs/{run_id}/cases/{case_index}/share")
 async def create_share(
-    run_id: str, case_index: int, store: StoreDep, shares: SharesDep
+    run_id: str, case_index: int, store: StoreDep
 ) -> dict:
     await _case_run(store, run_id, case_index)  # 404 before minting a dead token
-    # The link remembers WHICH tenant's case it points at, because the route
+    # The row remembers WHICH tenant's case it points at, because the route
     # that resolves it has no principal to ask.
-    link = shares.create(run_id, case_index, org=current_org_id())
-    await store.create_share_link(link.token, run_id, case_index, now())
-    return {"token": link.token, "url": f"/v1/share/{link.token}"}
+    token = new_token()
+    await store.create_share_link(token, run_id, case_index, now())
+    return {"token": token, "url": f"/v1/share/{token}"}
 
 
 @router.delete("/share/{token}")
-async def revoke_share(token: str, store: StoreDep, shares: SharesDep) -> dict:
-    # Knowing a token must not let another tenant burn it: the in-memory
-    # registry is process-wide, so the org check is what scopes this.
-    link = shares.resolve(token)
-    if link is None or link.org != current_org_id():
+async def revoke_share(token: str, store: StoreDep) -> dict:
+    # Knowing a token must not let another tenant burn it — the UPDATE is
+    # org-scoped, so a miss is either "no such token" or "not yours" and both
+    # answer the same 404.
+    if not await store.revoke_share_link(token):
         raise HTTPException(404, "unknown token")
-    shares.revoke(token)
-    await store.revoke_share_link(token)
     return {"revoked": token}
 
 
 @router.get("/share/{token}")
-async def resolve_share(
-    token: str, store: StoreDep, shares: SharesDep
-) -> HTMLResponse:
-    link = shares.resolve(token)
-    if link is None:
+async def resolve_share(token: str, store: StoreDep) -> HTMLResponse:
+    """Resolve straight from the store — there is no in-process index.
+
+    There used to be one, rehydrated at boot, and it was authoritative for this
+    route while the table was authoritative for everything else. Retention
+    deletes a pruned run's links from the table; the index kept them, so the
+    moment a run id was used again (ids are client-chosen, and `upsert_run`
+    exists to reuse them) an old public token served the NEW case. The row is
+    the only source of truth now, which also means a revoke lands immediately
+    rather than at the next restart.
+    """
+    link = await store.get_share_link(token)
+    if link is None or link["revoked"]:
         raise HTTPException(404, "link revoked or unknown")
-    set_current_org(link.org)  # this route is open; adopt the link's tenant
-    run = await _case_run(store, link.run_id, link.case_index)
+    set_current_org(link["org_id"])  # this route is open; adopt the link's tenant
+    run = await _case_run(store, link["run_id"], link["case_index"])
     return HTMLResponse(evidence_receipt_html(
-        link.run_id, run["evidence"][link.case_index], run.get("scenario", "")
+        link["run_id"], run["evidence"][link["case_index"]],
+        run.get("scenario", ""),
     ))
 
 
