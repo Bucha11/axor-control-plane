@@ -409,6 +409,71 @@ function b64utf8(s: string): string {
   return btoa(bin);
 }
 
+export interface VaultCredential {
+  tool: string;
+  endpoint: string;
+  version: number;
+  revoked: boolean;
+  scope_nodes: string[];
+  header: string;
+  scheme: string;
+  // Whether this deployment can read this credential at all.
+  sealed: boolean;
+}
+
+export interface VaultCredsHealth {
+  enrolled: VaultCredential[];
+}
+
+export interface VaultEnrollment {
+  tool: string;
+  endpoint: string;
+  secret: string;
+  scope_nodes: string[];
+  header: string;
+  scheme: string;
+}
+
+export interface DispenseRow {
+  node_id: string;
+  tool: string;
+  endpoint: string;
+  version: number;
+  run_id: string | null;
+  seq: number | null;
+  verdict: string | null;
+  signed: boolean;
+  principal: string;
+  ts: string;
+}
+
+// The credential subsystem's own token, in its own header — the wall (spec v2
+// Ch.5 §3). Sent on every /v1/vault/creds route and nowhere else, so a browser
+// that can dispense still cannot request a signature.
+function afCreds(path: string, init: RequestInit = {}): Promise<Response> {
+  const token = useApp.getState().vaultCredsToken;
+  return af(path, {
+    ...init,
+    headers: {
+      ...(init.headers as Record<string, string> | undefined),
+      ...(token ? { "X-Vault-Creds-Token": token } : {}),
+    },
+  });
+}
+
+// Seal a credential to the deployment's sealing key, in the operator's browser.
+// libsodium's own sealed box (X25519 + XSalsa20-Poly1305), byte-identical to
+// what the node opens with pynacl — no primitive is reimplemented here, and the
+// wasm is loaded only when someone actually enrols something.
+async function sealSecret(publicKeyHex: string, secret: string): Promise<string> {
+  const sodium = (await import("libsodium-wrappers")).default;
+  await sodium.ready;
+  return sodium.to_base64(
+    sodium.crypto_box_seal(sodium.from_string(secret), sodium.from_hex(publicKeyHex)),
+    sodium.base64_variants.ORIGINAL,
+  );
+}
+
 // Signed command posture (protocol §6): the browser canonicalizes the payload
 // itself (byte-identical to the adapter's kernel), then asks the vault signing
 // custody to sign exactly those bytes. The operator key never enters the
@@ -469,8 +534,71 @@ export const api = {
     }).then((r) => j<{ ranking: InfluenceEntry[] }>(r)),
 
   vaultCredsHealth: () =>
-    af("/v1/vault/creds/health").then((r) =>
-      j<{ enrolled: { tool: string; endpoint: string; version: number; revoked: boolean; scope_nodes: string[]; header: string; scheme: string }[] }>(r)),
+    afCreds("/v1/vault/creds/health").then((r) => j<VaultCredsHealth>(r)),
+
+  // Envelope mode (ui-spec §14.2). Registering a sealing PUBLIC key is what
+  // stops this deployment storing plaintext at all; the private half is minted
+  // by `axor-proxy vault keygen` on the operator's own machine and never enters
+  // the browser — pasting it here would be handing over the one thing the mode
+  // exists to keep away from the backend.
+  vaultSealingKey: () =>
+    afCreds("/v1/vault/creds/sealing-key").then(
+      (r) => j<{ public_key_hex: string | null; envelope_mode: boolean }>(r)),
+  registerSealingKey: (publicKeyHex: string) =>
+    afCreds("/v1/vault/creds/sealing-key", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ public_key_hex: publicKeyHex }),
+    }).then((r) => j<{ registered: boolean }>(r)),
+
+  // Whose dispense attestations verify. Also a pubkey, also not a secret.
+  vaultNodeKeys: () =>
+    afCreds("/v1/vault/creds/node-keys").then((r) => j<Record<string, string>>(r)),
+  registerNodeKey: (nodeId: string, publicKeyHex: string) =>
+    afCreds("/v1/vault/creds/node-keys", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ node_id: nodeId, public_key_hex: publicKeyHex }),
+    }).then((r) => j<{ registered: boolean }>(r)),
+
+  // Enrol. In envelope mode the secret is sealed HERE, in the operator's own
+  // browser, and only the ciphertext is posted — one step for the operator and
+  // one fewer place the plaintext exists than a shell command would leave it.
+  vaultEnroll: async (body: VaultEnrollment, sealingKey: string | null) => {
+    const { secret, ...rest } = body;
+    const payload: Record<string, unknown> = { ...rest };
+    if (sealingKey) payload.sealed_secret = await sealSecret(sealingKey, secret);
+    else payload.secret = secret;
+    const r = await afCreds("/v1/vault/creds/enroll", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    return j<{ tool: string; endpoint: string; version: number }>(r);
+  },
+  vaultRotate: async (
+    tool: string, endpoint: string, secret: string, sealingKey: string | null,
+  ) => {
+    const payload: Record<string, unknown> = { tool, endpoint };
+    if (sealingKey) payload.sealed_secret = await sealSecret(sealingKey, secret);
+    else payload.secret = secret;
+    const r = await afCreds("/v1/vault/creds/rotate", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    return j<{ version: number }>(r);
+  },
+  vaultRevoke: (tool: string, endpoint: string) =>
+    afCreds("/v1/vault/creds/revoke", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ tool, endpoint }),
+    }).then((r) => j<{ revoked: boolean; version: number }>(r)),
+
+  // What every dispensed credential was fetched for. Never the credential.
+  vaultCredsAudit: () =>
+    afCreds("/v1/vault/creds/audit").then((r) => j<DispenseRow[]>(r)),
 
   vaultSigningKeys: () =>
     af("/v1/vault/signing/keys").then((r) =>

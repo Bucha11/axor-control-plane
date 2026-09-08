@@ -37,6 +37,11 @@ interface AppState {
   // a sign request). Empty => unsigned dev posture (AXOR_ALLOW_UNSIGNED=1).
   signingKeyId: string;
   vaultSigningToken: string;
+  // The other half of the wall (spec v2 Ch.5 §3): its own token, in its own
+  // header, so being able to dispense a credential never grants the ability to
+  // request a signature. Kept apart in the store for the same reason it is kept
+  // apart on the wire.
+  vaultCredsToken: string;
   // Adoption (spec: quiet-until-wrong, so learning is opt-in). Learn mode reveals
   // per-surface coach notes; `learnSeen` gates the one-time first-visit nudge;
   // `coachDismissed` remembers which notes the user closed.
@@ -56,6 +61,7 @@ interface AppState {
   clearSession: () => void;
   setSigningKeyId: (id: string) => void;
   setVaultSigningToken: (token: string) => void;
+  setVaultCredsToken: (token: string) => void;
   setLearnMode: (v: boolean) => void;
   markLearnSeen: () => void;
   dismissCoach: (id: string) => void;
@@ -74,7 +80,9 @@ export const MODE_LABEL: Record<ConnectionMode, string> = {
 };
 
 // Keys whose values are credentials; everything else is UI preference.
-const SECRET_KEYS = ["apiToken", "refreshToken", "vaultSigningToken"] as const;
+const SECRET_KEYS = [
+  "apiToken", "refreshToken", "vaultSigningToken", "vaultCredsToken",
+] as const;
 
 // One Storage face over two backing stores: session for the secret half of the
 // persisted blob, local for the rest. zustand/persist writes a single JSON
@@ -159,6 +167,7 @@ export const useApp = create<AppState>()(
       identityEmail: "",
       signingKeyId: "",
       vaultSigningToken: "",
+      vaultCredsToken: "",
       learnMode: false,
       learnSeen: false,
       coachDismissed: [],
@@ -182,6 +191,7 @@ export const useApp = create<AppState>()(
       clearSession: () => set({ apiToken: "", refreshToken: "", identityEmail: "" }),
       setSigningKeyId: (id) => set({ signingKeyId: id }),
       setVaultSigningToken: (token) => set({ vaultSigningToken: token }),
+      setVaultCredsToken: (token) => set({ vaultCredsToken: token }),
       setLearnMode: (v) => set({ learnMode: v, learnSeen: true }),
       markLearnSeen: () => set({ learnSeen: true }),
       dismissCoach: (id) =>

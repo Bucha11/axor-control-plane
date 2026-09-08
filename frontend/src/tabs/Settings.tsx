@@ -10,6 +10,7 @@ import { IdentityError, login, signup } from "../identity";
 import { MODE_LABEL, useApp } from "../store";
 import { C, MONO, btn } from "../theme";
 import Coach from "../components/Coach";
+import ToolCredentials from "../components/ToolCredentials";
 import { useStartTour } from "../components/Tour";
 
 const TRIGGERS = [
@@ -482,7 +483,6 @@ export default function Settings() {
 // federation". The separation is backend-enforced (separate credentials);
 // the UI mirrors it structurally.
 function FederationVault() {
-  const creds = useQuery({ queryKey: ["vault-creds"], queryFn: api.vaultCredsHealth });
   const keys = useQuery({ queryKey: ["vault-keys"], queryFn: api.vaultSigningKeys });
   const audit = useQuery({ queryKey: ["vault-audit"], queryFn: api.vaultSigningAudit });
   const qc = useQueryClient();
@@ -513,30 +513,7 @@ function FederationVault() {
   const signedPosture = Boolean(signingKeyId);
   return (
     <div className="flex gap-4 mb-4" data-testid="federation-vault" style={{ alignItems: "stretch" }}>
-      <div className="p-4 flex-1" style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 8 }}>
-        <div style={{ fontSize: 10, fontFamily: MONO, color: C.dim, letterSpacing: "0.1em", marginBottom: 8 }}>
-          FEDERATION VAULT · TOOL CREDENTIALS
-        </div>
-        <div style={{ fontFamily: MONO, fontSize: 10.5, color: C.mut, marginBottom: 10, lineHeight: 1.6 }}>
-          fetched at call time and injected at the sink by the proxy, for the
-          tools its AXOR_VAULT_TOOLS opts in — so the agent never holds the key.
-          per-node scope, fail-closed, no cache. rotation is config; the plane
-          may revoke, never grant.
-        </div>
-        {(creds.data?.enrolled ?? []).length === 0 ? (
-          <div style={{ fontFamily: MONO, fontSize: 11, color: C.dim }}>no credentials enrolled</div>
-        ) : (
-          (creds.data?.enrolled ?? []).map((e) => (
-            <div key={`${e.tool}-${e.endpoint}`} className="flex items-center gap-2 py-1" style={{ fontFamily: MONO, fontSize: 11 }}>
-              <span style={{ color: e.revoked ? C.dim : C.text, textDecoration: e.revoked ? "line-through" : "none" }}>{e.tool}</span>
-              <span style={{ color: C.dim, fontSize: 10 }}>v{e.version}</span>
-              <span style={{ color: C.dim, fontSize: 10 }}>scope: {e.scope_nodes.join(", ") || "none"}</span>
-              <span style={{ color: C.dim, fontSize: 10 }}>→ {e.header}{e.scheme ? ` ${e.scheme}` : ""}</span>
-              {e.revoked && <span style={{ color: C.red, fontSize: 10 }}>revoked</span>}
-            </div>
-          ))
-        )}
-      </div>
+      <ToolCredentials />
       <div className="p-4 flex-1" style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 8 }}>
         <div style={{ fontSize: 10, fontFamily: MONO, color: C.dim, letterSpacing: "0.1em", marginBottom: 8 }}>
           FEDERATION VAULT · SIGNING KEYS
