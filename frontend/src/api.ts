@@ -242,15 +242,20 @@ export interface RegressionRow {
   run_id: string;
   side: string;
   label: string;
-  result: "held" | "escaped" | "passed" | "regressed";
+  // `unanchored`: a must-block pin whose trace recorded no denial, so there is
+  // nothing in it to check the candidate config against.
+  result: "held" | "escaped" | "passed" | "regressed" | "unanchored";
   first_divergence: number | null;
   new_denial: { seq: number; reason: string; category: string } | null;
+  pinned_denials: number;
+  escaped_denials: { node_id: string; seq: number; tool: string; gate: string | null }[];
 }
 
 export interface RegressionReport {
   rows: RegressionRow[];
   regressed: number;
   escaped: number;
+  unanchored: number;
   safe_to_ship: boolean;
 }
 
@@ -830,7 +835,8 @@ export const api = {
   regressionHistory: (limit = 50) =>
     af(`/v1/regression/history?limit=${limit}`).then((r) =>
       j<{ created_ts: string; source: string; regressed: number; escaped: number;
-          skipped: number; total: number; safe_to_ship: boolean }[]>(r),
+          unanchored: number; skipped: number; total: number;
+          safe_to_ship: boolean }[]>(r),
     ),
   getRegressionSchedule: () =>
     af("/v1/regression/schedule").then((r) =>

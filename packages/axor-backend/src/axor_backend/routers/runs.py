@@ -61,13 +61,24 @@ async def set_evidence(
     await store.set_evidence(run_id, evidence)
     # Run completed with >=1 EvidenceCase → notify (spec section 16 trigger).
     deviations = [c for c in evidence if c.get("deviation")]
+    pinned = False
     if deviations:
         # Auto-pin the must-block side here, at the system of record (decision
         # 11): a trace carrying an EvidenceCase IS the regression corpus's block
         # side, and pinning it should not depend on the uploading client
-        # remembering to POST /v1/pins. pin() is idempotent, so the proxy's own
-        # pin call stays a harmless no-op.
-        await store.pin(run_id, "must_block", body.get("scenario", ""))
+        # remembering to POST /v1/pins. This is the ONLY auto-pin — the proxy
+        # used to POST /v1/pins itself, which put the same policy in two places.
+        #
+        # Only a trace that recorded a denial, though. The block side asks "does
+        # this config still make the denial this run made"; a run whose evidence
+        # is a fabricated tool result (or any deviation caught with the gates in
+        # observe mode) recorded no denial, so the pin has nothing to check and
+        # the corpus can only report it unchecked forever. The evidence
+        # notification below still fires — the finding is not lost, it just does
+        # not become a regression test that cannot run.
+        pinned = await store.has_recorded_denial(run_id)
+        if pinned:
+            await store.pin(run_id, "must_block", body.get("scenario", ""))
         await notifier.emit(
             "evidence_run",
             body.get("node_id", "proxy"),
@@ -77,7 +88,7 @@ async def set_evidence(
                 "permalink": f"/v1/runs/{run_id}",
             },
         )
-    return {"ok": True, "notified": bool(deviations)}
+    return {"ok": True, "notified": bool(deviations), "pinned": pinned}
 
 
 @router.get("/runs")

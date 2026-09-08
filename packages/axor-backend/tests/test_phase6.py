@@ -227,16 +227,27 @@ async def test_cascade_stop_stops_the_whole_subtree(
 
 # ── evidence auto-pin ─────────────────────────────────────────────────────────
 
+def _call(seq: int, tool: str, verdict: str) -> dict:
+    return {"schema_version": "1.0", "seq": seq, "node_id": "n1",
+            "kind": "tool_call", "ts": "t", "causal_root": None, "gate": None,
+            "verdict": verdict,
+            "payload": {"tool": tool, "args": {}, "arg_refs": {}}}
+
+
 async def test_set_evidence_auto_pins_deviation_to_must_block(
     client: httpx.AsyncClient,
 ) -> None:
     store = client._app.state.store  # type: ignore[attr-defined]
-    await client.post("/v1/ingest/run_x", json={"node_id": "n1", "events": []})
-    # Evidence with a deviation → auto-pinned to the must_block corpus side.
-    await client.post("/v1/runs/run_x/evidence", json={
+    await client.post("/v1/ingest/run_x", json={
+        "node_id": "n1", "events": [_call(0, "slack_post", "deny")],
+    })
+    # Evidence with a deviation, over a trace that recorded the denial →
+    # auto-pinned to the must_block corpus side.
+    pinned = (await client.post("/v1/runs/run_x/evidence", json={
         "node_id": "n1", "scenario": "prompt_injection",
         "evidence": [{"case_id": "c1", "deviation": "exfil attempt"}],
-    })
+    })).json()
+    assert pinned == {"ok": True, "notified": True, "pinned": True}
     pins = await store.pinned()
     assert any(p["run_id"] == "run_x" and p["side"] == "must_block" for p in pins)
 
@@ -247,6 +258,41 @@ async def test_set_evidence_auto_pins_deviation_to_must_block(
     })
     pins = await store.pinned()
     assert not any(p["run_id"] == "run_y" for p in pins)
+
+
+async def test_a_deviation_with_no_recorded_denial_is_not_auto_pinned(
+    client: httpx.AsyncClient,
+) -> None:
+    """The block side pins a denial to hold; a trace with none is not one.
+
+    A fabricated tool result — or any deviation caught with the gates in
+    observe mode — leaves a trace where every call passed. Pinned must_block,
+    it produces a corpus row the report can only ever mark unchecked
+    (`replay_api.regression_row`), and one such pin withholds `safe_to_ship`
+    from every config forever. The evidence notification still fires: the
+    finding is kept, it just does not become a regression test that cannot run.
+    """
+    store = client._app.state.store  # type: ignore[attr-defined]
+    notifier = client._app.state.notifier  # type: ignore[attr-defined]
+    fired: list[str] = []
+
+    async def capture(url: str, body: dict, org: str) -> None:
+        fired.append(body["trigger"])
+
+    notifier.subscribe("https://hook.test/x", ["evidence_run"], 0.0)
+    notifier._deliver = capture
+    await client.post("/v1/ingest/run_obs", json={
+        "node_id": "n1", "events": [_call(0, "web_search", "pass")],
+    })
+    body = (await client.post("/v1/runs/run_obs/evidence", json={
+        "node_id": "n1", "scenario": "tool-deprivation",
+        "evidence": [{"case_id": "c1", "deviation": "fabricated_tool_result"}],
+    })).json()
+    await notifier.drain()
+
+    assert body == {"ok": True, "notified": True, "pinned": False}
+    assert not any(p["run_id"] == "run_obs" for p in await store.pinned())
+    assert fired == ["evidence_run"]  # the finding is still reported
 
 
 # ── node_stale sweep ──────────────────────────────────────────────────────────

@@ -50,13 +50,11 @@ class BackendUploader:
                 f"{self._base}/v1/runs/{run.run_id}/evidence",
                 json={"node_id": run.node_id, "evidence": evidence}, headers=h,
             )).raise_for_status()
-            if any(c.deviation is not None for c in run.evidence):
-                # Auto-pin the must-block side (decision 11): traces carrying an
-                # EvidenceCase are the regression corpus's block side.
-                (await client.post(
-                    f"{self._base}/v1/pins/{run.run_id}",
-                    json={"side": "must_block", "label": run.scenario}, headers=h,
-                )).raise_for_status()
+            # No pin call here. The must-block auto-pin (decision 11) is the
+            # backend's, decided in POST /v1/runs/{id}/evidence above: it is the
+            # system of record and it can see whether the trace actually
+            # recorded a denial for the pin to hold. Pinning from here too put
+            # the same policy in two places, and this one could not check.
             return {"uploaded": True, "events": len(events),
                     "evidence": len(evidence)}
         except httpx.HTTPError as exc:

@@ -254,8 +254,10 @@ async def run_due_schedule(state: Any, org: str) -> None:  # noqa: ANN401
 
         await state.store.mutate_setting("regression_schedule", stamp)
         log.info(
-            "scheduled corpus run (org %s): %d rows, regressed=%d escaped=%d",
+            "scheduled corpus run (org %s): %d rows, regressed=%d escaped=%d "
+            "unanchored=%d",
             org, len(report["rows"]), report["regressed"], report["escaped"],
+            report["unanchored"],
         )
     except asyncio.CancelledError:
         raise

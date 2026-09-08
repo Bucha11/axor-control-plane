@@ -43,7 +43,7 @@ from fastapi import FastAPI
 from axor_backend.broadcast import Broadcast
 from axor_backend.clock import now
 from axor_backend.config import AppConfig
-from axor_backend.errors import unhandled_error
+from axor_backend.errors import ConfigInvalid, config_invalid, unhandled_error
 from axor_backend.lifecycle import lifespan
 from axor_backend.limits import SubgraphCache
 from axor_backend.notifications import Notifier
@@ -103,6 +103,9 @@ def create_app(
     app.state.active_today = {}
     app.state.notifier = _notifier(app)
 
+    # ConfigInvalid before the catch-all: a malformed kernel config is a
+    # typo in an operator's JSON, and 500 'internal' hides which field.
+    app.add_exception_handler(ConfigInvalid, config_invalid)
     app.add_exception_handler(Exception, unhandled_error)
     app.middleware("http")(auth_middleware)
     for router in ALL_ROUTERS:

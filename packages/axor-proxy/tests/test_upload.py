@@ -51,7 +51,7 @@ async def stack(tmp_path: pathlib.Path) -> object:
         yield proxy_client, backend_client
 
 
-async def test_claim_uploads_trace_and_evidence_and_autopins(stack) -> None:  # noqa: ANN001
+async def test_claim_uploads_trace_and_evidence(stack) -> None:  # noqa: ANN001
     proxy, backend = stack
     run_id = (await proxy.post("/axor/runs", json={
         "scenario": "tool-deprivation",
@@ -77,9 +77,14 @@ async def test_claim_uploads_trace_and_evidence_and_autopins(stack) -> None:  # 
     scrub = (await backend.get(f"/v1/replay/{run_id}")).json()
     assert scrub["first_divergence"] is None
 
-    # discrepancy-bearing trace auto-pinned must-block -> regression sees it
+    # The discrepancy here is a fabricated tool result: every call in the trace
+    # passed, so there is no denial for a must_block pin to hold and the backend
+    # does not pin it (routers/runs.set_evidence). Pinned anyway, the corpus
+    # could only ever report it unchecked and withhold safe_to_ship from every
+    # config. The evidence itself uploaded — that is what the run produced.
+    pins = (await backend.get("/v1/pins")).json()
+    assert not any(p["run_id"] == run_id for p in pins["pins"])
     report = (await backend.post("/v1/regression", json={
         "config": {"allowed_tools": ["web_search"], "egress_sinks": []},
     })).json()
-    assert any(r["run_id"] == run_id and r["side"] == "must_block"
-               for r in report["rows"])
+    assert report["rows"] == [] and report["safe_to_ship"] is True

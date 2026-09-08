@@ -38,19 +38,25 @@ async def regression_report(store: Store, config_json: dict) -> dict:
         )
     regressed = sum(1 for r in rows if r["result"] == "regressed")
     escaped = sum(1 for r in rows if r["result"] == "escaped")
+    # A must_block pin whose trace recorded no denial cannot be checked against
+    # itself (replay_api.regression_row). Counted, and it withholds
+    # safe_to_ship: the report promises "every attack still blocked", and a pin
+    # nothing was verified against is not evidence for that sentence.
+    unanchored = sum(1 for r in rows if r["result"] == "unanchored")
     return {
         "rows": rows,
         "regressed": regressed,
         "escaped": escaped,
+        "unanchored": unanchored,
         "skipped": skipped,
-        "safe_to_ship": regressed == 0 and escaped == 0,
+        "safe_to_ship": regressed == 0 and escaped == 0 and unanchored == 0,
     }
 
 
 async def record_corpus_run(state: Any, report: dict, source: str) -> None:  # noqa: ANN401
     """Every corpus run leaves history; a failing one gets loud (spec §16)."""
     await state.store.add_regression_report(report, source, now())
-    if report["regressed"] or report["escaped"]:
+    if not report["safe_to_ship"]:
         await state.notifier.emit(
             "regression_failed",
             "corpus",
@@ -58,6 +64,7 @@ async def record_corpus_run(state: Any, report: dict, source: str) -> None:  # n
                 "source": source,
                 "regressed": report["regressed"],
                 "escaped": report["escaped"],
+                "unanchored": report["unanchored"],
                 "total": len(report["rows"]),
             },
         )

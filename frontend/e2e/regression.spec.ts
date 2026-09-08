@@ -46,6 +46,43 @@ test.describe("regression", () => {
     await expect(page.getByText(/Safe to ship/)).toHaveCount(0);
   });
 
+  test("a config that lets the pinned exfil through escapes, and the row names it", async ({ page }) => {
+    await goHash(page, "regression");
+    // Two edits at once, both plausible: a trusted set on slack_post's driving
+    // argument (which supersedes the integrity axis, so the exfil the trace
+    // recorded as DENY now goes through), and bash dropped from the capability
+    // table (an unrelated benign call that now denies). The report used to
+    // answer "still blocked" for exactly this — it asked whether the config
+    // denies ANYTHING in the trace, and bash obliged.
+    await page.locator("textarea").fill(
+      JSON.stringify(
+        {
+          allowed_tools: ["email_read", "summarize", "slack_post", "notes_read", "notes_write"],
+          egress_sinks: ["slack_post"],
+          driving_args: { slack_post: ["text"] },
+          value_policies: {
+            slack_post: [{ arg: "text", kind: "enum", allowed: ["…"] }],
+          },
+        },
+        null,
+        2,
+      ),
+    );
+    await page.getByRole("button", { name: /Run regression/ }).click();
+
+    await expect(page.getByText("ESCAPED", { exact: true })).toBeVisible();
+    await expect(page.getByText(/Safe to ship/)).toHaveCount(0);
+    // Counts only for the escape itself: the corpus is shared with whatever
+    // other specs in this run have pinned, so "how many held" is not this
+    // test's to assert.
+    await expect(page.getByText(/1 escape/).first()).toBeVisible();
+    // The row opens onto the step that escaped — named, not a count.
+    await page.getByText("ESCAPED", { exact: true }).click();
+    await expect(
+      page.getByText(/slack_post @ adapter-demo-block:6.*recorded DENY/),
+    ).toBeVisible();
+  });
+
   test("the org layer (schedule + history) renders locked without a license", async ({ page }) => {
     await goHash(page, "regression");
     await expect(page.getByText("SCHEDULED CI · HISTORY")).toBeVisible();

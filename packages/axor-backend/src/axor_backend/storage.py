@@ -497,6 +497,26 @@ class Store:
         # kernel-schema line as a string, so re-serialise on the way out.
         return [json.dumps(r.line) for r in rows]
 
+    async def has_recorded_denial(self, run_id: str) -> bool:
+        """Did this run record a DENY at a boundary?
+
+        The must_block corpus side exists to check that a denial the trace
+        already made still gets made under a candidate config
+        (``replay_api.regression_row``). A trace with no denial in it carries no
+        such boundary, so pinning one produces a corpus row that can never be
+        checked — which is what this answers for the auto-pin. Reads only the
+        gated events, not the whole trace.
+        """
+        async with self.engine.connect() as conn:
+            rows = (await conn.execute(
+                select(events.c.line).where(
+                    events.c.run_id == run_id,
+                    events.c.org_id == current_org_id(),
+                    events.c.kind == "tool_call",
+                )
+            )).all()
+        return any((r.line or {}).get("verdict") == "deny" for r in rows)
+
     async def run_events_after(
         self, run_id: str, after_id: int = 0,
     ) -> list[tuple[int, str]]:
@@ -1411,6 +1431,11 @@ class Store:
         return [
             {"created_ts": r.created_ts, "source": r.source,
              "regressed": r.regressed, "escaped": r.escaped,
+             # Read from the stored report rather than a column: a history row
+             # marked unsafe with "0 regressed · 0 escaped" tells the operator
+             # nothing about why. Rows written before unanchored existed report
+             # 0, which is what they measured.
+             "unanchored": (r.report_json or {}).get("unanchored", 0),
              "skipped": r.skipped, "total": r.total,
              "safe_to_ship": r.safe_to_ship}
             for r in rows

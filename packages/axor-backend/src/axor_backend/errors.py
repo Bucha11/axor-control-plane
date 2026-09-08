@@ -19,6 +19,17 @@ class TraceNotFound(BackendError):
     pass
 
 
+class ConfigInvalid(BackendError):
+    """A kernel config (Config Builder shape or direct) is malformed.
+
+    Its own type because it is a caller mistake, not a server fault: every
+    consumer of ``kernel_config_from_json`` answers on behalf of an operator
+    editing JSON by hand, so the field that is wrong belongs in the response.
+    Mapped to 400 by :func:`config_invalid` — a 500 here reads as "Axor is
+    broken" for what is a typo in a text box.
+    """
+
+
 class StaleVersion(BackendError):
     """A versioned write named a version the row no longer holds.
 
@@ -58,3 +69,8 @@ async def unhandled_error(request: Request, exc: Exception) -> JSONResponse:
         exc_info=exc,
     )
     return JSONResponse({"error": "internal"}, status_code=500)
+
+
+async def config_invalid(request: Request, exc: Exception) -> JSONResponse:
+    """A malformed kernel config is the caller's, with the field named."""
+    return JSONResponse({"error": str(exc)}, status_code=400)
