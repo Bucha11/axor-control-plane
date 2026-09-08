@@ -695,8 +695,12 @@ async def test_saturation_is_dead_lettered_not_queued() -> None:
 
     n = Notifier(post=hang)
     n.subscribe("http://sink.test", ["node_stale"])
-    for i in range(_MAX_IN_FLIGHT + 5):
-        await n.emit("node_stale", f"n{i}", {})
+    # Bounded: emit SCHEDULES, so this loop is fast. Were delivery inline again
+    # it would sit here for hours, and a mutation that hangs the suite is a
+    # worse signal than one that fails it.
+    async with asyncio.timeout(5):
+        for i in range(_MAX_IN_FLIGHT + 5):
+            await n.emit("node_stale", f"n{i}", {})
     assert len(n.dead_letters) >= 5
     assert "saturated" in n.dead_letters[-1].error
     for task in list(n._in_flight):
