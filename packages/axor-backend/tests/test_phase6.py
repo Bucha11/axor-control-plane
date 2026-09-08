@@ -2,6 +2,7 @@
 (section 8.3), and the EE offline license check (monetization section 4)."""
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import pathlib
 from collections.abc import AsyncIterator
@@ -36,8 +37,12 @@ async def test_notifier_retries_then_dead_letters() -> None:
 
     n = Notifier(post=failing_post, max_attempts=3)
     n.subscribe("http://sink.test/hook", ["evidence_run"])
-    delivered = await n.emit("evidence_run", "node1", {"cases": 1})
-    assert delivered == 1
+    # emit SCHEDULES; the POSTs and their retries run off the caller's path, so
+    # observing them means draining. Inline delivery is what put forty seconds
+    # of a dead webhook on a governed node's heartbeat.
+    scheduled = await n.emit("evidence_run", "node1", {"cases": 1})
+    await n.drain()
+    assert scheduled == 1
     assert calls["n"] == 3  # retried up to max_attempts
     assert len(n.dead_letters) == 1
     assert n.dead_letters[0].error == "status 500"
@@ -55,6 +60,7 @@ async def test_notifier_hands_dead_letters_to_the_persistence_sink() -> None:
     n = Notifier(post=failing_post, max_attempts=2, dead_sink=sink)
     n.subscribe("http://sink.test/hook", ["node_stale"])
     await n.emit("node_stale", "node1", {"silent_for": 31})
+    await n.drain()
     assert len(persisted) == 1
     assert persisted[0].payload["trigger"] == "node_stale"
 
@@ -70,6 +76,7 @@ async def test_notifier_survives_a_broken_persistence_sink() -> None:
     n.subscribe("http://sink.test/hook", ["node_stale"])
     # Must not raise — the in-memory record still lands.
     assert await n.emit("node_stale", "node1", {}) == 1
+    await n.drain()
     assert len(n.dead_letters) == 1
 
 
@@ -80,13 +87,39 @@ async def test_notifier_debounce_suppresses_repeats() -> None:
         seen.append(body)
         return 200
 
-    n = Notifier(post=ok_post)
+    # An injected clock, because the debounce window has to be a real interval
+    # somebody can wait out. It used to be a counter that only a test advanced,
+    # so in every deployment it stood still and a debounce of any size muted
+    # the (trigger, node) pair permanently.
+    fake = [100.0]
+    n = Notifier(post=ok_post, clock=lambda: fake[0])
     n.subscribe("http://sink.test", ["level_transition_up"], debounce_seconds=5.0)
     assert await n.emit("level_transition_up", "n1", {"to": "LOCKED"}) == 1
     assert await n.emit("level_transition_up", "n1", {"to": "LOCKED"}) == 0  # debounced
-    n.tick(6.0)
+    fake[0] += 6.0
     assert await n.emit("level_transition_up", "n1", {"to": "LOCKED"}) == 1
+    await n.drain()
     assert len(seen) == 2
+
+
+async def test_a_debounce_window_actually_expires() -> None:
+    """The regression: with the default clock, five events over more than the
+    window must not collapse to one. This was `1` — the logical clock never
+    moved, so every later event measured a zero-length interval and a debounce
+    of any size was a permanent mute that looked like configuration working."""
+    seen = []
+
+    async def ok_post(url: str, body: dict) -> int:
+        seen.append(body)
+        return 200
+
+    n = Notifier(post=ok_post)
+    n.subscribe("http://sink.test", ["node_stale"], debounce_seconds=0.05)
+    for _ in range(5):
+        await n.emit("node_stale", "n1", {})
+        await asyncio.sleep(0.03)
+    await n.drain()
+    assert len(seen) >= 2, "the debounce window never expired"
 
 
 async def test_unknown_trigger_rejected() -> None:
@@ -254,6 +287,7 @@ async def test_stale_sweep_fires_once_per_stale_episode() -> None:
                    "updated_ts": (now - timedelta(seconds=40)).isoformat()}]
     assert await stale_sweep(store, notifier, broadcast, 30.0, seen, now) == 1
     assert await stale_sweep(store, notifier, broadcast, 30.0, seen, now) == 0
+    await notifier.drain()
     assert len(fired) == 1 and fired[0]["trigger"] == "node_stale"
 
     # Heartbeats again (fresh), then goes silent → re-arms and fires anew.
@@ -263,6 +297,7 @@ async def test_stale_sweep_fires_once_per_stale_episode() -> None:
     store.rows = [{"node_id": "n1", "level": "NORMAL",
                    "updated_ts": (now - timedelta(seconds=40)).isoformat()}]
     assert await stale_sweep(store, notifier, broadcast, 30.0, seen, now) == 1
+    await notifier.drain()
     assert len(fired) == 2
 
 
@@ -593,3 +628,98 @@ def test_license_cli_reads_key_from_file_and_env(
     monkeypatch.delenv("AXOR_VENDOR_KEY")
     assert main(["issue", "--org", "N", "--expires-at", "2999-01-01"]) == 2
     assert "no signing key" in capsys.readouterr().err
+
+
+# ── delivery is off the caller's path ────────────────────────────────────────
+
+async def test_emit_does_not_wait_for_the_webhook() -> None:
+    """`emit` is called from the telemetry handler. Four attempts at a
+    ten-second timeout is forty seconds added to a heartbeat whose stale window
+    is thirty — so one customer's dead webhook drove their own nodes into
+    `node_stale`, which emitted again into the same dead webhook. A broken
+    notification sink looked like a failing fleet."""
+    import time as _time
+
+    async def slow_post(url: str, body: dict) -> int:
+        await asyncio.sleep(0.4)
+        return 500
+
+    n = Notifier(post=slow_post, max_attempts=2)
+    n.subscribe("http://sink.test", ["node_stale"])
+    started = _time.monotonic()
+    assert await n.emit("node_stale", "n1", {}) == 1
+    assert _time.monotonic() - started < 0.1, "emit blocked on the webhook"
+    await n.drain()
+    assert len(n.dead_letters) == 1  # still recorded, just not inline
+
+
+async def test_subscribing_the_same_webhook_twice_delivers_once() -> None:
+    """The store deduplicates on (url, triggers, pattern) and the in-memory
+    list appended unconditionally, so a repeated subscribe stored ONE row and
+    delivered TWICE — and a restart, rehydrating from those rows, silently went
+    back to once. The duplicate rate depended on uptime."""
+    sent = []
+
+    async def ok_post(url: str, body: dict) -> int:
+        sent.append(url)
+        return 200
+
+    n = Notifier(post=ok_post)
+    for _ in range(3):
+        n.subscribe("http://sink.test/hook", ["node_stale"], debounce_seconds=0.0)
+    assert await n.emit("node_stale", "n1", {}) == 1
+    await n.drain()
+    assert sent == ["http://sink.test/hook"]
+
+
+async def test_resubscribing_updates_rather_than_duplicating() -> None:
+    """Same identity, new debounce: the registration is updated in place."""
+    n = Notifier(post=lambda url, body: None)
+    n.subscribe("http://sink.test/hook", ["node_stale"], debounce_seconds=1.0)
+    n.subscribe("http://sink.test/hook", ["node_stale"], debounce_seconds=30.0,
+                label="oncall")
+    assert len(n._subs) == 1
+    assert n._subs[0].debounce_seconds == 30.0
+    assert n._subs[0].label == "oncall"
+
+
+async def test_saturation_is_dead_lettered_not_queued() -> None:
+    """A notifier that answers a flood by growing a task list without limit
+    trades a visible failure for an invisible one. The dead-letter log exists
+    because lost deliveries are evidence."""
+    from axor_backend.notifications import _MAX_IN_FLIGHT
+
+    async def hang(url: str, body: dict) -> int:
+        await asyncio.sleep(30)
+        return 200
+
+    n = Notifier(post=hang)
+    n.subscribe("http://sink.test", ["node_stale"])
+    for i in range(_MAX_IN_FLIGHT + 5):
+        await n.emit("node_stale", f"n{i}", {})
+    assert len(n.dead_letters) >= 5
+    assert "saturated" in n.dead_letters[-1].error
+    for task in list(n._in_flight):
+        task.cancel()
+
+
+async def test_unsubscribe_stops_delivery_and_is_tenant_scoped() -> None:
+    """A registered webhook fired forever: there was no way to remove one
+    short of editing the database, while the body carries node ids, levels and
+    a permalink."""
+    sent = []
+
+    async def ok_post(url: str, body: dict) -> int:
+        sent.append((url, body["node_id"]))
+        return 200
+
+    n = Notifier(post=ok_post)
+    n.subscribe("http://sink.test/hook", ["node_stale"], org="org_a")
+    n.subscribe("http://sink.test/hook", ["node_stale"], org="org_b")
+
+    assert n.unsubscribe("http://sink.test/hook", org="org_a") == 1
+    assert await n.emit("node_stale", "n1", {}, org="org_a") == 0
+    # The other tenant's on-call is untouched — same URL, different subscriber.
+    assert await n.emit("node_stale", "n1", {}, org="org_b") == 1
+    await n.drain()
+    assert sent == [("http://sink.test/hook", "n1")]

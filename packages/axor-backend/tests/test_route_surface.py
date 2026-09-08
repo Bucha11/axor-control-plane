@@ -82,6 +82,7 @@ EXPECTED: dict[tuple[str, str], str] = {
     ("GET", "/v1/runs/{run_id}/attestations"): "read",
     # ── notifications ────────────────────────────────────────────────────────
     ("POST", "/v1/notifications/subscribe"): "operate",
+    ("POST", "/v1/notifications/unsubscribe"): "operate",
     ("GET", "/v1/notifications/subscriptions"): "read",
     ("GET", "/v1/notifications/dead-letters"): "read",
     # ── share & export ───────────────────────────────────────────────────────

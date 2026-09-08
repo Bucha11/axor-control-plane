@@ -18,6 +18,21 @@ test.describe("settings", () => {
     await expect(page.getByRole("button", { name: "subscribed" })).toBeVisible();
   });
 
+  test("a subscribed webhook can be unsubscribed", async ({ page }) => {
+    // A registered webhook fired forever: removing one meant editing the
+    // database, while the body it receives carries node ids, levels and a
+    // permalink.
+    await goHash(page, "settings");
+    const url = `https://sink.e2e/drop-${Date.now()}`;
+    await page.getByPlaceholder("https://hooks.example/… (JSON POST)").fill(url);
+    await page.getByRole("checkbox").first().check();
+    await page.getByRole("button", { name: /Subscribe/ }).click();
+    await expect(page.getByText(url)).toBeVisible();
+
+    await page.getByRole("button", { name: `unsubscribe ${url}` }).click();
+    await expect(page.getByText(url)).toHaveCount(0);
+  });
+
   test("surfaces the dead-letter log (delivery honesty)", async ({ page }) => {
     await goHash(page, "settings");
     // The failure-honesty log is always surfaced; its contents depend on prior

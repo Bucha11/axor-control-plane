@@ -174,6 +174,7 @@ async def test_regression_failed_trigger_fires_on_bad_corpus() -> None:
     n = Notifier(post=ok_post)
     n.subscribe("http://sink.test/h", ["regression_failed"])
     await n.emit("regression_failed", "corpus", {"escaped": 1, "source": "manual"})
+    await n.drain()
     assert seen and seen[0]["trigger"] == "regression_failed"
 
 
@@ -193,6 +194,7 @@ async def test_node_pattern_routes_deliveries() -> None:
 
     await n.emit("node_stale", "team-a-worker1", {})
     await n.emit("node_stale", "team-b-worker9", {})
+    await n.drain()
 
     assert ("http://team-a.test/h", "team-a-worker1") in hits
     assert ("http://team-a.test/h", "team-b-worker9") not in hits

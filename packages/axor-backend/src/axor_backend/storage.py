@@ -1214,6 +1214,21 @@ class Store:
                 label=label, node_pattern=node_pattern, org_id=current_org_id(),
             ))
 
+    async def remove_subscriptions(self, url: str) -> int:
+        """Drop this tenant's subscriptions for `url`. Returns how many went.
+
+        Scoped by org like every other read here: one tenant unsubscribing must
+        not silence another's on-call, even for the same collector URL.
+        """
+        async with self.engine.begin() as conn:
+            result = await conn.execute(
+                delete(notification_subs).where(
+                    notification_subs.c.url == url,
+                    notification_subs.c.org_id == current_org_id(),
+                )
+            )
+        return int(result.rowcount or 0)
+
     async def list_subscriptions(self) -> list[dict[str, Any]]:
         """This tenant's subscriptions — what the settings surface shows."""
         async with self.engine.connect() as conn:

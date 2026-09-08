@@ -46,6 +46,7 @@ async def test_delivery_does_not_cross_tenants() -> None:
     n.subscribe("http://b.example/hook", ["node_stale"], org="org_b")
 
     assert await n.emit("node_stale", "n1", {"silent_seconds": 31}, org="org_a") == 1
+    await n.drain()  # emit schedules; the POST runs off the caller's path
     assert [url for url, _ in sent] == ["http://a.example/hook"]
 
     assert await n.emit("node_stale", "n1", {"silent_seconds": 31}, org="org_c") == 0
@@ -143,3 +144,32 @@ async def test_query_token_rejected_off_the_browser_routes(
              "ts": "t", "causal_root": None, "gate": None, "verdict": None,
              "payload": {}}]})
     assert (await client.get(f"/v1/runs/run_q/events?token={TOKEN}")).status_code == 200
+
+
+async def test_unsubscribe_removes_the_row_and_stops_the_delivery(
+    client: httpx.AsyncClient
+) -> None:
+    """Removed from the STORE first: the other order would stop delivery in
+    this process and leave a row that resurrects the webhook at the next
+    restart — the mirror of why subscribe persists first."""
+    body = {"url": "http://hook.example/gone", "triggers": ["node_stale"]}
+    assert (await client.post("/v1/notifications/subscribe",
+                              headers=_bearer(TOKEN), json=body)).status_code == 200
+    listed = (await client.get("/v1/notifications/subscriptions",
+                               headers=_bearer(TOKEN))).json()
+    assert any(s["url"] == body["url"] for s in listed)
+
+    r = await client.post("/v1/notifications/unsubscribe",
+                          headers=_bearer(TOKEN), json={"url": body["url"]})
+    assert r.status_code == 200 and r.json()["removed"] == 1
+    listed = (await client.get("/v1/notifications/subscriptions",
+                               headers=_bearer(TOKEN))).json()
+    assert not any(s["url"] == body["url"] for s in listed)
+
+
+async def test_unsubscribing_something_that_is_not_there_says_so(
+    client: httpx.AsyncClient
+) -> None:
+    r = await client.post("/v1/notifications/unsubscribe",
+                          headers=_bearer(TOKEN), json={"url": "http://nope.example"})
+    assert r.status_code == 404

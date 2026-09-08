@@ -171,6 +171,10 @@ export default function Settings() {
       }),
     onSuccess: () => void qc.invalidateQueries({ queryKey: ["subscriptions"] }),
   });
+  const unsubscribe = useMutation({
+    mutationFn: (target: string) => api.unsubscribeNotifications(target),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ["subscriptions"] }),
+  });
   // A 200 means the license is verified AND active, so everything that renders
   // an entitlement has to be refetched — otherwise the panel says "active" while
   // Regression still shows its EE controls locked.
@@ -395,9 +399,19 @@ export default function Settings() {
               ACTIVE SUBSCRIPTIONS
             </div>
             {(subscriptions.data ?? []).map((s, i) => (
-              <div key={i} style={{ fontFamily: MONO, fontSize: 11, color: C.mut, marginTop: 4 }}>
-                {s.label ? `[${s.label}] ` : ""}{s.url} · {s.triggers.join(", ")}
-                {s.node_pattern !== "*" ? ` · nodes: ${s.node_pattern}` : ""}
+              <div key={i} className="flex items-center gap-2" style={{ fontFamily: MONO, fontSize: 11, color: C.mut, marginTop: 4 }}>
+                <span>
+                  {s.label ? `[${s.label}] ` : ""}{s.url} · {s.triggers.join(", ")}
+                  {s.node_pattern !== "*" ? ` · nodes: ${s.node_pattern}` : ""}
+                </span>
+                <button
+                  aria-label={`unsubscribe ${s.url}`}
+                  onClick={() => unsubscribe.mutate(s.url)}
+                  disabled={unsubscribe.isPending}
+                  style={btn({ color: C.mut, fontSize: 10, padding: "1px 7px" })}
+                >
+                  unsubscribe
+                </button>
               </div>
             ))}
           </>

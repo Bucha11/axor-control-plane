@@ -809,6 +809,15 @@ export const api = {
         ...(routing?.nodePattern ? { node_pattern: routing.nodePattern } : {}),
       }),
     }).then((r) => j<{ subscribed: string; triggers: string[] }>(r)),
+  // A registered webhook used to fire forever: there was no way to remove one
+  // short of editing the database, while the body it receives carries node
+  // ids, levels, a permalink, and for license_expiring the licensed org.
+  unsubscribeNotifications: (url: string) =>
+    af("/v1/notifications/unsubscribe", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ url }),
+    }).then((r) => j<{ unsubscribed: string; removed: number }>(r)),
   listSubscriptions: () =>
     af("/v1/notifications/subscriptions").then((r) =>
       j<{ url: string; triggers: string[]; debounce_seconds: number;

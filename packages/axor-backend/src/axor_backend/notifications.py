@@ -14,17 +14,26 @@ where wrong gets loud. We emit and route — never a pager.
   settings — a notification system that fails silently is worse than none.
   Dead letters persist (capped, migration 0002): a restart must not erase the
   evidence that deliveries were lost.
+- Delivery is OFF the caller's path. `emit` matches and schedules; the POSTs,
+  their retries and their dead-lettering happen in background tasks. Awaiting
+  them inline meant a customer's broken webhook stalled their own governed
+  nodes: `emit` is called from the telemetry handler, and four attempts at a
+  ten-second timeout is forty seconds on a heartbeat whose stale window is
+  thirty.
 - Source: the plane event feed the backend already has; a subscriber with an
   HTTP sink and per-trigger debounce, no new instrumentation.
 """
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import ipaddress
 import json
 import logging
 import socket
+import time
 from collections import deque
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from fnmatch import fnmatch
 from typing import Any
@@ -134,9 +143,43 @@ class Subscription:
     # organization's on-call must not be paged about another organization's
     # nodes, and the body carries the node id, level and a permalink.
     org: str = PUBLIC_ORG
-    # last fire time per (trigger, node) — debounce key. Trace-free: we stamp
-    # from a monotonic counter passed in, so tests stay deterministic.
+    # last fire time per (trigger, node) — the debounce key, stamped from the
+    # notifier's clock. Pruned against the window so a long-lived process with a
+    # large fleet does not accumulate an entry per (trigger, node) forever.
     _last: dict[tuple[str, str], float] = field(default_factory=dict)
+
+    def key(self) -> tuple[str, str, frozenset[str], str]:
+        """What makes two subscriptions the same one — the same identity the
+        store's unique constraint uses, so memory and the database agree about
+        how many deliveries a repeated subscribe produces."""
+        return (self.org, self.url, self.triggers, self.node_pattern)
+
+    def due(self, trigger: str, node_id: str, now: float) -> bool:
+        """Whether this event fires, and stamp it if so."""
+        if self.debounce_seconds <= 0:
+            return True
+        slot = (trigger, node_id)
+        last = self._last.get(slot)
+        if last is not None and (now - last) < self.debounce_seconds:
+            return False
+        self._last[slot] = now
+        if len(self._last) > _DEBOUNCE_KEYS_MAX:
+            cutoff = now - self.debounce_seconds
+            self._last = {
+                k: v for k, v in self._last.items() if v >= cutoff
+            } or {slot: now}
+        return True
+
+
+# Debounce keys held per subscription before the expired ones are swept. A
+# fleet emits (trigger, node) pairs without bound over a long process life.
+_DEBOUNCE_KEYS_MAX = 4096
+
+# In-flight deliveries across all subscriptions. Past this a delivery is
+# dead-lettered immediately rather than queued: a notifier that answers a flood
+# by growing a task list without limit trades a visible failure for an
+# invisible one.
+_MAX_IN_FLIGHT = 256
 
 
 @dataclass
@@ -158,6 +201,7 @@ class Notifier:
         dead_letter_cap: int = 500,
         dead_sink: Any = None,  # noqa: ANN401 - async callable(DeadLetter) that persists it
         block_private: bool = False,
+        clock: Callable[[], float] | None = None,
     ) -> None:
         # Whether registering a webhook crosses a privilege boundary in THIS
         # deployment — see check_webhook_url. The app turns it on for any
@@ -168,7 +212,14 @@ class Notifier:
         self._max_attempts = max_attempts
         self._dead: deque[DeadLetter] = deque(maxlen=dead_letter_cap)
         self._dead_sink = dead_sink
-        self._clock = 0.0  # logical clock; debounce is in these units
+        # Debounce needs a clock that MOVES. This was a logical counter advanced
+        # by a `tick()` that only a test ever called, so in every deployment it
+        # stood at zero: the first event for a (trigger, node) stamped 0.0 and
+        # every later one measured a zero-length interval against the window and
+        # was suppressed. A debounce of any size was a permanent mute, and it
+        # looked exactly like configuration working.
+        self._now: Callable[[], float] = clock or time.monotonic
+        self._in_flight: set[asyncio.Task] = set()
 
     def validate(self, url: str, triggers: list[str]) -> None:
         """Everything :meth:`subscribe` would reject, without registering.
@@ -186,34 +237,83 @@ class Notifier:
         self, url: str, triggers: list[str], debounce_seconds: float = 0.0,
         label: str = "", node_pattern: str = "*", org: str | None = None,
     ) -> None:
+        """Register, or update the one already here.
+
+        Idempotent on the same identity the store's unique constraint uses. It
+        used to append unconditionally, so subscribing the same webhook twice
+        stored ONE row and delivered TWICE — and a restart, which rehydrates
+        from those rows, silently went back to once. The duplicate rate
+        depended on how recently the process had been restarted.
+        """
         self.validate(url, triggers)
-        self._subs.append(Subscription(
+        fresh = Subscription(
             url, frozenset(triggers), debounce_seconds,
             label=label, node_pattern=node_pattern or "*",
             org=org if org is not None else current_org_id(),
-        ))
+        )
+        for existing in self._subs:
+            if existing.key() == fresh.key():
+                # Keep `_last`: re-subscribing is not a way to clear a debounce
+                # that is doing its job.
+                existing.debounce_seconds = debounce_seconds
+                existing.label = label
+                return
+        self._subs.append(fresh)
 
-    def tick(self, dt: float = 1.0) -> None:
-        self._clock += dt
+    def unsubscribe(self, url: str, org: str | None = None) -> int:
+        """Stop delivering to `url` for this tenant. Returns how many went.
+
+        There was no way to do this at all: a webhook registered once fired
+        forever, and a wrong or leaked URL could only be removed by editing the
+        database — while the body it receives carries node ids, levels, a
+        permalink, and for `license_expiring` the licensed organization.
+        """
+        scope = org if org is not None else current_org_id()
+        before = len(self._subs)
+        self._subs = [
+            s for s in self._subs if not (s.url == url and s.org == scope)
+        ]
+        return before - len(self._subs)
 
     @property
     def dead_letters(self) -> list[DeadLetter]:
         return list(self._dead)
+
+    async def drain(self, seconds: float = 10.0) -> None:
+        """Wait for the deliveries already scheduled. Shutdown calls this so a
+        notification in flight is not simply dropped when the process stops;
+        tests call it to observe a delivery that emit() no longer waits for."""
+        with contextlib.suppress(TimeoutError):
+            async with asyncio.timeout(seconds):
+                while self._in_flight:
+                    await asyncio.wait(list(self._in_flight))
 
     async def emit(
         self, trigger: str, node_id: str, payload: dict[str, Any],
         org: str | None = None,
     ) -> int:
         """Fan a triggering event out to this tenant's matching subscriptions.
-        Returns the number of subscriptions delivered to (after debounce).
+        Returns the number of subscriptions it was SCHEDULED to (after
+        debounce) — the POSTs run in the background.
+
+        Scheduled, not awaited, and that is the point. This used to deliver
+        inline, and `emit` is called from the telemetry handler: four attempts
+        at a ten-second timeout is forty seconds added to a heartbeat whose
+        stale window is thirty, so one customer's dead webhook drove their own
+        governed nodes into `node_stale` — which emitted again, into the same
+        dead webhook. A broken notification sink looked like a failing fleet.
 
         `org` defaults to the ambient tenant, which is right inside a request
         and inside the background sweeps (they set it per iteration). Pass it
-        explicitly when emitting from somewhere neither holds."""
+        explicitly when emitting from somewhere neither holds. It is resolved
+        HERE rather than in the task, because by the time the task runs the
+        request's ContextVar is gone.
+        """
         if trigger not in TRIGGERS:
             raise ValueError(f"unknown trigger {trigger!r}")
         scope = org if org is not None else current_org_id()
-        delivered = 0
+        now = self._now()
+        scheduled = 0
         body = {"trigger": trigger, "node_id": node_id, **payload}
         for sub in self._subs:
             if sub.org != scope:
@@ -222,15 +322,32 @@ class Notifier:
                 continue
             if not fnmatch(node_id, sub.node_pattern):
                 continue
-            key = (trigger, node_id)
-            if sub.debounce_seconds > 0:
-                last = sub._last.get(key)
-                if last is not None and (self._clock - last) < sub.debounce_seconds:
-                    continue
-                sub._last[key] = self._clock
-            await self._deliver(sub.url, body, sub.org)
-            delivered += 1
-        return delivered
+            if not sub.due(trigger, node_id, now):
+                continue
+            self._schedule(sub.url, body, sub.org)
+            scheduled += 1
+        return scheduled
+
+    def _schedule(self, url: str, body: dict[str, Any], org: str) -> None:
+        """Hand one delivery to the event loop, or dead-letter it now.
+
+        Saturation is dead-lettered rather than queued: a notifier that answers
+        a flood by growing a task list without limit trades a visible failure
+        for an invisible one, and the whole point of the dead-letter log is
+        that lost deliveries are evidence.
+        """
+        if len(self._in_flight) >= _MAX_IN_FLIGHT:
+            self._bury(DeadLetter(
+                url=url, payload=body, org=org, attempts=0,
+                error=f"notifier saturated ({_MAX_IN_FLIGHT} deliveries in "
+                      f"flight); this one was not attempted",
+            ))
+            return
+        task = asyncio.create_task(self._deliver(url, body, org))
+        # Held so the loop does not garbage-collect a delivery mid-flight, and
+        # so `drain` can wait for what is outstanding.
+        self._in_flight.add(task)
+        task.add_done_callback(self._in_flight.discard)
 
     async def _deliver(
         self, url: str, body: dict[str, Any], org: str = PUBLIC_ORG
@@ -255,18 +372,37 @@ class Notifier:
             if attempt < self._max_attempts:
                 await asyncio.sleep(backoff)
                 backoff = min(backoff * 2, 2.0)
-        letter = DeadLetter(url=url, payload=body, error=last_error,
-                            attempts=self._max_attempts, org=org)
+        await self._bury_and_persist(DeadLetter(
+            url=url, payload=body, error=last_error,
+            attempts=self._max_attempts, org=org,
+        ))
+
+    def _bury(self, letter: DeadLetter) -> None:
+        """Record a lost delivery in memory. Synchronous, so the saturation
+        path can use it without needing a task of its own."""
         self._dead.append(letter)
         if self._dead_sink is not None:
-            # Persistence must never make emit() itself fail — a broken DB on
-            # top of a broken webhook still leaves the in-memory record.
-            try:
-                await self._dead_sink(letter)
-            except Exception:  # noqa: BLE001 - deliberately non-fatal
-                logging.getLogger("axor.notifications").exception(
-                    "dead-letter persist failed"
-                )
+            self._schedule_persist(letter)
+
+    def _schedule_persist(self, letter: DeadLetter) -> None:
+        task = asyncio.create_task(self._persist(letter))
+        self._in_flight.add(task)
+        task.add_done_callback(self._in_flight.discard)
+
+    async def _bury_and_persist(self, letter: DeadLetter) -> None:
+        self._dead.append(letter)
+        if self._dead_sink is not None:
+            await self._persist(letter)
+
+    async def _persist(self, letter: DeadLetter) -> None:
+        # Persistence must never take down the delivery task — a broken DB on
+        # top of a broken webhook still leaves the in-memory record.
+        try:
+            await self._dead_sink(letter)
+        except Exception:  # noqa: BLE001 - deliberately non-fatal
+            logging.getLogger("axor.notifications").exception(
+                "dead-letter persist failed"
+            )
 
 
 async def _default_post(url: str, body: dict[str, Any]) -> int:

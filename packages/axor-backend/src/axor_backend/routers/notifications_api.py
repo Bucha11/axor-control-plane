@@ -62,6 +62,31 @@ async def notif_subscribe(
     }
 
 
+@router.post("/unsubscribe")
+async def notif_unsubscribe(
+    body: dict, store: StoreDep, notifier: NotifierDep
+) -> dict:
+    """Stop delivering to a webhook. There was no way to do this at all.
+
+    A registered webhook fired forever, and a wrong or leaked URL could only be
+    removed by editing the database — while the body it receives carries node
+    ids, levels, a permalink, and for `license_expiring` the licensed
+    organization.
+
+    Removed from the store FIRST, for the mirror image of the reason subscribe
+    persists first: the other order would stop delivery in this process and
+    leave a row that resurrects the webhook at the next restart.
+    """
+    url = str(body.get("url") or "")
+    if not url:
+        raise HTTPException(400, "url required")
+    removed = await store.remove_subscriptions(url)
+    notifier.unsubscribe(url, org=current_org_id())
+    if not removed:
+        raise HTTPException(404, f"no subscription for {url!r} in this tenant")
+    return {"unsubscribed": url, "removed": removed}
+
+
 @router.get("/subscriptions")
 async def notif_subscriptions(store: StoreDep) -> list[dict]:
     return await store.list_subscriptions()

@@ -52,6 +52,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         async with running_stale_monitor(app):
             yield
     finally:
+        # Deliveries no longer block the caller, so at shutdown there can be
+        # notifications in flight. Give them the moment they need rather than
+        # dropping them: a lost delivery that never reaches the dead-letter log
+        # is exactly the silence this channel exists to prevent.
+        with contextlib.suppress(Exception):
+            await app.state.notifier.drain(5.0)
         for task in tasks:
             task.cancel()
         for task in tasks:
