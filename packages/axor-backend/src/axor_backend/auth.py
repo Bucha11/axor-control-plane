@@ -104,6 +104,9 @@ _READ_POLICY: tuple[tuple[str, str], ...] = (
     # secrets, but the map of registered nodes is the same operational config as
     # the enrolment inventory above.
     ("/v1/vault/creds/node-keys", "admin"),
+    # The key to seal against is public, but whether this deployment is in
+    # envelope mode at all is the shape of its custody — same bar as the rest.
+    ("/v1/vault/creds/sealing-key", "admin"),
     # Pubkeys are explicitly NOT secrets (vault_signing module docstring), but
     # the per-key operator allowlist is operational config, so: not `read`.
     ("/v1/vault/signing/keys", "operate"),

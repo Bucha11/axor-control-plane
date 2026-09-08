@@ -98,6 +98,7 @@ async def vault_enroll(body: dict, request: Request, store: StoreDep) -> dict:
             [str(n) for n in body.get("scope_nodes", [])],
             header=str(body.get("header", "") or "Authorization"),
             scheme=str(body.get("scheme", "Bearer")),
+            sealed_secret=str(body.get("sealed_secret", "")),
         )
     except EnrollmentInvalid as exc:
         raise HTTPException(400, exc.reason) from exc
@@ -171,6 +172,7 @@ async def vault_rotate(body: dict, request: Request, store: StoreDep) -> dict:
             str(body.get("tool", "")),
             str(body.get("endpoint", "")),
             str(body.get("secret", "")),
+            sealed_secret=str(body.get("sealed_secret", "")),
         )
     except NotEnrolled as exc:
         raise HTTPException(404, exc.reason) from exc
@@ -194,6 +196,41 @@ async def vault_revoke(body: dict, request: Request, store: StoreDep) -> dict:
         )
     except NotEnrolled as exc:
         raise HTTPException(404, exc.reason) from exc
+
+
+@router.post("/creds/sealing-key")
+async def vault_register_sealing_key(
+    body: dict, request: Request, store: StoreDep
+) -> dict:
+    """Register the org's credential-sealing PUBLIC key — and stop this
+    deployment storing plaintext.
+
+    §14.2 ships the vault self-hosted-first and names the condition for hosted:
+    envelope encryption with customer-held root keys. This is that switch. After
+    it, `enroll` and `rotate` refuse a plaintext `secret` and take a
+    `sealed_secret` the backend cannot open; the private half never comes here.
+
+    Public by definition, so registering it is not handing us anything. What it
+    buys is that we are no longer trusted to decline to look — we are unable to.
+    """
+    _gate(request, "creds")
+    from axor_backend.vault_creds import SEALING_KEY_SETTING
+
+    pubkey = str(body.get("public_key_hex", ""))
+    if len(pubkey) != 64 or not _is_hex(pubkey):
+        raise HTTPException(400, "requires public_key_hex (32-byte X25519, hex)")
+    await store.set_setting(SEALING_KEY_SETTING, pubkey)
+    return {"registered": True, "public_key_hex": pubkey}
+
+
+@router.get("/creds/sealing-key")
+async def vault_sealing_key(request: Request, store: StoreDep) -> dict:
+    """The key to seal against, and whether this deployment holds plaintext."""
+    _gate(request, "creds")
+    from axor_backend.vault_creds import SEALING_KEY_SETTING
+
+    pubkey = await store.get_setting(SEALING_KEY_SETTING)
+    return {"public_key_hex": pubkey, "envelope_mode": bool(pubkey)}
 
 
 @router.post("/creds/node-keys")

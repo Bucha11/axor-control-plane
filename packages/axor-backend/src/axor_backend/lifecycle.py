@@ -111,13 +111,16 @@ async def rehydrate(state: Any) -> None:  # noqa: ANN401 - app.state is dynamic
     # the settings KV, and not even encrypted at rest. Silence would read as "a
     # secret store is underneath"; it is not.
     creds = await state.store.get_setting("vault_creds/v1")
-    if creds:
+    plaintext = [k for k, e in (creds or {}).items() if not e.get("sealed_secret")]
+    if plaintext:
         log.warning(
-            "TOOL CREDENTIALS ARE IN THE DEV BACKEND (%d enrolled) — the "
-            "settings table, in plaintext. Fine for a test bench; a real "
-            "deployment plugs a Vault/KMS-class store behind the same "
-            "interface (ui-spec §14.2 decision #13).",
-            len(creds),
+            "TOOL CREDENTIALS ARE IN THE DEV BACKEND (%d of %d enrolled held "
+            "in plaintext) — the settings table, unencrypted. Fine for a test "
+            "bench. Register a sealing key (POST /v1/vault/creds/sealing-key, "
+            "`axor-proxy vault keygen`) and this deployment stores only what it "
+            "cannot open (ui-spec §14.2); a real one also plugs a Vault/KMS-"
+            "class store behind the same interface (decision #13).",
+            len(plaintext), len(creds),
         )
     # Share links and notification subscriptions are primary data: rebuild their
     # in-memory holders so a restart keeps permalinks live and keeps

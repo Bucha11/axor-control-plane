@@ -36,6 +36,18 @@ injects credentials, becoming a high-value target") and bounds it:
   row reads ``signed: false``; what must not happen is an unsigned fetch that
   looks signed.
 
+ENVELOPE MODE. When the deployment has a sealing key registered, the plane holds
+a `sealed_secret` it cannot open and hands that back instead. The private half
+lives here (``AXOR_CRED_SEALING_SEED``), the box is opened in this process, and
+the plaintext exists for the length of one request — which is the same lifetime
+it had before, except that now it never existed anywhere else. That is §14.2's
+stated condition for a hosted vault: the backend is not trusted to decline to
+look, it is unable to.
+
+Fail closed applies here too and is easy to get wrong: a sealed credential the
+node cannot open is a denial, never a call without it, and never a fall back to
+some other value.
+
 What the agent sees is what §14.2 is for: a credential it never held cannot be
 exfiltrated by anything it says. The proxy REPLACES the injection header rather
 than adding to it — an agent-supplied Authorization on a vault-mode tool is
@@ -58,6 +70,33 @@ class CredentialDenied(Exception):
     def __init__(self, reason: str) -> None:
         super().__init__(reason)
         self.reason = reason
+
+
+def generate_sealing_key() -> tuple[str, str]:
+    """A credential-sealing keypair: (private seed hex, public key hex).
+
+    X25519 sealed boxes. The public half is registered with the plane so the
+    operator's enrolment can seal to it; the private half belongs with the nodes
+    and must never reach the backend — the whole property is that it cannot.
+    """
+    from nacl.public import PrivateKey
+
+    key = PrivateKey.generate()
+    return bytes(key).hex(), bytes(key.public_key).hex()
+
+
+def seal(public_key_hex: str, secret: str) -> str:
+    """Seal a credential to a deployment's sealing key, base64 for transport.
+
+    Anyone with the public half can seal — that is what makes enrolment possible
+    without the decryption key ever leaving the nodes.
+    """
+    import base64
+
+    from nacl.public import PublicKey, SealedBox
+
+    box = SealedBox(PublicKey(bytes.fromhex(public_key_hex)))
+    return base64.b64encode(box.encrypt(secret.encode())).decode()
 
 
 @dataclass(frozen=True)
@@ -96,6 +135,7 @@ class CredentialVault:
         creds_token: str | None = None,
         timeout: float = 10.0,
         signing_seed: str | None = None,
+        sealing_seed: str | None = None,
     ) -> None:
         self._base = backend_url.rstrip("/")
         self._client = client
@@ -117,6 +157,12 @@ class CredentialVault:
         self._seed = (
             signing_seed if signing_seed is not None
             else os.environ.get("AXOR_NODE_SIGNING_SEED", "")
+        ) or ""
+        # The private half of the deployment's credential-sealing key. Present
+        # only on the nodes; the backend has never seen it and cannot.
+        self._sealing_seed = (
+            sealing_seed if sealing_seed is not None
+            else os.environ.get("AXOR_CRED_SEALING_SEED", "")
         ) or ""
 
     def attest(
@@ -188,14 +234,46 @@ class CredentialVault:
         try:
             body = response.json()
             return Credential(
-                secret=str(body["secret"]),
+                secret=self._plaintext(body, tool, endpoint),
                 version=int(body["version"]),
                 header=str(body.get("header") or "Authorization"),
                 scheme=str(body.get("scheme", "Bearer")),
             )
+        except CredentialDenied:
+            raise
         except (ValueError, KeyError, TypeError) as exc:
             raise CredentialDenied(
                 f"vault answered something that is not a credential: {exc}"
+            ) from exc
+
+    def _plaintext(self, body: dict, tool: str, endpoint: str) -> str:
+        """The secret to inject — opening the sealed box when there is one.
+
+        A sealed credential the node cannot open is a DENIAL. Falling through to
+        the plaintext field, or to any other value, would turn the one failure
+        this whole mode exists to make impossible into a quiet unauthenticated
+        call.
+        """
+        sealed = body.get("sealed_secret")
+        if not sealed:
+            return str(body["secret"])
+        if not self._sealing_seed:
+            raise CredentialDenied(
+                f"({tool}, {endpoint}) is sealed and this node has no sealing "
+                "key (AXOR_CRED_SEALING_SEED) — fail-closed, it was not called"
+            )
+        import base64
+
+        from nacl.exceptions import CryptoError
+        from nacl.public import PrivateKey, SealedBox
+
+        try:
+            key = PrivateKey(bytes.fromhex(self._sealing_seed))
+            return SealedBox(key).decrypt(base64.b64decode(sealed)).decode()
+        except (CryptoError, ValueError, TypeError) as exc:
+            raise CredentialDenied(
+                f"the sealed credential for ({tool}, {endpoint}) does not open "
+                f"with this node's sealing key: {type(exc).__name__}"
             ) from exc
 
 

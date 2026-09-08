@@ -29,7 +29,7 @@ The spec already drilled the holes on this line: §9 deferred "team features, SS
 | Topology (§12.1) | ✅ per connection | **fleet view**: all agents across teams, cross-connection search |
 | Identity | local tokens, GitHub OAuth | SSO/SAML/SCIM, RBAC (viewer/operator/admin) |
 | Retention | local files, yours | managed retention policies, legal hold, audit log export |
-| Vault (§14.2) | ✅ mechanism + sink-side injection + dev backend | fleet key management, rotation policies at scale, a real secret store underneath (decision #13) |
+| Vault (§14.2) | ✅ mechanism + sink-side injection + attested dispense + envelope mode | fleet key management, rotation policies at scale, a real secret store underneath (decision #13) |
 | Support | community | SLA, private channel, upgrade assistance |
 
 Two deliberately strong paid anchors: **compliance reports** (EvidenceCase + append-only attestation log + signed operator actions are audit artifacts already — the generator is cheap to build, priced on value to the buyer, EU-AI-Act-shaped demand) and **fleet view** (the moment a company runs 20+ governed agents, the free per-connection topology stops scaling organizationally — natural, non-artificial ceiling).

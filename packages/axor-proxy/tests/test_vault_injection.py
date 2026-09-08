@@ -391,3 +391,106 @@ async def test_an_unseeded_proxy_is_refused_once_the_node_has_a_key(
     r = await proxy.get("/t/web_search/")
     assert r.status_code == 403
     assert seen == []
+
+
+# ── envelope mode: the plane holds what it cannot read ───────────────────────
+
+class TestEnvelopeMode:
+    """§14.2 ships the vault self-hosted-first and names the condition for
+    hosted: envelope encryption with customer-held root keys. Registering a
+    sealing pubkey is that switch — after it the plane stores a `sealed_secret`
+    it has no key for, and the node opens it at the sink.
+
+    The backend is not trusted to decline to look. It is unable to.
+    """
+
+    @staticmethod
+    async def _envelope(backend: httpx.AsyncClient) -> tuple[str, str]:
+        from axor_proxy.vault import generate_sealing_key
+
+        seed, public = generate_sealing_key()
+        r = await backend.post(
+            "/v1/vault/creds/sealing-key",
+            headers={"Authorization": f"Bearer {MASTER}", **CREDS},
+            json={"public_key_hex": public})
+        assert r.status_code == 200, r.text
+        return seed, public
+
+    async def test_a_sealed_credential_round_trips_to_the_sink(
+        self, tmp_path: Path, seen: list[dict], backend: httpx.AsyncClient
+    ) -> None:
+        from axor_proxy.vault import seal
+
+        seed, public = await self._envelope(backend)
+        await enroll(backend, secret="", sealed_secret=seal(public, SECRET))
+        vault = CredentialVault(
+            "http://backend.test", ingest_key=await node_key(backend),
+            client=backend, creds_token="creds-tok", sealing_seed=seed,
+        )
+        proxy = make_proxy(tmp_path / "env", seen, vault)
+        await arm(proxy)
+        assert (await proxy.get("/t/web_search/")).status_code == 200
+        assert seen[0]["auth"] == f"Bearer {SECRET}"
+
+    async def test_the_plane_never_holds_the_plaintext(
+        self, backend: httpx.AsyncClient
+    ) -> None:
+        from axor_proxy.vault import seal
+
+        _, public = await self._envelope(backend)
+        await enroll(backend, secret="", sealed_secret=seal(public, SECRET))
+        health = await backend.get(
+            "/v1/vault/creds/health",
+            headers={"Authorization": f"Bearer {MASTER}", **CREDS})
+        assert SECRET not in health.text
+        assert health.json()["enrolled"][0]["sealed"] is True
+
+    async def test_plaintext_enrolment_is_refused_once_sealing_is_on(
+        self, backend: httpx.AsyncClient
+    ) -> None:
+        """A mode you can silently fall out of is not a custody boundary."""
+        await self._envelope(backend)
+        r = await backend.post(
+            "/v1/vault/creds/enroll",
+            headers={"Authorization": f"Bearer {MASTER}", **CREDS},
+            json={"tool": "web_search", "endpoint": ENDPOINT,
+                  "secret": SECRET, "scope_nodes": [NODE]})
+        assert r.status_code == 400
+        assert "sealed_secret" in r.json()["detail"]
+
+    async def test_a_node_without_the_sealing_key_is_denied_not_served(
+        self, tmp_path: Path, seen: list[dict], backend: httpx.AsyncClient
+    ) -> None:
+        from axor_proxy.vault import seal
+
+        _, public = await self._envelope(backend)
+        await enroll(backend, secret="", sealed_secret=seal(public, SECRET))
+        vault = CredentialVault(
+            "http://backend.test", ingest_key=await node_key(backend),
+            client=backend, creds_token="creds-tok", sealing_seed="",
+        )
+        proxy = make_proxy(tmp_path / "nokey", seen, vault)
+        await arm(proxy)
+        r = await proxy.get("/t/web_search/")
+        assert r.status_code == 403
+        assert "no sealing key" in r.json()["detail"]
+        assert seen == []
+
+    async def test_the_wrong_sealing_key_denies_rather_than_calls(
+        self, tmp_path: Path, seen: list[dict], backend: httpx.AsyncClient
+    ) -> None:
+        from axor_proxy.vault import generate_sealing_key, seal
+
+        _, public = await self._envelope(backend)
+        await enroll(backend, secret="", sealed_secret=seal(public, SECRET))
+        other_seed, _ = generate_sealing_key()
+        vault = CredentialVault(
+            "http://backend.test", ingest_key=await node_key(backend),
+            client=backend, creds_token="creds-tok", sealing_seed=other_seed,
+        )
+        proxy = make_proxy(tmp_path / "wrong", seen, vault)
+        await arm(proxy)
+        r = await proxy.get("/t/web_search/")
+        assert r.status_code == 403
+        assert "does not open" in r.json()["detail"]
+        assert seen == []

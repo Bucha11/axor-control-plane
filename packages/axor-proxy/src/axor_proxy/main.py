@@ -22,6 +22,12 @@ def cli() -> None:
     if sys.argv[1:2] == ["wrap"]:
         from axor_proxy.wrap import wrap_cli
         raise SystemExit(wrap_cli(sys.argv[2:]))
+    # `axor-proxy vault …` — the two operations envelope mode needs and that
+    # nothing else can do for you: mint the deployment's sealing keypair, and
+    # seal a credential to it before enrolling. Both are local; the private half
+    # never leaves this machine, which is the whole property.
+    if sys.argv[1:2] == ["vault"]:
+        raise SystemExit(_vault_cli(sys.argv[2:]))
 
     parser = argparse.ArgumentParser(prog="axor-proxy")
     parser.add_argument("--config", type=Path, help="tools.json")
@@ -86,3 +92,33 @@ def cli() -> None:
 
 if __name__ == "__main__":
     cli()
+
+
+def _vault_cli(argv: list[str]) -> int:
+    from axor_proxy.vault import generate_sealing_key, seal
+
+    parser = argparse.ArgumentParser(prog="axor-proxy vault")
+    sub = parser.add_subparsers(dest="cmd", required=True)
+    sub.add_parser("keygen", help="mint a credential-sealing keypair")
+    seal_cmd = sub.add_parser(
+        "seal", help="seal a credential to the deployment's sealing key")
+    seal_cmd.add_argument("--public-key", required=True,
+                          help="the deployment's sealing pubkey (hex)")
+    seal_cmd.add_argument("--secret", help="the credential; omit to read stdin")
+    args = parser.parse_args(argv)
+
+    if args.cmd == "keygen":
+        seed, public = generate_sealing_key()
+        # The seed goes to the nodes, the pubkey to the plane. Printed as the
+        # two env/route names they belong to, so the halves do not get swapped.
+        print(f"AXOR_CRED_SEALING_SEED={seed}")
+        print(f"public_key_hex={public}   "
+              f"# POST /v1/vault/creds/sealing-key")
+        return 0
+
+    secret = args.secret if args.secret is not None else sys.stdin.read().strip()
+    if not secret:
+        print("nothing to seal", file=sys.stderr)
+        return 2
+    print(seal(args.public_key, secret))
+    return 0

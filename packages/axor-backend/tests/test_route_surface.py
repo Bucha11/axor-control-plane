@@ -58,6 +58,10 @@ EXPECTED: dict[tuple[str, str], str] = {
     # What every dispensed credential was fetched for. Same bar as the signing
     # vault's audit next to it.
     ("GET", "/v1/vault/creds/audit"): "admin",
+    # Envelope mode: registering the sealing key is what stops this deployment
+    # storing plaintext at all.
+    ("POST", "/v1/vault/creds/sealing-key"): "admin",
+    ("GET", "/v1/vault/creds/sealing-key"): "admin",
     ("POST", "/v1/vault/signing/keys"): "admin",
     ("GET", "/v1/vault/signing/keys"): "operate",
     ("POST", "/v1/vault/signing/sign"): "operate",

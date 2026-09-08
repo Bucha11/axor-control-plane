@@ -18,6 +18,17 @@ with :mod:`axor_backend.vault_signing`. They are two subsystems that happen to
 share the word "vault"; a single admin surface spanning both would recreate
 the single-point-of-forgery the design avoids. CI enforces the import wall.
 
+ENVELOPE MODE (§14.2 self-hosted-first, and the condition it names for hosted):
+register a sealing PUBLIC key and the vault stops holding plaintext. Enrollment
+then carries a `sealed_secret` — sealed to that key by whoever has the secret —
+and this module stores and returns an opaque string it cannot open. The private
+half lives with the nodes; the backend needs no crypto for this at all, which is
+the point: it is not trusted to decline to look, it is unable to.
+
+The rule is enforced, not offered: once a sealing key is registered, a plaintext
+`secret` is REFUSED. A mode you can silently fall out of is not a custody
+boundary.
+
 Persistence: the settings KV (versioned entries), mutated through
 ``Store.mutate_setting`` so a change is one atomic read-modify-write. It was
 ``get_setting`` then ``set_setting`` — two transactions with the whole blob in
@@ -30,6 +41,8 @@ property — do not change with the backend.
 """
 from __future__ import annotations
 
+import base64
+import binascii
 import re
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -71,6 +84,17 @@ class EnrollmentInvalid(Exception):
 # header and an empty scheme.
 DEFAULT_HEADER = "Authorization"
 DEFAULT_SCHEME = "Bearer"
+
+# The org's credential-sealing PUBLIC key (X25519, hex). Public by definition —
+# what it buys is that this deployment can no longer store plaintext, not that
+# the key is a secret.
+SEALING_KEY_SETTING = "vault_creds/sealing_key/v1"
+
+# A libsodium sealed box is 48 bytes of overhead plus the message, so anything
+# shorter than the overhead is not one. Checked because an enrollment that
+# stored a truncated or empty "ciphertext" would fail at the sink, at call time,
+# on the node — the furthest possible point from where the mistake was made.
+_MIN_SEALED_BYTES = 48
 
 # RFC 9110 field names: visible ASCII, no separators. Checked at enrollment
 # rather than trusted, because this string is written into a request the proxy
@@ -122,9 +146,15 @@ class ToolCredentialVault:
         await self._store.mutate_setting(_STORE_KEY, mutate)
         return out[0]
 
+    async def sealing_key(self) -> str | None:
+        """The org's sealing pubkey, or None when this deployment stores
+        plaintext (the dev backend that decision #13 allows)."""
+        return (await self._store.get_setting(SEALING_KEY_SETTING)) or None
+
     async def enroll(
         self, tool: str, endpoint: str, secret: str, scope_nodes: list[str],
         header: str = DEFAULT_HEADER, scheme: str = DEFAULT_SCHEME,
+        sealed_secret: str = "",
     ) -> dict:
         """The grant path (the plane may narrow, never grant), and the only one.
 
@@ -135,7 +165,16 @@ class ToolCredentialVault:
         """
         if not tool or not endpoint:
             raise EnrollmentInvalid("enrollment requires both a tool and an endpoint")
-        if not secret:
+        sealing = await self.sealing_key()
+        if sealing and secret:
+            raise EnrollmentInvalid(
+                "this deployment has a sealing key registered, so it does not "
+                "store plaintext credentials — send `sealed_secret`, sealed to "
+                f"{sealing[:16]}…, instead of `secret`"
+            )
+        if sealed_secret:
+            _check_sealed(sealed_secret, tool, endpoint)
+        elif not secret:
             raise EnrollmentInvalid(f"no secret given for ({tool}, {endpoint})")
         scope = sorted({n for n in scope_nodes if n})
         if not scope:
@@ -155,11 +194,19 @@ class ToolCredentialVault:
         def change(data: dict[str, dict]) -> dict:
             prior = data.get(_key(tool, endpoint))
             version = (prior["version"] + 1) if prior else 1
-            data[_key(tool, endpoint)] = {
-                "tool": tool, "endpoint": endpoint, "secret": secret,
+            entry = {
+                "tool": tool, "endpoint": endpoint,
                 "version": version, "revoked": False, "scope_nodes": scope,
                 "header": header, "scheme": scheme,
             }
+            # Exactly one of the two is stored. Keeping both would mean a
+            # deployment that had switched to envelope mode still had the
+            # plaintext of everything enrolled before it.
+            if sealed_secret:
+                entry["sealed_secret"] = sealed_secret
+            else:
+                entry["secret"] = secret
+            data[_key(tool, endpoint)] = entry
             return {"tool": tool, "endpoint": endpoint, "version": version}
 
         return await self._mutate(change)
@@ -178,8 +225,12 @@ class ToolCredentialVault:
                 f"node {node_id!r} is not in the dispense scope for "
                 f"({tool}, {endpoint}) — scope mismatch"
             )
+        held = (
+            {"sealed_secret": entry["sealed_secret"]} if entry.get("sealed_secret")
+            else {"secret": entry.get("secret", "")}
+        )
         return {
-            "secret": entry["secret"],
+            **held,
             "version": entry["version"],
             # Placement travels WITH the secret: the caller injecting it must
             # not have to hold a second copy of the enrollment to know where it
@@ -189,7 +240,9 @@ class ToolCredentialVault:
             "scheme": entry.get("scheme", DEFAULT_SCHEME),
         }
 
-    async def rotate(self, tool: str, endpoint: str, new_secret: str) -> dict:
+    async def rotate(
+        self, tool: str, endpoint: str, new_secret: str, sealed_secret: str = "",
+    ) -> dict:
         """New secret, same scope, same revocation state.
 
         Rotation used to clear `revoked`, silently. An operator who revoked a
@@ -199,7 +252,15 @@ class ToolCredentialVault:
         is the module's, and rotate was the one operation quietly breaking it.
         So a revoked credential refuses rotation and says what to do instead.
         """
-        if not new_secret:
+        sealing = await self.sealing_key()
+        if sealing and new_secret:
+            raise EnrollmentInvalid(
+                "this deployment has a sealing key registered — rotate with "
+                "`sealed_secret`, not `secret`"
+            )
+        if sealed_secret:
+            _check_sealed(sealed_secret, tool, endpoint)
+        elif not new_secret:
             raise EnrollmentInvalid(f"no new secret given for ({tool}, {endpoint})")
 
         def change(data: dict[str, dict]) -> dict:
@@ -212,7 +273,12 @@ class ToolCredentialVault:
                     "again. Re-enroll to grant — revocation is narrowing, and "
                     "undoing it is a deliberate act."
                 )
-            entry["secret"] = new_secret
+            entry.pop("secret", None)
+            entry.pop("sealed_secret", None)
+            if sealed_secret:
+                entry["sealed_secret"] = sealed_secret
+            else:
+                entry["secret"] = new_secret
             entry["version"] += 1
             return {"version": entry["version"]}
 
@@ -238,7 +304,26 @@ class ToolCredentialVault:
                  "version": e["version"], "revoked": e["revoked"],
                  "scope_nodes": e["scope_nodes"],
                  "header": e.get("header", DEFAULT_HEADER),
-                 "scheme": e.get("scheme", DEFAULT_SCHEME)}
+                 "scheme": e.get("scheme", DEFAULT_SCHEME),
+                 # Whether this deployment can read this credential at all.
+                 "sealed": bool(e.get("sealed_secret"))}
                 for e in data.values()
             ],
         }
+
+
+def _check_sealed(sealed_secret: str, tool: str, endpoint: str) -> None:
+    """A sealed secret this vault cannot open, it can still refuse to store
+    garbage as. The alternative is failing at the sink, at call time, on the
+    node — the furthest possible point from where the mistake was made."""
+    try:
+        raw = base64.b64decode(sealed_secret, validate=True)
+    except (binascii.Error, ValueError) as exc:
+        raise EnrollmentInvalid(
+            f"sealed_secret for ({tool}, {endpoint}) is not valid base64: {exc}"
+        ) from exc
+    if len(raw) < _MIN_SEALED_BYTES:
+        raise EnrollmentInvalid(
+            f"sealed_secret for ({tool}, {endpoint}) is {len(raw)} bytes; a "
+            f"sealed box is at least {_MIN_SEALED_BYTES}"
+        )
