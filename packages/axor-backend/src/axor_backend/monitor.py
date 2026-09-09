@@ -8,6 +8,14 @@ been silent past the stale window (default 3T, T = the heartbeat period).
 Edge-triggered: a node fires node_stale once when it crosses into stale, and
 becomes eligible to fire again only after it heartbeats and goes stale anew — so
 the on-call is paged on the transition, not every sweep.
+
+The edge lives in the node's row (`reported_state.stale_notified`), not in this
+process. It used to be a set in memory, which made a backend restart a reason to
+page: nothing deletes a reported row, so every node that had ever gone quiet —
+decommissioned ones included — fired again on the first sweep after every
+restart. A restart is not a heartbeat. Keeping the flag beside the heartbeat
+that clears it also means the two cannot disagree, and a node that went silent
+WHILE the backend was down is still paged, exactly once, when it comes back up.
 """
 from __future__ import annotations
 
@@ -38,40 +46,51 @@ async def stale_sweep(
     notifier: Any,  # noqa: ANN401 - the Notifier
     broadcast: Any,  # noqa: ANN401 - the Broadcast bus
     stale_after: float,
-    already_stale: set[str],
     now: datetime,
 ) -> int:
-    """One pass. Emits node_stale for nodes newly past the stale window; clears
-    the flag for nodes that have heartbeated since, so a later silence re-fires.
-    Returns the number of node_stale notifications emitted this pass."""
+    """One pass. Emits node_stale for nodes newly past the stale window.
+
+    "Newly" is decided by the row: `mark_stale_notified` only writes when the
+    flag is still unset, so claiming it and paging are the same step, and the
+    re-arm is the heartbeat's own write (`upsert_reported` clears it). There is
+    no per-process memory of who has been paged — that is what made a restart
+    page the whole graveyard.
+
+    Returns the number of node_stale notifications emitted this pass.
+    """
     emitted = 0
-    live_nodes: set[str] = set()
     for row in await store.list_reported():
         node_id = row["node_id"]
-        live_nodes.add(node_id)
         ts = _parse_ts(row["updated_ts"])
         if ts is None:
+            # The one input this monitor has is unreadable, so it cannot say
+            # whether the node is silent — and staying quiet about that is the
+            # failure mode this whole file exists to prevent. `upsert_reported`
+            # is the only writer and stamps `clock.now()`, so a value that does
+            # not parse means the row was written by something else.
+            log.warning(
+                "node %s: last heartbeat timestamp %r does not parse — this node "
+                "is NOT being watched for silence",
+                node_id, row["updated_ts"],
+            )
             continue
         silent = (now - ts).total_seconds()
-        if silent >= stale_after:
-            if node_id not in already_stale:
-                already_stale.add(node_id)
-                broadcast.publish(
-                    topic("plane", node_id),
-                    {"type": "node_stale", "node_id": node_id,
-                     "silent_seconds": silent},
-                )
-                await notifier.emit(
-                    "node_stale", node_id,
-                    {"silent_seconds": round(silent, 1),
-                     "last_level": row["level"],
-                     "permalink": f"/v1/plane/nodes#{node_id}"},
-                )
-                emitted += 1
-        else:
-            already_stale.discard(node_id)  # fresh again → re-arm
-    # A node dropped from the store entirely is no longer ours to page on.
-    already_stale.intersection_update(live_nodes)
+        if silent < stale_after or row.get("stale_notified") is not None:
+            continue
+        if not await store.mark_stale_notified(node_id, now.isoformat()):
+            continue  # someone else claimed this silence between the read and here
+        broadcast.publish(
+            topic("plane", node_id),
+            {"type": "node_stale", "node_id": node_id,
+             "silent_seconds": silent},
+        )
+        await notifier.emit(
+            "node_stale", node_id,
+            {"silent_seconds": round(silent, 1),
+             "last_level": row["level"],
+             "permalink": f"/v1/plane/nodes#{node_id}"},
+        )
+        emitted += 1
     return emitted
 
 
@@ -90,25 +109,19 @@ async def stale_monitor(
     silent forever without anyone being paged — a failure of the one trigger
     whose whole purpose is to notice silence.
 
-    The `already_stale` edge-detection set is keyed by (org, node) so two
-    tenants may legitimately run a node of the same name.
+    Nothing about who has been paged is carried between sweeps here: the flag is
+    a column on the node's own row, so it is already scoped to the tenant that
+    owns the node and two tenants may run a node of the same name.
     """
     from axor_backend.tenancy import PUBLIC_ORG, set_current_org
 
-    already_stale: set[tuple[str, str]] = set()
     while True:
         await asyncio.sleep(interval)
         try:
             now = datetime.now(UTC)
             for org in await store.list_orgs():
                 set_current_org(org)
-                seen = {node for scope, node in already_stale if scope == org}
-                await stale_sweep(
-                    store, notifier, broadcast, stale_after, seen, now,
-                )
-                already_stale = {
-                    (scope, node) for scope, node in already_stale if scope != org
-                } | {(org, node) for node in seen}
+                await stale_sweep(store, notifier, broadcast, stale_after, now)
         except Exception as exc:  # noqa: BLE001 - a sweep error must not kill the loop
             log.warning("stale sweep failed: %s", exc)
         finally:
@@ -121,8 +134,22 @@ def spawn_stale_monitor(app: Any) -> asyncio.Task[None]:  # noqa: ANN401
     cadence; defaults are 3T / T."""
     import os
 
-    stale_after = float(os.environ.get("AXOR_STALE_AFTER", STALE_AFTER))
-    interval = float(os.environ.get("AXOR_STALE_SWEEP_INTERVAL", HEARTBEAT_PERIOD))
+    def seconds(name: str, default: float) -> float:
+        raw = os.environ.get(name)
+        if raw is None:
+            return default
+        try:
+            value = float(raw)
+        except ValueError:
+            raise ValueError(
+                f"{name}={raw!r} is not a number of seconds"
+            ) from None
+        if value <= 0:
+            raise ValueError(f"{name}={raw!r} must be > 0")
+        return value
+
+    stale_after = seconds("AXOR_STALE_AFTER", STALE_AFTER)
+    interval = seconds("AXOR_STALE_SWEEP_INTERVAL", HEARTBEAT_PERIOD)
     return asyncio.create_task(
         stale_monitor(app.state.store, app.state.notifier,
                       app.state.broadcast, interval, stale_after)

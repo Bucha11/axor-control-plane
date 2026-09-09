@@ -108,6 +108,11 @@ reported_state = Table(
     Column("level", String(24), nullable=False, default="NORMAL"),
     Column("budget_remaining", Integer, nullable=True),
     Column("updated_ts", String(40), nullable=False),
+    # When the stale monitor last paged for THIS silence (migration 0013).
+    # Cleared by every heartbeat, so it means "already reported, and the node
+    # has not spoken since". It lives here rather than in the monitor's memory
+    # because a restart must not be a reason to page again — see monitor.py.
+    Column("stale_notified", String(40), nullable=True),
     Column("org_id", String(64), nullable=False, server_default=PUBLIC_ORG),
     PrimaryKeyConstraint("org_id", "node_id"),
 )
@@ -775,6 +780,11 @@ class Store:
             values = {
                 "applied_version": applied_version, "level": level,
                 "budget_remaining": budget_remaining, "updated_ts": ts,
+                # The node spoke, so whatever silence was reported is over: this
+                # IS the re-arm the stale monitor's edge detection needs, and
+                # doing it in the same write means there is no window where a
+                # heartbeat has landed and the node still counts as reported.
+                "stale_notified": None,
             }
             if row is None:
                 await conn.execute(insert(reported_state).values(
@@ -805,19 +815,41 @@ class Store:
         }
 
     async def list_reported(self) -> list[dict[str, Any]]:
-        """Every node that has ever reported, with its last heartbeat ts — the
-        input the stale monitor scans (spec §16: node_stale after 3T silence)."""
+        """Every node that has ever reported, with its last heartbeat ts and
+        whether this silence has already been paged — the input the stale
+        monitor scans (spec §16: node_stale after 3T silence)."""
         async with self.engine.connect() as conn:
             rows = (await conn.execute(
                 select(
                     reported_state.c.node_id, reported_state.c.level,
-                    reported_state.c.updated_ts,
+                    reported_state.c.updated_ts, reported_state.c.stale_notified,
                 ).where(reported_state.c.org_id == current_org_id())
             )).all()
         return [
-            {"node_id": r.node_id, "level": r.level, "updated_ts": r.updated_ts}
+            {"node_id": r.node_id, "level": r.level, "updated_ts": r.updated_ts,
+             "stale_notified": r.stale_notified}
             for r in rows
         ]
+
+    async def mark_stale_notified(self, node_id: str, ts: str) -> bool:
+        """Record that node_stale has been sent for the node's current silence.
+
+        Conditional on the column still being unset, so the write is also the
+        claim: two sweeps racing (or two processes, if this ever runs as more
+        than one) page once between them rather than once each. Returns whether
+        THIS caller is the one that claimed it.
+        """
+        async with self.engine.begin() as conn:
+            result = await conn.execute(
+                update(reported_state)
+                .where(
+                    reported_state.c.node_id == node_id,
+                    reported_state.c.org_id == current_org_id(),
+                    reported_state.c.stale_notified.is_(None),
+                )
+                .values(stale_notified=ts)
+            )
+        return bool(result.rowcount)
 
     # ── fleet-wide reads ──────────────────────────────────────────────────────
     # The plane's two read surfaces render EVERY node at once, and the UI polls

@@ -296,55 +296,9 @@ async def test_a_deviation_with_no_recorded_denial_is_not_auto_pinned(
 
 
 # ── node_stale sweep ──────────────────────────────────────────────────────────
-
-async def test_stale_sweep_fires_once_per_stale_episode() -> None:
-    from datetime import UTC, datetime, timedelta
-
-    from axor_backend.broadcast import Broadcast
-    from axor_backend.monitor import stale_sweep
-
-    fired = []
-
-    async def capture(url: str, body: dict) -> int:
-        fired.append(body)
-        return 200
-
-    class FakeStore:
-        def __init__(self) -> None:
-            self.rows: list[dict] = []
-
-        async def list_reported(self) -> list[dict]:
-            return list(self.rows)
-
-    store = FakeStore()
-    notifier = Notifier(post=capture)
-    notifier.subscribe("http://sink.test", ["node_stale"])
-    broadcast = Broadcast()
-    now = datetime(2026, 7, 5, 12, 0, 0, tzinfo=UTC)
-
-    # Fresh node → not stale.
-    store.rows = [{"node_id": "n1", "level": "NORMAL",
-                   "updated_ts": (now - timedelta(seconds=5)).isoformat()}]
-    seen: set[str] = set()
-    assert await stale_sweep(store, notifier, broadcast, 30.0, seen, now) == 0
-
-    # Silent past 3T → fires once, and stays quiet on the next sweep (edge).
-    store.rows = [{"node_id": "n1", "level": "NORMAL",
-                   "updated_ts": (now - timedelta(seconds=40)).isoformat()}]
-    assert await stale_sweep(store, notifier, broadcast, 30.0, seen, now) == 1
-    assert await stale_sweep(store, notifier, broadcast, 30.0, seen, now) == 0
-    await notifier.drain()
-    assert len(fired) == 1 and fired[0]["trigger"] == "node_stale"
-
-    # Heartbeats again (fresh), then goes silent → re-arms and fires anew.
-    store.rows = [{"node_id": "n1", "level": "NORMAL",
-                   "updated_ts": (now - timedelta(seconds=1)).isoformat()}]
-    assert await stale_sweep(store, notifier, broadcast, 30.0, seen, now) == 0
-    store.rows = [{"node_id": "n1", "level": "NORMAL",
-                   "updated_ts": (now - timedelta(seconds=40)).isoformat()}]
-    assert await stale_sweep(store, notifier, broadcast, 30.0, seen, now) == 1
-    await notifier.drain()
-    assert len(fired) == 2
+# Moved to test_monitor.py: the edge detection is a column on the node's row
+# now, so the sweep needs a real store rather than a fake list of dicts, and it
+# has enough to say to want a file.
 
 
 # ── share + export ────────────────────────────────────────────────────────────
