@@ -670,8 +670,14 @@ export const api = {
     af("/axor/governed/spawn-tree", { method: "POST" }).then((r) =>
       j<{ run_id: string; nodes: Record<string, string>; denials: number; events: number }>(r)),
 
+  // The canned 4-node tree, straight into the plane — no proxy involved. It is
+  // what Control's "load the canned tree" button seeds; the live alternative
+  // (spawnGovernedTree) runs real IntentLoops but only produces delegation
+  // edges, so the lateral hop and the undeclared foreign peer come from here.
   seedTreeRun: () =>
-    af("/v1/demo/seed-tree-run", { method: "POST" }).then((r) => j<unknown>(r)),
+    af("/v1/demo/seed-tree-run", { method: "POST" }).then(
+      (r) => j<{ seeded: string[]; config: Record<string, unknown> }>(r),
+    ),
   command: async (nodeId: string, version: number, state: Record<string, unknown>) => {
     // One timestamp, signed and sent — the adapter reconstructs the exact bytes
     // from (node_id, version, body=state, timestamp), so they must match.

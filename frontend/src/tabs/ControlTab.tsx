@@ -35,6 +35,16 @@ function SpawnGoverned({ switchToAdapter }: { switchToAdapter?: boolean }) {
     },
     onError: (e: Error) => setErr(e.message),
   });
+  const seedTree = useMutation({
+    mutationFn: () => api.seedTreeRun(),
+    onSuccess: async () => {
+      setErr(null);
+      if (switchToAdapter) connect("adapter");
+      await qc.invalidateQueries({ queryKey: ["nodes"] });
+      await qc.invalidateQueries({ queryKey: ["topology"] });
+    },
+    onError: (e: Error) => setErr(e.message),
+  });
   const spawn = useMutation({
     mutationFn: () => api.spawnGoverned(),
     onSuccess: async () => {
@@ -64,9 +74,27 @@ function SpawnGoverned({ switchToAdapter }: { switchToAdapter?: boolean }) {
           {spawnTree.isPending ? "spawning tree…" : "Spawn a governed demo TREE"}
         </button>
       </Tooltip>
+      {/* The canned tree, which until now had no way in: the backend route
+          existed and nothing called it, so the lateral hop and the undeclared
+          foreign peer — edge kinds a live spawn does not produce — were
+          reachable only from the test suite. It also needs no proxy. */}
+      <Tooltip content="Loads the canned 4-node tree straight into the plane — no proxy needed. It carries what a live spawn does not: a lateral hop between siblings, and a send to an UNDECLARED foreign peer, denied at the boundary and drawn as an opaque node.">
+        <button
+          onClick={() => seedTree.mutate()}
+          disabled={seedTree.isPending}
+          style={{ ...btn({ color: C.mut, fontSize: 11.5, padding: "7px 12px" }), marginTop: 8 }}
+        >
+          {seedTree.isPending ? "loading…" : "or load the canned tree (lateral + foreign peer)"}
+        </button>
+      </Tooltip>
       {err && (
         <div style={{ fontFamily: MONO, fontSize: 11, color: C.red, marginTop: 8 }}>
           {err} — is the proxy running with a backend URL?
+        </div>
+      )}
+      {seedTree.isSuccess && (
+        <div style={{ fontFamily: MONO, fontSize: 11, color: C.dim, marginTop: 8 }}>
+          canned tree loaded — 4 nodes plus the opaque foreign peer, on the map below.
         </div>
       )}
       {spawn.isSuccess && (
@@ -112,11 +140,17 @@ function ControlBody({ focusNode, testBench }: { focusNode?: string; testBench: 
   });
   const [sel, setSel] = useState<string | null>(focusNode ?? null);
   const [lens, setLens] = useState<"list" | "graph">("list");
+  const list = nodes.data ?? [];
   const topo = useQuery({
     queryKey: ["topology"],
     queryFn: api.topology,
     refetchInterval: REFETCH_MS,
-    enabled: lens === "graph",
+    // Also when there is nothing to operate: `/v1/plane/nodes` lists nodes with
+    // desired or reported state, i.e. nodes that heartbeat or have been
+    // commanded — a traced tree's children are in the topology and not in that
+    // list. Gating this query on the graph lens meant Control said "no governed
+    // nodes connected yet" while it held the whole tree.
+    enabled: lens === "graph" || list.length === 0,
   });
   const [more, setMore] = useState(false);
   const [cmdError, setCmdError] = useState<string | null>(null);
@@ -158,15 +192,28 @@ function ControlBody({ focusNode, testBench }: { focusNode?: string; testBench: 
     );
   }
 
-  const list = nodes.data ?? [];
+  const traced = topo.data?.nodes ?? [];
   if (list.length === 0) {
     return (
       <div style={{ maxWidth: 640, margin: "0 auto" }}>
         <div style={{ fontFamily: MONO, fontSize: 12.5, color: C.mut }}>
-          No governed nodes connected yet. Point your axor-core adapter at the plane —
-          or spawn a real governed demo node right now:
+          {traced.length > 0
+            ? <>No node is reporting to the plane yet, so there is nothing to pause
+                or stop — but {traced.length} node{traced.length === 1 ? "" : "s"} have
+                traced here, and the shape they describe is below.</>
+            : <>No governed nodes connected yet. Point your axor-core adapter at the
+                plane — or spawn a real governed demo node right now:</>}
         </div>
         <SpawnGoverned />
+        {topo.data && traced.length > 0 && (
+          <div className="mt-4">
+            <TopologyGraph
+              payload={topo.data}
+              selected={sel}
+              onSelect={(id) => setSel(sel === id ? null : id)}
+            />
+          </div>
+        )}
       </div>
     );
   }

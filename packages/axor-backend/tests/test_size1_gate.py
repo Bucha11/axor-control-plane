@@ -4,6 +4,10 @@ A tree of size 1 must produce the exact behavior the deployed v0.13 path
 produces — byte-identical EvidenceCase, identical replay derivations. These
 tests re-derive both from the production code paths and byte-compare against
 the committed golden fixtures (generated once by scripts/gen_size1_golden.py).
+The scrubber's INPUT is frozen alongside them (`golden/size1/trace.json`): it
+used to be read live from `demo.EX_BLOCK_EVENTS`, so editing the demo — a
+product surface with a button behind it — moved the baseline of a break
+detector.
 
 DO NOT regenerate the fixtures to make this file pass. A diff here means the
 multi-agent layer changed single-agent production behavior — that is a
@@ -17,7 +21,6 @@ import pathlib
 
 import httpx
 import pytest
-from axor_backend.demo import EX_BLOCK_EVENTS
 from axor_backend.replay_api import parse_trace, scrubber_payload
 from axor_core.kernel.replay import replay
 from starlette.applications import Starlette
@@ -32,8 +35,22 @@ def canonical_dump(obj: object) -> str:
 
 
 def _scrubber_now() -> dict:
-    events = parse_trace([json.dumps(e) for e in EX_BLOCK_EVENTS])
-    return scrubber_payload(replay(events))
+    """The fold, over the FROZEN input in `golden/size1/trace.json`.
+
+    This read `demo.EX_BLOCK_EVENTS` — the live demo fixture, which is a product
+    surface: it is what "load example adapter run" seeds, and it is edited when
+    the reference shape a customer copies has to change. That made a
+    production-break detector move whenever the demo did, and the last such edit
+    (giving a denied call the `reason` every real producer records) forced a
+    regeneration of a baseline this file's own header says must not be
+    regenerated to pass.
+
+    The input belongs to the gate now. It is the same bytes the baseline was
+    recorded from; it simply stops moving when the demo does, which is what lets
+    this file mean what it says.
+    """
+    raw = json.loads((GOLDEN / "trace.json").read_text("utf-8"))
+    return scrubber_payload(replay(parse_trace([json.dumps(e) for e in raw])))
 
 
 # What the fold COMPUTES for each step. Everything else a step carries — kind,

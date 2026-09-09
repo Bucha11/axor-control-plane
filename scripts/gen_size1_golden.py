@@ -7,9 +7,15 @@ renders." This script records that behavior ONCE, from the production paths:
   evidence.json  — the EvidenceCase list the proxy's claim path produces for the
                    canonical fabrication scenario (deterministic: no timestamps
                    or ids inside the evidence dict).
-  scrubber.json  — the replay scrubber payload for the canonical adapter-schema
-                   trace (demo.EX_BLOCK_EVENTS, fixed timestamps), through the
-                   kernel fold with the default config.
+  trace.json     — the canonical adapter-schema trace the scrubber baseline was
+                   recorded from. Frozen: seeded once from demo.EX_BLOCK_EVENTS
+                   and never rewritten by this script afterwards. The demo
+                   fixture is a product surface (a button seeds it) and it moves
+                   when the reference shape a customer copies has to change;
+                   a break detector whose input moves with it detects nothing.
+                   To re-baseline the input, delete the file deliberately.
+  scrubber.json  — the replay scrubber payload for trace.json through the kernel
+                   fold with the default config.
 
 `tests/test_size1_gate.py` re-derives both live and byte-compares. The fixtures
 are NEVER regenerated to make CI pass — a diff means the multi-agent layer
@@ -78,21 +84,34 @@ async def produce_evidence() -> list[dict]:
         return result["evidence"]
 
 
-def produce_scrubber() -> dict:
+def frozen_trace() -> list[dict]:
+    """The gate's input. Seeded from the demo fixture once, then left alone."""
     from axor_backend.demo import EX_BLOCK_EVENTS
+
+    path = GOLDEN_DIR / "trace.json"
+    if path.exists():
+        return json.loads(path.read_text("utf-8"))
+    path.write_text(
+        json.dumps(EX_BLOCK_EVENTS, indent=2, ensure_ascii=False) + "\n", "utf-8"
+    )
+    print(f"wrote {path} (seeded from demo.EX_BLOCK_EVENTS)")
+    return list(EX_BLOCK_EVENTS)
+
+
+def produce_scrubber(trace: list[dict]) -> dict:
     from axor_backend.replay_api import parse_trace, scrubber_payload
     from axor_core.kernel.replay import replay
 
-    events = parse_trace([json.dumps(e) for e in EX_BLOCK_EVENTS])
-    return scrubber_payload(replay(events))
+    return scrubber_payload(replay(parse_trace([json.dumps(e) for e in trace])))
 
 
 def main() -> None:
     GOLDEN_DIR.mkdir(parents=True, exist_ok=True)
     evidence = asyncio.run(produce_evidence())
     (GOLDEN_DIR / "evidence.json").write_text(canonical_dump(evidence) + "\n", "utf-8")
+    trace = frozen_trace()
     (GOLDEN_DIR / "scrubber.json").write_text(
-        canonical_dump(produce_scrubber()) + "\n", "utf-8"
+        canonical_dump(produce_scrubber(trace)) + "\n", "utf-8"
     )
     print(f"wrote {GOLDEN_DIR}/evidence.json ({len(evidence)} case(s))")
     print(f"wrote {GOLDEN_DIR}/scrubber.json")
