@@ -19,8 +19,20 @@ from __future__ import annotations
 
 from typing import Any
 
-_WEB: dict[str, Any] = {"sources": ["web"], "sensitive": False}
-_CLEAN: dict[str, Any] = {"sources": [], "sensitive": False}
+
+def _web() -> dict[str, Any]:
+    return {"sources": ["web"], "sensitive": False}
+
+
+def _clean() -> dict[str, Any]:
+    return {"sources": [], "sensitive": False}
+
+
+# Built per call, not shared. These were two module-level dicts handed straight
+# into nine event payloads, so one `append` to `_WEB["sources"]` anywhere
+# rewrote six events of the tree at once — for the life of the process, in a
+# fixture whose whole job is to be the reference shape. Nothing mutates them
+# today; that is the only reason it was not already a bug.
 
 
 def _ev(seq: int, node: str, kind: str, verdict: str | None, **payload: Any) -> dict:  # noqa: ANN401
@@ -60,6 +72,7 @@ def _call(
     egress: bool = False,
     normalized: dict[str, Any] | None = None,
     gate: str | None = None,
+    reason: str | None = None,
 ) -> dict:
     """One recorded tool_call, in the shape ``call_payload`` produces.
 
@@ -72,12 +85,18 @@ def _call(
         "args": dict(args or {}),
         "arg_refs": dict(arg_refs or {}),
         "driving_args": list(driving_args or []),
-        "driving_root": dict(driving_root or _CLEAN),
+        "driving_root": dict(driving_root or _clean()),
         "floor_active": False,
         "normalized": normalized or _norm(),
     }
     if egress:
         payload["roles"] = {"egress_sink": True}
+    if reason is not None:
+        # A denied call carries what it was denied ON. Every real producer
+        # writes it (axor_wrap's bridge, the proxy, IntentLoop._record_denial):
+        # without it a consumer sees THAT the kernel refused and not what over,
+        # and an operator asking "why" gets nothing.
+        payload["reason"] = reason
     return _ev(seq, node, "tool_call", verdict, gate=gate, **payload)
 
 
@@ -94,7 +113,7 @@ EX_BLOCK_EVENTS: list[dict] = [
     # Summarize carries the web taint from v_mail into v_sum (arg_refs → value_ref
     # is the graph edge; the root keeps it tainted so the egress below denies).
     _call(4, EX_BLOCK_NODE, "pass", "summarize", args={"text": "…"},
-          arg_refs={"text": "v_mail"}, driving_args=["text"], driving_root=_WEB),
+          arg_refs={"text": "v_mail"}, driving_args=["text"], driving_root=_web()),
     _ev(5, EX_BLOCK_NODE, "tool_result", None, tool="summarize",
         value_ref="v_sum", root={"sources": ["web"], "sensitive": False}),
     # The exfil: a web-tainted value into an external post — recorded DENY.
@@ -102,8 +121,13 @@ EX_BLOCK_EVENTS: list[dict] = [
     # denies on `driving_root.is_tainted` + an external destination, which is
     # exactly what a consumer re-decides from — no content required.
     _call(6, EX_BLOCK_NODE, "deny", "slack_post", args={"text": "…"},
-          arg_refs={"text": "v_sum"}, driving_args=["text"], driving_root=_WEB,
+          arg_refs={"text": "v_sum"}, driving_args=["text"], driving_root=_web(),
           egress=True, gate="taint_floor",
+          reason=(
+              "taint enforcement (per-value): the driving argument of "
+              "'slack_post' carries a tainted/sensitive value — integrity "
+              "(untrusted-derived value into a high-risk operation)"
+          ),
           normalized=_norm(destination_kind="external_domain",
                            target_kind="external_url",
                            provenance="external_web",
@@ -127,7 +151,7 @@ EX_PASS_EVENTS: list[dict] = [
     _ev(1, EX_PASS_NODE, "tool_result", None, tool="notes_read",
         value_ref="v_note", root={"sources": [], "sensitive": False}),
     _call(2, EX_PASS_NODE, "pass", "notes_write", args={"text": "…"},
-          arg_refs={"text": "v_note"}, driving_args=["text"], driving_root=_CLEAN),
+          arg_refs={"text": "v_note"}, driving_args=["text"], driving_root=_clean()),
 ]
 
 # The kernel config the corpus is evaluated against: slack_post is a declared
@@ -164,49 +188,61 @@ TREE_EVENTS: list[dict] = [
         mode="silent_fail"),
     _call(1, TREE_SCRAPER, "pass", "web_search", args={"q": "rates"}),
     _ev(2, TREE_SCRAPER, "tool_result", None, tool="web_search",
-        value_ref="v_fab", root=_WEB),
+        value_ref="v_fab", root=_web()),
     _ev(3, TREE_SCRAPER, "claim", None, text="rates rose 0.25%"),
     # the fabrication travels UP with its taint carried intact
     _ev(4, TREE_SCRAPER, "message_sent", "pass", to=TREE_RESEARCH,
         edge_kind="delegation", msg_id="m_fab1", value_ref="v_fab",
-        carried={"root": _WEB}),
+        carried={"root": _web()}),
     _ev(1, TREE_RESEARCH, "message_received", None, **{"from": TREE_SCRAPER},
         edge_kind="delegation", msg_id="m_fab1", value_ref="v_fab",
-        carried={"root": _WEB}),
+        carried={"root": _web()}),
     # researcher folds it into its summary (derived value keeps the taint)
     _call(2, TREE_RESEARCH, "pass", "summarize", args={"text": "…"},
-          arg_refs={"text": "v_fab"}, driving_args=["text"], driving_root=_WEB),
+          arg_refs={"text": "v_fab"}, driving_args=["text"], driving_root=_web()),
     _ev(3, TREE_RESEARCH, "tool_result", None, tool="summarize",
-        value_ref="v_sum", root=_WEB),
+        value_ref="v_sum", root=_web()),
     # a lateral edge: researcher hands the writer a CLEAN style guide — the
     # lateral hop itself is fine; labels ride per value (Ch.1 §1)
     _ev(4, TREE_RESEARCH, "message_sent", "pass", to=TREE_WRITER,
         edge_kind="lateral", msg_id="m_style", value_ref="v_style",
-        carried={"root": _CLEAN}),
+        carried={"root": _clean()}),
     _ev(0, TREE_WRITER, "message_received", None, **{"from": TREE_RESEARCH},
         edge_kind="lateral", msg_id="m_style", value_ref="v_style",
-        carried={"root": _CLEAN}),
+        carried={"root": _clean()}),
     # the tainted summary is delegated up to the orchestrator
     _ev(5, TREE_RESEARCH, "message_sent", "pass", to=TREE_ORCH,
         edge_kind="delegation", msg_id="m_fab2", value_ref="v_sum",
-        carried={"root": _WEB}),
+        carried={"root": _web()}),
     _ev(2, TREE_ORCH, "message_received", None, **{"from": TREE_RESEARCH},
         edge_kind="delegation", msg_id="m_fab2", value_ref="v_sum",
-        carried={"root": _WEB}),
+        carried={"root": _web()}),
     _ev(3, TREE_ORCH, "claim", None, text="rates rose 0.25% (confirmed)"),
     # ...and the export is DENIED at the boundary: containment (Ch.2 §2)
     _call(4, TREE_ORCH, "deny", "slack_post", args={"text": "…"},
-          arg_refs={"text": "v_sum"}, driving_args=["text"], driving_root=_WEB,
+          arg_refs={"text": "v_sum"}, driving_args=["text"], driving_root=_web(),
           egress=True, gate="taint_floor",
+          reason=(
+              "taint enforcement (per-value): the driving argument of "
+              "'slack_post' carries a tainted/sensitive value — integrity "
+              "(untrusted-derived value into a high-risk operation)"
+          ),
           normalized=_norm(destination_kind="external_domain",
                            target_kind="external_url",
                            provenance="external_web",
                            data_flow="local_to_external")),
     # an UNDECLARED foreign peer: the send gate fails closed (L0, Ch.1 §2) —
     # the peer renders as an opaque diamond, the denial flashes on the edge
+    # `gate` takes a gate NAME from the kernel's own table, not the internal
+    # denial category: `gate_of("message_gate") == "message"`. This said
+    # "message_gate", which is outside the vocabulary a recorded verdict may
+    # name — the exact leak axor_core.governor exports GATE_OF_CATEGORY to
+    # prevent, and that axor-lab already shipped once. (axor_core.node.messaging
+    # writes the raw category here; this fixture is the reference shape, so it
+    # follows the contract rather than that producer.)
     _ev(1, TREE_WRITER, "message_sent", "deny", to="partner-agent",
         edge_kind="peer", msg_id="m_peer", value_ref="v_style",
-        carried={"root": _CLEAN}, gate="message_gate",
+        carried={"root": _clean()}, gate="message",
         reason="peer edge to an undeclared peer (undeclared = L0, denied)"),
 ]
 

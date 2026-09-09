@@ -130,16 +130,31 @@ def _scripted_stream(node_id: str):  # noqa: ANN202
     return stream()
 
 
-def _ordered_verdicts(trace_events: list) -> list[tuple[bool, str]]:
-    """One (approved, reason) per tool call, in call order — read from the REAL
-    IntentLoop trace, so the verdicts are authentic governance decisions."""
-    out: list[tuple[bool, str]] = []
+def _ordered_verdicts(trace_events: list) -> list[tuple[bool, str, str | None]]:
+    """One (approved, reason, gate) per tool call, in call order — read from the
+    REAL IntentLoop trace, so the verdicts are authentic governance decisions.
+
+    The gate is the kernel's own name for the gate that denied, mapped from the
+    category the IntentLoop recorded. It used to be the literal string
+    "taint_enforcement" on every denial: a CATEGORY, not a gate name, so it was
+    outside the vocabulary a recorded verdict may name (`GATE_OF_CATEGORY`'s
+    values) — and it was a guess besides, since a capability or budget denial
+    would have been labelled taint too. `gate_of` raises on a category it does
+    not know, which is the posture the kernel chose: an unrecognised denial
+    should be a loud error, not a category leaking into a field that takes a
+    gate name.
+    """
+    from axor_core.governor import gate_of
+
+    out: list[tuple[bool, str, str | None]] = []
     for event in trace_events:
         kind = getattr(event, "kind", None)
         if kind in (TraceEventKind.INTENT_APPROVED, TraceEventKind.INTENT_TRANSFORMED):
-            out.append((True, ""))
+            out.append((True, "", None))
         elif kind is TraceEventKind.INTENT_DENIED:
-            out.append((False, getattr(event, "reason", "")))
+            payload = getattr(event, "payload", None) or {}
+            category = str(payload.get("category") or "capability")
+            out.append((False, getattr(event, "reason", ""), gate_of(category)))
     return out
 
 
@@ -151,7 +166,9 @@ def _ev(seq: int, node_id: str, kind: str, verdict: str | None, **payload: Any) 
     }
 
 
-def _build_lines(node_id: str, verdicts: list[tuple[bool, str]]) -> list[dict]:
+def _build_lines(
+    node_id: str, verdicts: list[tuple[bool, str, str | None]]
+) -> list[dict]:
     """Serialise the flow into kernel-schema events, enriched with provenance:
     each call carries arg_refs (the value refs it reads) and, when it produces a
     value, a following tool_result with that value_ref — so the taint graph folds
@@ -159,7 +176,7 @@ def _build_lines(node_id: str, verdicts: list[tuple[bool, str]]) -> list[dict]:
     IntentLoop's own; only the value refs are annotated here."""
     lines: list[dict] = []
     seq = 0
-    for (tool, args, output), (approved, reason) in zip(_FLOW, verdicts):
+    for (tool, args, output), (approved, reason, gate) in zip(_FLOW, verdicts):
         arg_refs = {a: _REF[v] for a, v in args.items() if v in _REF}
         normalized = (
             {"destination_kind": "external_domain"} if tool in _EGRESS else {}
@@ -167,7 +184,7 @@ def _build_lines(node_id: str, verdicts: list[tuple[bool, str]]) -> list[dict]:
         lines.append(_ev(
             seq, node_id, "tool_call", "pass" if approved else "deny",
             tool=tool, args=args, arg_refs=arg_refs, normalized=normalized,
-            gate=(None if approved else "taint_enforcement"),
+            gate=gate,
             **({"reason": reason} if reason else {}),
         ))
         seq += 1
@@ -234,7 +251,9 @@ async def spawn_governed_node(
                 "deviation": "tainted_value_exfiltrated",
                 "verdict_source": "kernel",
                 "confidence": 1.0,
-                "observed_reality": {"gate": "taint_enforcement", "sink": "slack_post"},
+                # The gate NAME the trace recorded, not the internal
+                # category — a receipt and a replay step must agree.
+                "observed_reality": {"gate": "taint_floor", "sink": "slack_post"},
                 "agent_claim": "notified the channel with the latest rates",
                 "fault_attribution": [{"fault_mode": "instruction_injection",
                                        "tool_name": "web_search", "influence": "strong"}],
@@ -311,9 +330,9 @@ async def _run_node_flow(
     *,
     egress: frozenset[str] = frozenset(),
     untrusted: frozenset[str] = frozenset(),
-) -> list[tuple[str, dict[str, str], bool, str]]:
+) -> list[tuple[str, dict[str, str], bool, str, str | None]]:
     """One node's calls through a REAL IntentLoop over its OWN taint engine.
-    Returns (tool, args, approved, reason) per call, in order."""
+    Returns (tool, args, approved, reason, gate) per call, in order."""
     trace_events: list = []
     loop = IntentLoop(
         capability_executor=_tree_executor(tools),
@@ -339,8 +358,8 @@ async def _run_node_flow(
         pass
     verdicts = _ordered_verdicts(trace_events)
     return [
-        (tool, args, approved, reason)
-        for (tool, args), (approved, reason) in zip(flow, verdicts)
+        (tool, args, approved, reason, gate)
+        for (tool, args), (approved, reason, gate) in zip(flow, verdicts)
     ]
 
 
@@ -367,12 +386,13 @@ async def run_governed_tree(prefix: str) -> tuple[list[dict], int, dict[str, str
         bus.register(nid, engines[r])
 
     def tool_line(nid: str, tool: str, args: dict, approved: bool, reason: str,
-                  *, arg_refs: dict | None = None, egress: bool = False) -> None:
+                  gate: str | None, *, arg_refs: dict | None = None,
+                  egress: bool = False) -> None:
         per_node[nid].append(_ev(
             0, nid, "tool_call", "pass" if approved else "deny",
             tool=tool, args=args, arg_refs=arg_refs or {},
             normalized={"destination_kind": "external_domain"} if egress else {},
-            gate=None if approved else "taint_enforcement",
+            gate=gate,
             **({"reason": reason} if reason else {}),
         ))
 
@@ -393,12 +413,12 @@ async def run_governed_tree(prefix: str) -> tuple[list[dict], int, dict[str, str
     ))
 
     # scraper: real untrusted read → value tainted in ITS engine
-    for tool, args, ok, reason in await _run_node_flow(
+    for tool, args, ok, reason, gate in await _run_node_flow(
         ids["scraper"], _TREE_TOOLS["scraper"],
         [("web_search", {"q": QUERY})],
         engines["scraper"], untrusted=frozenset({"web_search"}),
     ):
-        tool_line(ids["scraper"], tool, args, ok, reason)
+        tool_line(ids["scraper"], tool, args, ok, reason, gate)
         if ok:
             result_line(ids["scraper"], tool, "v_web_result", tainted=True)
 
@@ -407,12 +427,12 @@ async def run_governed_tree(prefix: str) -> tuple[list[dict], int, dict[str, str
                            "delegation", WEB_OUT, value_ref="v_web_result"))
 
     # researcher: derives a summary FROM the carried value (real derivation)
-    for tool, args, ok, reason in await _run_node_flow(
+    for tool, args, ok, reason, gate in await _run_node_flow(
         ids["research"], _TREE_TOOLS["research"],
         [("summarize", {"text": WEB_OUT})],
         engines["research"],
     ):
-        tool_line(ids["research"], tool, args, ok, reason,
+        tool_line(ids["research"], tool, args, ok, reason, gate,
                   arg_refs={"text": "v_web_result"})
         if ok:
             # the summary derives from the tainted input — register honestly
@@ -426,12 +446,12 @@ async def run_governed_tree(prefix: str) -> tuple[list[dict], int, dict[str, str
                            "delegation", SUMMARY, value_ref="v_summary"))
 
     # orchestrator: its OWN IntentLoop denies the export of the carried value
-    for tool, args, ok, reason in await _run_node_flow(
+    for tool, args, ok, reason, gate in await _run_node_flow(
         ids["orch"], _TREE_TOOLS["orch"],
         [("slack_post", {"text": SUMMARY})],
         engines["orch"], egress=frozenset({"slack_post"}),
     ):
-        tool_line(ids["orch"], tool, args, ok, reason,
+        tool_line(ids["orch"], tool, args, ok, reason, gate,
                   arg_refs={"text": "v_summary"}, egress=True)
 
     # assign per-node seqs in causal order and flatten

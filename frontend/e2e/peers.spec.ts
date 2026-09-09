@@ -73,7 +73,9 @@ test.describe("inter-federation peers", () => {
     await expect(page.getByTestId("topo-node-partner-agent")).toBeVisible();
     await expect(page.getByText("peer · opaque")).toBeVisible();
     // …with the denied send flashed on the edge, at the boundary
-    await expect(page.getByText(/DENIED · message_gate/)).toBeVisible();
+    // The gate NAME the kernel's table gives, not the internal denial category:
+    // this read "DENIED · message_gate" on screen, which is not a gate.
+    await expect(page.getByText(/DENIED · message/)).toBeVisible();
 
     // selecting the peer shows the opaque card with ZERO intervention buttons
     await page.getByTestId("topo-node-partner-agent").click();

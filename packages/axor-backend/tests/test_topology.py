@@ -75,7 +75,9 @@ async def test_topology_derives_from_tree_run(open_client: httpx.AsyncClient) ->
     peer = next(n for n in topo["nodes"] if n["node_id"] == "partner-agent")
     assert peer["kind"] == "peer"
     peer_edge = next(e for e in topo["edges"] if e["kind"] == "peer")
-    assert peer_edge["denied"] == 1 and peer_edge["last_gate"] == "message_gate"
+    # The gate NAME, not the denial category: gate_of("message_gate") is
+    # "message", and this field carries names.
+    assert peer_edge["denied"] == 1 and peer_edge["last_gate"] == "message"
     assert all(n["kind"] == "self" for n in topo["nodes"]
                if n["node_id"] != "partner-agent")
 
