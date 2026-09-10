@@ -14,6 +14,7 @@ from collections.abc import AsyncIterator
 from fastapi import APIRouter, Header
 from sse_starlette.sse import EventSourceResponse
 
+from axor_backend.broadcast import messages as bus_messages
 from axor_backend.clock import now
 from axor_backend.deps import (
     BroadcastDep,
@@ -134,8 +135,9 @@ async def run_stream(
             for event_id, line in await store.run_events_after(run_id, after):
                 delivered = event_id
                 yield {"event": "event", "id": str(event_id), "data": line}
-            while True:
-                message = await queue.get()
+            # Ends when the bus drops this reader; the client reconnects and
+            # the replay above closes the gap.
+            async for message in bus_messages(queue):
                 # A live message published before this subscriber finished its
                 # replay would otherwise be sent twice.
                 event_id = int(message.get("id") or 0)

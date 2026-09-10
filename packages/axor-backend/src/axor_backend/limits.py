@@ -20,22 +20,42 @@ from typing import Any
 
 from fastapi import HTTPException
 
-MAX_EVENTS_PER_BATCH = int(os.environ.get("AXOR_MAX_EVENTS_PER_BATCH", "10000"))
+
+def _ceiling(name: str, default: int) -> int:
+    """A positive integer from the environment, or a message that names it.
+
+    These are read at IMPORT time, so a bare ``int(os.environ[...])`` meant a
+    typo in one of them stopped the whole backend from importing, with a
+    ValueError that quoted the value and not the variable it came from.
+    """
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        raise ValueError(f"{name}={raw!r} is not a whole number") from None
+    if value < 1:
+        raise ValueError(f"{name}={raw!r} must be >= 1")
+    return value
+
+
+MAX_EVENTS_PER_BATCH = _ceiling("AXOR_MAX_EVENTS_PER_BATCH", 10000)
 # Cached causal subgraphs held per process (app._subgraph_cache).
-SUBGRAPH_CACHE_MAX = int(os.environ.get("AXOR_SUBGRAPH_CACHE_MAX", "512"))
+SUBGRAPH_CACHE_MAX = _ceiling("AXOR_SUBGRAPH_CACHE_MAX", 512)
 # Regression pins one uploaded Lab package may carry. Each one is content-hashed,
 # converted to kernel events and REPLAYED before the request answers, so the
 # per-pin cost is real work and the count is caller-chosen. A genuine bundle pins
 # tens of cases, not thousands.
-MAX_PINS_PER_PACKAGE = int(os.environ.get("AXOR_MAX_PINS_PER_PACKAGE", "500"))
+MAX_PINS_PER_PACKAGE = _ceiling("AXOR_MAX_PINS_PER_PACKAGE", 500)
 
 # k-hop bounds for the per-run provenance walk. Both are resource bounds on a
 # caller-chosen number: without them `?k=` and `?limit=` sized the walk from the
 # query string. 30 hops is far past any real value chain in one run — the walk
 # stops early when the frontier empties, so the cap only ever binds a request
 # that was asking for the whole run anyway.
-MAX_KHOP_K = int(os.environ.get("AXOR_MAX_KHOP_K", "30"))
-MAX_KHOP_LIMIT = int(os.environ.get("AXOR_MAX_KHOP_LIMIT", "1000"))
+MAX_KHOP_K = _ceiling("AXOR_MAX_KHOP_K", 30)
+MAX_KHOP_LIMIT = _ceiling("AXOR_MAX_KHOP_LIMIT", 1000)
 
 
 def check_batch_size(events: Any, what: str = "events") -> list:  # noqa: ANN401

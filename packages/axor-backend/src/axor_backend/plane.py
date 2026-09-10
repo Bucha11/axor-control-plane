@@ -31,6 +31,7 @@ from axor_backend.attestations import (
 from axor_backend.attestations import (
     validate_fact as validate_attestation,
 )
+from axor_backend.broadcast import messages as bus_messages
 from axor_backend.clock import now, today
 from axor_backend.coverage import coverage
 from axor_backend.errors import (
@@ -168,8 +169,11 @@ async def desired_stream(node_id: str, request: Request) -> EventSourceResponse:
             yield {"event": "snapshot",
                    "data": _json({"node_id": node_id, "version": version,
                                   "state": state})}
-            while True:
-                message = await queue.get()
+            # `messages` ends when the bus drops this reader for falling
+            # behind, which is what makes the node reconnect and take a fresh
+            # snapshot. Parked on the queue it would stay deaf to every later
+            # pause/stop while going on heartbeating happily.
+            async for message in bus_messages(queue):
                 yield {"event": message.get("type", "delta"),
                        "data": _json(message)}
         finally:
