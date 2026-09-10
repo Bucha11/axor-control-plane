@@ -46,6 +46,7 @@ from axor_backend.broadcast import Broadcast
 from axor_backend.clock import now
 from axor_backend.config import AppConfig
 from axor_backend.errors import ConfigInvalid, config_invalid, unhandled_error
+from axor_backend.identity_client import JwksRefresher
 from axor_backend.lifecycle import lifespan
 from axor_backend.limits import SubgraphCache
 from axor_backend.notifications import Notifier
@@ -97,6 +98,12 @@ def create_app(
     app.state.allow_unsigned = config.allow_unsigned
     app.state.subgraph_cache = SubgraphCache()
     app.state.licenses = {}
+    # The identity verifying keys, refetchable on a rotation. Absent when
+    # identity login is not configured, which is what `resolve_principal` reads.
+    app.state.jwks = (
+        JwksRefresher(config.identity_jwks, config.identity_jwks_url)
+        if config.identity_jwks is not None else None
+    )
     # (org, node) -> the UTC day already written to the governed-node meter, so
     # a heartbeat every ten seconds is not a write every ten seconds. Per app,
     # not per process: a module global would outlive the store it describes.

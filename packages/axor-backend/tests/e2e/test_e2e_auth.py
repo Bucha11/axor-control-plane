@@ -65,11 +65,17 @@ async def test_scoped_key_is_least_privilege_over_the_wire(secured: Backend) -> 
         assert cmd.status_code == 403 and cmd.json()["need"] == "operate"
 
 
-async def test_sse_endpoint_honours_token_query_param(secured: Backend) -> None:
+async def test_a_query_token_is_refused_on_the_json_event_log(
+    secured: Backend,
+) -> None:
     async with httpx.AsyncClient(base_url=secured.url, timeout=10.0) as c:
         await c.post("/v1/ingest/run_authsse", json={"node_id": "n", "events": [
             {"schema_version": "1.0", "seq": 0, "node_id": "n", "kind": "claim",
              "ts": "t", "causal_root": None, "gate": None, "verdict": None, "payload": {}},
         ]}, headers=_bearer(TOKEN))
+        # `/events` is ordinary JSON, not a stream: a URL token buys nothing
+        # there but exposure, so it is refused like the rest of the API.
         assert (await c.get("/v1/runs/run_authsse/events")).status_code == 401
-        assert (await c.get(f"/v1/runs/run_authsse/events?token={TOKEN}")).status_code == 200
+        assert (
+            await c.get(f"/v1/runs/run_authsse/events?token={TOKEN}")
+        ).status_code == 401

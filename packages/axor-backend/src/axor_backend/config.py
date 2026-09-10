@@ -37,6 +37,10 @@ class AppConfig:
     # ── access control (architecture §9) ─────────────────────────────────────
     api_token: str | None = None
     identity_jwks: dict[str, Any] | None = None
+    # Where the JWKS came from, when it came from a URL. Kept so the process can
+    # refetch after a key rotation instead of 401-ing every login until a
+    # restart (identity_client.JwksRefresher). None when supplied inline.
+    identity_jwks_url: str | None = None
     identity_issuer: str = "axor-identity"
     # ── the vault's two separate credentials (spec v2 Ch.5 §3) ───────────────
     vault_creds_token: str | None = None
@@ -118,6 +122,7 @@ class AppConfig:
             allow_unsigned=allow_unsigned,
             api_token=api_token,
             identity_jwks=identity_jwks,
+            identity_jwks_url=os.environ.get("AXOR_IDENTITY_JWKS_URL") or None,
             identity_issuer=identity_issuer,
             vault_creds_token=(
                 vault_creds_token or os.environ.get("AXOR_VAULT_CREDS_TOKEN") or None

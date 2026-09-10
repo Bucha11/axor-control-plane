@@ -18,6 +18,7 @@ the policy table reviewable on its own.
 """
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
 
 from fastapi import Request, Response
@@ -33,6 +34,8 @@ from axor_backend.auth import (
     required_scope,
 )
 from axor_backend.tenancy import set_current_org
+
+log = logging.getLogger("axor.backend.auth")
 
 
 def _path_of(request: Request) -> str:
@@ -87,13 +90,34 @@ async def resolve_principal(request: Request) -> Principal | None:
     # axor-identity login: a human's access token, verified locally against the
     # JWKS. The org scopes the principal to a tenant; the role maps to the scope
     # ladder (a viewer reads, an owner may mint keys).
-    if config.identity_jwks is not None:
-        from axor_backend.identity_client import IdentityError, verify_access_token
+    jwks = getattr(request.app.state, "jwks", None)
+    if jwks is not None:
+        from axor_backend.identity_client import (
+            IdentityError,
+            UnknownKeyId,
+            verify_access_token,
+        )
+
+        def verify(document: dict) -> object:
+            return verify_access_token(
+                token, document, issuer=config.identity_issuer
+            )
 
         try:
-            claims = verify_access_token(
-                token, config.identity_jwks, issuer=config.identity_issuer
-            )
+            claims = verify(jwks.document)
+        except UnknownKeyId:
+            # The one failure a refetch can fix: identity rotated its signing
+            # key and this process still holds the document from before. Every
+            # login used to 401 from that moment until somebody restarted the
+            # backend. Rate-limited inside the refresher, because presenting a
+            # token needs no credential.
+            document = await jwks.refreshed()
+            if document is None:
+                return None
+            try:
+                claims = verify(document)
+            except IdentityError:
+                return None
         except IdentityError:
             return None
         return Principal(
@@ -116,9 +140,19 @@ async def auth_middleware(request: Request, call_next: Callable) -> Response:
         return await call_next(request)
     principal = await resolve_principal(request)
     if principal is None:
+        # Refusals were returned to the caller and to nobody else: a deployment
+        # could not tell that it was being probed with a bad token, or that a
+        # key was being used past its scope. The credential itself never
+        # appears — the principal's id does, which is the point of recording it.
+        log.warning("401 %s %s: no usable credential", request.method, path)
         return JSONResponse({"error": "unauthorized"}, status_code=401)
     need = required_scope(request.method, path)
     if not principal.may(need):
+        log.warning(
+            "403 %s %s: %s %s holds %s, needs %s",
+            request.method, path, principal.kind, principal.key_id,
+            sorted(principal.scopes), need,
+        )
         return JSONResponse(
             {"error": "forbidden", "need": need, "have": sorted(principal.scopes)},
             status_code=403,
@@ -127,6 +161,11 @@ async def auth_middleware(request: Request, call_next: Callable) -> Response:
     # say what a credential may do, this says who it may do it as.
     spoke_for = auth_mod.plane_node_of(request.method, path)
     if spoke_for is not None and not principal.may_speak_for(spoke_for):
+        log.warning(
+            "403 %s %s: %s %s is bound to node %r and may not speak as %r",
+            request.method, path, principal.kind, principal.key_id,
+            principal.node_id, spoke_for,
+        )
         return JSONResponse(
             {
                 "error": "forbidden",

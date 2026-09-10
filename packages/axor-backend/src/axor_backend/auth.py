@@ -211,7 +211,18 @@ def is_open(method: str, path: str) -> bool:
 # possible: an EventSource subscription and an <a href> export/download. These
 # alone accept `?token=`; everywhere else a query token is ignored, so a URL
 # copied out of a log or a history entry is not a working credential.
-_QUERY_TOKEN_SUFFIXES = ("/stream", "/events", "/export")
+#
+# `/events` used to be in this list and did not belong: `GET /v1/runs/{id}/events`
+# returns the run's whole event log as ordinary JSON and the UI fetches it with
+# the Authorization header (api.ts `runEvents`). Nothing opens it directly, so
+# the only thing the exception bought was a live credential in access logs,
+# browser history and Referer headers — with the full trace behind it.
+#
+# Adding to this list means claiming a header is IMPOSSIBLE for that route, not
+# merely inconvenient: `/v1/plane/{node}/desired` is an SSE stream and is
+# deliberately absent, because its subscriber is the node's own HTTP client,
+# which sets headers.
+_QUERY_TOKEN_SUFFIXES = ("/stream", "/export")
 
 
 def accepts_query_token(method: str, path: str) -> bool:

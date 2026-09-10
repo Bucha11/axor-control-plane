@@ -121,18 +121,37 @@ async def test_key_revocation(secured: httpx.AsyncClient) -> None:
     assert (await secured.get("/v1/runs", headers=_bearer(key))).status_code == 401
 
 
-async def test_sse_accepts_token_query_param(secured: httpx.AsyncClient) -> None:
-    # EventSource can't set headers → the stream endpoint honours ?token=.
-    # (We only assert the gate lets it through, not the stream body.)
+async def test_a_query_token_works_only_where_a_header_is_impossible(
+    secured: httpx.AsyncClient,
+) -> None:
+    """This asserted `/v1/runs/{id}/events` — which is not an SSE route at all,
+    despite the name it used to carry here. It returns the run's whole event log
+    as JSON and the UI fetches it with the Authorization header, so honouring a
+    URL token there only put a live credential in access logs and history.
+
+    The export IS opened directly, by an <a href>, and still honours it. The
+    stream's own gate is asserted in test_hardening (a live SSE body cannot be
+    read through this transport)."""
     await secured.post("/v1/ingest/run_s", json={"node_id": "n", "events": [
         {"schema_version": "1.0", "seq": 0, "node_id": "n", "kind": "claim",
          "ts": "t", "causal_root": None, "gate": None, "verdict": None,
          "payload": {}},
     ]}, headers=_bearer(TOKEN))
-    no_tok = await secured.get("/v1/runs/run_s/events")
-    assert no_tok.status_code == 401
-    with_tok = await secured.get(f"/v1/runs/run_s/events?token={TOKEN}")
-    assert with_tok.status_code == 200
+    await secured.post("/v1/runs/run_s/evidence", headers=_bearer(TOKEN), json={
+        "node_id": "n", "evidence": [{
+            "scenario": "s", "deviation": "d", "verdict_source": "deterministic",
+            "confidence": 1.0, "observed_reality": {"tool": "t"},
+            "agent_claim": "c", "fault_attribution": [],
+        }],
+    })
+    assert (await secured.get("/v1/runs/run_s/events")).status_code == 401
+    assert (
+        await secured.get(f"/v1/runs/run_s/events?token={TOKEN}")
+    ).status_code == 401
+
+    export = "/v1/runs/run_s/cases/0/export"
+    assert (await secured.get(export)).status_code == 401
+    assert (await secured.get(f"{export}?token={TOKEN}")).status_code == 200
 
 
 async def test_share_link_stays_open_under_auth(secured: httpx.AsyncClient) -> None:

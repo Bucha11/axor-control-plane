@@ -4,6 +4,7 @@ Each test names the finding it pins and what the defect actually let happen.
 """
 from __future__ import annotations
 
+import logging
 import pathlib
 
 import httpx
@@ -126,9 +127,15 @@ def test_query_token_is_accepted_only_where_a_header_is_impossible() -> None:
     stream and an <a href> export — never on the rest of the API."""
     from axor_backend.auth import accepts_query_token
 
-    assert accepts_query_token("GET", "/v1/runs/r1/stream")
-    assert accepts_query_token("GET", "/v1/runs/r1/events")
-    assert accepts_query_token("GET", "/v1/runs/r1/cases/0/export")
+    assert accepts_query_token("GET", "/v1/runs/r1/stream")     # EventSource
+    assert accepts_query_token("GET", "/v1/runs/r1/cases/0/export")  # <a href>
+    # …and NOT the run's event log, which is ordinary JSON the UI fetches with
+    # the Authorization header. It was in the list, so a URL out of an access
+    # log or browser history was a working credential to the whole trace.
+    assert not accepts_query_token("GET", "/v1/runs/r1/events")
+    # An SSE route whose subscriber is the node's own HTTP client, not a
+    # browser: a header is possible there, so a query token is not honoured.
+    assert not accepts_query_token("GET", "/v1/plane/n1/desired")
     assert not accepts_query_token("GET", "/v1/runs")
     assert not accepts_query_token("GET", "/v1/keys")
     assert not accepts_query_token("POST", "/v1/plane/n1/command")
@@ -143,7 +150,35 @@ async def test_query_token_rejected_off_the_browser_routes(
             {"schema_version": "1.0", "seq": 0, "node_id": "n", "kind": "claim",
              "ts": "t", "causal_root": None, "gate": None, "verdict": None,
              "payload": {}}]})
-    assert (await client.get(f"/v1/runs/run_q/events?token={TOKEN}")).status_code == 200
+    # The run's event log is JSON the UI fetches with a header, so it is off the
+    # browser routes too — this asserted 200 and was the reason it stayed on
+    # the list.
+    assert (await client.get(f"/v1/runs/run_q/events?token={TOKEN}")).status_code == 401
+    assert (await client.get("/v1/runs/run_q/events",
+                             headers=_bearer(TOKEN))).status_code == 200
+
+
+async def test_a_refusal_is_recorded_not_only_returned(
+    client: httpx.AsyncClient, caplog: pytest.LogCaptureFixture,
+) -> None:
+    """401s and 403s used to go to the caller and to nobody else: a deployment
+    could not tell it was being probed with a bad token, or that a key was
+    being used past its scope. The credential never appears in the line — the
+    principal's id does, which is what makes it worth recording."""
+    minted = await client.post("/v1/keys", headers=_bearer(TOKEN),
+                               json={"scopes": ["read"], "label": "ro"})
+    secret = minted.json()["secret"]
+    with caplog.at_level(logging.WARNING, logger="axor.backend.auth"):
+        assert (await client.get("/v1/runs",
+                                 headers=_bearer("wrong"))).status_code == 401
+        assert (await client.post("/v1/ingest/r", headers=_bearer(secret),
+                                  json={"node_id": "n", "events": []})
+                ).status_code == 403
+    lines = [r.getMessage() for r in caplog.records]
+    assert any(line.startswith("401 GET /v1/runs") for line in lines), lines
+    denied = next(line for line in lines if line.startswith("403 POST /v1/ingest/r"))
+    assert "needs ingest" in denied and "'read'" in denied
+    assert secret not in denied and "wrong" not in "".join(lines)
 
 
 async def test_unsubscribe_removes_the_row_and_stops_the_delivery(
