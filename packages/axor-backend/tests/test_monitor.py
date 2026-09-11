@@ -175,11 +175,13 @@ class TestAnUnreadableTimestampIsLoud:
 
 class TestTheCadenceEnvVarsAreValidated:
     def test_a_typo_names_the_variable(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """`float(os.environ[...])` killed startup with an unlabelled ValueError."""
+        """`float(os.environ[...])` killed startup with an unlabelled ValueError.
+        Both cadence variables go through `axor_backend.env` now, like every
+        other setting."""
         app = type("App", (), {"state": type("S", (), {})()})()
         monkeypatch.setenv("AXOR_STALE_AFTER", "thirty")
         with pytest.raises(ValueError, match="AXOR_STALE_AFTER"):
             spawn_stale_monitor(app)
         monkeypatch.setenv("AXOR_STALE_AFTER", "0")
-        with pytest.raises(ValueError, match="must be > 0"):
+        with pytest.raises(ValueError, match="must be >="):
             spawn_stale_monitor(app)

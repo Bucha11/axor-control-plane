@@ -1,7 +1,14 @@
 """Deployment configuration, resolved once.
 
 Every ``AXOR_*`` variable the backend reads is resolved here, at startup, into
-one frozen object. Two reasons, both of them things that bit us:
+one frozen object — except for a short, deliberate list of modules that read
+their own (``limits``, ``monitor``, ``observability``), which
+``test_env_surface`` enumerates and holds to the same documentation rule.
+Without that test this sentence was simply false: ten of twenty-three variables
+were read elsewhere, and twelve of them had fallen out of ``.env.example``,
+which is the exact drift the second reason below is about.
+
+Two reasons, both of them things that bit us:
 
 - **Reading the environment mid-request is a lie about when a setting takes
   effect.** The license verifier used to read ``AXOR_VENDOR_PUBKEY`` per call,
@@ -17,13 +24,14 @@ an empty keyring, not "go look at ``AXOR_OPERATOR_KEYS``".
 """
 from __future__ import annotations
 
-import json
-import os
 from dataclasses import dataclass
 from typing import Any
 
+from axor_backend import env
+
 DEFAULT_DATABASE_URL = "sqlite+aiosqlite:///./axor.db"
 DEFAULT_SCHEDULE_SWEEP_SECONDS = 60.0
+DEFAULT_IDENTITY_ISSUER = "axor-identity"
 
 
 @dataclass(frozen=True)
@@ -41,6 +49,10 @@ class AppConfig:
     # refetch after a key rotation instead of 401-ing every login until a
     # restart (identity_client.JwksRefresher). None when supplied inline.
     identity_jwks_url: str | None = None
+    # The `iss` claim an access token must carry. Configurable because a
+    # deployment may run its own identity under its own name — it had no
+    # environment variable at all while every setting beside it did, so such a
+    # deployment could not be configured to log anyone in.
     identity_issuer: str = "axor-identity"
     # ── the vault's two separate credentials (spec v2 Ch.5 §3) ───────────────
     vault_creds_token: str | None = None
@@ -95,7 +107,7 @@ class AppConfig:
         vault_creds_token: str | None = None,
         vault_signing_token: str | None = None,
         identity_jwks: dict[str, Any] | None = None,
-        identity_issuer: str = "axor-identity",
+        identity_issuer: str | None = None,
         vendor_pubkey: str | None = None,
         org: str | None = None,
         license_renewal_url: str | None = None,
@@ -103,57 +115,62 @@ class AppConfig:
     ) -> AppConfig:
         """Argument, else environment, else default — field by field."""
         if operator_keys is None:
-            operator_keys = json.loads(os.environ.get("AXOR_OPERATOR_KEYS", "{}"))
+            operator_keys = env.json_object("AXOR_OPERATOR_KEYS")
         if allow_unsigned is None:
-            allow_unsigned = _flag("AXOR_ALLOW_UNSIGNED")
+            allow_unsigned = env.flag("AXOR_ALLOW_UNSIGNED")
         if api_token is None:
-            api_token = os.environ.get("AXOR_API_TOKEN") or None
+            api_token = env.text("AXOR_API_TOKEN") or None
         if retention_days is None:
-            retention_days = _number("AXOR_RETENTION_DAYS")
+            retention_days = env.number("AXOR_RETENTION_DAYS")
         if identity_jwks is None:
             identity_jwks = _identity_jwks()
         return cls(
             database_url=(
                 database_url
-                or os.environ.get("AXOR_DATABASE_URL")
+                or env.text("AXOR_DATABASE_URL")
                 or DEFAULT_DATABASE_URL
             ),
             operator_keys=operator_keys,
             allow_unsigned=allow_unsigned,
             api_token=api_token,
             identity_jwks=identity_jwks,
-            identity_jwks_url=os.environ.get("AXOR_IDENTITY_JWKS_URL") or None,
-            identity_issuer=identity_issuer,
+            identity_jwks_url=env.text("AXOR_IDENTITY_JWKS_URL") or None,
+            identity_issuer=(
+                identity_issuer
+                if identity_issuer is not None
+                else env.text("AXOR_IDENTITY_ISSUER") or DEFAULT_IDENTITY_ISSUER
+            ),
             vault_creds_token=(
-                vault_creds_token or os.environ.get("AXOR_VAULT_CREDS_TOKEN") or None
+                vault_creds_token or env.text("AXOR_VAULT_CREDS_TOKEN") or None
             ),
             vault_signing_token=(
-                vault_signing_token
-                or os.environ.get("AXOR_VAULT_SIGNING_TOKEN")
-                or None
+                vault_signing_token or env.text("AXOR_VAULT_SIGNING_TOKEN") or None
             ),
             retention_days=retention_days,
-            schedule_sweep_seconds=(
-                _number("AXOR_SCHEDULE_SWEEP_SECONDS")
-                or DEFAULT_SCHEDULE_SWEEP_SECONDS
+            # `or DEFAULT` ate a deliberate 0 along with an unset variable, so a
+            # sweep interval of zero silently became sixty seconds. The default
+            # belongs to the reader, which can tell absent from set.
+            schedule_sweep_seconds=env.number(
+                "AXOR_SCHEDULE_SWEEP_SECONDS",
+                DEFAULT_SCHEDULE_SWEEP_SECONDS, minimum=0.001,
             ),
-            org=(org if org is not None else os.environ.get("AXOR_ORG", "")),
+            org=(org if org is not None else env.text("AXOR_ORG")),
             usage_reporting=(
                 usage_reporting
                 if usage_reporting is not None
-                else _flag("AXOR_USAGE_REPORTING")
+                else env.flag("AXOR_USAGE_REPORTING")
             ),
             license_renewal_url=(
                 license_renewal_url
                 if license_renewal_url is not None
-                else os.environ.get("AXOR_LICENSE_RENEWAL_URL", "")
+                else env.text("AXOR_LICENSE_RENEWAL_URL")
             ),
             vendor_pubkey=(
                 vendor_pubkey
                 if vendor_pubkey is not None
-                else os.environ.get("AXOR_VENDOR_PUBKEY", "")
+                else env.text("AXOR_VENDOR_PUBKEY")
             ),
-            env_license=os.environ.get("AXOR_LICENSE") or None,
+            env_license=env.text("AXOR_LICENSE") or None,
             # A multi-tenant server blocks webhooks aimed at internal addresses:
             # there an org admin holds `operate` without being the infrastructure
             # operator. A single-tenant self-hosted server does not, because
@@ -161,27 +178,18 @@ class AppConfig:
             # case. Either way the metadata-service range is refused
             # (notifications.check_webhook_url).
             webhook_block_private=(
-                identity_jwks is not None or _flag("AXOR_WEBHOOK_BLOCK_PRIVATE")
+                identity_jwks is not None or env.flag("AXOR_WEBHOOK_BLOCK_PRIVATE")
             ),
         )
-
-
-def _flag(name: str) -> bool:
-    return os.environ.get(name, "") == "1"
-
-
-def _number(name: str) -> float | None:
-    raw = os.environ.get(name, "")
-    return float(raw) if raw else None
 
 
 def _identity_jwks() -> dict[str, Any] | None:
     """The identity JWKS, supplied inline or fetched once at boot. Requires the
     ``axor-backend[identity]`` extra when a URL is used."""
-    raw = os.environ.get("AXOR_IDENTITY_JWKS")
+    raw = env.text("AXOR_IDENTITY_JWKS")
     if raw:
-        return json.loads(raw)
-    url = os.environ.get("AXOR_IDENTITY_JWKS_URL")
+        return env.json_object("AXOR_IDENTITY_JWKS")
+    url = env.text("AXOR_IDENTITY_JWKS_URL")
     if url:
         from axor_backend.identity_client import fetch_jwks
 

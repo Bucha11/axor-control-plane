@@ -132,24 +132,12 @@ def spawn_stale_monitor(app: Any) -> asyncio.Task[None]:  # noqa: ANN401
     """Start the monitor as a lifespan-scoped task. Reads AXOR_STALE_AFTER /
     AXOR_STALE_SWEEP_INTERVAL (seconds) for deployments that want a different
     cadence; defaults are 3T / T."""
-    import os
+    from axor_backend import env
 
-    def seconds(name: str, default: float) -> float:
-        raw = os.environ.get(name)
-        if raw is None:
-            return default
-        try:
-            value = float(raw)
-        except ValueError:
-            raise ValueError(
-                f"{name}={raw!r} is not a number of seconds"
-            ) from None
-        if value <= 0:
-            raise ValueError(f"{name}={raw!r} must be > 0")
-        return value
-
-    stale_after = seconds("AXOR_STALE_AFTER", STALE_AFTER)
-    interval = seconds("AXOR_STALE_SWEEP_INTERVAL", HEARTBEAT_PERIOD)
+    stale_after = env.number("AXOR_STALE_AFTER", STALE_AFTER, minimum=0.001)
+    interval = env.number(
+        "AXOR_STALE_SWEEP_INTERVAL", HEARTBEAT_PERIOD, minimum=0.001,
+    )
     return asyncio.create_task(
         stale_monitor(app.state.store, app.state.notifier,
                       app.state.broadcast, interval, stale_after)
