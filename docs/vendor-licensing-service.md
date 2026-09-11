@@ -38,7 +38,13 @@ products, and the worse of the two is the one holding the key.
 
 `axor_backend.licensing._fetch_license` POSTs to `AXOR_LICENSE_RENEWAL_URL`
 inside the last **21 days** of the current license (`RENEWAL_WINDOW_DAYS`), once
-per housekeeping sweep, per tenant.
+per entitlement sweep, per tenant. That sweep is `lifecycle.license_loop`,
+hourly, always running — it is not conditional on `AXOR_RETENTION_DAYS`, which
+is a separate setting it once shared a task with. Point
+`AXOR_LICENSE_RENEWAL_URL` at **https**: the request above names the
+organization and, with `AXOR_USAGE_REPORTING` on, its node counts; the reply is
+signature-checked either way, so the exposure is what leaves, not what
+arrives. Boot warns when it is not https.
 
 **Request:**
 

@@ -38,11 +38,12 @@ What a license actually has to answer, and each of these was a separate hole:
 from __future__ import annotations
 
 import logging
-from datetime import UTC, date, datetime, timedelta
+from datetime import date, timedelta
 from typing import Any
 
 from fastapi import HTTPException
 
+from axor_backend.clock import today
 from axor_backend.tenancy import PUBLIC_ORG, set_current_org
 
 log = logging.getLogger("axor.backend")
@@ -88,10 +89,6 @@ def stored_license(state: Any, org: str) -> Any | None:  # noqa: ANN401
     return getattr(state, "licenses", {}).get(org)
 
 
-def today() -> str:
-    return datetime.now(UTC).date().isoformat()
-
-
 # How long before expiry the operator is told. Three warnings, not one: the
 # first is a reminder, the last is an emergency, and a single notice sent 30
 # days out is one an operator can miss entirely.
@@ -104,7 +101,7 @@ def days_until(expires_at: str, from_day: str | None = None) -> int | None:
     vendor bug, and guessing at it is worse than reporting nothing."""
     try:
         end = date.fromisoformat(expires_at)
-        start = date.fromisoformat(from_day) if from_day else datetime.now(UTC).date()
+        start = date.fromisoformat(from_day or today())
     except (TypeError, ValueError):
         return None
     return (end - start).days
@@ -208,7 +205,7 @@ def billing_month(day: str | None = None) -> tuple[str, str]:
     rolling window would make "this month's peak" mean something different on
     every day it was asked.
     """
-    on = date.fromisoformat(day) if day else datetime.now(UTC).date()
+    on = date.fromisoformat(day or today())
     first = on.replace(day=1)
     last = (first + timedelta(days=32)).replace(day=1) - timedelta(days=1)
     return first.isoformat(), last.isoformat()
@@ -394,7 +391,7 @@ async def usage_report(state: Any, org: str) -> dict[str, Any] | None:  # noqa: 
     lic = stored_license(state, org)
     if lic is None:
         return None
-    on = datetime.now(UTC).date()
+    on = date.fromisoformat(today())
     last_month = (on.replace(day=1) - timedelta(days=1)).strftime("%Y-%m")
     start, end = billing_month(f"{last_month}-01")
     usage = await state.store.node_usage(start, end)
@@ -419,11 +416,13 @@ async def renew_once(state: Any, org: str, *, fetch: Any = None) -> bool:  # noq
     """
     current = stored_license(state, org)
     getter = fetch or _fetch_license
-    # Rides the renewal request rather than opening a second channel, and is
-    # None unless the operator switched reporting on separately. Enabling
-    # renewal does not enable this.
-    report = await usage_report(state, org)
     try:
+        # Rides the renewal request rather than opening a second channel, and
+        # is None unless the operator switched reporting on separately —
+        # enabling renewal does not enable this. It reads the meter, so it can
+        # fail, and it used to sit OUTSIDE this guard: the docstring said this
+        # function never raises and a database hiccup made a liar of it.
+        report = await usage_report(state, org)
         raw = await getter(state.config.license_renewal_url, org, current, report)
     except Exception as exc:  # noqa: BLE001 - an unreachable vendor is not an error here
         log.warning("license renewal fetch failed for org %s: %s", org, exc)
@@ -439,10 +438,16 @@ async def renew_once(state: Any, org: str, *, fetch: Any = None) -> bool:  # noq
     if rejected:
         log.warning("fetched license for org %s rejected: %s", org, rejected)
         return False
-    await state.store.set_setting("license_json", raw)
+    try:
+        await state.store.set_setting("license_json", raw)
+        # the next expiry is a new subject; the old notice must not suppress it
+        await state.store.set_setting("license_expiry_notified", None)
+    except Exception as exc:  # noqa: BLE001 - see the docstring: never raises
+        log.warning("verified license for org %s could not be stored: %s", org, exc)
+        return False
+    # Only after it is persisted: an in-memory entitlement the next restart
+    # forgets is worse than not having renewed.
     state.licenses[org] = new
-    # the next expiry is a new subject; the old notice must not suppress it
-    await state.store.set_setting("license_expiry_notified", None)
     log.info("license for org %s renewed through %s", org, new.expires_at)
     return True
 

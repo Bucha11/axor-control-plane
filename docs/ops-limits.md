@@ -40,9 +40,11 @@ to a worker. That is wrong, and the failure is silent rather than loud:
   reaches a subscriber on worker B. The audit stream would still open, still
   replay history from the database, and then simply never show a live event —
   a stream that looks healthy and is not.
-- **Every worker runs its own background sweeps.** The stale monitor and the
-  EE regression scheduler are per-process, so N workers page the on-call N
-  times for one silent node and fire the corpus N times per interval.
+- **Every worker runs its own background sweeps.** The stale monitor, the EE
+  regression scheduler and the entitlement pass are per-process, so N workers
+  page the on-call N times for one silent node, fire the corpus N times per
+  interval, and send the vendor N renewal requests and the operator N copies of
+  each expiry notice.
 - **Every worker migrates at boot.** `init_db` runs `alembic upgrade head` in
   the app lifespan, so simultaneous starts race on the same schema change.
 - **Every worker rehydrates its own taint graph** from the event log — correct,

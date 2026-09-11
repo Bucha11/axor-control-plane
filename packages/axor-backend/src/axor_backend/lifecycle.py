@@ -32,6 +32,10 @@ from axor_backend.tenancy import PUBLIC_ORG, set_current_org
 log = logging.getLogger("axor.backend")
 
 RETENTION_SWEEP_SECONDS = 6 * 3600
+# The entitlement pass. More often than retention because two of the three
+# things it does are notices with a deadline: the 1-day expiry notice has to
+# land on the day it names.
+LICENSE_SWEEP_SECONDS = 3600
 
 
 @contextlib.asynccontextmanager
@@ -43,7 +47,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # runs, and a share link rehydrated first would point at one that is gone.
     await prune_once(app.state)
     await rehydrate(app.state)
-    tasks = [asyncio.create_task(regression_schedule_loop(app.state))]
+    tasks = [
+        asyncio.create_task(regression_schedule_loop(app.state)),
+        # Always: entitlement housekeeping answers to the license, not to
+        # whether the operator configured a retention window.
+        asyncio.create_task(license_loop(app.state)),
+    ]
     if app.state.config.retention_days:
         tasks.append(asyncio.create_task(retention_loop(app.state)))
     try:
@@ -79,6 +88,17 @@ def warn_about_open_posture(config: Any) -> None:  # noqa: ANN401 - AppConfig
         log.warning(
             "AUTH IS OFF (no AXOR_API_TOKEN) — every endpoint is open. "
             "Fine for localhost, not for a deployment; see SECURITY.md."
+        )
+    renewal_url = config.license_renewal_url
+    if renewal_url and not renewal_url.startswith("https://"):
+        scheme, sep, _ = renewal_url.partition("://")
+        log.warning(
+            "LICENSE RENEWAL OVER %s (AXOR_LICENSE_RENEWAL_URL=%s) — the request "
+            "carries this deployment's organization and, with usage reporting "
+            "on, its node counts. The reply is signature-checked either way, so "
+            "this is about what LEAVES, not what arrives.",
+            scheme.upper() if sep else "NO SCHEME AT ALL",
+            renewal_url,
         )
     if config.allow_unsigned and not config.operator_keys:
         log.warning(
@@ -165,10 +185,25 @@ async def prune_once(state: Any) -> None:  # noqa: ANN401
 
 
 async def retention_loop(state: Any) -> None:  # noqa: ANN401
+    """Housekeeping for the retention window. Started only when one is set."""
     while True:
         await asyncio.sleep(RETENTION_SWEEP_SECONDS)
         with contextlib.suppress(Exception):
             await prune_once(state)
+
+
+async def license_loop(state: Any) -> None:  # noqa: ANN401
+    """Entitlement housekeeping, on its own task.
+
+    It used to run inside `retention_loop`, which the lifespan starts only when
+    `AXOR_RETENTION_DAYS` is set — and the default is unset, "keep forever". So
+    on an ordinary deployment renewal never fetched, `license_expiring` never
+    fired and an over-ceiling fleet was never warned about, all three silently,
+    all three gated on an unrelated housekeeping setting. The tests called
+    `license_sweep_once` directly and stayed green throughout.
+    """
+    while True:
+        await asyncio.sleep(LICENSE_SWEEP_SECONDS)
         with contextlib.suppress(Exception):
             await license_sweep_once(state)
 
@@ -194,8 +229,13 @@ async def license_sweep_once(state: Any) -> None:  # noqa: ANN401
     try:
         for org in await state.store.list_orgs():
             set_current_org(org)
-            if await renewal_due(state, org):
-                await renew_once(state, org)
+            # Guarded like its two siblings. It used to be the only one that
+            # was not, so a single tenant's failure skipped every later
+            # tenant's expiry notice and ceiling warning — swallowed by the
+            # loop's own suppress, with nothing said.
+            with contextlib.suppress(Exception):
+                if await renewal_due(state, org):
+                    await renew_once(state, org)
             with contextlib.suppress(Exception):
                 await notify_expiring(state, org)
             with contextlib.suppress(Exception):
