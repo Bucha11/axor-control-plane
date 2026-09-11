@@ -11,13 +11,20 @@ from __future__ import annotations
 
 import json
 
+from axor_core.kernel.events import Event
 from fastapi import HTTPException
 
 from axor_backend.replay_api import parse_trace
 from axor_backend.storage import Store
 
+# Both functions parse each line twice: once here, for one top-level key, and
+# again inside the kernel's reader. Measured at 0.45 s of the 5.41 s a
+# 200 000-event run costs — left alone deliberately, because removing it means
+# changing `Store.run_events` from `list[str]` to the dicts it already holds, for
+# every caller, to save 8%.
 
-async def events_for(store: Store, run_id: str) -> list:
+
+async def events_for(store: Store, run_id: str) -> list[Event]:
     """The run's kernel events, or an HTTPException saying why there are none."""
     lines = await store.run_events(run_id)
     if not lines:
@@ -37,7 +44,7 @@ async def events_for(store: Store, run_id: str) -> list:
         ) from exc
 
 
-async def kernel_events_or_empty(store: Store, run_id: str) -> list:
+async def kernel_events_or_empty(store: Store, run_id: str) -> list[Event]:
     """The run's kernel events, with "there are none" as an answer, not a 4xx.
 
     :func:`events_for` serves replay, where a run with no kernel trace is a

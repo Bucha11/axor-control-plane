@@ -30,6 +30,18 @@ class ConfigInvalid(BackendError):
     """
 
 
+class RunTooLarge(BackendError):
+    """A batch would push one run past ``limits.MAX_EVENTS_PER_RUN``.
+
+    Its own type, and raised from the store rather than the route, because only
+    the store knows what is already there — and it has to know inside the same
+    transaction, or two concurrent batches both measure a run that fits and both
+    write. Mapped to 413 by :func:`run_too_large`: the request is legal, the run
+    it would extend is not, and the client is the only party who can do anything
+    about it (start a new run id) while there is still time to.
+    """
+
+
 class StaleVersion(BackendError):
     """A versioned write named a version the row no longer holds.
 
@@ -74,3 +86,8 @@ async def unhandled_error(request: Request, exc: Exception) -> JSONResponse:
 async def config_invalid(request: Request, exc: Exception) -> JSONResponse:
     """A malformed kernel config is the caller's, with the field named."""
     return JSONResponse({"error": str(exc)}, status_code=400)
+
+
+async def run_too_large(request: Request, exc: Exception) -> JSONResponse:
+    """A full run is the caller's problem too, and the message says the remedy."""
+    return JSONResponse({"error": str(exc)}, status_code=413)

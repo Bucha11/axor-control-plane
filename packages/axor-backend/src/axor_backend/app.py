@@ -45,7 +45,13 @@ from fastapi import FastAPI
 from axor_backend.broadcast import Broadcast
 from axor_backend.clock import now
 from axor_backend.config import AppConfig
-from axor_backend.errors import ConfigInvalid, config_invalid, unhandled_error
+from axor_backend.errors import (
+    ConfigInvalid,
+    RunTooLarge,
+    config_invalid,
+    run_too_large,
+    unhandled_error,
+)
 from axor_backend.identity_client import JwksRefresher
 from axor_backend.lifecycle import lifespan
 from axor_backend.limits import SubgraphCache
@@ -113,6 +119,9 @@ def create_app(
     # ConfigInvalid before the catch-all: a malformed kernel config is a
     # typo in an operator's JSON, and 500 'internal' hides which field.
     app.add_exception_handler(ConfigInvalid, config_invalid)
+    # Likewise before the catch-all: a run at its ceiling is a 413 with a
+    # remedy, not an 'internal'.
+    app.add_exception_handler(RunTooLarge, run_too_large)
     app.add_exception_handler(Exception, unhandled_error)
     app.middleware("http")(auth_middleware)
     for router in ALL_ROUTERS:

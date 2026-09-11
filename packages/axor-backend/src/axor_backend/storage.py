@@ -26,6 +26,7 @@ from sqlalchemy import (
     Table,
     UniqueConstraint,
     delete,
+    func,
     insert,
     select,
     update,
@@ -34,7 +35,8 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
-from axor_backend.errors import ConcurrentUpdate, StaleVersion
+from axor_backend.errors import ConcurrentUpdate, RunTooLarge, StaleVersion
+from axor_backend.limits import MAX_EVENTS_PER_RUN
 from axor_backend.tenancy import PUBLIC_ORG, current_org_id
 
 metadata = MetaData()
@@ -449,6 +451,21 @@ class Store:
                 await conn.execute(insert(ingest_keys).values(
                     key=idempotency_key, org_id=org,
                 ))
+            # Inside the transaction, and before any row is written: two
+            # concurrent batches must not both measure a run that still fits.
+            stored = (await conn.execute(
+                select(func.count()).select_from(events).where(
+                    events.c.run_id == run_id, events.c.org_id == org,
+                )
+            )).scalar_one()
+            if stored + len(lines) > MAX_EVENTS_PER_RUN:
+                raise RunTooLarge(
+                    f"run {run_id} holds {stored} events; this batch of "
+                    f"{len(lines)} would exceed the per-run ceiling of "
+                    f"{MAX_EVENTS_PER_RUN} (AXOR_MAX_EVENTS_PER_RUN). Every read "
+                    f"of a run loads it whole, so the ceiling is on the run, not "
+                    f"the request — continue under a new run id."
+                )
             seen = await _stored_coordinates(conn, run_id, org, lines, node_id)
             payload: list[dict[str, Any]] = []
             fresh: list[dict[str, Any]] = []

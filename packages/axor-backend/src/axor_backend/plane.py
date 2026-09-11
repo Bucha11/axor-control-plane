@@ -39,7 +39,7 @@ from axor_backend.errors import (
     ConcurrentUpdate,
     StaleVersion,
 )
-from axor_backend.limits import check_batch_size
+from axor_backend.limits import check_batch
 from axor_backend.signing import signed_payload
 from axor_backend.tenancy import current_org_id, topic
 from axor_backend.traces import kernel_events_or_empty
@@ -191,9 +191,11 @@ async def telemetry(
 ) -> dict:
     ctx = _ctx(request)
     run_id = body.get("run_id", node_id)
-    # Same ceiling as /v1/ingest: the batch is held, parsed and folded in
-    # memory, so its size is a resource the caller controls.
-    lines: list[dict[str, Any]] = check_batch_size(body.get("events", []))
+    # Same door as /v1/ingest, and it has to be: the batch is held, parsed and
+    # folded in memory, so its size is a resource the caller controls — and a
+    # line the kernel cannot read poisons every later read of the run whichever
+    # of the two routes let it in.
+    lines: list[dict[str, Any]] = check_batch(body.get("events", []))
     await ctx.store.upsert_run(run_id, node_id, body.get("scenario", "live"), now())
     # Delivery is at-least-once: a batch is resent whenever its ack is lost, so
     # applying its effects again would overwrite the node's reported state with a

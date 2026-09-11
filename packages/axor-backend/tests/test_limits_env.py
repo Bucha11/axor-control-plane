@@ -13,6 +13,7 @@ from axor_backend import limits
 
 NAMES = (
     "AXOR_MAX_EVENTS_PER_BATCH",
+    "AXOR_MAX_EVENTS_PER_RUN",
     "AXOR_SUBGRAPH_CACHE_MAX",
     "AXOR_MAX_PINS_PER_PACKAGE",
     "AXOR_MAX_KHOP_K",
@@ -46,6 +47,7 @@ def test_the_defaults_stand_when_nothing_is_set(
         monkeypatch.delenv(name, raising=False)
     reloaded = importlib.reload(limits)
     assert reloaded.MAX_EVENTS_PER_BATCH == 10000
+    assert reloaded.MAX_EVENTS_PER_RUN == 250000
     assert reloaded.SUBGRAPH_CACHE_MAX == 512
     assert reloaded.MAX_PINS_PER_PACKAGE == 500
     assert reloaded.MAX_KHOP_K == 30

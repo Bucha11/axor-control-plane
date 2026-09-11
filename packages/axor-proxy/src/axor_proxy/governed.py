@@ -32,6 +32,7 @@ from axor_core.contracts.envelope import (
 from axor_core.contracts.policy import ExecutionPolicy, ExportMode, ToolPolicy
 from axor_core.contracts.result import ExecutorEvent, ExecutorEventKind
 from axor_core.contracts.trace import TraceEventKind
+from axor_core.kernel.events import SCHEMA_VERSION
 from axor_core.node.intent_loop import IntentLoop
 from axor_core.taint.engine import TaintEngine
 
@@ -160,7 +161,10 @@ def _ordered_verdicts(trace_events: list) -> list[tuple[bool, str, str | None]]:
 
 def _ev(seq: int, node_id: str, kind: str, verdict: str | None, **payload: Any) -> dict:  # noqa: ANN401
     return {
-        "schema_version": "1.0", "seq": seq, "node_id": node_id, "kind": kind,
+        # The kernel's constant, not a literal: the control plane now refuses a
+        # line whose major it cannot read (limits.check_batch), so a hardcoded
+        # "1.0" would turn the next kernel bump into a silent upload outage.
+        "schema_version": SCHEMA_VERSION, "seq": seq, "node_id": node_id, "kind": kind,
         "ts": f"seq:{seq}", "causal_root": None,
         "gate": payload.pop("gate", None), "verdict": verdict, "payload": payload,
     }

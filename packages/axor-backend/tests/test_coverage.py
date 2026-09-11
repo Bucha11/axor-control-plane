@@ -32,6 +32,7 @@ async def client(tmp_path: pathlib.Path) -> httpx.AsyncClient:
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app), base_url="http://backend.test"
     ) as c, app.router.lifespan_context(app):
+        c._app = app  # type: ignore[attr-defined]
         yield c
 
 
@@ -200,16 +201,37 @@ async def test_a_healthy_kernel_run_has_nothing_to_attest(
     assert body["level"] == "NORMAL"
 
 
-async def test_a_trace_that_cannot_be_read_is_not_reported_as_healthy(
+async def test_an_unreadable_line_no_longer_reaches_the_log(
     client: httpx.AsyncClient
 ) -> None:
-    """Answering "no facts" for an unreadable trace would report a degraded node
-    as healthy — the plane's one job, told backwards."""
-    await client.post(f"/v1/plane/{NODE}/telemetry", json={
+    """This used to be how the case below was set up — a client could just send
+    it. `limits.check_batch` now refuses at the door, because one accepted line
+    made every read of the run 422 for good with nothing able to delete it."""
+    r = await client.post(f"/v1/plane/{NODE}/telemetry", json={
         "run_id": "run_live",
         "events": [{"schema_version": "99.0", "seq": 0, "node_id": NODE,
                     "kind": "heartbeat", "ts": "t", "payload": {}}],
     })
+    assert r.status_code == 422
+    assert "the kernel cannot read it" in r.json()["detail"]
+
+
+async def test_a_trace_that_cannot_be_read_is_not_reported_as_healthy(
+    client: httpx.AsyncClient
+) -> None:
+    """Answering "no facts" for an unreadable trace would report a degraded node
+    as healthy — the plane's one job, told backwards.
+
+    Written straight to the store, because the door above is now the only way in
+    and it refuses this. That is still the state to defend: rows stored before
+    the door existed, or a kernel upgrade that drops a major it once read.
+    """
+    store = client._app.state.store  # type: ignore[attr-defined]
+    await _report(client, level="NORMAL")  # gives the node its latest run
+    await store.ingest_events("run_live", NODE, [
+        {"schema_version": "99.0", "seq": 99, "node_id": NODE,
+         "kind": "heartbeat", "ts": "t", "payload": {}},
+    ], None)
     r = await client.get(f"/v1/plane/{NODE}/coverage")
     assert r.status_code == 422
     assert "not a replayable kernel trace" in r.json()["detail"]

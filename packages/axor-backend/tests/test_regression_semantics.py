@@ -127,6 +127,107 @@ class TestAPinWithNoRecordedDenialIsNotChecked:
         assert report["rows"][0]["result"] == "unanchored"
 
 
+class TestAPinTheCorpusCouldNotReadIsNotEvidenceEither:
+    """The sibling of `unanchored`, and it used to be counted differently.
+
+    `regression_report` catches the 4xx `traces.events_for` raises for a pin
+    whose trace cannot be read — deleted events, a telemetry-only run, a Lab
+    package recorded under another kernel build — files the run id under
+    `skipped` and moves on. Right, and the right thing was then dropped from the
+    verdict: `safe_to_ship` counted regressed, escaped and unanchored, so a
+    corpus whose every pin was unreadable came out green, wrote a green history
+    row, and emitted no `regression_failed`. The reason it should not have is
+    written four lines above it, about `unanchored`.
+    """
+
+    async def test_an_unreadable_pin_withholds_safe_to_ship(
+        self, client: httpx.AsyncClient,
+    ) -> None:
+        # a run of plane telemetry: stored, and no kernel trace to replay
+        await client.post("/v1/ingest/hb", json={
+            "node_id": "n0",
+            "events": [{"seq": 0, "kind": "heartbeat", "node_id": "n0", "ts": "t"}],
+        })
+        await client.post("/v1/pins/hb",
+                          json={"side": "must_block", "label": "the exfil"})
+        report = (await client.post("/v1/regression", json={"config": {}})).json()
+        assert report["rows"] == []
+        assert report["safe_to_ship"] is False
+
+    async def test_the_skipped_pin_says_which_one_and_why(
+        self, client: httpx.AsyncClient,
+    ) -> None:
+        """"1 pin skipped" with no reason leaves the operator no next move."""
+        await client.post("/v1/ingest/hb", json={
+            "node_id": "n0",
+            "events": [{"seq": 0, "kind": "heartbeat", "node_id": "n0", "ts": "t"}],
+        })
+        await client.post("/v1/pins/hb",
+                          json={"side": "must_block", "label": "the exfil"})
+        report = (await client.post("/v1/regression", json={"config": {}})).json()
+        assert len(report["skipped"]) == 1
+        entry = report["skipped"][0]
+        assert entry["run_id"] == "hb"
+        assert entry["side"] == "must_block"
+        assert entry["label"] == "the exfil"
+        assert "plane telemetry only" in entry["reason"]
+
+    async def test_a_corpus_with_no_pins_is_not_safe_to_ship_either(
+        self, client: httpx.AsyncClient,
+    ) -> None:
+        """Nothing pinned means nothing verified. The panel has always said
+        "No pinned traces" for this, but the scheduled EE run wrote a green
+        history row and stayed quiet, which is the same sentence with no
+        evidence behind it."""
+        report = (await client.post("/v1/regression", json={"config": {}})).json()
+        assert report["rows"] == []
+        assert report["skipped"] == []
+        assert report["safe_to_ship"] is False
+
+    async def test_one_unreadable_pin_among_good_ones_still_withholds_it(
+        self, client: httpx.AsyncClient,
+    ) -> None:
+        """The case that matters, and the one an all-or-nothing test misses: a
+        corpus that DID verify something, plus one pin it could not read. The
+        rows are green, and the report still must not say every attack is
+        blocked — one of them was never looked at."""
+        await client.post("/v1/ingest/good", json={
+            "node_id": "n0", "events": [_call(0, "exfil", "deny")],
+        })
+        await client.post("/v1/pins/good",
+                          json={"side": "must_block", "label": "exfil"})
+        await client.post("/v1/ingest/hb", json={
+            "node_id": "n0",
+            "events": [{"seq": 0, "kind": "heartbeat", "node_id": "n0", "ts": "t"}],
+        })
+        await client.post("/v1/pins/hb",
+                          json={"side": "must_block", "label": "the other exfil"})
+        report = (await client.post("/v1/regression", json={
+            "config": {"allowed_tools": ["benign"]},
+        })).json()
+        assert [r["result"] for r in report["rows"]] == ["held"]
+        assert report["regressed"] == report["escaped"] == report["unanchored"] == 0
+        assert [e["run_id"] for e in report["skipped"]] == ["hb"]
+        assert report["safe_to_ship"] is False
+
+    async def test_a_full_corpus_still_ships(
+        self, client: httpx.AsyncClient,
+    ) -> None:
+        """The guard above must not be a blanket no: a corpus that actually
+        replayed its pin and held still says so."""
+        await client.post("/v1/ingest/real", json={
+            "node_id": "n0", "events": [_call(0, "exfil", "deny")],
+        })
+        await client.post("/v1/pins/real",
+                          json={"side": "must_block", "label": "exfil"})
+        report = (await client.post("/v1/regression", json={
+            "config": {"allowed_tools": ["benign"]},  # exfil undeclared, so denied
+        })).json()
+        assert report["skipped"] == []
+        assert [r["result"] for r in report["rows"]] == ["held"]
+        assert report["safe_to_ship"] is True
+
+
 class TestMustPassRegressesOnANewDenial:
     def test_a_recorded_pass_that_now_denies_is_a_regression(self) -> None:
         events = _trace(_call(0, "notes_write", "pass"))

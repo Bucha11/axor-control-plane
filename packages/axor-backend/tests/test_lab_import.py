@@ -422,7 +422,13 @@ async def test_reference_kernel_pins_stay_skipped_not_substituted(
         "/v1/regression",
         json={"config": _carried_config(cp_deploy)},
     )).json()
-    assert skipped_run_id in report["skipped"]
+    # `skipped` entries carry the reason, not just the id — see corpus.py.
+    assert skipped_run_id in [e["run_id"] for e in report["skipped"]]
+    assert "not a replayable kernel trace" in next(
+        e["reason"] for e in report["skipped"] if e["run_id"] == skipped_run_id
+    )
+    # And a corpus whose only pin could not be replayed does not ship.
+    assert report["safe_to_ship"] is False
     assert skipped_run_id not in [r["run_id"] for r in report["rows"]]
 
 
@@ -449,7 +455,7 @@ async def test_real_kernel_pins_replay_held_and_passed(
     lab_rows = {rid: r for rid, r in by_run.items() if rid.startswith("lab:")}
     assert len(lab_rows) == 2
     # the lab pins are in ROWS (replayed), never in skipped
-    assert not any(rid.startswith("lab:") for rid in report["skipped"])
+    assert not any(e["run_id"].startswith("lab:") for e in report["skipped"])
     results = {(r["side"], r["result"]) for r in lab_rows.values()}
     assert ("must_block", "held") in results
     assert ("must_pass", "passed") in results

@@ -22,7 +22,7 @@ from axor_backend.deps import (
     StoreDep,
     SubgraphCacheDep,
 )
-from axor_backend.limits import check_batch_size
+from axor_backend.limits import check_batch
 from axor_backend.tenancy import current_org_id, topic
 
 router = APIRouter(prefix="/v1", tags=["runs"])
@@ -38,7 +38,7 @@ async def ingest(
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
 ) -> dict:
     node_id = body.get("node_id", "proxy")
-    events = check_batch_size(body.get("events", []))
+    events = check_batch(body.get("events", []))
     await store.upsert_run(run_id, node_id, body.get("scenario", "custom"), now())
     result = await store.ingest_events(run_id, node_id, events, idempotency_key)
     # This run's causal subgraphs were derived from a shorter event list.

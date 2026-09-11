@@ -47,6 +47,19 @@ function headline(report: RegressionReport): React.ReactNode {
   if (report.unanchored > 0) {
     parts.push(`${report.unanchored} unchecked pin${report.unanchored === 1 ? "" : "s"}`);
   }
+  if (report.skipped.length > 0) {
+    parts.push(`${report.skipped.length} unreadable pin${report.skipped.length === 1 ? "" : "s"}`);
+  }
+  // A corpus with rows but no failures cannot reach here; one with NO rows can,
+  // and "v2 changes governed behavior" would be the wrong reason for it.
+  if (report.rows.length === 0) {
+    return (
+      <>
+        <span style={{ color: C.red }}>{parts.join(" + ") || "Nothing was checked"}</span>
+        {" "}— the corpus verified nothing, so it cannot say every attack is still blocked.
+      </>
+    );
+  }
   return (
     <>
       <span style={{ color: C.red }}>{parts.join(" + ") || "Failure"}</span> — v2 changes governed behavior.
@@ -140,7 +153,7 @@ function ScheduleAndHistory({ parseConfig }: { parseConfig: () => Record<string,
                   <span style={{ color: h.safe_to_ship ? C.mut : C.text, flex: 1 }}>
                     {h.safe_to_ship
                       ? `safe — ${h.total} rows`
-                      : `${h.regressed} regressed · ${h.escaped} escaped${h.unanchored ? ` · ${h.unanchored} not checked` : ""} of ${h.total}`}
+                      : `${h.regressed} regressed · ${h.escaped} escaped${h.unanchored ? ` · ${h.unanchored} not checked` : ""}${h.skipped ? ` · ${h.skipped} unreadable` : ""} of ${h.total}`}
                   </span>
                 </div>
               ))}
@@ -405,7 +418,10 @@ export default function Regression({ initialConfig }: { initialConfig?: string }
       />
 
       {report && (
-        report.rows.length === 0 ? (
+        // Only when there is genuinely nothing pinned. Pins that exist but could
+        // not be read also produce zero rows, and telling the operator to run an
+        // experiment would send them after a problem they do not have.
+        report.rows.length === 0 && report.skipped.length === 0 ? (
           <div style={{ fontFamily: MONO, fontSize: 12.5, color: C.mut }}>
             No pinned traces. Run an experiment (Eval) — discrepancy-bearing traces auto-pin the must-block side; add legitimate flows as must-pass.
           </div>
@@ -418,7 +434,27 @@ export default function Regression({ initialConfig }: { initialConfig?: string }
               {held} attacks still blocked · {passed} legitimate flows still pass ·{" "}
               {report.regressed} regressed · {report.escaped} escaped
               {report.unanchored > 0 ? ` · ${report.unanchored} not checked` : ""}
+              {report.skipped.length > 0 ? ` · ${report.skipped.length} unreadable` : ""}
             </div>
+
+            {report.skipped.length > 0 && (
+              <div style={{ marginBottom: 20, fontFamily: MONO, fontSize: 11.5 }}>
+                <div style={{ color: C.amber, marginBottom: 6 }}>
+                  Pinned, but the trace could not be read — these were not checked:
+                </div>
+                <div style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 8 }}>
+                  {report.skipped.map((p, i) => (
+                    <div key={p.run_id} className="px-4 py-2"
+                      style={{ borderTop: i ? `1px solid ${C.line}` : "none" }}>
+                      <span style={{ color: C.text }}>{p.run_id}</span>
+                      <span style={{ color: C.dim }}> · {p.side}</span>
+                      {p.label ? <span style={{ color: C.dim }}> · {p.label}</span> : null}
+                      <div style={{ color: C.mut, marginTop: 2 }}>{p.reason}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
 
             <div style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 8 }}>
               {report.rows.map((r, i) => {

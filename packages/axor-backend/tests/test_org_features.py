@@ -137,7 +137,11 @@ async def test_schedule_roundtrip_and_manual_history(
     history = (await client.get("/v1/regression/history")).json()
     assert len(history) == 1
     assert history[0]["source"] == "manual"
-    assert history[0]["safe_to_ship"] is True
+    # Nothing is pinned in this fixture, and a corpus that verified nothing
+    # cannot say every attack is still blocked (see test_regression_semantics).
+    # This asserted True until `safe_to_ship` stopped being green on zero rows.
+    assert history[0]["safe_to_ship"] is False
+    assert history[0]["total"] == 0
 
 
 async def test_scheduler_fires_when_due_and_alerts_on_failure(

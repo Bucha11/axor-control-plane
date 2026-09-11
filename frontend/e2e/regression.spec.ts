@@ -83,6 +83,44 @@ test.describe("regression", () => {
     ).toBeVisible();
   });
 
+  // A pin whose trace cannot be read is stubbed rather than seeded: the backend
+  // now refuses such a line at ingest (limits.check_batch), which is the point —
+  // the state only arises from rows stored before that door, or a kernel upgrade
+  // that drops a major it once read. The suite also shares one backend and one
+  // tenant, so a poisoned pin would leak into every other regression test.
+  test("a pin the corpus could not read is named, and withholds the verdict", async ({ page }) => {
+    await page.route("**/v1/regression", (route) =>
+      route.fulfill({
+        json: {
+          rows: [],
+          regressed: 0,
+          escaped: 0,
+          unanchored: 0,
+          skipped: [{
+            run_id: "adapter-demo-block",
+            side: "must_block",
+            label: "the exfil",
+            reason: "run adapter-demo-block is not a replayable kernel trace: "
+              + "event schema '9.9' has unknown major; kernel is 1.0",
+          }],
+          safe_to_ship: false,
+        },
+      }),
+    );
+    await goHash(page, "regression");
+    await page.getByRole("button", { name: /Run regression/ }).click();
+
+    // Not "Safe to ship", and not "No pinned traces" either — something IS
+    // pinned, and telling the operator to go run an experiment would send them
+    // after a problem they do not have.
+    await expect(page.getByText(/Safe to ship/)).toHaveCount(0);
+    await expect(page.getByText(/No pinned traces/)).toHaveCount(0);
+    await expect(page.getByText(/1 unreadable pin/).first()).toBeVisible();
+    // The pin, and the reason — "1 skipped" alone leaves no next move.
+    await expect(page.getByText(/Pinned, but the trace could not be read/)).toBeVisible();
+    await expect(page.getByText(/unknown major; kernel is 1\.0/)).toBeVisible();
+  });
+
   test("the org layer (schedule + history) renders locked without a license", async ({ page }) => {
     await goHash(page, "regression");
     await expect(page.getByText("SCHEDULED CI · HISTORY")).toBeVisible();

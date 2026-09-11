@@ -251,11 +251,23 @@ export interface RegressionRow {
   escaped_denials: { node_id: string; seq: number; tool: string; gate: string | null }[];
 }
 
+// A pin the corpus could not read at all — deleted events, a telemetry-only
+// run, or a Lab package recorded under another kernel build. It produces no row,
+// so it is not `unanchored`; it is simply absent from the check, and it
+// withholds `safe_to_ship` for the same reason.
+export interface SkippedPin {
+  run_id: string;
+  side: string;
+  label: string;
+  reason: string;
+}
+
 export interface RegressionReport {
   rows: RegressionRow[];
   regressed: number;
   escaped: number;
   unanchored: number;
+  skipped: SkippedPin[];
   safe_to_ship: boolean;
 }
 

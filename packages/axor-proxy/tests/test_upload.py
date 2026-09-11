@@ -87,4 +87,9 @@ async def test_claim_uploads_trace_and_evidence(stack) -> None:  # noqa: ANN001
     report = (await backend.post("/v1/regression", json={
         "config": {"allowed_tools": ["web_search"], "egress_sinks": []},
     })).json()
-    assert report["rows"] == [] and report["safe_to_ship"] is True
+    # No rows, because nothing was pinned — which is the point here. And no
+    # `safe_to_ship` either: an empty corpus verified nothing, so it has no
+    # ground for the sentence (see test_regression_semantics). It said True
+    # until that stopped being the case.
+    assert report["rows"] == []
+    assert report["safe_to_ship"] is False

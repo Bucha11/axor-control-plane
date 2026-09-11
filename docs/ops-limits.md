@@ -30,6 +30,40 @@ A single agent emits a few events per second at most, so ~150 rps ≈ 50–100
 concurrently chatty agents on one backend process. SQLite is fine for
 evaluation; use Postgres for a fleet.
 
+## Reading one run back — the cost is the run's size, not the request's
+
+Replay, containment, the causal subgraph, influence, provenance and the node
+coverage panel all go through `traces.events_for`, and every one of them
+materialises the **whole** run: the stored lines as strings, then as kernel
+`Event` objects. There is no windowing, and there cannot be one — replay is a
+fold over the complete trace, which is what makes it reproduce.
+
+Measured on SQLite, one process, events of ~120 bytes:
+
+| Run size | Read from the DB | Parse | Total | Peak RSS |
+|---|---|---|---|---|
+| 50 000 | 0.58 s | 0.43 s | **1.0 s** | 166 MiB |
+| 200 000 | 3.27 s | 2.13 s | **5.4 s** | 407 MiB |
+
+And end to end, with the response built:
+
+| Request | Result |
+|---|---|
+| `GET /v1/replay/{run}` on 200 000 events | 200 in **9.0 s**, 71 MB body, 545 MiB peak RSS |
+| `GET /v1/runs/{run}/provenance?focus=v1&k=2` on the same run | 200 in **5.1 s** to return 40 bytes |
+
+The second row is the shape to remember: `AXOR_MAX_KHOP_K` and
+`AXOR_MAX_KHOP_LIMIT` bound the *walk*, not the load underneath it, so a
+two-hop question about one value still pays for the whole trace. Both routes
+need only `read` scope.
+
+`AXOR_MAX_EVENTS_PER_RUN` (default 250 000) is what keeps this bounded, and it
+is enforced on **ingest** — the batch that would cross it gets a 413 naming a
+new run id as the remedy. A ceiling on the read would make an already-recorded
+trace permanently unreadable, and an audit log that cannot be read is worse than
+one that is slow. Lower it if your deployment answers these routes for
+interactive users; a real multi-node trace is thousands of events.
+
 ## One backend process — a correctness limit, not a tuning knob
 
 **Run exactly one backend replica.** An earlier version of this page suggested
