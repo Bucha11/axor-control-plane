@@ -1,4 +1,6 @@
-# Axor Control Plane — Protocol Note (v0.2)
+# Axor Control Plane — Protocol Note (v0.3)
+
+v0.3: **the snapshot is signed too** (section 3). v0.2 said in section 3 that state is LWW so "reconnect is trivially correct", and in section 6 that a compromised backend "cannot forge a pause, stop, injection or attestation". Both were implemented, and the first undid the second: a delta was verified against operator keys and the snapshot carrying the same fields was not, so a compromised plane could forge anything by sending it as a snapshot instead. The snapshot now carries `commands` — the signed command behind each key of `state` — and the adapter verifies every field before applying any of them.
 
 v0.2: adds `pending_excision` (spec 8.2.1, v0.13) mirroring the injection one-shot pattern (section 4a); resolves two of the section 9 open items (canonicalization = JCS RFC 8785; heartbeat static T=10s, stale=3T).
 
@@ -50,7 +52,24 @@ The distinction is load-bearing. Desired state answers "what should the node's p
 
 - `version`: monotonic per node, assigned by the backend on each accepted command. Adapter applies iff `version > applied_version`, at the IntentLoop boundary only.
 - **Lattice rules:** `stopped: true` is absorbing — once applied, later writes to `paused`/`pending_injection` are accepted into state but have no effect, and the adapter reports them as `noop_absorbed`. `budget_cap` is **decrease-only at the adapter**: a desired cap above the locally known cap is rejected locally (`rejected_widening`) regardless of what the backend sent — enforcement of the narrowing rule lives in the adapter, not in backend validation (a compromised backend must not be able to widen).
-- **Snapshot semantics on (re)subscribe:** the SSE stream opens with one `snapshot` event carrying the full current desired state, then pushes deltas. Because state is LWW, there is nothing to buffer or replay on the command direction — reconnect is trivially correct. (Telemetry direction handles durability separately, §5.)
+- **Snapshot semantics on (re)subscribe:** the SSE stream opens with one `snapshot` event carrying the full current desired state **and the signed commands behind it**, then pushes deltas. Because state is LWW, there is nothing to buffer or replay on the command direction — reconnect is trivially correct. (Telemetry direction handles durability separately, §5.)
+
+```json
+{
+  "node_id": "…", "version": 42,
+  "state": {"paused": true},
+  "commands": [
+    {"version": 41, "delta": {"paused": true},
+     "operator": "op_dmitrii", "timestamp": "…", "sig": "ed25519:…"}
+  ]
+}
+```
+
+- **`commands`: one entry per key of `state`** — whichever command last wrote it. Kept per key rather than as a log, so it is bounded by the size of the lattice and not by how long the node has run. A single command that wrote several keys appears once.
+- **The adapter verifies every entry exactly as it verifies a delta** (§6), then replays them in version order through the same apply path, so the lattice rules above hold identically whether a command arrives live or after a reconnect.
+- **A key in `state` that no verified command accounts for refuses the WHOLE snapshot** (`sig_invalid`, reported upstream). Partial application would be the backend choosing which half of an operator's command takes effect. Keys the commands cover that `state` does *not* are the allowed direction: clearing a consumed one-shot removes a key and cannot forge anything, which is why a consumption ack needs no signature.
+- `version` may be ahead of the last signed command for exactly that reason. The adapter takes it: the version is a counter, and a backend inflating it can only make the node ignore later commands — the withhold/delay §6 already allows, never a forged effect.
+- **Unsigned deployments** (no operator pubkeys in adapter config — the open dev posture, which the backend logs loudly at boot) keep plain LWW snapshot semantics. There is nothing to verify against, and pretending otherwise would refuse every snapshot on a deployment that signs nothing.
 
 ## 4. Injection — at-most-once by id
 
@@ -96,7 +115,7 @@ one), consumption is a fact:
 Channel security (TLS + per-connection token) authenticates *the plane*. It does not protect against the plane itself being compromised. Therefore, per spec §12.0, commands with agent-side effect are **signed end-to-end by the operator**:
 
 - Operator keypair: Ed25519. Public keys are placed in the **adapter's local config** by the operator — never delivered over the channel (else a compromised backend swaps keys).
-- Signed payload: `(node_id, version, canonical_state_delta | fact, timestamp)`. The adapter verifies before applying; unsigned or badly signed commands are dropped and reported (`sig_invalid`).
+- Signed payload: `(node_id, version, canonical_state_delta | fact, timestamp)`. The adapter verifies before applying; unsigned or badly signed commands are dropped and reported (`sig_invalid`). **This covers the snapshot as well as the delta** — see §3 — because a channel with one verified path and one unverified path has no verified path.
 - Consequence: a fully compromised backend can withhold or delay commands (liveness) but cannot forge a pause, stop, injection, or attestation (integrity). Advisory overlay, enforced cryptographically.
 - Facts (attestations) additionally embed the signature into the fact log entry itself — the Sentinel graph stores who signed, and revocation requires a signature from the same org's keyset.
 
@@ -129,7 +148,7 @@ inter-federation A2A ships (spec v2 Ch.1):
 
 | Failure | Effect | Because |
 |---|---|---|
-| Channel down | agent continues (or self-pauses if opted in); commands queue as LWW state, delivered as snapshot on reconnect | §3 snapshot semantics |
+| Channel down | agent continues (or self-pauses if opted in); commands queue as LWW state, delivered as snapshot on reconnect — **with the signatures they arrived with**, so reconnect is not a way around §6 | §3 snapshot semantics |
 | Backend compromised | can delay/withhold; cannot forge commands, cannot widen budget, cannot swap operator keys | §6 e2e signatures, §3 adapter-side narrowing check |
 | Operator key leaked | attacker can pause/stop/inject on test-bench connections until key revoked in adapter config | key rotation = adapter config change; flagged as the residual risk |
 | Duplicate/replayed delta | no-op | version monotonicity + consumed-id set |

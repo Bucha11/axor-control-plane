@@ -13,7 +13,8 @@ booting the real stack, dependency audit (pip-audit + pnpm audit), deploy smoke.
 exports scrubbed again at render; share links scoped + revocable; retention
 window configurable (AXOR_RETENTION_DAYS). Backups: see docs/runbook.md.
 **Integrity** — operator commands Ed25519-signed over RFC 8785 canonical bytes;
-adapter re-verifies with its own keys (backend compromise ≠ command forgery);
+adapter re-verifies with its own keys, deltas and reconnect snapshots alike
+(backend compromise ≠ command forgery);
 facts append-only; event log append-only with idempotent ingest.
 **Availability** — advisory overlay: platform outage does not affect governed
 agents. Single-instance backend (documented limit); healthchecks in compose.

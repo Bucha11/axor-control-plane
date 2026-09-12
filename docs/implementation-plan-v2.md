@@ -1,7 +1,7 @@
 # Axor Control Plane — Implementation Plan v2 (multi-agent) (2026-07-12)
 
 Derived from: `spec-v2-multiagent.md` (Ch.1–6 + consolidated decisions v2-1…v2-18) · the four
-v2 mocks in `mockups/v2/` · `ui-spec-v0.14.md` · `control-plane-protocol-v0.2.md` ·
+v2 mocks in `mockups/v2/` · `ui-spec-v0.14.md` · `control-plane-protocol-v0.3.md` ·
 `implementation-plan-v0.1.md` (execution log §7) · the verified current state of this repo and
 the pinned ecosystem packages.
 

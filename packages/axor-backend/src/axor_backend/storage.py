@@ -99,6 +99,14 @@ desired_state = Table(
     Column("node_id", String(128), nullable=False),
     Column("version", Integer, nullable=False),
     Column("state_json", _JSON, nullable=False),
+    # The signed command that last wrote each key of state_json:
+    # {key -> {version, delta, operator, timestamp, sig}}. The snapshot the
+    # desired-state stream opens with replays these so the adapter can verify
+    # every field it is about to apply (protocol §3/§6, v0.3). Keyed by state
+    # key rather than kept as a log, so it is bounded by the lattice's size and
+    # not by the node's uptime. Null for rows written before migration 0014,
+    # and for an unsigned deployment, which signs nothing by definition.
+    Column("commands_json", _JSON, nullable=True),
     Column("org_id", String(64), nullable=False, server_default=PUBLIC_ORG),
     PrimaryKeyConstraint("org_id", "node_id"),
 )
@@ -649,7 +657,9 @@ class Store:
     # ── desired / reported state ──────────────────────────────────────────────
 
     async def bump_desired(
-        self, node_id: str, delta: dict[str, Any], *, expect_version: int | None = None,
+        self, node_id: str, delta: dict[str, Any], *,
+        expect_version: int | None = None,
+        signature: dict[str, str] | None = None,
     ) -> tuple[int, dict[str, Any]]:
         """Apply a declarative delta, assign the next version, persist, return
         (version, merged_state). LWW per key; `stopped` absorbing is enforced
@@ -667,9 +677,21 @@ class Store:
         the version it was signed for: passing the version the operator signed
         makes the store refuse rather than retry, and the operator re-signs. Left
         unset — an internal or unsigned bump — contention is simply retried.
+
+        `signature` is `{operator, timestamp, sig}` — the same triple — and it is
+        recorded against every key this delta writes, so the snapshot the
+        desired-state stream opens with can hand the adapter the signed command
+        behind each field rather than bare state (protocol §3/§6). Without it
+        the affected keys' recorded commands are DROPPED rather than inherited —
+        see `_record_commands` for why that is about the accuracy of the
+        adapter's refusal and not about a hole.
         """
         return await self._merge_desired(
-            node_id, lambda state: {**state, **delta}, expect_version=expect_version,
+            node_id, lambda state: {**state, **delta},
+            expect_version=expect_version,
+            commands=lambda recorded, version: _record_commands(
+                recorded, delta, version, signature,
+            ),
         )
 
     async def clear_desired_key(self, node_id: str, key: str) -> None:
@@ -684,9 +706,18 @@ class Store:
             rest.pop(key, None)
             return rest
 
+        def drop(recorded: dict[str, Any], _version: int) -> dict[str, Any]:
+            # The key is gone from state, so its command has nothing left to
+            # vouch for. Removing a key is the one direction that cannot forge
+            # anything, which is why an ack needs no signature of its own.
+            rest = dict(recorded)
+            rest.pop(key, None)
+            return rest
+
         with contextlib.suppress(_NoSuchNode):
             await self._merge_desired(
                 node_id, without, require_existing=True, skip_if_unchanged=True,
+                commands=drop,
             )
 
     async def _merge_desired(
@@ -697,6 +728,7 @@ class Store:
         require_existing: bool = False,
         skip_if_unchanged: bool = False,
         expect_version: int | None = None,
+        commands: Callable[[dict[str, Any], int], dict[str, Any]] | None = None,
         attempts: int = 12,
     ) -> tuple[int, dict[str, Any]]:
         """Read the node's desired state, merge, and write it back only if
@@ -734,6 +766,7 @@ class Store:
                         state = merge({})
                         await conn.execute(insert(desired_state).values(
                             node_id=node_id, version=1, state_json=state,
+                            commands_json=commands({}, 1) if commands else None,
                             org_id=org,
                         ))
                         return 1, state
@@ -750,6 +783,10 @@ class Store:
                         # byte-identical to the one it already applied.
                         return row.version, dict(row.state_json)
                     version = row.version + 1
+                    recorded = (
+                        commands(dict(row.commands_json or {}), version)
+                        if commands else row.commands_json
+                    )
                     result = await conn.execute(
                         update(desired_state)
                         .where(
@@ -759,7 +796,8 @@ class Store:
                             # read. Zero rows updated means we lost — re-read.
                             desired_state.c.version == row.version,
                         )
-                        .values(version=version, state_json=state)
+                        .values(version=version, state_json=state,
+                                commands_json=recorded)
                     )
                     if result.rowcount:
                         return version, state
@@ -781,6 +819,27 @@ class Store:
         if row is None:
             return None
         return row.version, row.state_json
+
+    async def desired_commands(self, node_id: str) -> list[dict[str, Any]]:
+        """The signed commands behind this node's desired state, oldest first.
+
+        One entry per state key — whichever command last wrote it — so the
+        adapter can verify every field of the snapshot it is about to apply
+        (protocol §3/§6). Empty for a node whose state predates migration 0014
+        or was never signed; the adapter decides what that means, and in a
+        signed deployment it means refusing the snapshot.
+        """
+        async with self.engine.connect() as conn:
+            row = (await conn.execute(
+                select(desired_state.c.commands_json).where(
+                    desired_state.c.node_id == node_id,
+                    desired_state.c.org_id == current_org_id(),
+                )
+            )).first()
+        recorded = (row.commands_json if row else None) or {}
+        # One command can have written several keys; send it once.
+        unique = {c["sig"]: c for c in recorded.values() if c.get("sig")}
+        return sorted(unique.values(), key=lambda c: c["version"])
 
     async def upsert_reported(
         self, node_id: str, applied_version: int, level: str,
@@ -1677,6 +1736,34 @@ class Store:
              "attempts": r.attempts, "created_ts": r.created_ts}
             for r in rows
         ]
+
+
+def _record_commands(
+    recorded: dict[str, Any], delta: dict[str, Any], version: int,
+    signature: dict[str, str] | None,
+) -> dict[str, Any]:
+    """The commands map after a delta lands: one entry per key this delta wrote.
+
+    Unsigned writes REMOVE the affected entries instead of adding any. Not a
+    hole either way — the adapter compares the signed delta against the state
+    it accompanies, so a stale signature fails that comparison rather than
+    licensing the new value. What it buys is a true reason: a deployment that
+    turned signing off gets "unsigned state key 'paused'", which is what
+    happened, instead of "state key 'paused' is not what was signed", which
+    points the operator at a signature that is fine.
+    """
+    out = dict(recorded)
+    for key in delta:
+        if signature is None:
+            out.pop(key, None)
+        else:
+            out[key] = {
+                "version": version, "delta": dict(delta),
+                "operator": signature.get("operator", ""),
+                "timestamp": signature.get("timestamp", ""),
+                "sig": signature.get("sig", ""),
+            }
+    return out
 
 
 async def _stored_coordinates(

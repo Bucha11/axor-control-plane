@@ -310,7 +310,7 @@ async def notify_expiring(state: Any, org: str) -> None:  # noqa: ANN401
 # desired state: it dials out. A push would need the customer's backend to be
 # reachable from the vendor's — an inbound write surface on a security product,
 # behind their NAT, for a payment event that is not time-critical. The whole
-# plane protocol is dial-out for this reason (protocol v0.2: zero listening
+# plane protocol is dial-out for this reason (protocol v0.3: zero listening
 # sockets on customer infrastructure) and licensing does not get an exception.
 #
 # What comes back is verified by exactly the checks a pasted license passes,

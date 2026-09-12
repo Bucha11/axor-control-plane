@@ -83,7 +83,10 @@ async def command(node_id: str, body: dict, request: Request) -> dict:
     # The store re-checks the version it was signed for, atomically. The 409
     # above is the friendly early answer; this is the one that actually holds
     # when two commands arrive together.
-    new_version, state = await _apply(ctx, node_id, delta, expect_version=version - 1)
+    new_version, state = await _apply(
+        ctx, node_id, delta, expect_version=version - 1,
+        signature=_signature(ctx, operator, timestamp, sig),
+    )
     message = {
         "type": "delta", "node_id": node_id, "version": new_version,
         "state": state, "delta": delta, "operator": operator,
@@ -121,6 +124,10 @@ async def cascade_stop(node_id: str, request: Request, body: dict | None = None)
             raise HTTPException(403, str(exc)) from exc
         new_version, state = await _apply(
             ctx, node_id, delta, expect_version=version - 1,
+            signature=_signature(
+                ctx, body.get("operator", ""), body.get("timestamp", ""),
+                body.get("sig", ""),
+            ),
         )
         ctx.broadcast.publish(topic("plane", node_id), {
             "type": "delta", "node_id": node_id, "version": new_version,
@@ -166,9 +173,17 @@ async def desired_stream(node_id: str, request: Request) -> EventSourceResponse:
         try:
             current = await ctx.store.get_desired(node_id)
             version, state = current if current else (0, {})
+            # `commands` carries the signed command behind each key of
+            # `state`, so a reconnecting node can verify what it is about to
+            # apply instead of taking the plane's word for it (protocol §3/§6).
+            # Without it the snapshot was the hole in end-to-end signing: a
+            # delta was checked, and the same fields pushed as a snapshot were
+            # not.
             yield {"event": "snapshot",
-                   "data": _json({"node_id": node_id, "version": version,
-                                  "state": state})}
+                   "data": _json({
+                       "node_id": node_id, "version": version, "state": state,
+                       "commands": await ctx.store.desired_commands(node_id),
+                   })}
             # `messages` ends when the bus drops this reader for falling
             # behind, which is what makes the node reconnect and take a fresh
             # snapshot. Parked on the queue it would stay deaf to every later
@@ -614,12 +629,28 @@ async def nodes(request: Request) -> list[dict]:
     return out
 
 
+def _signature(
+    ctx: Any, operator: str, timestamp: str, sig: str,  # noqa: ANN401
+) -> dict[str, str] | None:
+    """The triple to record with a delta, or None when nothing was verified.
+
+    An open deployment (no keyring) checks no signature, so it has none to
+    record — and recording the caller's unverified claim would be worse than
+    recording nothing: the adapter would be handed a `sig` that fails
+    verification, when the truth is that this field was never signed at all.
+    """
+    if ctx.keyring.empty:
+        return None
+    return {"operator": operator, "timestamp": timestamp, "sig": sig}
+
+
 async def _apply(
     ctx: Any,  # noqa: ANN401 - app.state is dynamic
     node_id: str,
     delta: dict[str, Any],
     *,
     expect_version: int | None = None,
+    signature: dict[str, str] | None = None,
 ) -> tuple[int, dict[str, Any]]:
     """Write a desired-state delta, turning the store's two concurrency
     outcomes into the answers an operator can act on.
@@ -627,10 +658,15 @@ async def _apply(
     Both are 409, and both mean the same thing to the caller — the command was
     NOT applied, re-read the version and send it again. They are separate types
     because only one of them is safe to retry inside the store.
+
+    `signature` is the verified (operator, timestamp, sig) this delta arrived
+    with, kept so the desired-state snapshot can hand the adapter the signed
+    command behind each field. Omitted on an unsigned bump, which drops the
+    affected keys' recorded commands rather than borrowing them.
     """
     try:
         return await ctx.store.bump_desired(
-            node_id, delta, expect_version=expect_version,
+            node_id, delta, expect_version=expect_version, signature=signature,
         )
     except StaleVersion as exc:
         raise HTTPException(409, str(exc)) from exc
