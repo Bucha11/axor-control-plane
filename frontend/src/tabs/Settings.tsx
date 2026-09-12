@@ -551,7 +551,7 @@ export default function Settings() {
 // the UI mirrors it structurally.
 function FederationVault() {
   const keys = useQuery({ queryKey: ["vault-keys"], queryFn: api.vaultSigningKeys });
-  const audit = useQuery({ queryKey: ["vault-audit"], queryFn: api.vaultSigningAudit });
+  const audit = useQuery({ queryKey: ["vault-audit"], queryFn: () => api.vaultSigningAudit() });
   const qc = useQueryClient();
 
   // Signed command posture (protocol §6). The token authorizes sign requests;
@@ -601,9 +601,14 @@ function FederationVault() {
           ))
         )}
         {(audit.data ?? []).length > 0 && (
-          <div className="mt-2 pt-2" style={{ borderTop: `1px solid ${C.line}` }}>
+          <div className="mt-2 pt-2" data-testid="sign-request-audit"
+            style={{ borderTop: `1px solid ${C.line}` }}>
             <div style={{ fontFamily: MONO, fontSize: 9.5, color: C.dim, letterSpacing: "0.08em", marginBottom: 4 }}>SIGN-REQUEST AUDIT</div>
-            {(audit.data ?? []).slice(-5).reverse().map((a, i) => (
+            {/* The rows arrive NEWEST FIRST. This was `slice(-5).reverse()`,
+                which was right while the route returned oldest-first and became
+                "the five OLDEST of the page, upside down" when it stopped —
+                a log panel showing stale rows as the latest. */}
+            {(audit.data ?? []).map((a, i) => (
               <div key={i} className="flex items-center gap-2 py-0.5" style={{ fontFamily: MONO, fontSize: 10 }}>
                 <span style={{ color: a.granted ? C.green : C.red }}>{a.granted ? "signed" : "refused"}</span>
                 <span style={{ color: C.text }}>{a.operator}</span>

@@ -491,6 +491,8 @@ export interface VaultEnrollment {
 }
 
 export interface DispenseRow {
+  // Row id, for paging further back (`before_id`). Rows come newest first.
+  audit_id: number;
   node_id: string;
   tool: string;
   endpoint: string;
@@ -653,8 +655,11 @@ export const api = {
     }).then((r) => j<{ revoked: boolean; version: number }>(r)),
 
   // What every dispensed credential was fetched for. Never the credential.
-  vaultCredsAudit: () =>
-    afCreds("/v1/vault/creds/audit").then((r) => j<DispenseRow[]>(r)),
+  // NEWEST FIRST, and `limit` is what the caller will render: the route used to
+  // be capped in storage, so asking for "everything" was bounded by something
+  // else. Page further back with `before_id` from the last row's `audit_id`.
+  vaultCredsAudit: (limit = 6) =>
+    afCreds(`/v1/vault/creds/audit?limit=${limit}`).then((r) => j<DispenseRow[]>(r)),
 
   vaultSigningKeys: () =>
     af("/v1/vault/signing/keys").then((r) =>
@@ -674,9 +679,11 @@ export const api = {
       body: JSON.stringify({ key_id: keyId, operators }),
     }).then((r) => j<{ key_id: string; public_key_hex: string; operators: string[] }>(r)),
 
-  vaultSigningAudit: () =>
-    af("/v1/vault/signing/audit").then((r) =>
-      j<{ operator: string; key_id: string; payload_sha256: string; granted: boolean; ts: string }[]>(r)),
+  // Newest first; see `vaultCredsAudit` for `limit` and `before_id`.
+  vaultSigningAudit: (limit = 5) =>
+    af(`/v1/vault/signing/audit?limit=${limit}`).then((r) =>
+      j<{ audit_id: number; operator: string; key_id: string;
+          payload_sha256: string; granted: boolean; ts: string }[]>(r)),
 
   spawnGovernedTree: () =>
     af("/axor/governed/spawn-tree", { method: "POST" }).then((r) =>

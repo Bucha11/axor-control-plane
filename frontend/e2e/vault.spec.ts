@@ -38,6 +38,38 @@ test.describe("federation vault", () => {
     // the private half never renders anywhere
     await expect(vault.getByText(/seed/)).not.toBeVisible();
   });
+  test("the sign-request audit shows the LATEST request first", async ({ page }) => {
+    // The gap that let a real regression through: the old assertion checked the
+    // section header and that SOME "signed" row was visible, so when the route
+    // changed to newest-first and the panel kept `slice(-5).reverse()`, it
+    // showed the five OLDEST rows of the page as the latest and every test
+    // stayed green. A log panel's whole job is which row is on top.
+    const ctx = await request.newContext();
+    await ctx.post(`${BACKEND}/v1/vault/signing/keys`, {
+      data: { key_id: "ordering-key", operators: ["op_first", "op_last"] },
+    });
+    for (const operator of ["op_first", "op_last"]) {
+      await ctx.post(`${BACKEND}/v1/vault/signing/sign`, {
+        data: { key_id: "ordering-key", operator,
+                payload_b64: Buffer.from(operator).toString("base64") },
+      });
+    }
+    await ctx.dispose();
+
+    await setConnection(page, { mode: "adapter" });
+    await goHash(page, "settings");
+    // Scoped to the audit block: the keys pane above it lists each key's
+    // authorized operators, so an unscoped locator matches the key listing
+    // rather than the log — which is how a log test ends up asserting nothing.
+    const audit = page.getByTestId("sign-request-audit");
+    await expect(audit).toBeVisible();
+    const newest = await audit.getByText("op_last").first().boundingBox();
+    const older = await audit.getByText("op_first").first().boundingBox();
+    expect(newest).not.toBeNull();
+    expect(older).not.toBeNull();
+    expect(newest!.y).toBeLessThan(older!.y);
+  });
+
   // NOTE ON ORDER: registering a sealing key is a one-way switch for the run —
   // after it, this deployment refuses plaintext enrolment. So the plaintext
   // cases come first, deliberately, and the envelope ones follow.

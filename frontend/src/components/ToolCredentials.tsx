@@ -55,7 +55,7 @@ export default function ToolCredentials() {
 
   const health = useQuery({ queryKey: ["vault-creds"], queryFn: api.vaultCredsHealth });
   const sealing = useQuery({ queryKey: ["vault-sealing"], queryFn: api.vaultSealingKey });
-  const audit = useQuery({ queryKey: ["vault-creds-audit"], queryFn: api.vaultCredsAudit });
+  const audit = useQuery({ queryKey: ["vault-creds-audit"], queryFn: () => api.vaultCredsAudit() });
   // Which nodes sign their dispenses. Registering one was possible and seeing
   // what was registered was not, which makes "is this node signing?" a question
   // the panel could not answer about the deployment it is showing.
@@ -309,7 +309,8 @@ export default function ToolCredentials() {
           <div style={{ fontFamily: MONO, fontSize: 9.5, color: C.dim, letterSpacing: "0.08em", marginBottom: 4 }}>
             DISPENSE LOG · what each credential was fetched for
           </div>
-          {(audit.data ?? []).slice(-6).reverse().map((row, i) => (
+          {/* Newest first, straight from the route — see Settings.tsx. */}
+          {(audit.data ?? []).map((row, i) => (
             <div key={i} className="flex items-center gap-2 py-0.5" style={{ fontFamily: MONO, fontSize: 10, color: C.mut }}>
               <span style={{ color: row.signed ? C.green : C.dim }}>{row.signed ? "signed" : "unsigned"}</span>
               <span style={{ color: C.text }}>{row.tool}</span>

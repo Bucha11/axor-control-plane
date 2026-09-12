@@ -241,14 +241,41 @@ class TestRecordingIsPerKeyAndPerSignature:
 
         return _record_commands(recorded, delta, version, signature)
 
+    @staticmethod
+    def _keys(recorded: dict) -> dict:
+        """Asserted through the accessor rather than against the layout: the
+        layout changed once already (a flat `key -> whole command` map stored
+        the delta once per key, which is quadratic in a command's size), and
+        what these tests are about is which key a signature vouches for."""
+        from axor_backend.storage import _commands_map
+
+        by_key, commands = _commands_map(recorded)
+        return {k: commands[s] for k, s in by_key.items() if s in commands}
+
     def test_a_signed_delta_records_every_key_it_writes(self) -> None:
-        out = self._record({}, {"paused": True, "stopped": False}, 4,
-                           {"operator": "op", "timestamp": "t", "sig": "ab"})
+        out = self._keys(self._record(
+            {}, {"paused": True, "stopped": False}, 4,
+            {"operator": "op", "timestamp": "t", "sig": "ab"}))
         assert set(out) == {"paused", "stopped"}
         assert out["paused"] == {
             "version": 4, "delta": {"paused": True, "stopped": False},
             "operator": "op", "timestamp": "t", "sig": "ab",
         }
+
+    def test_one_command_is_held_once_however_many_keys_it_wrote(self) -> None:
+        """The quadratic one. A 200-key command stored 200 copies of its own
+        200-key delta — 10 290 bytes in, 2 087 090 out, in a column read and
+        rewritten on every command and every snapshot."""
+        import json
+
+        from axor_backend.storage import _commands_map
+
+        delta = {f"k{i}": "x" * 40 for i in range(200)}
+        stored = self._record(
+            {}, delta, 1, {"operator": "op", "timestamp": "t", "sig": "ab"})
+        _, commands = _commands_map(stored)
+        assert len(commands) == 1
+        assert len(json.dumps(stored)) < 4 * len(json.dumps(delta))
 
     def test_an_unsigned_delta_drops_the_keys_it_writes(self) -> None:
         """It must not leave the previous command in place. That signature is
@@ -259,10 +286,33 @@ class TestRecordingIsPerKeyAndPerSignature:
         before = self._record({}, {"paused": True}, 1,
                               {"operator": "op", "timestamp": "t", "sig": "ab"})
         after = self._record(before, {"paused": False}, 2, None)
-        assert after == {}
+        assert self._keys(after) == {}
+
+    def test_a_command_no_key_points_at_is_dropped_with_it(self) -> None:
+        """Otherwise the column grows with every superseded command, which is
+        the same unbounded-by-the-caller shape from the other direction."""
+        from axor_backend.storage import _commands_map
+
+        stored = {}
+        for version in range(1, 6):
+            stored = self._record(
+                stored, {"paused": version % 2 == 1}, version,
+                {"operator": "op", "timestamp": "t", "sig": f"s{version}"})
+        _, commands = _commands_map(stored)
+        assert list(commands) == ["s5"]
 
     def test_it_leaves_other_keys_alone(self) -> None:
         before = self._record({}, {"stopped": True}, 1,
                               {"operator": "op", "timestamp": "t", "sig": "ab"})
         after = self._record(before, {"paused": True}, 2, None)
-        assert set(after) == {"stopped"}
+        assert set(self._keys(after)) == {"stopped"}
+
+    def test_a_row_in_the_first_shape_is_still_read(self) -> None:
+        """Migration 0014 is young; a deployment may hold the flat shape."""
+        from axor_backend.storage import _commands_map
+
+        flat = {"paused": {"version": 1, "delta": {"paused": True},
+                           "operator": "op", "timestamp": "t", "sig": "ab"}}
+        by_key, commands = _commands_map(flat)
+        assert by_key == {"paused": "ab"}
+        assert commands["ab"]["delta"] == {"paused": True}

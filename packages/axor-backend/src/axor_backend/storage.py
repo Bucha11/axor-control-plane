@@ -742,9 +742,11 @@ class Store:
             # The key is gone from state, so its command has nothing left to
             # vouch for. Removing a key is the one direction that cannot forge
             # anything, which is why an ack needs no signature of its own.
-            rest = dict(recorded)
-            rest.pop(key, None)
-            return rest
+            by_key, commands = _commands_map(recorded)
+            by_key.pop(key, None)
+            live = set(by_key.values())
+            return {"by_key": by_key,
+                    "commands": {s: c for s, c in commands.items() if s in live}}
 
         with contextlib.suppress(_NoSuchNode):
             await self._merge_desired(
@@ -868,10 +870,11 @@ class Store:
                     desired_state.c.org_id == current_org_id(),
                 )
             )).first()
-        recorded = (row.commands_json if row else None) or {}
-        # One command can have written several keys; send it once.
-        unique = {c["sig"]: c for c in recorded.values() if c.get("sig")}
-        return sorted(unique.values(), key=lambda c: c["version"])
+        _, commands = _commands_map(row.commands_json if row else None)
+        return sorted(
+            (c for s, c in commands.items() if s),
+            key=lambda c: c["version"],
+        )
 
     async def upsert_reported(
         self, node_id: str, applied_version: int, level: str,
@@ -1857,32 +1860,63 @@ class Store:
         ]
 
 
+def _commands_map(recorded: Any) -> tuple[dict[str, str], dict[str, Any]]:  # noqa: ANN401
+    """`(key -> signature, signature -> command)`, from either stored shape.
+
+    The first shape was `{key: whole command}`, which stored the WHOLE delta
+    once per key the delta wrote — quadratic in the size of a command the
+    CALLER chooses: measured 50 bytes -> 194, but 10 290 -> 2 087 090, and that
+    column is read and rewritten on every command and every snapshot. The
+    lattice has about seven keys so the real multiplier is small, which is
+    exactly why it would have sat there. Tolerated on read because migration
+    0014 is young and a deployment may hold rows in it.
+    """
+    recorded = recorded or {}
+    if "by_key" in recorded or "commands" in recorded:
+        return dict(recorded.get("by_key") or {}), dict(recorded.get("commands") or {})
+    by_key, commands = {}, {}
+    for key, command in recorded.items():
+        sig = str(command.get("sig", ""))
+        by_key[key] = sig
+        commands[sig] = command
+    return by_key, commands
+
+
 def _record_commands(
     recorded: dict[str, Any], delta: dict[str, Any], version: int,
     signature: dict[str, str] | None,
 ) -> dict[str, Any]:
-    """The commands map after a delta lands: one entry per key this delta wrote.
+    """The commands map after a delta lands.
 
-    Unsigned writes REMOVE the affected entries instead of adding any. Not a
-    hole either way — the adapter compares the signed delta against the state
-    it accompanies, so a stale signature fails that comparison rather than
+    Stored as `key -> signature` beside `signature -> command`, so one command
+    is held ONCE however many keys it wrote (see `_commands_map`). A command no
+    key still points at is dropped with the key: it vouches for nothing, and
+    keeping it would grow the column with every superseded command.
+
+    Unsigned writes REMOVE the affected keys instead of adding any. Not a hole
+    either way — the adapter compares the signed delta against the state it
+    accompanies, so a stale signature fails that comparison rather than
     licensing the new value. What it buys is a true reason: a deployment that
     turned signing off gets "unsigned state key 'paused'", which is what
     happened, instead of "state key 'paused' is not what was signed", which
     points the operator at a signature that is fine.
     """
-    out = dict(recorded)
+    by_key, commands = _commands_map(recorded)
     for key in delta:
         if signature is None:
-            out.pop(key, None)
+            by_key.pop(key, None)
         else:
-            out[key] = {
+            sig = signature.get("sig", "")
+            by_key[key] = sig
+            commands[sig] = {
                 "version": version, "delta": dict(delta),
                 "operator": signature.get("operator", ""),
                 "timestamp": signature.get("timestamp", ""),
-                "sig": signature.get("sig", ""),
+                "sig": sig,
             }
-    return out
+    live = set(by_key.values())
+    return {"by_key": by_key,
+            "commands": {s: c for s, c in commands.items() if s in live}}
 
 
 async def _stored_coordinates(
