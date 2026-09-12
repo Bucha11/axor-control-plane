@@ -33,7 +33,7 @@ from axor_backend.attestations import (
 )
 from axor_backend.broadcast import messages as bus_messages
 from axor_backend.clock import now, today
-from axor_backend.coverage import coverage
+from axor_backend.coverage import coverage, facts_of_run
 from axor_backend.errors import (
     CommandRejected,
     ConcurrentUpdate,
@@ -362,6 +362,59 @@ def _check_attestation(fact: dict, signing_operator: str) -> None:
         )
 
 
+async def _check_run_scope(ctx: Any, fact: dict) -> None:  # noqa: ANN401
+    """The two things only the run can answer, so they cannot be checked above.
+
+    * **The fact id must not be one the run already recorded.** `append_fact`
+      enforces append-only within the fact log, and the run's own facts live in
+      the event log — different tables, no shared uniqueness. So an attestation
+      could take a recorded fact's id, and `coverage` merged the two by id: the
+      degradation fact was replaced by an attestation, `compute_level` skips
+      attestations, and a severity-4 quarantine went TERMINAL -> NORMAL under a
+      note whose `covers` was empty. Descent by deletion, with the fact gone
+      from the panel rather than shown discharged.
+    * **Every id in `covers` must be a fact of that run.** The door already
+      demands `run_id` whenever an attestation vouches for anything, because
+      fact ids are unique only inside the run that minted them. Naming an id
+      that run does not have is the same mistake one step further, and it used
+      to answer 201 and do nothing — a transposed character bought silence. It
+      also refuses attesting a fact that has not happened yet, which is
+      "trust this forever" rather than Sentinel's "I checked, resume watching".
+
+    Reading the run back costs what any read of a run costs (docs/ops-limits.md,
+    bounded by AXOR_MAX_EVENTS_PER_RUN). An operator appending a fact is rare and
+    deliberate; getting this wrong is permanent, because the fact log is
+    append-only and nothing can delete the collision afterwards.
+    """
+    run_id = str(fact.get("run_id") or "")
+    if not run_id:
+        return  # vouches for nothing and reaches no run's coverage
+    try:
+        events = await kernel_events_or_empty(ctx.store, run_id)
+    except HTTPException as exc:
+        raise HTTPException(
+            400,
+            f"cannot place this attestation in run {run_id}: its trace does "
+            f"not read back ({exc.detail})",
+        ) from exc
+    run_facts = facts_of_run(events)
+    fact_id = str(fact.get("fact_id") or "")
+    if fact_id in run_facts:
+        raise HTTPException(
+            409,
+            f"run {run_id} already recorded a fact with id {fact_id!r}. An "
+            f"attestation COVERS a fact, it never takes its id — taking it "
+            f"would replace the fact instead of discharging it.",
+        )
+    unknown = sorted({str(c) for c in (fact.get("covers") or ())} - set(run_facts))
+    if unknown:
+        raise HTTPException(
+            400,
+            f"run {run_id} has no fact(s) {unknown}; an attestation can only "
+            f"cover facts that run recorded. It has: {sorted(run_facts) or 'none'}.",
+        )
+
+
 @router.post("/{node_id}/facts", status_code=201)
 async def append_fact(node_id: str, body: dict, request: Request) -> dict:
     ctx = _ctx(request)
@@ -382,6 +435,10 @@ async def append_fact(node_id: str, body: dict, request: Request) -> dict:
             raise HTTPException(403, str(exc)) from exc
     elif not ctx.allow_unsigned:
         raise HTTPException(403, "no operator keys registered; facts rejected")
+    # After the signature, not before: this one reads the whole run back, and an
+    # unverified caller should not be able to spend that.
+    if fact.get("fact_type") == ATTESTATION_FACT_TYPE:
+        await _check_run_scope(ctx, fact)
     appended = await ctx.store.append_fact(node_id, fact, now())
     if not appended:
         raise HTTPException(409, "fact_id already exists (append-only)")

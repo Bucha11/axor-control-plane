@@ -27,11 +27,14 @@ then the two differ, and the plane renders the divergence rather than hiding it
 """
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from axor_core.kernel.degradation import compute_level as kernel_level
 from axor_core.kernel.degradation import covered_fact_ids
 from axor_core.kernel.events import EventKind, Fact, fact_from_payload
+
+log = logging.getLogger("axor.backend")
 
 ATTESTATION_FACT_TYPE = "operator_attestation"
 
@@ -78,7 +81,27 @@ def coverage(
         str(a["fact_id"]): fact_from_payload(a)
         for a in attestations if a.get("fact_id")
     }
-    facts = {**run_facts, **plane_facts}
+    # The RUN wins a collision, and this direction is the whole point. Merged
+    # the other way, an operator attestation that took a recorded fact's id
+    # replaced it — and since `compute_level` skips attestations entirely, the
+    # degradation it named stopped counting and vanished from the list. A
+    # severity-4 quarantine went TERMINAL -> NORMAL under a note whose `covers`
+    # was empty, and the panel then said "nothing is holding this node down".
+    # That is descent by DELETION, which is the one thing this whole surface
+    # exists not to have (axor_sentinel.sentinel.attestation: "a reset
+    # implemented as deletion or zeroing would be an operator-side
+    # reputation-laundering channel, so reset does not exist"). The door refuses
+    # new collisions (plane._check_run_scope); this is for rows already stored,
+    # and it is loud rather than silent.
+    shadowing = set(run_facts) & set(plane_facts)
+    if shadowing:
+        log.warning(
+            "plane fact(s) %s share an id with a fact this run recorded; the "
+            "run's fact stands and the attestation does not apply. An "
+            "attestation must COVER a fact, never take its id.",
+            sorted(shadowing),
+        )
+    facts = {**plane_facts, **run_facts}
     covered = covered_fact_ids(facts)
     roots = _causal_roots(events)
 
@@ -105,5 +128,9 @@ def coverage(
             for fact in facts.values()
             if fact.fact_type != ATTESTATION_FACT_TYPE
         ],
-        "covered": sorted(covered),
+        # Only ids this run actually has. `covers` is free text until the door
+        # checks it, so a transposed id used to come back here as "covered"
+        # while the fact it meant to discharge stayed at full severity — the
+        # operator reading the list would see their attestation had landed.
+        "covered": sorted(covered & set(facts)),
     }

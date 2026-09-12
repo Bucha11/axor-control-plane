@@ -136,10 +136,16 @@ async def test_an_attestation_from_another_run_discharges_nothing(
 ) -> None:
     """Fact ids are minted per run (`quar_{seq}`), so an attestation naming
     `quar_0` in one run must not discharge another run's `quar_0`. This is the
-    whole reason run_id is required."""
+    whole reason run_id is required.
+
+    It used to be STORED and simply not applied (201, no effect). Now the door
+    refuses it, because `run_other` does not have `quar_0` — the same rule seen
+    from the other end, and a refusal an operator can act on beats a write that
+    quietly does nothing."""
     await _report(client, _quarantine(0, "quar_0", 2, "v_ext_1"))
     r = await _attest(client, "att_elsewhere", ["quar_0"], run_id="run_other")
-    assert r.status_code == 201
+    assert r.status_code == 400
+    assert "run_other" in r.json()["detail"]
     assert (await _coverage(client))["level"] == "RESTRICTED"
 
 

@@ -138,6 +138,19 @@ async def test_unknown_operator_rejected(client: httpx.AsyncClient) -> None:
 async def test_attestation_requires_reason_and_is_append_only(
     client: httpx.AsyncClient, signing_key: SigningKey
 ) -> None:
+    # Run r0 has to actually hold f1: an attestation may only cover a fact the
+    # run it names recorded (plane._check_run_scope). This fixture used to
+    # cover an id no run had, which is the mistake that check now catches —
+    # the subject here is the reason requirement and append-only, so give it a
+    # real fact to vouch for.
+    await client.post("/v1/plane/n0/telemetry", json={
+        "run_id": "r0", "events": [{
+            "schema_version": "1.0", "seq": 0, "node_id": "n0", "kind": "fact",
+            "ts": "t", "causal_root": "v_ext_1",
+            "payload": {"fact_id": "f1", "fact_type": "source_quarantined",
+                        "severity": 2, "reason": "untrusted source"},
+        }],
+    })
     ts = datetime.now(UTC).isoformat()
     fact = {"fact_id": "a1", "fact_type": "operator_attestation",
             "severity": 0, "run_id": "r0", "covers": ["f1"],
