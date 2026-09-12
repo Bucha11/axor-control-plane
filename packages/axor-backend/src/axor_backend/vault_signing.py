@@ -26,6 +26,13 @@ authorized operator is not being one. ``principal`` is the credential that
 actually arrived. An audit trail that prints only the claim answers a question
 it does not know the answer to.
 
+And the log had a third hole, which was the fix for the first one seen from the
+other side. Logging refusals made key-id probing visible; the log was also
+trimmed to its newest 500 on every append, so eviction was a function of WRITES
+and refusals are free. Measured: 520 requests naming key ids that do not exist
+removed every trace of a real signature. A trail the signer can flush by signing
+is not a trail, so it is a table now (migration 0015) and eviction is by AGE.
+
 Pubkeys are NOT secrets and are never fetched from here: verification keys
 stay pinned in local adapter config — a compromised vault cannot swap what a
 node checks against.
@@ -40,14 +47,14 @@ with :mod:`axor_backend.vault_creds`. CI enforces the import wall.
 from __future__ import annotations
 
 import hashlib
-from datetime import UTC, datetime
 from typing import Any
 
 from nacl.signing import SigningKey
 
+from axor_backend.clock import now
+
 _KEYS_KEY = "vault_signing/keys/v1"
-_AUDIT_KEY = "vault_signing/audit/v1"
-_AUDIT_CAP = 500
+AUDIT_KIND = "signing"
 
 
 class SignRefused(Exception):
@@ -84,7 +91,7 @@ class SigningCustody:
                 f"key {key_id!r} needs at least one authorized operator — "
                 "a key nobody may sign with is not custody, it is a dead entry"
             )
-        created = datetime.now(UTC).isoformat()
+        created = now()
         # Generated OUTSIDE the mutation: it is retried on contention, and a
         # closure that minted fresh key material on each pass would decide from
         # something other than what it was handed.
@@ -153,18 +160,19 @@ class SigningCustody:
             "key_id": key_id,
             "payload_sha256": hashlib.sha256(payload).hexdigest(),
             "granted": granted,
-            "ts": datetime.now(UTC).isoformat(),
+            "ts": now(),
         }
         if refusal:
             entry["refusal"] = refusal
 
-        def mutate(stored: Any) -> list[dict]:  # noqa: ANN401
-            return [*(stored or []), entry][-_AUDIT_CAP:]
+        await self._store.add_vault_audit(AUDIT_KIND, entry, entry["ts"])
 
-        await self._store.mutate_setting(_AUDIT_KEY, mutate)
-
-    async def audit(self) -> list[dict]:
-        return (await self._store.get_setting(_AUDIT_KEY)) or []
+    async def audit(self, limit: int = 200, before_id: int | None = None) -> list[dict]:
+        """Newest first, one page at a time — the log is no longer capped, and
+        returning all of it was only safe while something threw most away."""
+        return await self._store.vault_audit_entries(
+            AUDIT_KIND, limit=limit, before_id=before_id,
+        )
 
     async def keys_public(self) -> list[dict]:
         """The listable surface: key ids, pubkeys, authorized operators —

@@ -10,6 +10,7 @@ import ast
 import asyncio
 import base64
 import pathlib
+from datetime import UTC, datetime
 
 import httpx
 import pytest
@@ -44,9 +45,14 @@ SH = {"x-vault-signing-token": SIGNING_TOKEN}
 def fetch(node_id: str, tool: str, endpoint: str, **over: object) -> dict:
     """A dispense body: what is wanted, and the attestation naming the call it
     is for. Unsigned — these fixtures register no node key, so the plane accepts
-    it and records `signed: false`."""
+    it and records `signed: false`.
+
+    The timestamp is NOW. It used to be a frozen date, which it could be because
+    nothing read it — an attestation is only good for the call being made, and
+    `ATTESTATION_MAX_AGE_SECONDS` is what makes that true rather than stated.
+    """
     attestation = {"node_id": node_id, "tool": tool, "endpoint": endpoint,
-                   "timestamp": "2026-09-08T00:00:00Z"}
+                   "timestamp": datetime.now(UTC).isoformat()}
     attestation.update(over)
     return {"node_id": node_id, "tool": tool, "endpoint": endpoint,
             "attestation": attestation}

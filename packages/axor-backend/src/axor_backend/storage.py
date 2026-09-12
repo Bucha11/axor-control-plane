@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import logging
 import random
 from collections.abc import Callable
 from typing import Any, NamedTuple
@@ -39,7 +40,19 @@ from axor_backend.errors import ConcurrentUpdate, RunTooLarge, StaleVersion
 from axor_backend.limits import MAX_EVENTS_PER_RUN
 from axor_backend.tenancy import PUBLIC_ORG, current_org_id
 
+log = logging.getLogger("axor.backend")
+
 metadata = MetaData()
+
+# A disk bound on one tenant's custody log, NOT a retention policy — see
+# `Store.add_vault_audit`. High enough that no legitimate deployment reaches it:
+# a node fetching a credential every second takes over a day to.
+VAULT_AUDIT_BACKSTOP = 100_000
+
+# The two custody logs, so the sweep does not have to import either vault to
+# know what to bound — and so adding a third one is a single edit here rather
+# than a log nothing ever trims.
+VAULT_AUDIT_KINDS = ("creds_dispense", "signing")
 
 # JSON payload columns: real JSONB on Postgres (indexable, queryable), portable
 # JSON (stored as TEXT, auto-(de)serialised) on SQLite for dev/tests. One column
@@ -245,6 +258,25 @@ lab_deploys = Table(
 # that never arrived. They persist (capped) so a restart doesn't erase the
 # evidence that deliveries were lost — the exact failure mode the dead-letter
 # log exists to expose.
+# The two vaults' audit trails (migration 0015). One table, one row per
+# privileged action, because they have the same shape and the same lifecycle —
+# the WALL between the subsystems (spec v2 Ch.5 §3) is about credentials and
+# signing keys, not about where their audit rows are stored, and each reading
+# route is still gated by its own subsystem token.
+#
+# They were a settings blob trimmed to the newest N on every append, which made
+# eviction a function of WRITES: 520 refused signature requests erased the
+# record of a real signature, and refusals are free. Eviction is by AGE now, so
+# the party a log is about cannot flush it by using the surface it records.
+vault_audit = Table(
+    "vault_audit", metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("kind", String(32), nullable=False, index=True),
+    Column("entry_json", _JSON, nullable=False),
+    Column("created_ts", String(40), nullable=False),
+    Column("org_id", String(64), nullable=False, server_default=PUBLIC_ORG, index=True),
+)
+
 dead_letters = Table(
     "dead_letters", metadata,
     Column("id", Integer, primary_key=True, autoincrement=True),
@@ -1689,6 +1721,93 @@ class Store:
 
     # ── notification dead letters (persist: a restart must not erase the
     # evidence that deliveries were lost) ─────────────────────────────────────
+
+    # ── vault audit (spec v2 Ch.5 §2-3) ──────────────────────────────────────
+
+    async def add_vault_audit(
+        self, kind: str, entry: dict[str, Any], ts: str,
+    ) -> None:
+        """Append one row to a custody log. An INSERT, never a blob rewrite.
+
+        No count-based eviction here on purpose. The log used to be trimmed to
+        the newest N on every append, which made eviction a function of WRITES —
+        and the surface that writes is the surface the log is about, so the
+        party under audit could flush it by using it. Age is what evicts now
+        (`prune_vault_audit_older_than`, driven by the deployment's retention
+        window); an unset window keeps forever, which is what an audit trail
+        wants.
+
+        One INSERT and nothing else. The disk backstop lives in the retention
+        sweep (`trim_vault_audit_to`), not here: counting the rows on every
+        append put the blob's own cost straight back — measured 2.75 ms at 2k
+        rows, 5.12 ms at 14k, which is what the 1000-row blob cost at its cap.
+        A bound on disk is housekeeping; it does not belong inside the
+        transaction that records a privileged action.
+        """
+        async with self.engine.begin() as conn:
+            await conn.execute(insert(vault_audit).values(
+                kind=kind, entry_json=entry, created_ts=ts,
+                org_id=current_org_id(),
+            ))
+
+    async def vault_audit_entries(
+        self, kind: str, limit: int = 200, before_id: int | None = None,
+    ) -> list[dict[str, Any]]:
+        """One custody log, newest first, one page at a time.
+
+        Paged because it is no longer capped: returning the whole log was safe
+        only while something else was throwing most of it away.
+        """
+        where = [vault_audit.c.kind == kind,
+                 vault_audit.c.org_id == current_org_id()]
+        if before_id is not None:
+            where.append(vault_audit.c.id < before_id)
+        async with self.engine.connect() as conn:
+            rows = (await conn.execute(
+                select(vault_audit.c.id, vault_audit.c.entry_json)
+                .where(*where)
+                .order_by(vault_audit.c.id.desc())
+                .limit(limit)
+            )).all()
+        return [{**r.entry_json, "audit_id": r.id} for r in rows]
+
+    async def prune_vault_audit_older_than(self, cutoff_ts: str) -> int:
+        """Retention, in this tenant's custody logs. `created_ts` is ISO-8601,
+        so a lexicographic compare is chronological (same as `runs`)."""
+        async with self.engine.begin() as conn:
+            return (await conn.execute(delete(vault_audit).where(
+                vault_audit.c.created_ts < cutoff_ts,
+                vault_audit.c.org_id == current_org_id(),
+            ))).rowcount
+
+    async def trim_vault_audit_to(
+        self, kind: str, backstop: int = VAULT_AUDIT_BACKSTOP,
+    ) -> int:
+        """The disk bound, applied by the sweep rather than by every append.
+
+        NOT a retention policy, and the difference is the whole point of this
+        table existing: retention evicts by age, so writing rows cannot
+        accelerate it and the surface a log records cannot be used to erase the
+        record. This is the bound that stops one tenant filling a disk, set far
+        above any legitimate use — a tenant past it is being drained or is
+        misconfigured, and either way the rows it drops are gone, so the caller
+        says so out loud.
+        """
+        org = current_org_id()
+        async with self.engine.begin() as conn:
+            cutoff = (await conn.execute(
+                select(vault_audit.c.id)
+                .where(vault_audit.c.kind == kind, vault_audit.c.org_id == org)
+                .order_by(vault_audit.c.id.desc())
+                .offset(backstop - 1).limit(1)
+            )).scalar_one_or_none()
+            if cutoff is None:
+                return 0  # fewer rows than the backstop; nothing to trim
+            return (await conn.execute(delete(vault_audit).where(
+                vault_audit.c.kind == kind,
+                vault_audit.c.org_id == org,
+                vault_audit.c.id < cutoff,
+            ))).rowcount
 
     async def add_dead_letter(
         self, url: str, payload: dict[str, Any], error: str, attempts: int,

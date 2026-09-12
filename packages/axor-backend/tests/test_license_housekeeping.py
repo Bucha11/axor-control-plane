@@ -37,16 +37,36 @@ class TestTheSweepDoesNotDependOnRetention:
             database_url=f"sqlite+aiosqlite:///{tmp_path}/a.db",
         )
         assert "license_loop" in loops
-        assert "retention_loop" not in loops  # unset means keep forever
 
     async def test_retention_still_has_its_own(
         self, tmp_path: pathlib.Path,
     ) -> None:
+        """Two loops, not one. This file's subject is that the entitlement pass
+        is not a tenant of retention's task — the two run on different periods
+        and answer to different settings."""
         loops = await _running_loops(
             database_url=f"sqlite+aiosqlite:///{tmp_path}/b.db",
             retention_days=30.0,
         )
         assert {"license_loop", "retention_loop"} <= loops
+
+    async def test_retention_starts_even_with_no_window(
+        self, tmp_path: pathlib.Path,
+    ) -> None:
+        """This asserted the opposite until `prune_once` grew a second pass.
+
+        The window is still opt-in, and unset still means keep forever — but the
+        loop also carries the vault audit's disk backstop now, and a deployment
+        that keeps its history forever still has a disk. Which is the same
+        lesson this file is about, applied one step further: a pass that must
+        always run cannot live behind a setting that is usually unset. What the
+        loop does with an unset window is `prune_once`'s to decide, and
+        test_vault_audit holds it to that.
+        """
+        loops = await _running_loops(
+            database_url=f"sqlite+aiosqlite:///{tmp_path}/c.db",
+        )
+        assert "retention_loop" in loops
 
 
 class _Lic:

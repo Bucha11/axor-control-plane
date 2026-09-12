@@ -23,16 +23,27 @@ from fastapi import APIRouter, HTTPException, Request
 from axor_backend.auth import constant_time_eq
 from axor_backend.clock import now
 from axor_backend.deps import StoreDep
-from axor_backend.vault_dispense import (
-    DISPENSE_LOG_CAP,
-    DISPENSE_LOG_SETTING,
-    NODE_KEYS_SETTING,
-    AttestationRefused,
-)
+from axor_backend.vault_dispense import AUDIT_KIND as DISPENSE_KIND
+from axor_backend.vault_dispense import NODE_KEYS_SETTING, AttestationRefused
 from axor_backend.vault_dispense import log_entry as dispense_row
 from axor_backend.vault_dispense import verify as verify_attestation
 
 router = APIRouter(prefix="/v1/vault", tags=["vault"])
+
+# Rows an audit page returns by default, and the most it will return at all.
+# Both logs used to be capped in storage, so "give me everything" was bounded by
+# something other than this route; now it is bounded here.
+AUDIT_PAGE = 200
+AUDIT_PAGE_MAX = 1000
+
+
+def _page(limit: int) -> int:
+    """A page size the caller chose, clamped and refused rather than silently
+    reinterpreted — a `limit=0` that quietly means 200 is a caller reading an
+    empty log and believing it."""
+    if limit < 1:
+        raise HTTPException(400, "`limit` must be at least 1")
+    return min(limit, AUDIT_PAGE_MAX)
 
 
 def _gate(request: Request, which: str) -> None:
@@ -150,10 +161,7 @@ async def vault_dispense(body: dict, request: Request, store: StoreDep) -> dict:
         principal=getattr(principal, "key_id", "") if principal else "",
         ts=now(),
     )
-    await store.mutate_setting(
-        DISPENSE_LOG_SETTING,
-        lambda stored: [*(stored or []), row][-DISPENSE_LOG_CAP:],
-    )
+    await store.add_vault_audit(DISPENSE_KIND, row, row["ts"])
     return credential
 
 
@@ -264,10 +272,21 @@ async def vault_node_keys(request: Request, store: StoreDep) -> dict:
 
 
 @router.get("/creds/audit")
-async def vault_creds_audit(request: Request, store: StoreDep) -> list[dict]:
-    """What every dispensed credential was fetched for. Never the credential."""
+async def vault_creds_audit(
+    request: Request, store: StoreDep,
+    limit: int = AUDIT_PAGE, before_id: int | None = None,
+) -> list[dict]:
+    """What every dispensed credential was fetched for. Never the credential.
+
+    Newest first, paged: the log is no longer trimmed to its newest thousand on
+    every append (migration 0015), so handing back all of it is no longer a
+    thing something else was quietly making safe. Page with `before_id` from the
+    `audit_id` of the last row you read.
+    """
     _gate(request, "creds")
-    return (await store.get_setting(DISPENSE_LOG_SETTING)) or []
+    return await store.vault_audit_entries(
+        DISPENSE_KIND, limit=_page(limit), before_id=before_id,
+    )
 
 
 @router.get("/creds/health")
@@ -319,11 +338,18 @@ async def vault_sign(body: dict, request: Request, store: StoreDep) -> dict:
 
 
 @router.get("/signing/audit")
-async def vault_audit(request: Request, store: StoreDep) -> list[dict]:
+async def vault_audit(
+    request: Request, store: StoreDep,
+    limit: int = AUDIT_PAGE, before_id: int | None = None,
+) -> list[dict]:
+    """Every signature request, granted or refused. Newest first, paged — see
+    `/creds/audit` for why paging arrived with the table."""
     _gate(request, "signing")
     from axor_backend.vault_signing import SigningCustody
 
-    return await SigningCustody(store).audit()
+    return await SigningCustody(store).audit(
+        limit=_page(limit), before_id=before_id,
+    )
 
 
 def _payload(payload_b64: str) -> bytes:

@@ -21,6 +21,12 @@ follow, and only the first is authentication:
   shipped; the credential vault had none at all. Draining a scope now looks
   like what it is: dispenses with no run behind them.
 
+  That last sentence was only true for the most recent thousand. The log was a
+  settings blob trimmed to its newest N on every append, so eviction followed
+  WRITES and a further 1019 dispenses erased the drain that prompted the
+  question. It is a table now (migration 0015) and eviction is by AGE, so using
+  the surface cannot erase the record of having used it.
+
 The signature is optional and its absence is recorded, never assumed away. A
 node with a registered pubkey signs the attestation (RFC 8785 canonical bytes,
 ed25519 — the same envelope operator commands use); a node without one is
@@ -32,13 +38,22 @@ the backend that stored it.
 """
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from typing import Any
 
 from axor_backend.signing import jcs_canonical
 
 NODE_KEYS_SETTING = "node_pubkeys/v1"
-DISPENSE_LOG_SETTING = "vault_creds/dispense_log/v1"
-DISPENSE_LOG_CAP = 1000
+AUDIT_KIND = "creds_dispense"
+
+# How stale an attestation may be. It is signed over a `timestamp` and nothing
+# ever read it, so one captured attestation re-fetched its credential forever —
+# "I signed this call" quietly became "I signed a standing pass for this call".
+# The plane commands' own replay guard is the version counter; a dispense has no
+# counter, so freshness is what it gets. Generous, because a node's clock is its
+# own and the window is not a security boundary — it bounds how long a captured
+# attestation stays useful, which is the whole claim.
+ATTESTATION_MAX_AGE_SECONDS = 300.0
 
 # Fields the attestation signs, in the envelope both sides rebuild. Anything not
 # listed is not covered by the signature and must not be trusted as if it were.
@@ -76,6 +91,8 @@ def verify(
     tool: str,
     endpoint: str,
     pubkey_hex: str | None,
+    now: datetime | None = None,
+    max_age: float = ATTESTATION_MAX_AGE_SECONDS,
 ) -> bool:
     """Check the attestation against the dispense it accompanies.
 
@@ -91,6 +108,7 @@ def verify(
     for field in ("node_id", "tool", "endpoint", "timestamp"):
         if not attestation.get(field):
             raise AttestationRefused(f"attestation is missing {field}")
+    _check_fresh(str(attestation["timestamp"]), now=now, max_age=max_age)
     if str(attestation["node_id"]) != node_id:
         raise AttestationRefused(
             f"attestation is for node {attestation['node_id']!r}, "
@@ -118,6 +136,38 @@ def verify(
             f"pubkey for node {node_id!r}"
         )
     return True
+
+
+def _check_fresh(
+    timestamp: str, *, now: datetime | None, max_age: float,
+) -> None:
+    """The attested call must be one being made now, not one made once.
+
+    Both directions, and the future one is not paranoia: an attestation dated
+    forward would otherwise be a pass that only starts working later, minted
+    before anyone thought to look. A timestamp that will not parse is refused
+    rather than waved through — it is inside the signed envelope, so a signer
+    that cannot produce a date is a signer whose statement cannot be placed in
+    time at all.
+    """
+    try:
+        attested = datetime.fromisoformat(timestamp)
+    except ValueError as exc:
+        raise AttestationRefused(
+            f"attestation timestamp {timestamp!r} is not an ISO-8601 instant, "
+            f"so the call it names cannot be placed in time ({exc})"
+        ) from None
+    if attested.tzinfo is None:
+        attested = attested.replace(tzinfo=UTC)
+    drift = ((now or datetime.now(UTC)) - attested).total_seconds()
+    if abs(drift) <= max_age:
+        return
+    raise AttestationRefused(
+        f"attestation is {abs(drift):.0f}s "
+        f"{'old' if drift > 0 else 'in the future'}, past the "
+        f"{max_age:.0f}s window; a credential is dispensed for the call being "
+        f"made, not for one that was made once"
+    )
 
 
 def _verify_ed25519(pubkey_hex: str, message: bytes, sig_hex: str) -> bool:

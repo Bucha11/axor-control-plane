@@ -26,7 +26,7 @@ from fastapi import FastAPI
 from axor_backend.corpus import record_corpus_run, regression_report
 from axor_backend.licensing import active_license, load_licenses
 from axor_backend.monitor import running_stale_monitor
-from axor_backend.storage import init_db
+from axor_backend.storage import VAULT_AUDIT_KINDS, init_db
 from axor_backend.tenancy import PUBLIC_ORG, set_current_org
 
 log = logging.getLogger("axor.backend")
@@ -52,9 +52,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         # Always: entitlement housekeeping answers to the license, not to
         # whether the operator configured a retention window.
         asyncio.create_task(license_loop(app.state)),
+        # Always, for the same reason one step further: `prune_once` now carries
+        # the vault audit's disk backstop as well as the retention window, and a
+        # deployment that keeps its history forever still has a disk. The window
+        # itself is still opt-in — `prune_once` checks it.
+        asyncio.create_task(retention_loop(app.state)),
     ]
-    if app.state.config.retention_days:
-        tasks.append(asyncio.create_task(retention_loop(app.state)))
     try:
         # The node_stale trigger is edge-detected by a background sweep (spec
         # §16): a silent node emits nothing, so its absence is what we watch.
@@ -166,26 +169,62 @@ async def rehydrate(state: Any) -> None:  # noqa: ANN401 - app.state is dynamic
 # ── retention (launch-readiness §1) ───────────────────────────────────────────
 
 async def prune_once(state: Any) -> None:  # noqa: ANN401
-    """Drop runs older than the configured window, in every tenant."""
+    """Housekeeping over stored history, in every tenant.
+
+    Two passes with different rules, and mixing them up is what this shape
+    exists to prevent:
+
+    * **The retention window** drops runs and ages out the vaults' custody logs.
+      Unset means keep forever, which is the right default for an audit trail.
+    * **The disk backstop** on those logs runs REGARDLESS, because it is not
+      retention — it is the bound that stops one tenant filling a disk, and a
+      deployment that keeps its history forever still has a disk. (The license
+      sweep taught this lesson already: a pass that must always run cannot live
+      behind a setting that is usually unset.)
+
+    Eviction by age rather than by count is what makes the custody logs
+    un-flushable: writing rows cannot accelerate the clock, so the surface a log
+    records cannot be used to erase the record of having used it.
+    """
     days = state.config.retention_days
-    if days is None or days <= 0:  # unset = keep forever
-        return
-    cutoff = (datetime.now(UTC) - timedelta(days=days)).isoformat()
+    cutoff = (
+        (datetime.now(UTC) - timedelta(days=days)).isoformat()
+        if days and days > 0 else None
+    )
     try:
         for org in await state.store.list_orgs():
             set_current_org(org)
+            for kind in VAULT_AUDIT_KINDS:
+                dropped = await state.store.trim_vault_audit_to(kind)
+                if dropped:
+                    log.warning(
+                        "VAULT AUDIT AT ITS BACKSTOP: dropped %d %r row(s) for "
+                        "org %s. A disk bound, not retention — a tenant this "
+                        "far past it is being drained or is misconfigured, and "
+                        "the dropped rows are gone.",
+                        dropped, kind, org,
+                    )
+            if cutoff is None:
+                continue
             pruned = await state.store.prune_runs_older_than(cutoff)
             if pruned:
                 log.info(
                     "retention: pruned %d runs older than %s (org %s)",
                     pruned, cutoff, org,
                 )
+            audit = await state.store.prune_vault_audit_older_than(cutoff)
+            if audit:
+                log.info(
+                    "retention: pruned %d vault audit row(s) older than %s "
+                    "(org %s)", audit, cutoff, org,
+                )
     finally:
         set_current_org(PUBLIC_ORG)
 
 
 async def retention_loop(state: Any) -> None:  # noqa: ANN401
-    """Housekeeping for the retention window. Started only when one is set."""
+    """Housekeeping over stored history. Always started — see `prune_once` for
+    which of its two passes is conditional and which is not."""
     while True:
         await asyncio.sleep(RETENTION_SWEEP_SECONDS)
         with contextlib.suppress(Exception):
