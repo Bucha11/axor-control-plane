@@ -4,14 +4,44 @@ Every route here is a pure kernel computation over stored events — nothing is
 written, and no verdict is invented. That is why they read with the `read`
 scope even when they are POSTs: a counterfactual and an influence ranking are
 questions asked of a trace, not changes to it.
+
+Two things follow from "pure kernel computation", and neither was handled.
+
+**It is synchronous CPU work.** Called straight from an ``async def`` it holds
+the event loop for its whole duration, and this backend is single-instance by
+design (docs/ops-limits.md), so there is no second worker to take over. One
+influence request over a 601-event run starved the loop for 3.1 continuous
+seconds — measured as the overshoot of 50 ms timers that could not fire:
+
+    /v1/healthz idle:                 0.87 ms
+    the influence request took:       3627 ms (601 events)
+    worst 50 ms timer overshoot:      3124 ms
+
+Nothing else was served in that window: not ingest, not the plane, not
+``/v1/healthz`` — which docker-compose polls with ``timeout: 5s`` and which two
+services gate their start on. Every kernel call here now runs through
+``asyncio.to_thread``; the GIL still has to be shared, but the interpreter
+switches out of it, so a long fold no longer means a dead process.
+
+**Ablation is not linear.** See ``limits.MAX_ABLATION_REFS`` for the numbers.
+
+And the door was typed in one field out of three: ``config`` was checked and
+answered 400, while ``anchor_seq`` and ``anchor_node`` went to the kernel as
+they arrived — ``int("abc")``, ``int({})`` and an unhashable node id each left
+the route as a 500 with ``{"error": "internal"}``, the caller's mistake
+reported as ours.
 """
 from __future__ import annotations
 
+import asyncio
+
+from axor_core.kernel.events import Event
 from axor_core.kernel.replay import replay
 from axor_core.kernel.subgraph import causal_subgraph
 from fastapi import APIRouter, HTTPException
 
 from axor_backend.deps import StoreDep, SubgraphCacheDep
+from axor_backend.limits import MAX_ABLATION_REFS
 from axor_backend.replay_api import (
     containment_report,
     influence_ranking,
@@ -24,11 +54,40 @@ from axor_backend.traces import events_for
 router = APIRouter(prefix="/v1", tags=["analysis"])
 
 
+def _anchor(body: dict) -> tuple[str, int]:
+    """The (node, seq) a POST body names, or a 400 saying which field is wrong.
+
+    `int(body.get("anchor_seq", -1))` raised on a word and on a dict, and a
+    non-string node id raised `unhashable type` deeper in the kernel walk. All
+    three reached the caller as 500 {"error": "internal"}.
+    """
+    node = body.get("anchor_node", "")
+    if not isinstance(node, str):
+        raise HTTPException(400, "anchor_node must be a string")
+    raw = body.get("anchor_seq", -1)
+    if isinstance(raw, bool) or not isinstance(raw, int):
+        # bool is an int in Python and `anchor_seq: true` is not a sequence
+        # number; refusing it here beats anchoring at 1.
+        raise HTTPException(400, "anchor_seq must be an integer")
+    return node, raw
+
+
 def _subgraph(events: list, anchor_node: str, anchor_seq: int) -> dict:
     try:
         return causal_subgraph(events, anchor_node, anchor_seq)
     except ValueError as exc:
         raise HTTPException(404, str(exc)) from exc
+
+
+async def _off_loop(fn, /, *args: object) -> object:  # noqa: ANN001 — any kernel call
+    """Run one kernel computation without holding the event loop.
+
+    Not a speed-up — it is the same work. What it buys is that everything else
+    this single-instance process owes (the plane's heartbeats, an ingest, the
+    liveness probe its orchestrator gates two services on) keeps being served
+    while a large fold runs.
+    """
+    return await asyncio.to_thread(fn, *args)
 
 
 @router.get("/runs/{run_id}/subgraph")
@@ -48,7 +107,7 @@ async def run_subgraph(
     events = await events_for(store, run_id)
     return cache.put(
         org, run_id, anchor_node, anchor_seq,
-        _subgraph(events, anchor_node, anchor_seq),
+        await _off_loop(_subgraph, events, anchor_node, anchor_seq),
     )
 
 
@@ -60,51 +119,95 @@ async def run_containment(
     event-grounded (headline-safe) ratio, outcome as a label — never a
     governance-attributed score."""
     events = await events_for(store, run_id)
-    return containment_report(events, _subgraph(events, anchor_node, anchor_seq))
+    sub = await _off_loop(_subgraph, events, anchor_node, anchor_seq)
+    return await _off_loop(containment_report, events, sub)
+
+
+def _requested_refs(body: dict, available: list[str]) -> list[str]:
+    """The refs to ablate: the caller's subset, or all of them if they named none.
+
+    A case with more upstream values than the bound is refused, not truncated.
+    Ranking the first N by ref id would answer "of these arbitrary values, which
+    drove the denial" while being read as "which value drove the denial", and
+    the caller has no way to see the substitution happened.
+    """
+    asked = body.get("refs")
+    if asked is not None:
+        if not isinstance(asked, list) or not all(isinstance(r, str) for r in asked):
+            raise HTTPException(400, "refs must be a list of value-ref strings")
+        unknown = sorted(set(asked) - set(available))
+        if unknown:
+            raise HTTPException(
+                400, f"refs not in this case's causal subgraph: {unknown[:10]}")
+        refs = [r for r in available if r in set(asked)]
+    else:
+        refs = available
+    if len(refs) > MAX_ABLATION_REFS:
+        raise HTTPException(
+            422,
+            f"this case has {len(refs)} upstream values and one request ablates "
+            f"at most {MAX_ABLATION_REFS}: ablation replays the anchor's whole "
+            f"local sequence once per ref, so the cost grows about sixfold for "
+            f"every doubling. Name the values you want ranked in `refs`, or "
+            f"anchor nearer the denial.",
+        )
+    return refs
 
 
 @router.post("/runs/{run_id}/influence")
 async def run_influence(run_id: str, body: dict, store: StoreDep) -> dict:
     """Influence ranking by subgraph ablation (spec v2 Ch.3 §7): which upstream
-    value most drove the anchor's claim. Deterministic; bounded by causal-chain
-    length."""
-    anchor_node = body.get("anchor_node", "")
-    anchor_seq = int(body.get("anchor_seq", -1))
+    value most drove the anchor's claim. Deterministic; bounded by
+    `limits.MAX_ABLATION_REFS`, which is a bound the route enforces rather than
+    the causal-chain length it used to hope for."""
+    anchor_node, anchor_seq = _anchor(body)
     events = await events_for(store, run_id)
-    sub = _subgraph(events, anchor_node, anchor_seq)
+    sub = await _off_loop(_subgraph, events, anchor_node, anchor_seq)
     case_nodes = {n["node_id"] for n in sub["nodes"]}
-    refs = sorted({
+    available = sorted({
         str(e.payload.get("value_ref"))
         for e in events
         if e.node_id in case_nodes and e.payload.get("value_ref")
     })
+    refs = _requested_refs(body, available)
     cfg_json = body.get("config") or {}
     if not cfg_json:
         # Default ablation config: the anchor's own denied sink declared as
         # egress — the minimal config under which the recorded containment
         # reproduces, so ablation measures exactly "did this value drive the
         # denial".
-        anchor_ev = next(
-            e for e in events if e.node_id == anchor_node and e.seq == anchor_seq
-        )
+        anchor_ev = _anchor_event(events, anchor_node, anchor_seq)
         tool = str(anchor_ev.payload.get("tool", ""))
         cfg_json = {"egress_sinks": [tool] if tool else []}
     config = kernel_config_from_json(cfg_json)
     return {
         "anchor": sub["anchor"],
-        "ranking": influence_ranking(
-            events, config, anchor_node, anchor_seq, refs
+        "ablated_refs": len(refs),
+        "available_refs": len(available),
+        "ranking": await _off_loop(
+            influence_ranking, events, config, anchor_node, anchor_seq, refs
         ),
     }
 
 
+def _anchor_event(events: list[Event], node: str, seq: int) -> Event:
+    """The anchor itself. `next(...)` with no default raised StopIteration out
+    of a coroutine, which Python re-raises as a bare RuntimeError — a 500 for a
+    case the subgraph walk happens to admit but that carries no such event."""
+    for event in events:
+        if event.node_id == node and event.seq == seq:
+            return event
+    raise HTTPException(404, f"no event seq={seq} at node {node!r}")
+
+
 @router.get("/replay/{run_id}")
 async def replay_scrubber(run_id: str, store: StoreDep) -> dict:
-    return scrubber_payload(replay(await events_for(store, run_id)))
+    events = await events_for(store, run_id)
+    return scrubber_payload(await _off_loop(replay, events))
 
 
 @router.post("/replay/{run_id}")
 async def replay_counterfactual(run_id: str, body: dict, store: StoreDep) -> dict:
     events = await events_for(store, run_id)
     config = kernel_config_from_json(body.get("config", {}))
-    return scrubber_payload(replay(events, config))
+    return scrubber_payload(await _off_loop(replay, events, config))

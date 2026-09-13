@@ -63,6 +63,25 @@ MAX_PINS_PER_PACKAGE = env.integer("AXOR_MAX_PINS_PER_PACKAGE", 500, minimum=1)
 MAX_KHOP_K = env.integer("AXOR_MAX_KHOP_K", 30, minimum=1)
 MAX_KHOP_LIMIT = env.integer("AXOR_MAX_KHOP_LIMIT", 1000, minimum=1)
 
+# How many upstream values one influence request will ablate. Unlike the k-hop
+# bounds this one is not generous, because the work is not linear: ablation
+# replays the anchor's whole local sequence once PER REF, and each replay is
+# itself superlinear in the events it folds. Measured end to end, one request:
+#
+#      n reads   events        ms     growth
+#          100      201     245.7
+#          200      401    1203.5       x4.9
+#          400      801    6931.2       x5.8
+#          800     1601   41666.1       x6.0
+#
+# Six per doubling — 1601 events already cost 41.7 s of one request, under the
+# cheapest scope in the system, and `MAX_EVENTS_PER_RUN` is 250 000. A linear
+# ceiling does not bound a superquadratic route. 200 refs keeps the worst case
+# near a second; past it the route refuses and says how to narrow, rather than
+# ranking a silently truncated subset — a different question answered under the
+# name of the one that was asked.
+MAX_ABLATION_REFS = env.integer("AXOR_MAX_ABLATION_REFS", 200, minimum=1)
+
 
 def check_batch(events: Any, what: str = "events") -> list[dict[str, Any]]:  # noqa: ANN401
     """Validate a caller-supplied event batch, or raise a 4xx that says why.

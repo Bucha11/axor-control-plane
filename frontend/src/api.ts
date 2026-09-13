@@ -584,12 +584,27 @@ export const api = {
     af(`/v1/runs/${runId}/containment?anchor_node=${encodeURIComponent(anchor.node_id)}&anchor_seq=${anchor.seq}`)
       .then((r) => j<ContainmentReport>(r)),
 
-  influence: (runId: string, anchor: CaseAnchor, config: Record<string, unknown>) =>
+  // `refs` narrows the ablation to the values you want ranked. A case with more
+  // upstream values than the backend will ablate in one request answers 422
+  // rather than ranking a truncated subset, so the caller has a knob.
+  influence: (
+    runId: string, anchor: CaseAnchor, config: Record<string, unknown>,
+    refs?: string[],
+  ) =>
     af(`/v1/runs/${runId}/influence`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ anchor_node: anchor.node_id, anchor_seq: anchor.seq, config }),
-    }).then((r) => j<{ ranking: InfluenceEntry[] }>(r)),
+      body: JSON.stringify({
+        anchor_node: anchor.node_id, anchor_seq: anchor.seq, config,
+        ...(refs ? { refs } : {}),
+      }),
+    }).then((r) =>
+      j<{
+        ranking: InfluenceEntry[];
+        ablated_refs: number;
+        available_refs: number;
+      }>(r),
+    ),
 
   vaultCredsHealth: () =>
     afCreds("/v1/vault/creds/health").then((r) => j<VaultCredsHealth>(r)),
