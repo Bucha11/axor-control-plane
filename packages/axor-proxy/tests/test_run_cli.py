@@ -197,33 +197,17 @@ def test_run_cli_errors_without_command() -> None:
         rc.run_cli(["--fault", "web_search"])
 
 
-class TestTheSubcommandIsNotCalledWrap:
-    """`wrap` belongs to axor-wrap's WrappedToolset, which gates, taints and
-    produces verdicts. This subcommand does none of those — it runs a subprocess
-    and submits its answer as the claim. Sharing the word is how "the control
-    plane has two integration modes, wrapper and proxy" gets said out loud, when
-    there is one (the proxy) and a claim-submitting utility."""
+class TestTheSubcommandIsNotAWrapper:
+    """Wrapping, in this codebase, is what `axor_wrap.WrappedToolset` does to
+    tool callables: gate, taint, verdict. This subcommand does none of it — it
+    runs a subprocess and submits its answer as the claim. Sharing the word is
+    what makes "the control plane has two integration modes, wrapper and proxy"
+    sound true, when there is one integration and a claim-submitting utility."""
 
     def test_the_parser_calls_itself_run(self) -> None:
         assert rc._build_arg_parser().prog == "axor-proxy run"
 
-    def test_the_old_spelling_still_works_and_says_the_new_one(
-        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture,
-    ) -> None:
-        """Silently breaking a documented command is worse than an awkward
-        name, so `wrap` routes to the same entry point and names it."""
-        import axor_proxy.main as main
-
-        seen: list[list[str]] = []
-        monkeypatch.setattr(rc, "run_cli", lambda argv: seen.append(argv) or 0)
-        monkeypatch.setattr(sys, "argv", ["axor-proxy", "wrap", "--scenario", "s"])
-        with pytest.raises(SystemExit) as exit_info:
-            main.cli()
-        assert exit_info.value.code == 0
-        assert seen == [["--scenario", "s"]]
-        assert "`axor-proxy run`" in capsys.readouterr().err
-
-    def test_the_new_spelling_routes_without_the_notice(
+    def test_run_routes_to_the_subcommand(
         self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture,
     ) -> None:
         import axor_proxy.main as main
@@ -231,7 +215,25 @@ class TestTheSubcommandIsNotCalledWrap:
         seen: list[list[str]] = []
         monkeypatch.setattr(rc, "run_cli", lambda argv: seen.append(argv) or 0)
         monkeypatch.setattr(sys, "argv", ["axor-proxy", "run", "--", "agent"])
-        with pytest.raises(SystemExit):
+        with pytest.raises(SystemExit) as exit_info:
             main.cli()
+        assert exit_info.value.code == 0
         assert seen == [["--", "agent"]]
         assert capsys.readouterr().err == ""
+
+    def test_wrap_is_not_a_spelling_of_it(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture,
+    ) -> None:
+        """Not an alias and not a deprecation shim: `wrap` reaches the server's
+        own parser and is rejected there, which is what an unknown argument
+        should do. Nothing is published yet, so there is nobody to carry."""
+        import axor_proxy.main as main
+
+        seen: list[list[str]] = []
+        monkeypatch.setattr(rc, "run_cli", lambda argv: seen.append(argv) or 0)
+        monkeypatch.setattr(sys, "argv", ["axor-proxy", "wrap", "--", "agent"])
+        with pytest.raises(SystemExit) as exit_info:
+            main.cli()
+        assert exit_info.value.code == 2
+        assert seen == []
+        assert "unrecognized arguments: wrap" in capsys.readouterr().err

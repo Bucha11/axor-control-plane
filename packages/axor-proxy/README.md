@@ -25,7 +25,7 @@ Modules:
 |---|---|
 | `app.py` | routes: `/t/{tool}` passthrough, `/axor/runs` arm→claim, `/axor/runs/{id}/simulate`, `/axor/governed/spawn`, preflight/health |
 | `runs.py` | run lifecycle; fault semantics from `axor_eval`; the run's governor; EvidenceCase construction |
-| `run_cli.py` | `axor-proxy run -- <cmd>`: arm, execute a CLI agent, submit its stdout as the claim. Governs nothing — it was called `wrap`, which is axor-wrap's word for the thing that gates and taints |
+| `run_cli.py` | `axor-proxy run -- <cmd>`: arm, execute a CLI agent, submit its stdout as the claim. Not a wrapper — it gates nothing; wrapping is what `axor_wrap.WrappedToolset` does to tool callables |
 | `faults.py` / `mock_tools.py` | fault application; demo mock tools |
 | `agent.py` | scripted agent — drives a run to completion over the proxy's own HTTP surface (the in-app "run an experiment") |
 | `recorder.py` / `upload.py` | JSONL trace writer; best-effort upload + auto-pin to the backend |

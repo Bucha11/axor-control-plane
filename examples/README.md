@@ -71,11 +71,9 @@ cooperating tool binds to the right run; on a single-run proxy the tool traffic
 binds automatically. Reuse an already-armed run with `--run-id`; omit `--fault`
 for an observe-only run. Use `run` **or** the in-code hook, not both.
 
-> It was spelled `wrap` until the name collided with the thing it is
-> not: `axor-wrap`'s `WrappedToolset` wraps tool *callables* and
-> governs them — gate, taint, verdict. This command governs nothing;
+> `run` is not a wrapper. Wrapping, here, is what `axor-wrap`'s `WrappedToolset`
+> does to tool *callables* — gate, taint, verdict. This command governs nothing;
 > it runs a subprocess and submits its answer as the claim.
-> `axor-proxy wrap` still works and prints the new spelling.
 
 How detection works (`--claim-from observed`, the default): a real agent never
 names its tools in the answer — it says *"Based on the search results, rates rose

@@ -1,12 +1,12 @@
 """`axor-proxy run -- <agent command>` — the no-code-change path for CLI agents.
 
-Named `wrap` until it collided with the thing it is not. `axor_wrap`'s
-`WrappedToolset` wraps tool CALLABLES and governs them: it gates, it taints, it
-produces verdicts. This subcommand does none of those — it arms a run, executes
-a subprocess, reads its stdout and submits the answer as the claim. One name for
-two unrelated mechanisms is how "the control plane has two integration modes,
-wrapper and proxy" gets said out loud, when there is one (the proxy) and a
-utility for submitting a claim. `axor-proxy wrap` still works and says this.
+This is not a wrapper, and the distinction is load-bearing: wrapping in this
+codebase is what `axor_wrap.WrappedToolset` does to tool CALLABLES — it gates,
+it taints, it produces verdicts. This command does none of that. It arms a run,
+executes a subprocess, reads its stdout and submits the answer as the claim.
+Calling both "wrap" is what makes "the control plane has two integration modes,
+wrapper and proxy" sound true, when there is one integration (the proxy) and a
+utility for submitting a claim.
 
 The observe-only proxy sees your agent's tool calls but not the one thing that
 makes an EvidenceCase: the agent's own final answer (the *claim*). For an agent
