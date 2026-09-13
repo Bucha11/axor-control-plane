@@ -17,11 +17,22 @@ from pathlib import Path
 
 
 def cli() -> None:
-    # `axor-proxy wrap …` is a subcommand (run a CLI agent + submit its claim);
+    # `axor-proxy run …` is a subcommand (run a CLI agent + submit its claim);
     # everything else is the server, whose flat flag parser is kept unchanged.
-    if sys.argv[1:2] == ["wrap"]:
-        from axor_proxy.wrap import wrap_cli
-        raise SystemExit(wrap_cli(sys.argv[2:]))
+    #
+    # It was `wrap`, which is the one word this repo cannot spare: axor-wrap's
+    # `WrappedToolset` wraps tool callables and GOVERNS them — gate, taint,
+    # verdict. This subcommand gates nothing; it runs a subprocess and submits
+    # its answer as the claim. The old spelling still works, because silently
+    # breaking a documented command is worse than an awkward name, and it says
+    # what it is now called.
+    if sys.argv[1:2] in (["run"], ["wrap"]):
+        if sys.argv[1] == "wrap":
+            print("[axor] `axor-proxy wrap` is now `axor-proxy run` — it submits "
+                  "a CLI agent's answer as the claim and governs nothing; "
+                  "`wrap` belongs to axor-wrap's WrappedToolset.", file=sys.stderr)
+        from axor_proxy.run_cli import run_cli
+        raise SystemExit(run_cli(sys.argv[2:]))
     # `axor-proxy vault …` — the two operations envelope mode needs and that
     # nothing else can do for you: mint the deployment's sealing keypair, and
     # seal a credential to it before enrolling. Both are local; the private half

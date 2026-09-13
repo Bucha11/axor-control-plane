@@ -129,4 +129,12 @@ def sniff_rpc_call(body: bytes) -> dict[str, Any] | None:
         params = parsed.get("params")
         if isinstance(params, dict) and isinstance(params.get("name"), str):
             out["tool"] = params["name"]
+            # The call's arguments, for the governor to evaluate against the
+            # run's manifests. They are NOT recorded — the trace keeps
+            # observations (size, sha256, the verdict), never the body. Only
+            # `tools/call` carries them, which is why a governed run says out
+            # loud which of its calls the governor could not see.
+            args = params.get("arguments")
+            if isinstance(args, dict):
+                out["arguments"] = args
     return out

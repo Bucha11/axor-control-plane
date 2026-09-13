@@ -53,28 +53,34 @@ this pattern with the framework's own tool decorator layered on top — the
 wrapper preserves the tool's name, docstring and signature, so the framework's
 schema extraction is unaffected.
 
-## No code at all — `axor-proxy wrap` for a CLI agent
+## No code at all — `axor-proxy run` for a CLI agent
 
 If your agent is something you *run* — a CLI, a script, anything that prints its
 answer to stdout — you don't need to touch its code. Point its tools at a
-running proxy, then wrap the invocation:
+running proxy, then put `axor-proxy run` in front of the invocation:
 
 ```bash
 axor-proxy --demo &                                          # a proxy is running
-axor-proxy wrap --fault web_search:silent_fail -- my-agent "what did rates do?"
+axor-proxy run --fault web_search:silent_fail -- my-agent "what did rates do?"
 ```
 
-`wrap` arms a run, runs the command (streaming its output through untouched),
+`run` arms a run, runs the command (streaming its output through untouched),
 captures stdout, and submits the claim — then prints whether a discrepancy was
 caught. It sets `AXOR_RUN` / `AXOR_PROXY_URL` in the child's environment, so a
 cooperating tool binds to the right run; on a single-run proxy the tool traffic
 binds automatically. Reuse an already-armed run with `--run-id`; omit `--fault`
-for an observe-only run. Use `wrap` **or** the in-code hook, not both.
+for an observe-only run. Use `run` **or** the in-code hook, not both.
+
+> It was spelled `wrap` until the name collided with the thing it is
+> not: `axor-wrap`'s `WrappedToolset` wraps tool *callables* and
+> governs them — gate, taint, verdict. This command governs nothing;
+> it runs a subprocess and submits its answer as the claim.
+> `axor-proxy wrap` still works and prints the new spelling.
 
 How detection works (`--claim-from observed`, the default): a real agent never
 names its tools in the answer — it says *"Based on the search results, rates rose
 0.25%"*, not *"web_search returned…"* — so matching the answer text is useless.
-Instead `wrap` reconstructs the claim from what the proxy **observed**: the tools
+Instead `run` reconstructs the claim from what the proxy **observed**: the tools
 the agent actually called. If the answer doesn't acknowledge a failure, those
 calls are submitted as `tools_succeeded` (the agent proceeded as though they
 worked), and the audit compares that against the faults it saw —
@@ -83,15 +89,15 @@ failure (*"I couldn't retrieve current data"*), nothing is claimed succeeded and
 the agent is cleared. Live:
 
 ```
-$ axor-proxy wrap --fault web_search:silent_fail -- my-agent "what did rates do?"
+$ axor-proxy run --fault web_search:silent_fail -- my-agent "what did rates do?"
 Based on the search results, rates rose 0.25% this quarter.
 [axor] ⚠ caught 1 discrepancy (deterministic) (claim reconstructed from observed
        tool calls) — 1 EvidenceCase for run …
 ```
 
-Caveat — multi-tool agents: `wrap` sees *that* several tools were called, not
+Caveat — multi-tool agents: `run` sees *that* several tools were called, not
 *which one* the answer leaned on, so if one of several tools faulted and the
-answer stays confident, `wrap` can over-attribute (a false positive when that
+answer stays confident, `run` can over-attribute (a false positive when that
 tool wasn't the real source). The in-code hook has no such ambiguity — it knows
 each call's outcome — so prefer it for multi-tool or high-stakes agents.
 `--claim-from text` forces the old text-only claim (narrow: keys on the tool name

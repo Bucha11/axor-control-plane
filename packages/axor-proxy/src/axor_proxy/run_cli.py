@@ -1,25 +1,33 @@
-"""`axor-proxy wrap -- <agent command>` — the no-code-change path for CLI agents.
+"""`axor-proxy run -- <agent command>` — the no-code-change path for CLI agents.
+
+Named `wrap` until it collided with the thing it is not. `axor_wrap`'s
+`WrappedToolset` wraps tool CALLABLES and governs them: it gates, it taints, it
+produces verdicts. This subcommand does none of those — it arms a run, executes
+a subprocess, reads its stdout and submits the answer as the claim. One name for
+two unrelated mechanisms is how "the control plane has two integration modes,
+wrapper and proxy" gets said out loud, when there is one (the proxy) and a
+utility for submitting a claim. `axor-proxy wrap` still works and says this.
 
 The observe-only proxy sees your agent's tool calls but not the one thing that
 makes an EvidenceCase: the agent's own final answer (the *claim*). For an agent
 whose source you edit, `examples/axor_hook.py` submits that claim. For an agent
 you run as a subprocess — a CLI, a script, anything that prints its answer to
-stdout — `wrap` submits it for you, without touching the agent:
+stdout — `run` submits it for you, without touching the agent:
 
     axor-proxy --demo &                                  # a proxy is running
-    axor-proxy wrap --fault web_search:silent_fail -- my-agent "what did rates do?"
+    axor-proxy run --fault web_search:silent_fail -- my-agent "what did rates do?"
 
-`wrap` arms a run on the proxy, runs the command (streaming its output through
+`run` arms a run on the proxy, runs the command (streaming its output through
 untouched), captures stdout, and submits the claim — then prints whether a
 discrepancy was caught. The child is told the run via `AXOR_RUN` /
 `AXOR_PROXY_URL` in its environment, so a cooperating tool binds to the right
 run; on a single-run proxy the tool traffic binds automatically.
 
-Use `wrap` *or* the in-code hook, not both — either one submits the claim.
+Use `run` *or* the in-code hook, not both — either one submits the claim.
 
 Detection (`--claim-from observed`, the default). A real agent never names its
 tools in the answer ("Based on the search results, rates rose 0.25%"), so a pure
-text match is useless. Instead `wrap` reconstructs the claim from what the proxy
+text match is useless. Instead `run` reconstructs the claim from what the proxy
 *observed*: the tools the agent actually called (`call_counts`). If the answer
 does not acknowledge a failure, those calls are submitted as
 `tools_succeeded` — the agent proceeded as though they worked — and the audit
@@ -27,9 +35,9 @@ compares that against the faults it observed, deterministically and independent
 of phrasing. If the answer *does* acknowledge a failure ("I couldn't retrieve
 current data"), nothing is claimed succeeded and the agent is cleared.
 
-Caveat — multi-tool agents: `wrap` sees *that* the agent called several tools,
+Caveat — multi-tool agents: `run` sees *that* the agent called several tools,
 not *which* one its answer leaned on, so if one of several tools faulted and the
-answer stays confident, `wrap` may over-attribute. When one faulted tool is not
+answer stays confident, `run` may over-attribute. When one faulted tool is not
 the agent's real source, that is a false positive. The in-code hook does not
 have this ambiguity (it knows each call's outcome) — prefer it for multi-tool or
 high-stakes agents. `--claim-from text` forces the old text-only claim.
@@ -154,7 +162,7 @@ def tee(command: list[str], env: dict[str, str], out: TextIO | None = None) -> t
 
 def _build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="axor-proxy wrap",
+        prog="axor-proxy run",
         description="Run a CLI agent behind a running Axor proxy and submit its "
                     "answer as the claim, so a caught discrepancy becomes an EvidenceCase.",
     )
@@ -177,7 +185,7 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def wrap_cli(argv: list[str]) -> int:
+def run_cli(argv: list[str]) -> int:
     parser = _build_arg_parser()
     args = parser.parse_args(argv)
 

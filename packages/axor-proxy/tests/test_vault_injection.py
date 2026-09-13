@@ -272,13 +272,47 @@ async def test_the_injection_is_recorded_without_the_key_material(
 async def test_a_denial_is_recorded_as_one(
     proxy: httpx.AsyncClient, tmp_path: Path
 ) -> None:
+    """A refused tool call is a TOOL_CALL carrying `verdict: deny`.
+
+    axor-core's event schema says exactly that, and says why: "this branch is
+    the only one replay re-gates, and DENIAL is for refusals that are not tool
+    calls (a spawn, a message)". It was written as an unlabelled TOOL_CALL
+    *plus* a DENIAL, and both halves were wrong at once — the fold has no
+    DENIAL branch, so the refusal was invisible to replay, while the unlabelled
+    call read as one that HAPPENED.
+    """
     run_id = await arm(proxy)
     await proxy.get("/t/web_search/")
     lines = trace(tmp_path, run_id)
-    call = next(e for e in lines if e["kind"] == EventKind.TOOL_CALL.value)
+    assert [e["kind"] for e in lines] == [EventKind.TOOL_CALL.value]
+    call = lines[0]
+    assert call["verdict"] == "deny"
+    assert call["gate"] == "capability"
+    assert call["payload"]["category"] == "vault"
     assert call["payload"]["credential"]["injected"] is False
-    denial = next(e for e in lines if e["kind"] == EventKind.DENIAL.value)
-    assert denial["payload"]["category"] == "vault"
+    assert call["payload"]["reason"] == call["payload"]["credential"]["reason"]
+
+
+async def test_the_refusal_reaches_replay_and_costs_no_budget(
+    proxy: httpx.AsyncClient, backend: httpx.AsyncClient, tmp_path: Path
+) -> None:
+    """The property the shape exists for, measured through the real fold.
+
+    Before: the fold saw a verdict-less call and a kind it has no branch for —
+    `recorded_verdict=None, gate=None, budget_spent_calls=1` for a request that
+    never left the proxy.
+    """
+    run_id = await arm(proxy)
+    await proxy.get("/t/web_search/")
+    lines = trace(tmp_path, run_id)
+    up = await backend.post(f"/v1/ingest/{run_id}", json={"events": lines},
+                            headers={"Authorization": f"Bearer {MASTER}"})
+    assert up.status_code == 202, up.text
+    steps = (await backend.get(f"/v1/replay/{run_id}",
+                               headers={"Authorization": f"Bearer {MASTER}"})).json()["steps"]
+    assert [s["recorded_verdict"] for s in steps] == ["deny"]
+    assert [s["gate"] for s in steps] == ["capability"]
+    assert steps[0]["state"]["budget_spent_calls"] == 0
 
 
 async def test_a_stdio_tool_in_vault_mode_is_denied_not_passed_through(

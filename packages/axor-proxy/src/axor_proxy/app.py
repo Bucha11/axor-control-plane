@@ -10,8 +10,16 @@ Rules, in order of importance:
   reasoning and the bounds.
 - Exactly two intervention points: inject fault (armed scenario), record
   observation. Everything else is clean passthrough.
-- Observe-only: the proxy never blocks the agent.
+- Observe-only: the proxy never blocks the agent. A run armed WITH tool
+  manifests additionally carries an `axor_core.governor.ToolCallGovernor`, so
+  each call it can see the arguments of is evaluated and its verdict recorded —
+  the posture axor-wrap spells `enforcement="off"`, and the same governor. The
+  HTTP boundary is the one integration that does not reduce to that flag on a
+  `WrappedToolset`: there is no callable here to wrap. Without manifests
+  nothing is governed and the trace keeps exactly the shape it had — the effect
+  class of a tool is the operator's declaration, never inferred from a name.
 - No raw bodies persisted: observations carry status, sizes and hashes only.
+  Call arguments go to the governor and never to the trace; the verdict does.
 - Disarmed endpoints return 503 (decision #1): traffic flows only while a run
   is armed.
 """
@@ -25,7 +33,7 @@ from pathlib import Path
 from typing import Any
 
 import httpx
-from axor_core.kernel.events import EventKind
+from axor_core.kernel.events import EventKind, Verdict
 from starlette.applications import Starlette
 from starlette.datastructures import Headers
 from starlette.requests import Request
@@ -35,7 +43,13 @@ from starlette.routing import Mount, Route
 from axor_proxy.agent import ScriptedAgent, default_claim, default_script
 from axor_proxy.mcp import McpError, discover, sniff_rpc_call
 from axor_proxy.mock_tools import mock_tools_app
-from axor_proxy.runs import RunManager, evidence_to_dict, sha256_hex
+from axor_proxy.runs import (
+    VAULT_DENIAL_CATEGORY,
+    Run,
+    RunManager,
+    evidence_to_dict,
+    sha256_hex,
+)
 from axor_proxy.stdio_mcp import StdioMcpServer, discover_stdio
 from axor_proxy.upload import BackendUploader
 from axor_proxy.vault import CredentialDenied, CredentialVault, vault_tools
@@ -52,6 +66,99 @@ def _forward_headers(headers: Headers) -> list[tuple[bytes, bytes]]:
     return [
         (k, v) for k, v in headers.raw if k.decode().lower() not in _HOP_BY_HOP
     ]
+
+
+def _gate(category: str) -> str:
+    """A denial category -> the kernel's own gate name.
+
+    `axor_core.governor` exports GATE_OF_CATEGORY precisely so consumers stop
+    keeping private maps; an unknown category is a loud error rather than a
+    category quietly leaking into a column that takes a gate name.
+    """
+    from axor_core.governor import gate_of
+
+    return gate_of(category)
+
+
+def _govern(
+    run: Run, tool: str, args: dict[str, Any] | None, payload: dict[str, Any],
+) -> tuple[object | None, str | None, Verdict | None]:
+    """Evaluate one call against the run's governor, if it has one.
+
+    Observe-only: the proxy's third rule is that it never blocks the agent, so a
+    deny is RECORDED and the call proceeds — the same posture `axor-wrap` calls
+    ``enforcement="off"``, and the same governor underneath. What the HTTP
+    boundary cannot supply is a callable to wrap; the decision is identical.
+
+    Returns (decision, gate, verdict). A run with no governor, or a call whose
+    arguments are not observable, gets (None, None, None) and says which in the
+    payload — an unlabelled call must not read as an approved one.
+    """
+    if run.governor is None:
+        return None, None, None
+    if args is None:
+        payload["governance"] = {
+            "governed": False,
+            "reason": "arguments not observable at the HTTP boundary: only an "
+                      "MCP tools/call body names them",
+        }
+        return None, None, None
+    decision = run.governor.evaluate(tool, args)  # type: ignore[attr-defined]
+    payload["governance"] = {"governed": True, "enforcement": "off"}
+    if decision.allowed:
+        return decision, None, Verdict.PASS
+    payload["reason"] = decision.reason
+    payload["category"] = decision.category
+    return decision, _gate(decision.category), Verdict.DENY
+
+
+def hasher_hex(raw: bytes) -> str:
+    return hashlib.sha256(raw).hexdigest()
+
+
+def _is_stream(content_type: str) -> bool:
+    """An event-stream is relayed whatever the run is: buffering one to feed the
+    ledger would stall the tool it exists to carry."""
+    return content_type.split(";")[0].strip().lower() == "text/event-stream"
+
+
+def _rpc_value(body: Any) -> Any:  # noqa: ANN401 — arbitrary tool JSON
+    """The value a JSON-RPC answer actually carries.
+
+    A `tools/call` response wraps its result in `{"jsonrpc", "id", "result"}`;
+    registering the envelope would put a ref on a dict the next call never
+    passes, so the taint edge would never fold. Non-RPC bodies pass through.
+    """
+    if isinstance(body, dict) and body.get("jsonrpc") == "2.0" and "result" in body:
+        return body["result"]
+    return body
+
+
+def _ledger(entry: dict[str, Any]) -> dict[str, Any]:
+    """`{"ledger": entry}`, or nothing at all for an ungoverned run — an
+    ungoverned trace keeps exactly the shape it had."""
+    return {"ledger": entry} if entry else {}
+
+
+def _register(run: Run, decision: object | None, output: object) -> dict[str, Any]:
+    """Fold an executed call's output into the run's per-value taint ledger.
+
+    Only for calls that actually ran, and only where the proxy holds the value.
+    The returned dict goes on the TOOL_RESULT so a reader can tell a ledger
+    entry from a gap: a later egress call that passes under a ledger which never
+    saw the upstream body has passed on incomplete evidence, and that has to be
+    legible rather than implied.
+    """
+    if run.governor is None:
+        return {}
+    if decision is None:
+        return {"registered": False, "reason": "call was not governed"}
+    run.governor.register_output(decision, output)  # type: ignore[attr-defined]
+    for event in run.governor.drain_trace_events():  # type: ignore[attr-defined]
+        ref = (getattr(event, "payload", None) or {}).get("value_ref")
+        if ref:
+            return {"registered": True, "value_ref": ref}
+    return {"registered": True}
 
 
 class ProxyState:
@@ -260,8 +367,13 @@ def create_app(state: ProxyState) -> Starlette:
         # MCP granularity: a JSON-RPC tools/call body names the inner tool —
         # record `server:tool` instead of one opaque endpoint. Observation-only.
         rpc = sniff_rpc_call(body)
+        governed_args: dict[str, Any] | None = None
         if rpc is not None:
-            call_payload["rpc"] = rpc
+            governed_args = rpc.get("arguments")
+            # The arguments go to the governor, never to the trace: "no raw
+            # bodies persisted" is the proxy's fourth rule and an argument map
+            # IS the body.
+            call_payload["rpc"] = {k: v for k, v in rpc.items() if k != "arguments"}
             if rpc.get("tool"):
                 call_payload["tool"] = f"{tool}:{rpc['tool']}"
         # ── vault mode (§14.2), opt-in per tool: fetch the credential now and
@@ -292,12 +404,21 @@ def create_app(state: ProxyState) -> Starlette:
                 except CredentialDenied as exc:
                     denial = exc.reason
             if denial is not None:
+                # A refused tool call is a TOOL_CALL with `verdict: deny` —
+                # axor-core's own event schema says so, and says why: "this
+                # branch is the only one replay re-gates, and DENIAL is for
+                # refusals that are not tool calls (a spawn, a message)". It
+                # was written as an unlabelled TOOL_CALL *plus* a DENIAL, and
+                # the replay fold has no DENIAL branch, so the refusal was
+                # invisible to replay AND the unlabelled call charged the
+                # budget for a request that never left the proxy.
                 call_payload["credential"] = {"injected": False, "reason": denial}
-                await state.runs.record(run, EventKind.TOOL_CALL, call_payload)
-                await state.runs.record(run, EventKind.DENIAL, {
-                    "tool": tool, "category": "vault", "reason": denial,
-                    "intent_kind": "tool_call",
-                })
+                call_payload["reason"] = denial
+                call_payload["category"] = "vault"
+                await state.runs.record(
+                    run, EventKind.TOOL_CALL, call_payload,
+                    gate=_gate(VAULT_DENIAL_CATEGORY), verdict=Verdict.DENY,
+                )
                 run.call_counts[tool] = run.call_counts.get(tool, 0) + 1
                 return JSONResponse(
                     {"error": "credential_denied", "tool": tool, "detail": denial},
@@ -313,7 +434,12 @@ def create_app(state: ProxyState) -> Starlette:
                 "version": credential.version,
             }
 
-        await state.runs.record(run, EventKind.TOOL_CALL, call_payload)
+        decision, gate, verdict = _govern(
+            run, call_payload["tool"], governed_args, call_payload,
+        )
+        await state.runs.record(
+            run, EventKind.TOOL_CALL, call_payload, gate=gate, verdict=verdict,
+        )
 
         def outgoing() -> list[tuple[bytes, bytes]]:
             """Headers for the upstream call. Byte-for-byte passthrough, except
@@ -372,7 +498,8 @@ def create_app(state: ProxyState) -> Starlette:
                 EventKind.TOOL_RESULT,
                 {"tool": tool, "status": 200, "faulted": True,
                  "response_bytes": len(payload),
-                 "response_sha256": sha256_hex(payload)},
+                 "response_sha256": sha256_hex(payload),
+                 **_ledger(_register(run, decision, faulted))},
             )
             run.call_counts[tool] = run.call_counts.get(tool, 0) + 1
             return Response(payload, media_type="application/json")
@@ -405,6 +532,30 @@ def create_app(state: ProxyState) -> Starlette:
         }
         run.call_counts[tool] = run.call_counts.get(tool, 0) + 1
 
+        # ── governed run, non-streaming answer: read the body so the ledger
+        # sees the value. A per-value taint gate is only as good as what the
+        # ledger holds, and a ledger that never saw an upstream result lets the
+        # next egress call pass on nothing. Buffering is confined to a run the
+        # operator armed WITH manifests — an ungoverned run still streams, and
+        # so does an event-stream, which must flow whatever the run is. ──
+        if run.governor is not None and decision is not None and not _is_stream(
+            upstream.headers.get("content-type", "")
+        ):
+            raw = await upstream.aread()
+            await upstream.aclose()
+            try:
+                value: Any = json.loads(raw) if raw else None
+            except (json.JSONDecodeError, UnicodeDecodeError):
+                value = raw.decode("utf-8", "replace")
+            await state.runs.record(run, EventKind.TOOL_RESULT, {
+                "tool": tool, "status": upstream.status_code,
+                "response_bytes": len(raw),
+                "response_sha256": hasher_hex(raw),
+                **_ledger(_register(run, decision, _rpc_value(value))),
+            })
+            return Response(raw, status_code=upstream.status_code,
+                            headers=resp_headers)
+
         async def relay() -> Any:  # noqa: ANN401 - async byte generator
             hasher = hashlib.sha256()
             count = 0
@@ -429,6 +580,15 @@ def create_app(state: ProxyState) -> Starlette:
                 }
                 if error is not None:
                     result_payload["error"] = error
+                if run.governor is not None:
+                    # Streamed: the body passes through and is never buffered
+                    # (rule 4, and an SSE-backed tool must flow). The ledger
+                    # therefore did not see this value, and a later call that
+                    # carries it cannot resolve to a ref. Recorded, not implied.
+                    result_payload["ledger"] = {
+                        "registered": False,
+                        "reason": "streamed: the body is relayed, never buffered",
+                    }
                 await state.runs.record(run, EventKind.TOOL_RESULT, result_payload)
 
         return StreamingResponse(
@@ -440,13 +600,34 @@ def create_app(state: ProxyState) -> Starlette:
             payload = await request.json()
         except json.JSONDecodeError:
             return JSONResponse({"error": "malformed_json"}, status_code=400)
-        run = state.runs.start(
-            scenario=payload.get("scenario", "custom"),
-            faults=payload.get("faults", []),
-            node_id=payload.get("node_id", "proxy"),
-        )
+        manifests = payload.get("manifests")
+        if manifests is not None and (
+            not isinstance(manifests, list)
+            or not all(isinstance(m, dict) for m in manifests)
+        ):
+            return JSONResponse(
+                {"error": "bad_manifests",
+                 "detail": "manifests must be a list of tool-manifest/v1 objects "
+                           "(what the config builder emits)"},
+                status_code=400,
+            )
+        try:
+            run = state.runs.start(
+                scenario=payload.get("scenario", "custom"),
+                faults=payload.get("faults", []),
+                node_id=payload.get("node_id", "proxy"),
+                manifests=manifests,
+            )
+        except Exception as exc:  # noqa: BLE001 — the operator's manifests
+            # Arming with manifests the governor cannot be built from is a 400
+            # naming the reason, not a run that silently records no verdicts.
+            return JSONResponse(
+                {"error": "bad_manifests", "detail": f"{type(exc).__name__}: {exc}"},
+                status_code=400,
+            )
         return JSONResponse(
             {"run_id": run.run_id, "armed": True,
+             "governed": run.governor is not None,
              "tools": {t: f"/t/{t}/" for t in state.tools}},
             status_code=201,
         )
