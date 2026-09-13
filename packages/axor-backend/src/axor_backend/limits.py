@@ -82,6 +82,18 @@ MAX_KHOP_LIMIT = env.integer("AXOR_MAX_KHOP_LIMIT", 1000, minimum=1)
 # name of the one that was asked.
 MAX_ABLATION_REFS = env.integer("AXOR_MAX_ABLATION_REFS", 200, minimum=1)
 
+# The longest debounce a webhook subscription may carry. A debounce says "not
+# again within N seconds"; past a day it is not a debounce, it is a mute, and a
+# mute is what `POST /v1/notifications/unsubscribe` is for — one leaves a row
+# saying the webhook is gone, the other leaves a row saying it is live and
+# quietly delivers nothing.
+#
+# It is a bound because the field was unvalidated and `float()` accepts what
+# `json.loads` accepts: a subscription created with `Infinity` returned 200 and
+# fired once, ever — the permanent mute this system was fixed for once already,
+# reachable again through a number instead of a broken clock.
+MAX_DEBOUNCE_SECONDS = env.integer("AXOR_MAX_DEBOUNCE_SECONDS", 86400, minimum=1)
+
 
 def check_batch(events: Any, what: str = "events") -> list[dict[str, Any]]:  # noqa: ANN401
     """Validate a caller-supplied event batch, or raise a 4xx that says why.
