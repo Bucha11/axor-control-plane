@@ -255,14 +255,17 @@ class TestTheKernelWorkDoesNotHoldTheLoop:
         assert overshoot < 0.4, f"the loop was starved for {overshoot * 1000:.0f} ms"
 
     @pytest.mark.parametrize(("method", "path", "body", "expected"), [
-        ("GET", "/v1/replay/r", None, {"replay"}),
-        ("POST", "/v1/replay/r", {"config": {}}, {"replay"}),
+        # `_kernel_trace` is on every row on purpose: the first pass of this fix
+        # handed off the folds and left the trace parse on the loop, and a
+        # 60 000-event replay still starved it for 1141 ms.
+        ("GET", "/v1/replay/r", None, {"_kernel_trace", "_replayed"}),
+        ("POST", "/v1/replay/r", {"config": {}}, {"_kernel_trace", "_replayed"}),
         ("GET", "/v1/runs/r/subgraph?anchor_node=n1&anchor_seq=6", None,
-         {"_subgraph"}),
+         {"_kernel_trace", "_subgraph"}),
         ("GET", "/v1/runs/r/containment?anchor_node=n1&anchor_seq=6", None,
-         {"_subgraph", "containment_report"}),
+         {"_kernel_trace", "_subgraph", "containment_report"}),
         ("POST", "/v1/runs/r/influence", {"anchor_node": "n1", "anchor_seq": 6},
-         {"_subgraph", "influence_ranking"}),
+         {"_kernel_trace", "_subgraph", "influence_ranking"}),
     ])
     async def test_every_route_hands_its_kernel_work_off(
         self, client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch,
@@ -275,10 +278,10 @@ class TestTheKernelWorkDoesNotHoldTheLoop:
         whether the work is handed off or not, which is a test that tests
         nothing. What must hold is that no route here calls the kernel inline.
         """
-        from axor_backend.routers import analysis
+        from axor_backend import offload
 
         handed: list[str] = []
-        real = analysis.asyncio.to_thread
+        real = offload.asyncio.to_thread
 
         async def counting(  # noqa: ANN202
             fn, /, *args: object, **kwargs: object,  # noqa: ANN001
@@ -286,7 +289,7 @@ class TestTheKernelWorkDoesNotHoldTheLoop:
             handed.append(getattr(fn, "__name__", repr(fn)))
             return await real(fn, *args, **kwargs)
 
-        monkeypatch.setattr(analysis.asyncio, "to_thread", counting)
+        monkeypatch.setattr(offload.asyncio, "to_thread", counting)
         await seed(client, "r", 3)
         r = await client.request(method, path, headers=H, json=body)
         assert r.status_code == 200, r.text

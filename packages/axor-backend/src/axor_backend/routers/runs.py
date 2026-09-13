@@ -99,8 +99,7 @@ async def list_runs(store: StoreDep) -> list[dict]:
 
 @router.get("/runs/{run_id}/events")
 async def run_events(run_id: str, store: StoreDep) -> list[dict]:
-    lines = await store.run_events(run_id)
-    return [json.loads(line) for line in lines]
+    return await store.run_events(run_id)
 
 
 @router.get("/runs/{run_id}/stream")

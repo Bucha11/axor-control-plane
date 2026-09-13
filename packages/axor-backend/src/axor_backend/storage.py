@@ -492,21 +492,6 @@ class Store:
                 await conn.execute(insert(ingest_keys).values(
                     key=idempotency_key, org_id=org,
                 ))
-            # Inside the transaction, and before any row is written: two
-            # concurrent batches must not both measure a run that still fits.
-            stored = (await conn.execute(
-                select(func.count()).select_from(events).where(
-                    events.c.run_id == run_id, events.c.org_id == org,
-                )
-            )).scalar_one()
-            if stored + len(lines) > MAX_EVENTS_PER_RUN:
-                raise RunTooLarge(
-                    f"run {run_id} holds {stored} events; this batch of "
-                    f"{len(lines)} would exceed the per-run ceiling of "
-                    f"{MAX_EVENTS_PER_RUN} (AXOR_MAX_EVENTS_PER_RUN). Every read "
-                    f"of a run loads it whole, so the ceiling is on the run, not "
-                    f"the request — continue under a new run id."
-                )
             seen = await _stored_coordinates(conn, run_id, org, lines, node_id)
             payload: list[dict[str, Any]] = []
             fresh: list[dict[str, Any]] = []
@@ -524,6 +509,25 @@ class Store:
                 })
             if not payload:
                 return IngestResult(replayed=False, rows=[])
+            # Inside the transaction and before any row is written — two
+            # concurrent batches must not both measure a run that still fits —
+            # but AFTER the duplicates are dropped, counting what would actually
+            # be stored. Counting the batch as sent refused a re-send that adds
+            # nothing, which turns the ceiling into a reason a retry near it can
+            # never succeed.
+            stored = (await conn.execute(
+                select(func.count()).select_from(events).where(
+                    events.c.run_id == run_id, events.c.org_id == org,
+                )
+            )).scalar_one()
+            if stored + len(payload) > MAX_EVENTS_PER_RUN:
+                raise RunTooLarge(
+                    f"run {run_id} holds {stored} events; this batch of "
+                    f"{len(payload)} new events would exceed the per-run ceiling "
+                    f"of {MAX_EVENTS_PER_RUN} (AXOR_MAX_EVENTS_PER_RUN). Every "
+                    f"read of a run loads it whole, so the ceiling is on the run, "
+                    f"not the request — continue under a new run id."
+                )
             # One statement, not one per event. At the 10k-per-request ceiling
             # the row-at-a-time loop took seconds of round-trips inside a single
             # transaction; RETURNING hands back the ids in insertion order.
@@ -533,7 +537,7 @@ class Store:
                 rows=list(zip((r.id for r in result), fresh, strict=True)),
             )
 
-    async def run_events(self, run_id: str) -> list[str]:
+    async def run_events(self, run_id: str) -> list[dict[str, Any]]:
         """The run's events in APPEND order — which is causal order.
 
         Ordering by ``seq`` was wrong for any multi-node run: seq is monotonic
@@ -556,9 +560,15 @@ class Store:
                 )
                 .order_by(events.c.id)
             )).all()
-        # The column is native JSON; callers of this method still expect the raw
-        # kernel-schema line as a string, so re-serialise on the way out.
-        return [json.dumps(r.line) for r in rows]
+        # The column is native JSON and every caller wanted the dict back, so
+        # this used to serialise 60 000 rows to strings for four call sites that
+        # immediately parsed them again. Measured on a 60 000-event run: 0.26 s
+        # to dump, 0.91 s to load, against 0.76 s for the read itself — a round
+        # trip costing more than the query. The one caller the KERNEL forces a
+        # string on (`traces._kernel_trace`, because `event_from_json_line` takes
+        # one and Rule 0 says we do not rebuild its reader) serialises there,
+        # inside the thread, rather than here on the event loop.
+        return [r.line for r in rows]
 
     async def has_recorded_denial(self, run_id: str) -> bool:
         """Did this run record a DENY at a boundary?
@@ -614,7 +624,15 @@ class Store:
         same events without duplicating them, preserving the append-only events
         invariant. The stored lines are converted-from-Lab kernel events; their
         ``lab:`` run_id prefix marks the provenance (a Lab handoff, not plane
-        telemetry ingested from a governed node)."""
+        telemetry ingested from a governed node).
+
+        Bounded by `MAX_EVENTS_PER_RUN`, like `ingest_events`, and for the reason
+        that ceiling states about itself: "every read of a run loads it whole, so
+        the ceiling is on the run, not the request". This writes to the SAME
+        events table and had no bound at all — 250 050 events went in through one
+        Lab handoff and the resulting run replayed as 82 MB. A ceiling one door
+        enforces and the door beside it does not is not a ceiling.
+        """
         async with self.engine.begin() as conn:
             seen = {
                 (row.node_id, row.seq) for row in (await conn.execute(
@@ -625,8 +643,24 @@ class Store:
                     )
                 )).all()
             }
+            already = len(seen)
+            fresh = [
+                line for line in lines
+                if (str(line.get("node_id", "root")), int(line["seq"])) not in seen
+            ]
+            # Counted after the duplicates are dropped: a package re-upload
+            # re-asserts the same events and adds none, so it must not be refused
+            # for a size it does not add.
+            if already + len(fresh) > MAX_EVENTS_PER_RUN:
+                raise RunTooLarge(
+                    f"lab trace for {run_id} would add {len(fresh)} events to the "
+                    f"{already} it holds; the per-run ceiling is "
+                    f"{MAX_EVENTS_PER_RUN} (AXOR_MAX_EVENTS_PER_RUN). Every read "
+                    f"of a run loads it whole, so a package cannot carry a trace "
+                    f"larger than a run may be."
+                )
             stored = 0
-            for line in lines:
+            for line in fresh:
                 node_id = str(line.get("node_id", "root"))
                 seq = int(line["seq"])
                 if (node_id, seq) in seen:

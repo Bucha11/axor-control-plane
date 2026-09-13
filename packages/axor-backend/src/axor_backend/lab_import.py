@@ -27,7 +27,7 @@ from axor_core.contracts.schemas import validate as validate_schema
 
 from axor_backend.errors import BackendError
 from axor_backend.lab_export import condition_config_hash, content_hash
-from axor_backend.limits import MAX_PINS_PER_PACKAGE
+from axor_backend.limits import MAX_EVENTS_PER_RUN, MAX_PINS_PER_PACKAGE
 
 # The schema_version const, the verdict pair and the effect classes were all
 # restated here as frozensets. They are the format's, and the format is
@@ -227,11 +227,29 @@ def _trace_body_errors(regression_traces: Any) -> list[str]:  # noqa: ANN401 - u
     """
     if not isinstance(regression_traces, dict):
         return []
-    return [
+    errors = [
         f"regression_traces[{trace_id!r}]: body trace_id does not match its key"
         for trace_id, body in regression_traces.items()
         if isinstance(body, dict) and str(body.get("trace_id", "")) != str(trace_id)
     ]
+    # …and it must not be larger than a run is allowed to be. A carried trace is
+    # written into the events table under `lab:{trace_id}` and read back like any
+    # other run — every read loading it whole — so the per-run ceiling applies to
+    # it. The store enforces it too; refusing here means the whole package is
+    # rejected with every reason listed, rather than a deploy that writes some
+    # pins and then raises on one.
+    for trace_id, body in regression_traces.items():
+        if not isinstance(body, dict):
+            continue
+        carried = body.get("events")
+        if isinstance(carried, list) and len(carried) > MAX_EVENTS_PER_RUN:
+            errors.append(
+                f"regression_traces[{trace_id!r}]: carries {len(carried)} events, "
+                f"past the per-run ceiling of {MAX_EVENTS_PER_RUN} "
+                f"(AXOR_MAX_EVENTS_PER_RUN) — a pin is replayed as a run, and "
+                f"every read of a run loads it whole"
+            )
+    return errors
 
 
 def _pin_run_id(trace_id: str) -> str:

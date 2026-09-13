@@ -33,8 +33,6 @@ reported as ours.
 """
 from __future__ import annotations
 
-import asyncio
-
 from axor_core.kernel.events import Event
 from axor_core.kernel.replay import replay
 from axor_core.kernel.subgraph import causal_subgraph
@@ -42,6 +40,7 @@ from fastapi import APIRouter, HTTPException
 
 from axor_backend.deps import StoreDep, SubgraphCacheDep
 from axor_backend.limits import MAX_ABLATION_REFS
+from axor_backend.offload import off_loop as _off_loop
 from axor_backend.replay_api import (
     containment_report,
     influence_ranking,
@@ -77,17 +76,6 @@ def _subgraph(events: list, anchor_node: str, anchor_seq: int) -> dict:
         return causal_subgraph(events, anchor_node, anchor_seq)
     except ValueError as exc:
         raise HTTPException(404, str(exc)) from exc
-
-
-async def _off_loop(fn, /, *args: object) -> object:  # noqa: ANN001 — any kernel call
-    """Run one kernel computation without holding the event loop.
-
-    Not a speed-up — it is the same work. What it buys is that everything else
-    this single-instance process owes (the plane's heartbeats, an ingest, the
-    liveness probe its orchestrator gates two services on) keeps being served
-    while a large fold runs.
-    """
-    return await asyncio.to_thread(fn, *args)
 
 
 @router.get("/runs/{run_id}/subgraph")
@@ -200,14 +188,27 @@ def _anchor_event(events: list[Event], node: str, seq: int) -> Event:
     raise HTTPException(404, f"no event seq={seq} at node {node!r}")
 
 
+def _replayed(events: list[Event], config: object = None) -> dict:
+    """Fold and shape, as one unit of work handed to a thread.
+
+    `scrubber_payload` is another pass over every step, so leaving it behind
+    while `replay` went off the loop kept two thirds of the block: measured on a
+    60 000-event run, replay 0.63 s, scrubber_payload 0.62 s.
+    """
+    return scrubber_payload(replay(events) if config is None else replay(events, config))
+
+
 @router.get("/replay/{run_id}")
 async def replay_scrubber(run_id: str, store: StoreDep) -> dict:
-    events = await events_for(store, run_id)
-    return scrubber_payload(await _off_loop(replay, events))
+    # What still costs the loop here is FastAPI serialising the answer: 0.38 s
+    # for the 22 MB a 60 000-event run produces. That is not work a thread can
+    # take — the fix for it is not returning 22 MB, which is `MAX_EVENTS_PER_RUN`'s
+    # job, not this route's.
+    return await _off_loop(_replayed, await events_for(store, run_id))
 
 
 @router.post("/replay/{run_id}")
 async def replay_counterfactual(run_id: str, body: dict, store: StoreDep) -> dict:
     events = await events_for(store, run_id)
     config = kernel_config_from_json(body.get("config", {}))
-    return scrubber_payload(await _off_loop(replay, events, config))
+    return await _off_loop(_replayed, events, config)

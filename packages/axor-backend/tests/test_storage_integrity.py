@@ -10,7 +10,6 @@ rather than a 500.
 from __future__ import annotations
 
 import asyncio
-import json
 import pathlib
 
 import pytest
@@ -49,14 +48,13 @@ async def test_a_multi_node_trace_reads_back_in_the_order_it_happened(
     await store.ingest_events("ex_tree", demo.TREE_ORCH, demo.TREE_EVENTS, None)
 
     authored = [(e["node_id"], e["seq"]) for e in demo.TREE_EVENTS]
-    stored = [
-        (json.loads(raw)["node_id"], json.loads(raw)["seq"])
-        for raw in await store.run_events("ex_tree")
-    ]
-    assert stored == authored
+    # `run_events` hands back the dicts the JSON column holds; it used to
+    # re-serialise them for callers that all parsed them straight back.
+    lines = await store.run_events("ex_tree")
+    assert [(ln["node_id"], ln["seq"]) for ln in lines] == authored
 
     # And causally: nothing is received before anything is sent.
-    lines = [json.loads(raw) for raw in await store.run_events("ex_tree")]
+    lines = await store.run_events("ex_tree")
     first_send = next(i for i, e in enumerate(lines) if e["kind"] == "message_sent")
     first_recv = next(i for i, e in enumerate(lines) if e["kind"] == "message_received")
     assert first_send < first_recv
