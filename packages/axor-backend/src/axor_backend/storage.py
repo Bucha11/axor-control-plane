@@ -448,6 +448,48 @@ class Store:
         except IntegrityError:
             return  # another request created it between the select and the insert
 
+    async def reseed_run(
+        self, run_id: str, node_id: str, scenario: str, ts: str,
+        lines: list[dict[str, Any]],
+    ) -> None:
+        """Replace a run's events wholesale — the ONE write that is allowed to.
+
+        Everywhere else the events table is append-only, which is the point of
+        it. The canned demo runs are the exception and need to be: their trace
+        ships with the release, so a deployment seeded once under an older one
+        kept that version forever. `ingest_events` deduplicates on
+        (node_id, seq), so re-seeding a CHANGED demo event at the same
+        coordinate silently kept the old one — "re-seeding overwrites the same
+        run ids" was the docstring's claim and not what happened.
+
+        Only `routers/demo.py` calls this, and only for a run id it owns
+        (`demo.DEMO_RUN_IDS`); the route refuses to touch a run that is not one.
+        """
+        async with self.engine.begin() as conn:
+            org = current_org_id()
+            await conn.execute(delete(events).where(
+                events.c.run_id == run_id, events.c.org_id == org,
+            ))
+            await conn.execute(delete(runs).where(
+                runs.c.run_id == run_id, runs.c.org_id == org,
+            ))
+            await conn.execute(insert(runs).values(
+                run_id=run_id, node_id=node_id, scenario=scenario,
+                intervened=False, completed=False, evidence_json=[],
+                created_ts=ts, org_id=org,
+            ))
+            await conn.execute(insert(events), [
+                {
+                    "run_id": run_id,
+                    "node_id": str(line.get("node_id", node_id)),
+                    "seq": int(line["seq"]),
+                    "kind": str(line["kind"]),
+                    "line": line,
+                    "org_id": org,
+                }
+                for line in lines
+            ])
+
     async def get_run(self, run_id: str) -> dict[str, Any] | None:
         """One run by id. Every caller that needs a single run used to build a
         dict from `list_runs()` and index into it — reading the whole table, with

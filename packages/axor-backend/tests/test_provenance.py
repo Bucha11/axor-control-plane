@@ -219,15 +219,27 @@ async def test_seed_adapter_runs_lights_up_deep_surfaces(
                           params={"focus": "v_mail", "k": 3})).json()
     assert {"src": "v_mail", "dst": "v_sum"} in g["edges"]
 
-    # 4. Two-sided regression: block held + pass passes → safe.
+    # 4. Two-sided regression: block held + pass passes — both sides check out,
+    #    and the gate still withholds, because both pins are CANNED.
+    #
+    #    This assertion used to be `safe_to_ship is True`, which is the same
+    #    hole the empty corpus had: two clicks on the in-app demo turned a
+    #    corpus that had verified nothing about this deployment green. The demo
+    #    proves the shipped kernel denies the shipped attack; "every attack
+    #    still blocked" is a sentence about the deployment's own agents.
     reg = (await client.post("/v1/regression", json={"config": cfg})).json()
     sides = {row["run_id"]: (row["side"], row["result"]) for row in reg["rows"]}
     assert sides["ex_block"] == ("must_block", "held")
     assert sides["ex_pass"] == ("must_pass", "passed")
-    assert reg["safe_to_ship"] is True
+    assert all(row["demo"] for row in reg["rows"])
+    assert (reg["own_rows"], reg["demo_rows"]) == (0, 2)
+    assert reg["safe_to_ship"] is False
+    assert (reg["regressed"], reg["escaped"], reg["unanchored"]) == (0, 0, 0)
 
-    # A config that breaks the legit flow → the must_pass side regresses (teeth).
+    # The teeth are unchanged: a config that breaks the legit flow regresses the
+    # must_pass side, canned or not — marked, never excluded.
     broken = dict(cfg, allowed_tools=[t for t in cfg["allowed_tools"]
                                       if t != "notes_write"])
     reg2 = (await client.post("/v1/regression", json={"config": broken})).json()
     assert reg2["safe_to_ship"] is False
+    assert reg2["regressed"] >= 1

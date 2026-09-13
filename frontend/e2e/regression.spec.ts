@@ -11,7 +11,7 @@ test.describe("regression", () => {
     await setConnection(page, { mode: "adapter" });
   });
 
-  test("the golden config is safe to ship (both sides hold)", async ({ page }) => {
+  test("both sides of the seeded corpus hold", async ({ page }) => {
     await goHash(page, "regression");
     await page.getByRole("button", { name: /load example corpus/ }).click();
     // The seed drops its matching config into the editor.
@@ -21,9 +21,43 @@ test.describe("regression", () => {
     await expect(page.getByText(/must-block · .*must-pass/)).toBeVisible();
     await page.getByRole("button", { name: /Run regression/ }).click();
 
-    await expect(page.getByText(/Safe to ship/)).toBeVisible();
     await expect(page.getByText("still blocked").first()).toBeVisible();
     await expect(page.getByText("still passes").first()).toBeVisible();
+  });
+
+  test("a corpus of only canned pins cannot say it is safe", async ({ page }) => {
+    // Stubbed, not seeded: the e2e stack shares one backend and other specs pin
+    // runs of their own into the same corpus, so "none of your own" is not a
+    // state this test can hold. What it owns is the rendering.
+    //
+    // This headline exists because the demo seed was measured doing what an
+    // empty corpus used to: turning "nothing about this deployment was
+    // verified" into a green verdict. The rule itself is pinned backend-side.
+    await page.route("**/v1/regression", (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          rows: [
+            { run_id: "ex_block", side: "must_block", label: "adapter-demo",
+              result: "held", first_divergence: null, new_denial: null,
+              pinned_denials: 1, escaped_denials: [], demo: true },
+            { run_id: "ex_pass", side: "must_pass", label: "adapter-demo",
+              result: "passed", first_divergence: null, new_denial: null,
+              pinned_denials: 0, escaped_denials: [], demo: true },
+          ],
+          regressed: 0, escaped: 0, unanchored: 0, skipped: [],
+          own_rows: 0, demo_rows: 2, safe_to_ship: false,
+        }),
+      }),
+    );
+    await goHash(page, "regression");
+    await page.getByRole("button", { name: /load example corpus/ }).click();
+    await page.getByRole("button", { name: /Run regression/ }).click();
+
+    await expect(page.getByText(/Safe to ship/)).toHaveCount(0);
+    await expect(page.getByText(/2 demo pins, none of your own/)).toBeVisible();
+    await expect(page.getByText(/Pin one of your own runs/)).toBeVisible();
   });
 
   test("a config that breaks the legit flow regresses (the CI has teeth)", async ({ page }) => {

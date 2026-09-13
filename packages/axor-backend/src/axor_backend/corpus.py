@@ -15,6 +15,7 @@ from typing import Any
 from fastapi import HTTPException
 
 from axor_backend.clock import now
+from axor_backend.demo import DEMO_RUN_IDS
 from axor_backend.replay_api import kernel_config_from_json, regression_row
 from axor_backend.storage import Store
 from axor_backend.traces import events_for
@@ -42,9 +43,13 @@ async def regression_report(store: Store, config_json: dict) -> dict:
             skipped.append({"run_id": pin["run_id"], "side": pin["side"],
                             "label": pin["label"], "reason": str(exc.detail)})
             continue
-        rows.append(
-            regression_row(pin["run_id"], pin["side"], pin["label"], events, config)
-        )
+        row = regression_row(
+            pin["run_id"], pin["side"], pin["label"], events, config)
+        # Canned evidence is real, replayable and about the DEMO. Marked rather
+        # than excluded: a demo pin that REGRESSES is still a kernel that stopped
+        # denying what it used to, which is worth failing on.
+        row["demo"] = pin["run_id"] in DEMO_RUN_IDS
+        rows.append(row)
     regressed = sum(1 for r in rows if r["result"] == "regressed")
     escaped = sum(1 for r in rows if r["result"] == "escaped")
     # A must_block pin whose trace recorded no denial cannot be checked against
@@ -52,12 +57,18 @@ async def regression_report(store: Store, config_json: dict) -> dict:
     # safe_to_ship: the report promises "every attack still blocked", and a pin
     # nothing was verified against is not evidence for that sentence.
     unanchored = sum(1 for r in rows if r["result"] == "unanchored")
+    own = sum(1 for r in rows if not r["demo"])
     return {
         "rows": rows,
         "regressed": regressed,
         "escaped": escaped,
         "unanchored": unanchored,
         "skipped": skipped,
+        # How much of the corpus is the deployment's own, and how much shipped
+        # with the product. Reported, because "2 pins, both canned" and "2 pins"
+        # are different answers and the operator could not tell them apart.
+        "own_rows": own,
+        "demo_rows": len(rows) - own,
         # `skipped` and an empty corpus withhold it for exactly the reason
         # `unanchored` does, three lines up. A pin whose trace could not be read
         # was verified against nothing; a corpus with no pins verified nothing
@@ -65,8 +76,19 @@ async def regression_report(store: Store, config_json: dict) -> dict:
         # evidence behind it, and it is the strongest sentence this product
         # says — it used to come out green with every pin unreadable, taking the
         # scheduled run's history row and its silence with it.
+        # `own` rather than `rows` for the same reason an empty corpus withholds
+        # it. Two clicks on the in-app demo used to turn a corpus that had
+        # verified nothing into `safe_to_ship: true`:
+        #
+        #     empty corpus:      safe_to_ship=False rows=0
+        #     after a demo seed: safe_to_ship=True  rows=2 (both 'adapter-demo')
+        #
+        # which is the empty-corpus hole through a different door — the canned
+        # pins prove the shipped kernel denies the shipped attack, and
+        # "every attack still blocked" is a sentence about THIS deployment's
+        # agents. A regressed or escaped demo row still fails it.
         "safe_to_ship": (
-            bool(rows)
+            own > 0
             and not skipped
             and regressed == 0
             and escaped == 0

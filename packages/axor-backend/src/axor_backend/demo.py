@@ -19,6 +19,14 @@ from __future__ import annotations
 
 from typing import Any
 
+# The run ids these canned traces occupy, and the scenario labels that mark a
+# run as one of them. Both are code-owned facts rather than strings a caller can
+# type: `routers/demo.py` refuses to seed over a run that is not already one of
+# these, and `corpus.py` reads them to tell canned evidence from the
+# deployment's own.
+DEMO_RUN_IDS = frozenset({"ex_block", "ex_pass", "ex_tree"})
+DEMO_SCENARIOS = frozenset({"adapter-demo", "multi-agent-demo"})
+
 
 def _web() -> dict[str, Any]:
     return {"sources": ["web"], "sensitive": False}

@@ -249,6 +249,8 @@ export interface RegressionRow {
   new_denial: { seq: number; reason: string; category: string } | null;
   pinned_denials: number;
   escaped_denials: { node_id: string; seq: number; tool: string; gate: string | null }[];
+  // A pin on one of the canned demo runs, seeded by /v1/demo/*.
+  demo: boolean;
 }
 
 // A pin the corpus could not read at all — deleted events, a telemetry-only
@@ -268,6 +270,13 @@ export interface RegressionReport {
   escaped: number;
   unanchored: number;
   skipped: SkippedPin[];
+  // How much of the corpus is this deployment's own evidence, and how much
+  // shipped with the product. `safe_to_ship` counts `own_rows`: the canned
+  // pins prove the shipped kernel denies the shipped attack, and "every attack
+  // still blocked" is a sentence about THIS deployment's agents. Two clicks on
+  // the in-app demo used to turn a corpus that had verified nothing green.
+  own_rows: number;
+  demo_rows: number;
   safe_to_ship: boolean;
 }
 

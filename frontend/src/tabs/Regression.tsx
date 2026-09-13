@@ -50,6 +50,20 @@ function headline(report: RegressionReport): React.ReactNode {
   if (report.skipped.length > 0) {
     parts.push(`${report.skipped.length} unreadable pin${report.skipped.length === 1 ? "" : "s"}`);
   }
+  // A corpus whose only pins are the canned demo runs has rows and no failures,
+  // and still cannot say the sentence: those pins are evidence about the demo.
+  if (parts.length === 0 && report.own_rows === 0 && report.demo_rows > 0) {
+    return (
+      <>
+        <span style={{ color: C.amber }}>
+          {report.demo_rows} demo pin{report.demo_rows === 1 ? "" : "s"}, none of
+          your own
+        </span>
+        {" "}— the canned runs check the shipped kernel against the shipped
+        attack. Pin one of your own runs to check yours.
+      </>
+    );
+  }
   // A corpus with rows but no failures cannot reach here; one with NO rows can,
   // and "v2 changes governed behavior" would be the wrong reason for it.
   if (report.rows.length === 0) {
