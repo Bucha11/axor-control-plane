@@ -5,8 +5,12 @@ Honest scope: solo-maintained OSS; controls below are technical and
 verifiable in code/CI, not audited attestations. DPA: template pending
 counsel — design partners get a mutual NDA + this page meanwhile.
 
-**Access control** — opt-in bearer auth; scoped keys (read<ingest<operate<admin),
-least-privilege, stored SHA-256, shown once. Master token = env, never persisted.
+**Access control** — opt-in bearer auth; scoped keys (read, ingest, operate,
+admin — an exact set, NOT a ladder that implies: an `admin` key does not read),
+stored SHA-256, shown once. Master token = env, never persisted. A key delegates
+only scopes it holds, and a node-bound key mints only for its own node, so
+minting is not a way around either wall. Every mint and revoke is appended to a
+custody log that outlives the key (`GET /v1/keys/audit`).
 **Change management** — every change via PR CI: lint, 100+ tests incl. E2E
 booting the real stack, dependency audit (pip-audit + pnpm audit), deploy smoke.
 **Data handling** — raw tool bodies never persisted (observations: sizes/hashes);

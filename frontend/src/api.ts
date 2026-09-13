@@ -1026,6 +1026,23 @@ export const api = {
     ),
   revokeKey: (keyId: string) =>
     af(`/v1/keys/${keyId}`, { method: "DELETE" }).then((r) => j<{ revoked: string }>(r)),
+  // Every mint and revoke, newest first. `listKeys` answers "what exists now",
+  // which a revoke erases; this answers "what was issued", which it does not.
+  keysAudit: (limit = 8) =>
+    af(`/v1/keys/audit?limit=${limit}`).then((r) =>
+      j<
+        {
+          audit_id: number;
+          action: "mint" | "revoke";
+          ts: string;
+          key_id: string;
+          scopes?: string[];
+          node_id?: string | null;
+          label?: string;
+          by: { kind: string; id: string | null };
+        }[]
+      >(r),
+    ),
 };
 
 // Live audit stream (spec 8): SSE of colour-coded events for a run. Returns an

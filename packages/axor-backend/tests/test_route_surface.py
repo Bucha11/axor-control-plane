@@ -102,6 +102,9 @@ EXPECTED: dict[tuple[str, str], str] = {
     # ── API keys: listing them is credential enumeration ─────────────────────
     ("POST", "/v1/keys"): "admin",
     ("GET", "/v1/keys"): "admin",
+    # The listing shows what exists; a revoke erases it from there and not from
+    # here. Same scope: reading who was ever issued what is enumeration too.
+    ("GET", "/v1/keys/audit"): "admin",
     ("DELETE", "/v1/keys/{key_id}"): "admin",
     # ── plane (protocol v0.3): the node dials OUT; operator commands come in ─
     ("POST", "/v1/plane/{node_id}/command"): "operate",

@@ -144,16 +144,29 @@ export default function Settings() {
     retry: false,
   });
 
+  // The listing above shows what still exists, so a revoke erases the evidence
+  // that a key was ever issued. This is the log that survives one.
+  const keysAudit = useQuery({
+    queryKey: ["api-keys-audit"],
+    queryFn: () => api.keysAudit(),
+    enabled: authStatus.data?.authenticated === true && (authStatus.data?.scopes ?? []).includes("admin"),
+    retry: false,
+  });
+
   const mintKey = useMutation({
     mutationFn: () => api.createKey(keyScopes, keyLabel),
     onSuccess: (r) => {
       setMintedSecret(r.secret);
       void qc.invalidateQueries({ queryKey: ["api-keys"] });
+      void qc.invalidateQueries({ queryKey: ["api-keys-audit"] });
     },
   });
   const revokeKey = useMutation({
     mutationFn: (keyId: string) => api.revokeKey(keyId),
-    onSuccess: () => void qc.invalidateQueries({ queryKey: ["api-keys"] }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ["api-keys"] });
+      void qc.invalidateQueries({ queryKey: ["api-keys-audit"] });
+    },
   });
 
   const licenseStatus = useQuery({ queryKey: ["license-status"], queryFn: api.licenseStatus });
@@ -310,6 +323,27 @@ export default function Settings() {
                     <Trash2 size={12} color={C.dim} style={{ cursor: "pointer" }} onClick={() => revokeKey.mutate(k.key_id)} />
                   </div>
                 ))}
+                {(keysAudit.data ?? []).length > 0 && (
+                  <div className="mt-3" data-testid="key-lifecycle-audit">
+                    <div style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim, letterSpacing: "0.08em", marginBottom: 6 }}>
+                      ISSUED &amp; REVOKED · newest first
+                    </div>
+                    {/* Already newest-first from the route; rendered as it arrives. */}
+                    {(keysAudit.data ?? []).map((a) => (
+                      <div key={a.audit_id} className="flex items-center gap-2 py-0.5">
+                        <span style={{ fontFamily: MONO, fontSize: 10.5, width: 46,
+                          color: a.action === "revoke" ? C.red : C.green }}>{a.action}</span>
+                        <span style={{ fontFamily: MONO, fontSize: 10.5, color: C.text }}>{a.key_id}</span>
+                        <span style={{ fontFamily: MONO, fontSize: 10.5, color: C.mut }}>
+                          {(a.scopes ?? []).join(",")}{a.node_id ? ` @${a.node_id}` : ""}
+                        </span>
+                        <span style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim, flex: 1, textAlign: "right" }}>
+                          by {a.by.id ?? a.by.kind} · {a.ts.slice(0, 19).replace("T", " ")}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
             )}
           </>

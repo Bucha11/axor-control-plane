@@ -49,10 +49,11 @@ metadata = MetaData()
 # a node fetching a credential every second takes over a day to.
 VAULT_AUDIT_BACKSTOP = 100_000
 
-# The two custody logs, so the sweep does not have to import either vault to
-# know what to bound — and so adding a third one is a single edit here rather
-# than a log nothing ever trims.
-VAULT_AUDIT_KINDS = ("creds_dispense", "signing")
+# The custody logs, so the sweep does not have to import either vault to know
+# what to bound — and so adding one is a single edit here rather than a log
+# nothing ever trims. `api_key` is the credential-lifecycle log: every mint and
+# revoke of an API key (routers/keys.py), which used to leave no trace at all.
+VAULT_AUDIT_KINDS = ("creds_dispense", "signing", "api_key")
 
 # JSON payload columns: real JSONB on Postgres (indexable, queryable), portable
 # JSON (stored as TEXT, auto-(de)serialised) on SQLite for dev/tests. One column
