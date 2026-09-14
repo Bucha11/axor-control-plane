@@ -52,7 +52,12 @@ from axor_proxy.runs import (
 )
 from axor_proxy.stdio_mcp import StdioMcpServer, discover_stdio
 from axor_proxy.upload import BackendUploader
-from axor_proxy.vault import CredentialDenied, CredentialVault, vault_tools
+from axor_proxy.vault import (
+    CredentialDenied,
+    CredentialVault,
+    check_vault_colocation,
+    vault_tools,
+)
 
 # Hop-by-hop headers never forwarded in either direction (RFC 9110 s7.6.1).
 _HOP_BY_HOP = frozenset({
@@ -220,10 +225,21 @@ class ProxyState:
         self.vault_tools: frozenset[str] = (
             vault_tool_names if vault_tool_names is not None else vault_tools()
         )
-        self.vault = vault or (
-            CredentialVault(backend_url, ingest_key=ingest_key)
-            if backend_url and self.vault_tools else None
-        )
+        if vault is not None:
+            # An injected client is an embedding seam carrying its own
+            # transport; the URL beside it is not a deployment fact, so the
+            # posture check below has nothing to judge. Nothing in the product
+            # takes this branch — `main.cli` always builds its own.
+            self.vault: CredentialVault | None = vault
+        elif backend_url and self.vault_tools:
+            # Vault mode fails closed by design, which makes the backend's
+            # uptime part of whether this agent's tools work at all. §14.2
+            # answers that with co-location; `check_vault_colocation` is that
+            # answer stated as a check rather than assumed.
+            check_vault_colocation(backend_url)
+            self.vault = CredentialVault(backend_url, ingest_key=ingest_key)
+        else:
+            self.vault = None
 
 
 async def _stdio_dispatch(

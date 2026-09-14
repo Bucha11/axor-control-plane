@@ -55,10 +55,14 @@ discarded, because "the agent's config holds vault references, never keys".
 """
 from __future__ import annotations
 
+import ipaddress
+import logging
 import os
+import socket
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
+from urllib.parse import urlparse
 
 import httpx
 from axor_core.kernel.jcs import canonicalize
@@ -122,6 +126,96 @@ def vault_tools(raw: str | None = None) -> frozenset[str]:
     """Tools this proxy injects credentials for. Empty = pure passthrough."""
     value = raw if raw is not None else os.environ.get("AXOR_VAULT_TOOLS", "")
     return frozenset(t.strip() for t in value.split(",") if t.strip())
+
+
+ALLOW_REMOTE_ENV = "AXOR_VAULT_ALLOW_REMOTE"
+
+
+class VaultPostureRefused(Exception):
+    """Vault mode was armed against a backend whose uptime nobody here owns."""
+
+
+def _remote(host: str) -> str | None:
+    """Why this host is somebody else's, or None if it shares fate with us.
+
+    Loopback is the same machine; RFC1918/ULA is the same network (compose, a
+    pod, a VPC) — either way the vault goes down when this proxy does, which is
+    what "co-location" means. Anything else is a different failure domain, and
+    that includes a name that does not resolve: vault mode's entire cost is this
+    backend's availability, so "I cannot tell what this is" is not a posture to
+    arm it under.
+
+    Link-local is deliberately NOT co-located even though it shares a link: it
+    is the range that carries the cloud metadata service, and a backend URL
+    pointing into it is a stranger thing than the override is.
+    """
+    try:
+        infos = socket.getaddrinfo(host, None, proto=socket.IPPROTO_TCP)
+    except socket.gaierror as exc:
+        return f"{host!r} does not resolve ({exc})"
+    for info in infos:
+        address = ipaddress.ip_address(info[4][0])
+        if address.is_link_local:
+            return f"{host!r} resolves to the link-local address {address}"
+        if not (address.is_loopback or address.is_private):
+            return f"{host!r} resolves to the public address {address}"
+    return None
+
+
+def check_vault_colocation(
+    backend_url: str, allow_remote: bool | None = None,
+) -> None:
+    """Refuse vault mode against a backend this deployment does not share fate with.
+
+    §14.2 decision #14 is `fail closed`: vault unreachable → no credential → the
+    tool call is denied, and no TTL cache is permitted because it "would
+    reintroduce the secret-on-proxy this feature exists to remove". That is the
+    right call, and it converts every availability event into a governance
+    denial. The spec answers the resulting question only for one shape —
+    "availability is solved where it belongs — vault HA, co-location on
+    self-hosted" — and `spec-v2-multiagent.md` records that the other shape has
+    no answer yet: "fail-closed across someone else's uptime has no answer here
+    yet, where self-hosted answers it with co-location".
+
+    So co-location stops being an assumption and becomes a check. Envelope mode
+    already answered CUSTODY for a hosted backend (the plane cannot open what it
+    holds); this is about UPTIME, which envelope mode does not touch.
+
+    ``AXOR_VAULT_ALLOW_REMOTE=1`` proceeds anyway — an operator who has an
+    availability answer of their own is entitled to it — and says out loud what
+    has been accepted. What it stops is getting there by accident.
+    """
+    if allow_remote is None:
+        allow_remote = os.environ.get(ALLOW_REMOTE_ENV, "") == "1"
+    host = urlparse(backend_url).hostname
+    if not host:
+        raise VaultPostureRefused(
+            f"vault mode needs a backend URL with a host; got {backend_url!r}"
+        )
+    why = _remote(host)
+    if why is None:
+        return
+    if allow_remote:
+        logging.getLogger("axor.proxy").warning(
+            "VAULT MODE IS ARMED AGAINST A REMOTE BACKEND (%s, %s=1). Vault "
+            "mode fails closed by design — no cache, no break-glass — so every "
+            "second that backend is unreachable is a second your agent's tool "
+            "calls are DENIED, and its uptime is not this deployment's to "
+            "control. ui-spec §14.2 answers availability with co-location; for "
+            "a remote vault there is no answer in the spec, so the answer has "
+            "to be yours.", why, ALLOW_REMOTE_ENV,
+        )
+        return
+    raise VaultPostureRefused(
+        f"vault mode (AXOR_VAULT_TOOLS) is armed against {backend_url!r}, but "
+        f"{why} — a different failure domain from this proxy. Vault mode fails "
+        f"closed by design (ui-spec §14.2 decision #14): no cache, no "
+        f"break-glass, so every moment that backend is unreachable is a moment "
+        f"this agent's tool calls are denied. §14.2 solves availability with "
+        f"co-location and says nothing about a remote vault. Co-locate the "
+        f"backend, or set {ALLOW_REMOTE_ENV}=1 to accept that its uptime is "
+        f"your answer to give."
+    )
 
 
 class CredentialVault:

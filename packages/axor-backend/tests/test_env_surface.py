@@ -86,14 +86,40 @@ def test_env_example_does_not_document_settings_nothing_reads() -> None:
     nothing keeps. Proxy- and frontend-side variables are out of scope here."""
     backend = {name for names in _literals_by_file().values() for name in names}
     documented = set(_DECLARED.findall(ENV_EXAMPLE.read_text("utf-8")))
-    # Consumed by the proxy, the frontend's nginx, compose or the build.
-    elsewhere = {
-        "AXOR_PG_PASSWORD", "GITHUB_TOKEN", "AXOR_INGEST_KEY", "AXOR_PROXY_DEMO",
-        "AXOR_PROXY_TOKEN", "AXOR_VAULT_TOOLS", "AXOR_NODE_SIGNING_SEED",
-        "AXOR_CRED_SEALING_SEED", "AXOR_IDENTITY_SIGNING_KEY",
-        "VITE_CHECKOUT_URL", "AXOR_TRACE_DIR", "AXOR_BACKEND_URL",
-    }
-    orphans = sorted(documented - backend - elsewhere)
+    orphans = sorted(documented - backend - _ELSEWHERE)
     assert not orphans, (
         f".env.example documents settings nothing reads: {orphans}"
+    )
+
+
+# Consumed by the proxy, the frontend's nginx, compose or the build rather than
+# by the backend. The names are checked against those sources below, because a
+# hand-kept exemption list is the same promise-nobody-keeps this file exists to
+# catch — one name added here on a wrong assumption and the guard is off for it
+# forever.
+_ELSEWHERE = frozenset({
+    "AXOR_PG_PASSWORD", "GITHUB_TOKEN", "AXOR_INGEST_KEY", "AXOR_PROXY_DEMO",
+    "AXOR_PROXY_TOKEN", "AXOR_VAULT_TOOLS", "AXOR_VAULT_ALLOW_REMOTE",
+    "AXOR_NODE_SIGNING_SEED", "AXOR_CRED_SEALING_SEED",
+    "AXOR_IDENTITY_SIGNING_KEY", "VITE_CHECKOUT_URL", "AXOR_TRACE_DIR",
+    "AXOR_BACKEND_URL",
+})
+
+
+def test_the_elsewhere_list_is_true() -> None:
+    """Every name exempted above is read by something in this repository."""
+    sources = "\n".join(
+        path.read_text("utf-8")
+        for path in [
+            *(ROOT / "packages/axor-proxy/src").rglob("*.py"),
+            *(ROOT / "frontend/src").rglob("*.ts"),
+            *(ROOT / "frontend").glob("*.conf"),
+            ROOT / "docker-compose.yml",
+            ROOT / "Dockerfile",
+        ]
+        if path.is_file()
+    )
+    unread = sorted(name for name in _ELSEWHERE if name not in sources)
+    assert not unread, (
+        f"exempted as 'consumed elsewhere' and consumed nowhere: {unread}"
     )

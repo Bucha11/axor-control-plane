@@ -25,6 +25,7 @@ Modules:
 |---|---|
 | `app.py` | routes: `/t/{tool}` passthrough, `/axor/runs` arm→claim, `/axor/runs/{id}/simulate`, `/axor/governed/spawn`, preflight/health |
 | `runs.py` | run lifecycle; fault semantics from `axor_eval`; the run's governor; EvidenceCase construction |
+| `vault.py` | sink-side credential injection (§14.2): opt-in per tool, fetched at call time, never cached, fail-closed. `check_vault_colocation` refuses to arm it against a backend in another failure domain — the mode's cost is that backend's uptime, and §14.2 answers availability with co-location |
 | `run_cli.py` | `axor-proxy run -- <cmd>`: arm, execute a CLI agent, submit its stdout as the claim. Not a wrapper — it gates nothing; wrapping is what `axor_wrap.WrappedToolset` does to tool callables |
 | `faults.py` / `mock_tools.py` | fault application; demo mock tools |
 | `agent.py` | scripted agent — drives a run to completion over the proxy's own HTTP surface (the in-app "run an experiment") |
