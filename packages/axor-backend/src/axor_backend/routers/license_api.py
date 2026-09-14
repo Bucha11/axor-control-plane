@@ -226,7 +226,14 @@ async def license_usage(state: StateDep, store: StoreDep, months: int = 3) -> di
     span = max(1, min(int(months), 24))
     lic = active_license(state, current_org_id())
     ceiling = lic.governed_node_ceiling if lic else None
-    on = date.today()
+    # The UTC calendar, not the host's. `clock.today` says why: usage is metered
+    # per UTC day "so that a fleet spanning time zones is counted once, on one
+    # calendar, and a customer and the vendor reading the same invoice see the
+    # same days" — and `plane.record_node_activity` stamps every row with it.
+    # `date.today()` is the host's local day, so on any deployment east or west
+    # of UTC the window and the rows it selects were on different calendars for
+    # part of every day.
+    on = date.fromisoformat(today())
     periods = []
     for _ in range(span):
         start, end = billing_month(on.isoformat())
@@ -268,7 +275,13 @@ async def license_invoice(
             "Usage is still measured — see /v1/license/usage.",
         )
     if month is None:
-        first_of_this = date.today().replace(day=1)
+        # Same calendar as the rows, for the same reason — and here it decides
+        # WHICH MONTH is billed. At 2026-03-01T00:30+13:00 the host's day is
+        # 2026-03-01 and the UTC day is 2026-02-28, so "the month just ended"
+        # was February by the host and January by the meter: the default put a
+        # different month's statement in front of the customer for thirteen
+        # hours around every month boundary.
+        first_of_this = date.fromisoformat(today()).replace(day=1)
         month = (first_of_this - timedelta(days=1)).strftime("%Y-%m")
     try:
         start, end = billing_month(f"{month}-01")
