@@ -106,6 +106,7 @@ export default function Health() {
   };
 
   const latest = report.data?.latest ?? null;
+  const graded = report.data?.drift_case ?? null;
   const history = report.data?.history ?? [];
   const heals = repair.data?.history ?? [];
   const lastHeal: HealAttempt | null = heals[0] ?? null;
@@ -263,6 +264,35 @@ export default function Health() {
           {phase === "awaiting" && !lastHeal && (
             <div style={{ fontFamily: MONO, fontSize: 11, color: C.steel, marginTop: 10 }}>
               excision commanded → awaiting the verifying re-probe.
+            </div>
+          )}
+
+          {/* The same battery in Eval's vocabulary — the tier, not a score.
+              Two reports that both read DRIFT_DETECTED are not the same news:
+              one backed by canary escapes is a structural fact about the probe
+              output, the other is a judge-graded anomaly discounted again for
+              being uncalibrated. The plane kept only the verdict string, so
+              they rendered — and paged — identically.
+
+              It is labelled as evidence and never as a number to compare
+              agents by: BEHAVIORAL_DRIFT is Experimental and excluded from the
+              integrity score whatever its confidence (ui-spec 8.2). */}
+          {graded && (
+            <div style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim, marginTop: 10, lineHeight: 1.7 }}>
+              graded as <span style={{ color: C.text }}>{graded.deviation}</span> ·{" "}
+              <Tooltip content={graded.verdict_source === "deterministic"
+                ? "Escape-backed: a canary or structural readout escaped the clean baseline. A fact about the probe output, not a judgement about it."
+                : "Judge-graded: no canary escape behind this verdict, so the confidence is interpretive — and discounted again while the battery is uncalibrated."}>
+                <span style={{ color: graded.verdict_source === "deterministic" ? C.text : C.mut,
+                               borderBottom: `1px dotted ${C.line}`, cursor: "help" }}>
+                  {graded.verdict_source}
+                </span>
+              </Tooltip>{" "}
+              · confidence {graded.confidence.toFixed(2)}
+              <br />
+              Evidence, not a score — this is never blended into Scenario Delta
+              or the integrity score. Drift asks whether your agent changed; Eval
+              asks whether it lies under fault.
             </div>
           )}
 

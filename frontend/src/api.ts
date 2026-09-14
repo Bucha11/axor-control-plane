@@ -244,6 +244,22 @@ export interface RepairState {
   history: HealAttempt[];
 }
 
+// The same battery graded in axor-eval's vocabulary (BehavioralIntegrityAudit).
+// It is NOT an integrity score and says so in the payload: BEHAVIORAL_DRIFT is
+// an Experimental deviation type, excluded from `core_cases` whatever its
+// confidence. What it adds over the bare verdict is the TIER — escape-backed
+// drift is a structural fact about the probe output (deterministic, 1.0), a
+// consistency anomaly is judge-graded and discounted again when uncalibrated.
+export interface DriftCase {
+  deviation: string;
+  verdict_source: "deterministic" | "judge";
+  confidence: number;
+  observed_reality: Record<string, unknown>;
+  agent_claim: string;
+  experimental: boolean;
+  in_integrity_score: boolean;
+}
+
 export interface ProbeCheck {
   id: number;
   created_ts: string;
@@ -1025,7 +1041,8 @@ export const api = {
   // as a healthy agent. This is drift, never an Eval metric (ui-spec 8.2).
   probeReport: (nodeId: string) =>
     af(`/v1/plane/${nodeId}/probe-report`).then((r) =>
-      j<{ latest: ProbeHealth | null; history: ProbeCheck[] }>(r)),
+      j<{ latest: ProbeHealth | null; history: ProbeCheck[];
+          drift_case: DriftCase | null }>(r)),
 
   // What the localizer proposed, what is in flight, and how past heals ended.
   repair: (nodeId: string) =>

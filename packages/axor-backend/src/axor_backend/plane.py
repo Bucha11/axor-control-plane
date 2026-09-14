@@ -37,6 +37,7 @@ from axor_backend.attestations import (
 from axor_backend.broadcast import messages as bus_messages
 from axor_backend.clock import now, today
 from axor_backend.coverage import coverage, facts_of_run
+from axor_backend.drift_evidence import drift_case
 from axor_backend.errors import (
     CommandRejected,
     ConcurrentUpdate,
@@ -624,12 +625,20 @@ async def post_probe_report(node_id: str, body: dict, request: Request) -> dict:
     )
     notifier = getattr(ctx, "notifier", None)
     if notifier is not None and verdict == probe_plane.VERDICT_DRIFT_DETECTED:
+        # The graded tier travels with the page. Two reports that both say
+        # DRIFT_DETECTED are not the same news: one backed by canary escapes is
+        # a deterministic fact about the probe output, the other is a
+        # judge-graded anomaly discounted again for being uncalibrated. On-call
+        # was being handed the same line for both.
+        graded = drift_case(body) or {}
         await notifier.emit(
             "behavioral_drift", node_id,
             {"escape_count": int(body.get("escape_count", 0)),
              "probes_sent": int(body.get("probes_sent", 0)),
              "families": [f["family"] for f in families
                           if f.get("state") == "escaped"],
+             "verdict_source": graded.get("verdict_source"),
+             "confidence": graded.get("confidence"),
              "permalink": f"/v1/plane/nodes#{node_id}"},
         )
     return {"stored": True, "id": report_id, "heals_verified": outcomes}
@@ -674,9 +683,15 @@ async def get_probe_report(node_id: str, request: Request) -> dict:
     (ui-spec 8.2).
     """
     ctx = _ctx(request)
+    latest = await ctx.store.latest_probe_report(node_id)
     return {
-        "latest": await ctx.store.latest_probe_report(node_id),
+        "latest": latest,
         "history": await ctx.store.probe_report_history(node_id),
+        # The same battery, graded in axor-eval's vocabulary — the tier this
+        # plane used to discard. Null when the verdict is not a deviation, and
+        # `in_integrity_score: false` on the case itself: drift answers "has my
+        # agent changed?", never "does my agent lie under fault?" (ui-spec 8.2).
+        "drift_case": drift_case(latest),
     }
 
 

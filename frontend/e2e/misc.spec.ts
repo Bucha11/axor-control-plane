@@ -84,6 +84,11 @@ test.describe("secondary surfaces", () => {
     await goHash(page, "health");
 
     await expect(page.getByRole("heading", { name: /A probe family drifted/ })).toBeVisible();
+    // The battery graded in Eval's vocabulary: escape-backed, so deterministic —
+    // and labelled as evidence, never as a number to rank agents by.
+    await expect(page.getByText("graded as behavioral_drift", { exact: false })).toBeVisible();
+    await expect(page.getByText("deterministic · confidence 1.00", { exact: false })).toBeVisible();
+    await expect(page.getByText("never blended into Scenario Delta", { exact: false })).toBeVisible();
     await expect(page.getByText("Self-heal excises 1 context fragment", { exact: false })).toBeVisible();
     await page.getByRole("button", { name: /Self-heal/ }).click();
     await page.getByPlaceholder("reason (required)", { exact: false })

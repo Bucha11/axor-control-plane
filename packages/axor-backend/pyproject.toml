@@ -21,7 +21,11 @@ dependencies = [
   # proxy, from its own in-memory run state, so a run that arrived here any
   # other way carried real verdicts and no evidence at all. Imported, not
   # restated: a platform that decided for itself what an EvidenceCase is would
-  # be a second answer to a question Eval already answers.
+  # be a second answer to a question Eval already answers. Also the grader for
+  # a probe battery (`audit.behavioral_audit`): axor-probe and axor-eval may
+  # not import each other (P-34), so this backend is the only component that
+  # can join them — and the only one that can notice their two copies of the
+  # verdict vocabulary diverging.
   "axor-eval>=0.2,<0.3",
   # Attestation semantics — append-only, revocation-as-an-event, same-keyset
   # revocation, the required reason. Imported, not restated: a plane that
@@ -33,7 +37,10 @@ dependencies = [
   # into plane.py under a comment calling that "the same posture as everywhere
   # else" — the opposite of the two lines above. The copy matched; nothing
   # checked that it did, in either repository. 0.2 is the first release naming
-  # the vocabulary as a set rather than as four constants a consumer assembles.
+  # the vocabulary as a set rather than as four constants a consumer assembles,
+  # and carrying `integration.eval.audit_payload` — the re-keying from the
+  # posted health payload into the eval feed, which differs by one field name
+  # and silently floors the graded confidence when a consumer does it by hand.
   "axor-probe>=0.2,<0.3",
   "fastapi>=0.111", "sse-starlette>=2.1", "uvicorn>=0.29",
   "sqlalchemy[asyncio]>=2.0", "asyncpg>=0.29",
