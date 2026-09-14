@@ -101,8 +101,43 @@ one), consumption is a fact:
   request it into effect. Partial application is not allowed (no silently-narrower heal).
 - Downstream heat/attestation semantics are unchanged: excision removes content, it never
   vouches (spec 8.2.1); Sentinel branches end at the excision event.
-- After consumption the backend clears `pending_excision` and the plane service schedules
-  the verifying re-probe (spec 8.2.1 "heal -> verify, one gesture").
+- After consumption the backend clears `pending_excision` (`POST /v1/plane/{node}/consumed`).
+
+### Where the excision comes from, and how it is verified
+
+The plane does **not** schedule the verifying re-probe — an earlier draft of this
+section said it did, and it cannot: batteries run node-side and are posted out-dial
+(`POST /v1/plane/{node}/probe-report`), and the plane never dials into a customer
+runtime. The verification is a pairing, not a trigger.
+
+1. **The node localizes.** `axor_probe.repair.localize` needs an escape oracle — the
+   customer's own model on a sandbox copy of the context — so it runs where the agent
+   runs. Its `RepairProposal` rides along with the health check as `repair_proposal`
+   (`axor_probe.integration.plane.proposal_payload`). A malformed one is rejected at
+   ingest, while the node is still there to hear it; an absent one is fine and simply
+   means there is nothing to offer an operator.
+2. **An operator shapes the cut.** `POST /v1/plane/{node}/repair/excision-request`
+   with a required `reason` returns the `pending_excision` body — built by
+   `axor_probe.integration.plane.excision_request`, which refuses a proposal that does
+   not authorize it (422), including one whose fragments the localizer ESCALATED and
+   the operator has not confirmed by name. **This route writes nothing.**
+3. **The command goes through the ordinary door.** The body is signed and sent to
+   `POST /v1/plane/{node}/command`, which is the one write into desired state and the
+   one that verifies an operator signature. A second route that wrote the excision
+   directly would be an unsigned path into the governance channel.
+4. **The plane records the heal.** The write is hooked at the command, not at the
+   surface that offered it, so a cut issued by curl is tracked like one issued by the
+   health panel. An excision without an `id` is refused: the adapter keys at-most-once
+   off it, and a cut with no id can never be paired to its verification.
+5. **The first health check afterwards verifies it.** Whichever battery it happens to
+   be — a node reports its own health, not one battery per excision. `heal_outcome`
+   decides the result and is green only for a `CONSISTENT` re-probe. Later checks
+   describe a later state and leave the closed verdict alone: a cut that failed does
+   not turn green on its own the next time the agent happens to probe clean.
+
+`GET /v1/plane/{node}/repair` serves all three: the proposal, the excision in flight,
+and the heal history. A heal awaiting its re-probe reports `reprobe_verdict: null`,
+which is **not** the same as `resolved: false`.
 
 ## 5. Telemetry upstream
 

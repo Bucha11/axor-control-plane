@@ -206,6 +206,44 @@ export interface ProbeHealth {
   max_drift_score_uncalibrated: number;
 }
 
+// What the localizer found (axor-probe `repair.localize`), as the node posted
+// it. `auto_excise` is the pure-tainted cut — no legitimate task content, so no
+// collateral; `escalate` names fragments that also carry real work and are only
+// cut when the operator explicitly confirms them.
+export interface RepairProposal {
+  verdict: "auto_excise" | "escalate_operator" | "no_drift_from_taint";
+  drift_fragments: string[];
+  excision: string[];
+  auto_excise: string[];
+  escalate: string[];
+  recommend_quarantine_all: boolean;
+  approximate: boolean;
+}
+
+// One commanded cut and its verifying re-probe. THREE states, not two:
+// `reprobe_verdict === null` means the node has not reported back yet, which is
+// not the same as a cut that failed — rendering it as `resolved: false` would
+// make an unmeasured heal look like a broken one.
+export interface HealAttempt {
+  id: number;
+  excision_id: string;
+  operator: string;
+  reason: string;
+  target_refs: string[];
+  families: string[];
+  requested_ts: string;
+  reprobe_verdict: string | null;
+  resolved: boolean | null;
+  outcome_ts: string | null;
+}
+
+export interface RepairState {
+  proposal: RepairProposal | null;
+  version: number;
+  pending: { id: string; target_refs: string[]; reason: string; operator: string } | null;
+  history: HealAttempt[];
+}
+
 export interface ProbeCheck {
   id: number;
   created_ts: string;
@@ -988,6 +1026,35 @@ export const api = {
   probeReport: (nodeId: string) =>
     af(`/v1/plane/${nodeId}/probe-report`).then((r) =>
       j<{ latest: ProbeHealth | null; history: ProbeCheck[] }>(r)),
+
+  // What the localizer proposed, what is in flight, and how past heals ended.
+  repair: (nodeId: string) =>
+    af(`/v1/plane/${nodeId}/repair`).then((r) => j<RepairState>(r)),
+
+  // Self-heal, in the two steps it actually is.
+  //
+  // The first asks the plane to SHAPE the cut: axor-probe's `excision_request`
+  // turns the node's proposal into a `pending_excision` body, refusing one that
+  // the proposal does not authorize (422). It writes nothing.
+  //
+  // The second is the ordinary signed command door — the same one Control uses
+  // to pause a node — carrying that body. It has to be this door: an excision
+  // is an operator instruction to delete part of a running agent's context, and
+  // a route that wrote it without a signature would be the unsigned way into
+  // the channel the operator keyring exists to protect.
+  //
+  // Until this existed, "Self-heal" appended an operator_attestation fact and
+  // told the operator to await a verifying re-probe. Nothing had been cut.
+  selfHeal: async (
+    nodeId: string, reason: string, includeEscalated = false,
+  ) => {
+    const shaped = await af(`/v1/plane/${nodeId}/repair/excision-request`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ reason, include_escalated: includeEscalated }),
+    }).then((r) => j<{ state: Record<string, unknown>; version: number }>(r));
+    return api.command(nodeId, shaped.version, shaped.state);
+  },
 
   // ── governed node: a real axor-core IntentLoop wired to the plane ──────────
   spawnGoverned: () =>

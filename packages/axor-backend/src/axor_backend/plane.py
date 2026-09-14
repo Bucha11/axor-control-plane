@@ -7,6 +7,8 @@ POST /v1/plane/{node_id}/facts      append-only facts (attestations)
 POST /v1/plane/{node_id}/consumed   one-shot consumption ack (injection/excision)
 POST /v1/plane/{node_id}/probe-report  behavioral health check posted by the node
 GET  /v1/plane/{node_id}/probe-report  last check + the series behind it
+GET  /v1/plane/{node_id}/repair        the localizer's proposal + heal history
+POST /v1/plane/{node_id}/repair/excision-request  shape a cut (does NOT command)
 
 Merge/absorb semantics live in axor_core.kernel.state.DesiredState — the
 backend persists and fans out; it does not interpret. Signature verification
@@ -88,6 +90,12 @@ async def command(node_id: str, body: dict, request: Request) -> dict:
         ctx, node_id, delta, expect_version=version - 1,
         signature=_signature(ctx, operator, timestamp, sig),
     )
+    # A commanded cut opens the heal half of the heal->verify pair. The hook is
+    # HERE, at the write that actually reaches the node's desired state, not on
+    # the surface that offers the cut: an excision is an excision whether it
+    # came from the health panel, a CLI, or curl, and the pair has to close for
+    # all three.
+    await _open_heal(ctx, node_id, delta, operator)
     message = {
         "type": "delta", "node_id": node_id, "version": new_version,
         "state": state, "delta": delta, "operator": operator,
@@ -95,6 +103,34 @@ async def command(node_id: str, body: dict, request: Request) -> dict:
     }
     ctx.broadcast.publish(topic("plane", node_id), message)
     return {"node_id": node_id, "version": new_version, "state": state}
+
+
+async def _open_heal(
+    ctx: Any, node_id: str, delta: dict, operator: str,  # noqa: ANN401
+) -> None:
+    """Record a commanded `pending_excision` as an open heal attempt."""
+    excision = delta.get("pending_excision")
+    if not isinstance(excision, dict):
+        return
+    excision_id = str(excision.get("id") or excision.get("excision_id") or "")
+    if not excision_id:
+        # The adapter keys at-most-once off this id (protocol §4). An excision
+        # without one is not a one-shot and its heal cannot be verified either,
+        # so it is refused rather than delivered and silently untracked.
+        raise HTTPException(400, "pending_excision requires an `id`")
+    latest = await ctx.store.latest_probe_report(node_id)
+    families = [
+        f.get("family") for f in (latest or {}).get("families", [])
+        if isinstance(f, dict) and f.get("state") == probe_plane.FAMILY_ESCAPED
+    ]
+    await ctx.store.open_heal_attempt(
+        node_id, excision_id,
+        str(excision.get("operator") or operator),
+        str(excision.get("reason", "")),
+        [str(r) for r in excision.get("target_refs", [])],
+        [str(f) for f in families if f],
+        now(),
+    )
 
 
 @router.post("/{node_id}/cascade-stop", status_code=202)
@@ -570,7 +606,18 @@ async def post_probe_report(node_id: str, body: dict, request: Request) -> dict:
         # crashed instead of the report being rejected.
         if not isinstance(fam.get("family"), str) or not fam["family"]:
             raise HTTPException(400, "each family needs a non-empty `family` name")
+    # The repair proposal rides along when the node ran the localizer. It is
+    # optional — a battery without one is a battery, and a node that does not
+    # localize still reports health — but a malformed one is refused rather
+    # than stored: this is the object an operator's excision is built from, and
+    # the refusal has to happen while the node is still there to hear it.
+    if "repair_proposal" in body:
+        try:
+            probe_plane.proposal_from_payload(body["repair_proposal"])
+        except ValueError as exc:
+            raise HTTPException(400, f"repair_proposal: {exc}") from exc
     report_id = await ctx.store.add_probe_report(node_id, body, now())
+    outcomes = await _close_heals(ctx, node_id, verdict)
     ctx.broadcast.publish(
         topic("plane", node_id),
         {"type": "probe_report", "node_id": node_id, "report": body},
@@ -585,7 +632,36 @@ async def post_probe_report(node_id: str, body: dict, request: Request) -> dict:
                           if f.get("state") == "escaped"],
              "permalink": f"/v1/plane/nodes#{node_id}"},
         )
-    return {"stored": True, "id": report_id}
+    return {"stored": True, "id": report_id, "heals_verified": outcomes}
+
+
+async def _close_heals(ctx: Any, node_id: str, verdict: str) -> list[dict]:  # noqa: ANN401
+    """Fold this report into every commanded cut still awaiting verification.
+
+    The FIRST report after a cut is the verifying re-probe, whichever battery
+    it happens to be — a node reports its own health, it does not run one
+    battery per excision. Later reports describe a later state and leave the
+    closed verdict alone, which is what makes the pair readable afterwards:
+    "this cut was followed by this result", not "the node is fine now".
+
+    `resolved` is axor-probe's, not a comparison written again here.
+    """
+    outcomes = []
+    for attempt in await ctx.store.open_heal_attempts(node_id):
+        outcome = probe_plane.heal_outcome(
+            attempt["excision_id"], attempt["operator"],
+            tuple(attempt["families"]), verdict,
+        )
+        await ctx.store.close_heal_attempt(
+            attempt["id"], outcome.reprobe_verdict, outcome.resolved, now(),
+        )
+        outcomes.append({
+            "excision_id": outcome.excision_id, "operator": outcome.operator,
+            "healed_families": list(outcome.healed_families),
+            "reprobe_verdict": outcome.reprobe_verdict,
+            "resolved": outcome.resolved, "caption": outcome.caption,
+        })
+    return outcomes
 
 
 @router.get("/{node_id}/probe-report")
@@ -601,6 +677,81 @@ async def get_probe_report(node_id: str, request: Request) -> dict:
     return {
         "latest": await ctx.store.latest_probe_report(node_id),
         "history": await ctx.store.probe_report_history(node_id),
+    }
+
+
+@router.get("/{node_id}/repair")
+async def get_repair(node_id: str, request: Request) -> dict:
+    """What the localizer found, what was cut, and whether it worked.
+
+    `proposal` is the RepairProposal the node posted with its last battery, or
+    null when it did not run the localizer — there is nothing to offer an
+    operator then, and the panel says so rather than offering a cut with no
+    verdict behind it. `pending` is the excision currently sitting in desired
+    state (delivered, not yet consumed). `history` is the heal->verify pairs,
+    newest first, including the ones still waiting for their re-probe.
+    """
+    ctx = _ctx(request)
+    latest = await ctx.store.latest_probe_report(node_id)
+    current = await ctx.store.get_desired(node_id)
+    state = current[1] if current else {}
+    return {
+        "proposal": (latest or {}).get("repair_proposal"),
+        "version": current[0] if current else 0,
+        "pending": state.get("pending_excision"),
+        "history": await ctx.store.heal_attempt_history(node_id),
+    }
+
+
+@router.post("/{node_id}/repair/excision-request")
+async def build_excision(node_id: str, body: dict, request: Request) -> dict:
+    """Turn the node's repair proposal into a `pending_excision` command body.
+
+    This route SHAPES; it does not command. The body it returns goes back
+    through `POST /{node}/command`, which is the one door into desired state
+    and the one that checks an operator signature. Writing the excision here
+    would have been a second door into the same channel that skipped the
+    signature — on the deployments the operator keyring exists for, the
+    convenient route would have been the unsigned one.
+
+    The body is built by `axor_probe.integration.plane.excision_request`, so
+    the rule that fragments the localizer ESCALATED are not cut without an
+    explicit `include_escalated` is enforced by the library that decided which
+    fragments those were, not by a copy of the rule living here.
+    """
+    ctx = _ctx(request)
+    reason = body.get("reason", "")
+    if not isinstance(reason, str) or not reason.strip():
+        raise HTTPException(400, "reason is required")
+    latest = await ctx.store.latest_probe_report(node_id)
+    payload = (latest or {}).get("repair_proposal")
+    if payload is None:
+        raise HTTPException(
+            409,
+            "no repair proposal for this node: the last battery did not "
+            "localize the drift, so there is nothing to excise",
+        )
+    try:
+        proposal = probe_plane.proposal_from_payload(payload)
+    except ValueError as exc:  # pragma: no cover - refused at ingest
+        raise HTTPException(500, f"stored repair_proposal is not one: {exc}") from exc
+
+    excision_id = str(body.get("excision_id") or f"exc_{node_id}_{latest['id']}")
+    try:
+        command_body = probe_plane.excision_request(
+            proposal, excision_id=excision_id, reason=reason.strip(),
+            operator=str(body.get("operator", "op_ui")),
+            include_escalated=bool(body.get("include_escalated", False)),
+        )
+    except probe_plane.ExcisionNotApplicable as exc:
+        # 422: the request is well-formed, the proposal does not authorize it.
+        raise HTTPException(422, str(exc)) from exc
+
+    current = await ctx.store.get_desired(node_id)
+    return {
+        "state": {"pending_excision": command_body},
+        "version": (current[0] if current else 0) + 1,
+        "escalated_included": bool(body.get("include_escalated", False)),
     }
 
 

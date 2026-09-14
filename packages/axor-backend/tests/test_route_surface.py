@@ -115,6 +115,14 @@ EXPECTED: dict[tuple[str, str], str] = {
     ("POST", "/v1/plane/{node_id}/consumed"): "ingest",
     ("POST", "/v1/plane/{node_id}/probe-report"): "ingest",
     ("GET", "/v1/plane/{node_id}/probe-report"): "read",
+    # Drift telemetry, same bar as the battery it came with: what the node's
+    # localizer blamed, and how past cuts ended.
+    ("GET", "/v1/plane/{node_id}/repair"): "read",
+    # Writes nothing — and still `operate`. What it returns is a governance
+    # command body, shaped to be signed and sent: naming fragments to delete
+    # from a running agent's context is the operator action, and handing
+    # somebody the pre-built instruction should not cost less than issuing it.
+    ("POST", "/v1/plane/{node_id}/repair/excision-request"): "operate",
     ("GET", "/v1/plane/{node_id}/coverage"): "read",
     ("GET", "/v1/plane/topology"): "read",
     ("GET", "/v1/plane/nodes"): "read",

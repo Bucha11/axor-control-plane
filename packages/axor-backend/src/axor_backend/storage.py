@@ -329,6 +329,31 @@ probe_reports = Table(
     Column("org_id", String(64), nullable=False, server_default=PUBLIC_ORG, index=True),
 )
 
+# One row per commanded excision — the heal half of the heal->verify pair
+# (ui-spec 8.2.1). It is written when a `pending_excision` actually reaches
+# desired state, not when a UI offers to write one, so it records what the node
+# was told to do rather than what an operator considered. `reprobe_verdict` is
+# filled by the FIRST health check that arrives afterwards; `resolved` is
+# axor-probe's `heal_outcome`, which is green only for a CONSISTENT re-probe.
+heal_attempts = Table(
+    "heal_attempts", metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("node_id", String(128), nullable=False, index=True),
+    Column("excision_id", String(128), nullable=False),
+    Column("operator", String(128), nullable=False, default=""),
+    Column("reason", String(500), nullable=False, default=""),
+    Column("target_refs", _JSON, nullable=False),
+    # The families that were escaped when the cut was commanded — what the heal
+    # was FOR. Read back into the outcome so "healed by op → re-probe: OK" names
+    # them; recomputing it later from a newer report would name the wrong set.
+    Column("families", _JSON, nullable=False),
+    Column("requested_ts", String(40), nullable=False),
+    Column("reprobe_verdict", String(32), nullable=True),
+    Column("resolved", Boolean, nullable=True),
+    Column("outcome_ts", String(40), nullable=True),
+    Column("org_id", String(64), nullable=False, server_default=PUBLIC_ORG, index=True),
+)
+
 api_keys = Table(
     "api_keys", metadata,
     Column("key_id", String(32), primary_key=True),
@@ -1735,6 +1760,84 @@ class Store:
             for r in reversed(rows)
         ]
 
+    # ── self-heal: the commanded excision and its verifying re-probe ────────
+
+    async def open_heal_attempt(
+        self, node_id: str, excision_id: str, operator: str, reason: str,
+        target_refs: list[str], families: list[str], ts: str,
+    ) -> int:
+        """Record that an excision was commanded, awaiting its re-probe.
+
+        Idempotent on `excision_id`: the excision is a one-shot by id at the
+        adapter, and a command re-sent at a new version is the same heal, not a
+        second one. Without that, a retried command would open a second open
+        attempt and the next report would close only one of them, leaving a row
+        that never resolves.
+        """
+        async with self.engine.begin() as conn:
+            existing = (await conn.execute(
+                select(heal_attempts.c.id).where(
+                    heal_attempts.c.node_id == node_id,
+                    heal_attempts.c.excision_id == excision_id,
+                    heal_attempts.c.org_id == current_org_id(),
+                )
+            )).first()
+            if existing is not None:
+                return int(existing.id)
+            result = await conn.execute(insert(heal_attempts).values(
+                node_id=node_id, excision_id=excision_id, operator=operator,
+                reason=reason, target_refs=list(target_refs),
+                families=list(families), requested_ts=ts,
+                reprobe_verdict=None, resolved=None, outcome_ts=None,
+                org_id=current_org_id(),
+            ))
+            return int(result.inserted_primary_key[0])
+
+    async def open_heal_attempts(self, node_id: str) -> list[dict[str, Any]]:
+        """Every commanded excision on this node still waiting for a re-probe,
+        oldest first. Plural because two cuts can be in flight, and one report
+        verifies the node, not one of them."""
+        async with self.engine.connect() as conn:
+            rows = (await conn.execute(
+                select(heal_attempts).where(
+                    heal_attempts.c.node_id == node_id,
+                    heal_attempts.c.org_id == current_org_id(),
+                    heal_attempts.c.reprobe_verdict.is_(None),
+                ).order_by(heal_attempts.c.id)
+            )).all()
+        return [_heal_row(r) for r in rows]
+
+    async def close_heal_attempt(
+        self, attempt_id: int, reprobe_verdict: str, resolved: bool, ts: str,
+    ) -> None:
+        """Fold in the verifying re-probe. Only an OPEN attempt is closed: the
+        second report after a heal describes a later state of the node and must
+        not overwrite the verdict the first one gave this cut."""
+        async with self.engine.begin() as conn:
+            await conn.execute(
+                update(heal_attempts)
+                .where(
+                    heal_attempts.c.id == attempt_id,
+                    heal_attempts.c.org_id == current_org_id(),
+                    heal_attempts.c.reprobe_verdict.is_(None),
+                )
+                .values(reprobe_verdict=reprobe_verdict, resolved=resolved,
+                        outcome_ts=ts)
+            )
+
+    async def heal_attempt_history(
+        self, node_id: str, limit: int = 20,
+    ) -> list[dict[str, Any]]:
+        """Newest first — the heals this node has had, resolved or not."""
+        async with self.engine.connect() as conn:
+            rows = (await conn.execute(
+                select(heal_attempts).where(
+                    heal_attempts.c.node_id == node_id,
+                    heal_attempts.c.org_id == current_org_id(),
+                ).order_by(heal_attempts.c.id.desc()).limit(limit)
+            )).all()
+        return [_heal_row(r) for r in rows]
+
     # ── Lab deploys (axor-cp-deploy/v1 packages accepted from Axor Lab) ──────
 
     async def add_lab_deploy(
@@ -1935,6 +2038,16 @@ class Store:
              "attempts": r.attempts, "created_ts": r.created_ts}
             for r in rows
         ]
+
+
+def _heal_row(row: Any) -> dict[str, Any]:  # noqa: ANN401 - a SQLAlchemy Row
+    return {
+        "id": row.id, "excision_id": row.excision_id, "operator": row.operator,
+        "reason": row.reason, "target_refs": list(row.target_refs or []),
+        "families": list(row.families or []), "requested_ts": row.requested_ts,
+        "reprobe_verdict": row.reprobe_verdict, "resolved": row.resolved,
+        "outcome_ts": row.outcome_ts,
+    }
 
 
 def _commands_map(recorded: Any) -> tuple[dict[str, str], dict[str, Any]]:  # noqa: ANN401
