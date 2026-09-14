@@ -127,6 +127,12 @@ _ROUTE_POLICY: tuple[tuple[str, str, str], ...] = (
     # a node has, and axor-wrap treats a 4xx here as a programming error and
     # raises, so the battery crashed instead of degrading.
     ("/v1/plane/", "/probe-report", "ingest"),
+    # Same shape again: a node's own sentinel posting the reputation it computed
+    # across sessions. Out-dial, about itself, on the node's own credential. The
+    # plane cannot compute this and must not — the cycle runs where the agent
+    # runs (ui-spec §12.0) — so `operate` here would mean the only party that
+    # HAS the snapshot is the one party that cannot post it.
+    ("/v1/plane/", "/reputation", "ingest"),
     # Influence ranking is subgraph ablation: replay with one value excised.
     # Its siblings /v1/replay and /v1/regression are `read` for exactly that
     # reason; this one inherited `ingest` from the /v1/runs/ prefix, so a

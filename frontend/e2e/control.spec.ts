@@ -3,7 +3,8 @@
 // on the plane the operator can pause, cap the budget (decrease-only), and reach
 // the intervention menu. One test drives the REAL end-to-end spawn (proxy +
 // axor-core IntentLoop + plane), the rest use a seeded node for determinism.
-import { expect, test } from "@playwright/test";
+import { expect, request, test } from "@playwright/test";
+import snapshotFixture from "./fixtures/reputation-snapshot.json" with { type: "json" };
 import { BACKEND, goHash, seedDegradedNode, seedNode, setConnection, uniqueNode } from "./helpers";
 
 test.describe("control", () => {
@@ -147,5 +148,56 @@ test.describe("control", () => {
     // The proxy runs a real axor-core IntentLoop, uploads its trace and keeps a
     // PlaneClient heartbeating; the UI switches to adapter and lists it live.
     await expect(page.getByText(/governed-[0-9a-f]+/).first()).toBeVisible({ timeout: 30_000 });
+  });
+});
+
+// Cross-session reputation reaching the plane (ui-spec:416). The axis lives on
+// the node — axor-sentinel's cycle runs beside axor-core and posts out-dial —
+// and until now the plane had nowhere to put it: no route, no table, and a
+// topology that answered with posture and nothing else.
+test.describe("cross-session reputation", () => {
+  const NODE = "rep-node";
+
+  test("a node's sentinel verdict reaches the graph and names its facts", async ({ page }) => {
+    const ctx = await request.newContext();
+    // the node exists on the plane
+    await ctx.post(`${BACKEND}/v1/plane/${NODE}/command`, {
+      data: { version: 1, state: { paused: false }, operator: "op_ui", timestamp: "", sig: "" },
+    });
+    // its own sentinel posts what it found across sessions. The payload is a
+    // REAL snapshot recorded from axor-sentinel (e2e/fixtures), not one this
+    // test assembles: the checksum covers a canonical serialisation of the
+    // reputation maps that only the library that wrote it should produce, and
+    // a test that recomputed it here would be asserting against its own copy
+    // of the rule instead of against the rule.
+    const posted = await ctx.post(`${BACKEND}/v1/plane/${NODE}/reputation`, {
+      data: snapshotFixture,
+    });
+    expect(posted.status()).toBe(201);
+
+    await setConnection(page, { mode: "adapter" });
+    await goHash(page, "control");
+    await page.getByRole("button", { name: "graph" }).click();
+
+    // the badge on the node, and the facts behind the verdict when selected
+    await expect(page.getByTestId(`topo-rep-${NODE}`)).toBeVisible();
+    await page.getByTestId(`topo-node-${NODE}`).click();
+    await expect(page.getByText("cross-session reputation · axor-sentinel · snapshot v4")).toBeVisible();
+    await expect(page.getByText("db:customers")).toBeVisible();
+    await expect(page.getByText("P3 staging count: 4 tainted sessions / 30d")).toBeVisible();
+  });
+
+  test("a node with no sentinel says so instead of reading clean", async ({ page }) => {
+    const ctx = await request.newContext();
+    await ctx.post(`${BACKEND}/v1/plane/unwatched-node/command`, {
+      data: { version: 1, state: { paused: false }, operator: "op_ui", timestamp: "", sig: "" },
+    });
+    await setConnection(page, { mode: "adapter" });
+    await goHash(page, "control");
+    await page.getByRole("button", { name: "graph" }).click();
+    await page.getByTestId("topo-node-unwatched-node").click();
+
+    await expect(page.getByText("no axor-sentinel is reporting here", { exact: false })).toBeVisible();
+    await expect(page.getByTestId("topo-rep-unwatched-node")).toHaveCount(0);
   });
 });

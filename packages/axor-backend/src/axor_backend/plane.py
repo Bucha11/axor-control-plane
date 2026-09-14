@@ -24,6 +24,10 @@ from collections.abc import AsyncIterator
 from typing import Any
 
 from axor_probe.integration import plane as probe_plane
+from axor_sentinel.sentinel.snapshot import (
+    SnapshotRejected,
+    snapshot_from_payload,
+)
 from fastapi import APIRouter, Header, HTTPException, Request
 from sse_starlette.sse import EventSourceResponse
 
@@ -770,6 +774,116 @@ async def build_excision(node_id: str, body: dict, request: Request) -> dict:
     }
 
 
+# ── cross-session reputation ──────────────────────────────────────────────────
+#
+# The one axis in this product that survives between sessions. axor-core sees
+# one session, axor-eval one scenario, axor-probe one battery, and this plane
+# one node's posture; axor-sentinel is what watches a resource across all of
+# them, which is what catches an exfiltration staged over dozens of
+# individually normal sessions.
+#
+# It runs on the NODE, beside axor-core, and it must: ui-spec §12.0 — enforcement
+# stays local, the plane never enters the decision path. A reputation cycle
+# running here, feeding a node's own decisions, is precisely what that
+# architecture forbids. So the snapshot is posted out-dial, exactly like
+# telemetry and the health check, and the plane's job is the one ui-spec:416
+# gives it: render the reputation, per node.
+#
+# What arrives is `axor_sentinel.sentinel.snapshot`'s own shape, parsed by its
+# own `snapshot_from_payload` — the checksum check, the finite suspicion
+# codomain and the level vocabulary all belong to the library that computes
+# them. A plane that decided for itself what a reputation verdict is would be a
+# second answer to the question Sentinel exists to answer.
+
+
+@router.post("/{node_id}/reputation", status_code=201)
+async def post_reputation(node_id: str, body: dict, request: Request) -> dict:
+    """Ingest one ReputationSnapshot from a node's axor-sentinel.
+
+    Refused (400) when the payload is not a snapshot — including a checksum
+    that does not match the maps it carries. On disk that check catches a lost
+    bit between two processes that trust each other; over this wire the maps
+    and their checksum arrive together from somewhere else, and clearing a
+    FLAGGED resource is exactly the edit worth making.
+
+    A snapshot no newer than the one held is accepted and NOT stored (200-shaped
+    `{"stored": false}` in a 201 body would lie, so the answer says which). The
+    version is monotonic at the sentinel that wrote it, so an older one is a
+    retry or a reorder — never news, and never a reason to walk a node's
+    reputation backwards.
+    """
+    ctx = _ctx(request)
+    try:
+        snapshot = snapshot_from_payload(body)
+    except SnapshotRejected as exc:
+        raise HTTPException(400, f"reputation snapshot: {exc}") from exc
+
+    stored = await ctx.store.put_reputation(
+        node_id, snapshot.version, snapshot.generated_at, body, now(),
+    )
+    if not stored:
+        held = await ctx.store.reputation(node_id)
+        raise HTTPException(
+            409,
+            f"snapshot version {snapshot.version} is not newer than the "
+            f"version {held['version']} already held for this node",
+        )
+    ctx.broadcast.publish(
+        topic("plane", node_id),
+        {"type": "reputation", "node_id": node_id, "version": snapshot.version},
+    )
+    notifier = getattr(ctx, "notifier", None)
+    flagged = sorted(
+        rid for rid, level in snapshot.resource_level.items() if level == "FLAGGED"
+    )
+    if notifier is not None and flagged:
+        await notifier.emit(
+            "heat_threshold", node_id,
+            {"flagged": flagged, "version": snapshot.version,
+             "facts": {rid: snapshot.verdict_facts.get(rid, []) for rid in flagged},
+             "permalink": f"/v1/plane/nodes#{node_id}"},
+        )
+    return {"stored": True, "version": snapshot.version, "flagged": len(flagged)}
+
+
+@router.get("/{node_id}/reputation")
+async def get_reputation(node_id: str, request: Request) -> dict:
+    """The node's last reported reputation, or null.
+
+    Null means this node has no sentinel reporting — an absence of evidence,
+    rendered as such and never as a clean bill, the same rule the health panel
+    holds for a node that never posted a battery.
+    """
+    return {"reputation": await _ctx(request).store.reputation(node_id)}
+
+
+def _reputation_summary(snapshot: dict | None) -> dict | None:
+    """Per-node counts for the topology annotation, or None.
+
+    None is a node whose sentinel has never reported, and it renders as an
+    absence. It is NOT `flagged: 0`: "nobody is watching this node across
+    sessions" and "somebody is watching and found nothing" are opposite facts,
+    and collapsing them would make an unwatched node the cleanest thing on the
+    graph.
+    """
+    if snapshot is None:
+        return None
+    levels = snapshot.get("resource_level") or {}
+    counts = {"FLAGGED": 0, "WATCH": 0, "CLEAN": 0}
+    for level in levels.values():
+        if level in counts:
+            counts[level] += 1
+    return {
+        "version": snapshot.get("version"),
+        "generated_at": snapshot.get("generated_at"),
+        "received_ts": snapshot.get("received_ts"),
+        "flagged": counts["FLAGGED"],
+        "watch": counts["WATCH"],
+        "clean": counts["CLEAN"],
+        "resources": len(levels),
+    }
+
+
 @router.get("/topology")
 async def topology(request: Request) -> dict:
     """The tree as a graph — derived ONLY from traced events (node_spawned /
@@ -827,9 +941,10 @@ async def topology(request: Request) -> dict:
     # Plane-connected nodes with no traced edges still render (size-1 lists).
     for nid in await ctx.store.list_nodes():
         touch(nid)
-    # Two queries for the whole fleet, not two per node.
+    # Three queries for the whole fleet, not three per node.
     desired_by_node = await ctx.store.all_desired()
     reported_by_node = await ctx.store.all_reported()
+    reputation_by_node = await ctx.store.all_reputation()
     for n in nodes.values():
         if n["kind"] != "self":
             continue  # foreign peers are opaque: no posture, no interventions
@@ -838,6 +953,12 @@ async def topology(request: Request) -> dict:
             {"version": current[0], "state": current[1]} if current else None
         )
         n["reported"] = reported_by_node.get(n["node_id"])
+        # ui-spec:416 — "topology annotated with cross-session reputation per
+        # node". Summarised, not the whole snapshot: this surface is polled and
+        # a sentinel's resource map is unbounded. The counts say whether to
+        # look; `GET /{node}/reputation` is where the resources and the facts
+        # behind each verdict are.
+        n["reputation"] = _reputation_summary(reputation_by_node.get(n["node_id"]))
     return {
         "nodes": sorted(nodes.values(), key=lambda n: n["node_id"]),
         "edges": sorted(edges.values(), key=lambda e: (e["from"], e["to"], e["kind"])),

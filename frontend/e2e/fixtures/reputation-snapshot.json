@@ -1,0 +1,23 @@
+{
+  "checksum": "cbb9609b073cbd17711080e5e277168b6e0179ad681504f9a03288e99cc17809",
+  "container_level": {},
+  "container_reputation": {},
+  "container_score_telemetry": {},
+  "generated_at": 1700000004.0,
+  "resource_level": {
+    "db:customers": "FLAGGED",
+    "s3:exports": "WATCH"
+  },
+  "resource_reputation": {
+    "db:customers": 1.0,
+    "s3:exports": 0.4
+  },
+  "resource_score_telemetry": {},
+  "signature": "",
+  "verdict_facts": {
+    "db:customers": [
+      "P3 staging count: 4 tainted sessions / 30d"
+    ]
+  },
+  "version": 4
+}

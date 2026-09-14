@@ -123,6 +123,12 @@ EXPECTED: dict[tuple[str, str], str] = {
     # from a running agent's context is the operator action, and handing
     # somebody the pre-built instruction should not cost less than issuing it.
     ("POST", "/v1/plane/{node_id}/repair/excision-request"): "operate",
+    # A node's own sentinel posting what it computed — out-dial, the same shape
+    # and the same bar as telemetry and the health check. `ingest` is what a
+    # node's credential holds; requiring `operate` would put it out of reach of
+    # the only key a node has.
+    ("POST", "/v1/plane/{node_id}/reputation"): "ingest",
+    ("GET", "/v1/plane/{node_id}/reputation"): "read",
     ("GET", "/v1/plane/{node_id}/coverage"): "read",
     ("GET", "/v1/plane/topology"): "read",
     ("GET", "/v1/plane/nodes"): "read",

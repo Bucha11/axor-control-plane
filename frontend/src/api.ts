@@ -270,11 +270,41 @@ export interface ProbeCheck {
 }
 
 // Topology (spec v2 Ch.4 §6): derived from traced spawn/message events only.
+// Per-node cross-session reputation, as the node's own axor-sentinel last
+// reported it. `null` means NO sentinel is reporting for this node — an absence,
+// never a clean bill: "nobody watches this node across sessions" and "somebody
+// watches and found nothing" are opposite facts, and collapsing them would make
+// an unwatched node the safest-looking thing on the graph.
+export interface ReputationSummary {
+  version: number;
+  generated_at: number;
+  received_ts: string;
+  flagged: number;
+  watch: number;
+  clean: number;
+  resources: number;
+}
+
+// The whole snapshot, from GET /v1/plane/{node}/reputation. `verdict_facts`
+// names which predicate fired for each non-clean resource — a reputation number
+// on its own is an accusation.
+export interface ReputationSnapshot {
+  version: number;
+  generated_at: number;
+  received_ts: string;
+  resource_reputation: Record<string, number>;
+  container_reputation: Record<string, number>;
+  resource_level: Record<string, "CLEAN" | "WATCH" | "FLAGGED">;
+  container_level: Record<string, "CLEAN" | "WATCH" | "FLAGGED">;
+  verdict_facts: Record<string, string[]>;
+}
+
 export interface TopologyNode {
   node_id: string;
   kind: "self" | "peer";
   desired?: { version: number; state: Record<string, unknown> } | null;
   reported?: NodeInfo["reported"];
+  reputation?: ReputationSummary | null;
 }
 
 export interface TopologyEdge {
@@ -638,6 +668,14 @@ export const api = {
   nodes: () => af("/v1/plane/nodes").then((r) => j<NodeInfo[]>(r)),
 
   topology: () => af("/v1/plane/topology").then((r) => j<TopologyPayload>(r)),
+
+  // What a node's axor-sentinel found across sessions — the one axis in the
+  // product that survives between them. The cycle runs on the NODE (enforcement
+  // stays local; the plane never enters the decision path, ui-spec 12.0) and
+  // posts the snapshot out-dial; this reads what it posted.
+  reputation: (nodeId: string) =>
+    af(`/v1/plane/${nodeId}/reputation`).then((r) =>
+      j<{ reputation: ReputationSnapshot | null }>(r)),
 
   subgraph: (runId: string, anchor: CaseAnchor) =>
     af(`/v1/runs/${runId}/subgraph?anchor_node=${encodeURIComponent(anchor.node_id)}&anchor_seq=${anchor.seq}`)

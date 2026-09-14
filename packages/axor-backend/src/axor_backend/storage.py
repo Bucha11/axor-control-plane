@@ -329,6 +329,24 @@ probe_reports = Table(
     Column("org_id", String(64), nullable=False, server_default=PUBLIC_ORG, index=True),
 )
 
+# The reputation a node's own axor-sentinel computed, as the node last reported
+# it. ONE row per node: a snapshot is a complete statement of what that sentinel
+# currently believes, versioned monotonically, so the new one replaces the old
+# rather than accumulating beside it — history lives in the sentinel's own
+# append-only evidence sets, on the node, where the facts behind each verdict
+# are. `version` is kept so a snapshot that arrives out of order can be refused
+# instead of rewinding a node's reputation.
+reputation_snapshots = Table(
+    "reputation_snapshots", metadata,
+    Column("node_id", String(128), nullable=False),
+    Column("version", Integer, nullable=False),
+    Column("generated_at", Float, nullable=False),
+    Column("received_ts", String(40), nullable=False),
+    Column("payload_json", _JSON, nullable=False),
+    Column("org_id", String(64), nullable=False, server_default=PUBLIC_ORG),
+    PrimaryKeyConstraint("org_id", "node_id", name="pk_reputation_snapshots"),
+)
+
 # One row per commanded excision — the heal half of the heal->verify pair
 # (ui-spec 8.2.1). It is written when a `pending_excision` actually reaches
 # desired state, not when a UI offers to write one, so it records what the node
@@ -1759,6 +1777,72 @@ class Store:
              "probes_sent": r.probes_sent}
             for r in reversed(rows)
         ]
+
+    # ── cross-session reputation (a node's own axor-sentinel) ───────────────
+
+    async def put_reputation(
+        self, node_id: str, version: int, generated_at: float,
+        payload: dict[str, Any], ts: str,
+    ) -> bool:
+        """Store a node's snapshot. False when a newer one is already held.
+
+        The version is monotonic at the sentinel that wrote it, so an older one
+        arriving later is a retry or a reorder, never news. Accepting it would
+        walk a node's reputation backwards — and the direction that matters is
+        the one where a FLAGGED resource silently returns to clean.
+        """
+        async with self.engine.begin() as conn:
+            held = (await conn.execute(
+                select(reputation_snapshots.c.version).where(
+                    reputation_snapshots.c.node_id == node_id,
+                    reputation_snapshots.c.org_id == current_org_id(),
+                )
+            )).first()
+            if held is not None and int(held.version) >= version:
+                return False
+            values = {
+                "version": version, "generated_at": generated_at,
+                "received_ts": ts, "payload_json": payload,
+            }
+            if held is None:
+                await conn.execute(insert(reputation_snapshots).values(
+                    node_id=node_id, org_id=current_org_id(), **values,
+                ))
+            else:
+                await conn.execute(
+                    update(reputation_snapshots).where(
+                        reputation_snapshots.c.node_id == node_id,
+                        reputation_snapshots.c.org_id == current_org_id(),
+                    ).values(**values)
+                )
+            return True
+
+    async def reputation(self, node_id: str) -> dict[str, Any] | None:
+        async with self.engine.connect() as conn:
+            row = (await conn.execute(
+                select(reputation_snapshots).where(
+                    reputation_snapshots.c.node_id == node_id,
+                    reputation_snapshots.c.org_id == current_org_id(),
+                )
+            )).first()
+        if row is None:
+            return None
+        return {"received_ts": row.received_ts, **row.payload_json}
+
+    async def all_reputation(self) -> dict[str, dict[str, Any]]:
+        """Every node's snapshot, for the fleet surfaces. One query: the
+        topology renders this per node and used to be the shape that cost a
+        round trip each."""
+        async with self.engine.connect() as conn:
+            rows = (await conn.execute(
+                select(reputation_snapshots).where(
+                    reputation_snapshots.c.org_id == current_org_id(),
+                )
+            )).all()
+        return {
+            r.node_id: {"received_ts": r.received_ts, **r.payload_json}
+            for r in rows
+        }
 
     # ── self-heal: the commanded excision and its verifying re-probe ────────
 

@@ -31,7 +31,15 @@ dependencies = [
   # revocation, the required reason. Imported, not restated: a plane that
   # decided for itself what a valid attestation is would be a second answer to
   # a question Sentinel already answers.
-  "axor-sentinel>=0.3.1,<0.4",
+  #
+  # 0.4 is the first release carrying the snapshot WIRE shape
+  # (`snapshot_payload` / `snapshot_from_payload`). Until then this dependency
+  # bought two pure predicates and a claim of alignment with a component that
+  # was not running anywhere: the cross-session reputation axis — the only
+  # thing in this product that survives between sessions — had no route, no
+  # table and no surface here, so `prior_heat` was structurally 0.0 because
+  # there was no heat to discharge. The node's sentinel reports it now.
+  "axor-sentinel>=0.4,<0.5",
   # The behavioural-health vocabulary, from the module that defines the payload
   # `POST /v1/plane/{node}/probe-report` accepts. It was two literals copied
   # into plane.py under a comment calling that "the same posture as everywhere

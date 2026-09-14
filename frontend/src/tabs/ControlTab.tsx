@@ -14,6 +14,102 @@ import Tooltip from "../components/Tooltip";
 
 const REFETCH_MS = 5000;
 
+const LEVEL_COLOR: Record<string, string> = {
+  FLAGGED: C.red, WATCH: C.amber, CLEAN: C.dim,
+};
+
+// What the node's OWN axor-sentinel found across sessions (ui-spec:416).
+//
+// This is the one axis in the product that survives between sessions: axor-core
+// sees one session, axor-eval one scenario, axor-probe one battery, and this
+// plane one node's posture. Sentinel is what watches a resource across all of
+// them, which is what catches an exfiltration staged over dozens of
+// individually normal sessions.
+//
+// It runs on the NODE and must — enforcement stays local, the plane never
+// enters the decision path (ui-spec 12.0). The plane renders what the node
+// posted, and renders the FACTS beside each verdict: a reputation number on its
+// own is an accusation, and the predicate that fired is what an operator acts
+// on.
+function ReputationCard({ nodeId }: { nodeId: string }) {
+  const rep = useQuery({
+    queryKey: ["reputation", nodeId],
+    queryFn: () => api.reputation(nodeId),
+    refetchInterval: REFETCH_MS,
+  });
+  const snapshot = rep.data?.reputation ?? null;
+
+  // No sentinel reporting for this node. Said plainly and NOT drawn as clean:
+  // "nobody watches this node across sessions" and "somebody watches and found
+  // nothing" are opposite facts.
+  if (snapshot === null) {
+    return (
+      <div style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 8,
+                    padding: "10px 14px", marginTop: 8, fontFamily: MONO, fontSize: 11,
+                    color: C.dim, lineHeight: 1.7 }}>
+        No cross-session reputation for <span style={{ color: C.mut }}>{nodeId}</span> —
+        no axor-sentinel is reporting here. That is an absence of evidence, not a
+        clean record, so nothing on this node is coloured for it.
+      </div>
+    );
+  }
+
+  const ranked = Object.entries(snapshot.resource_level)
+    .filter(([, level]) => level !== "CLEAN")
+    .sort(([, a], [, b]) => (a === "FLAGGED" ? -1 : 0) - (b === "FLAGGED" ? -1 : 0));
+  const clean = Object.values(snapshot.resource_level).filter((l) => l === "CLEAN").length;
+
+  return (
+    <div style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 8, marginTop: 8 }}>
+      <div className="flex items-center justify-between px-4 py-2.5"
+           style={{ borderBottom: `1px solid ${C.line}` }}>
+        <span style={{ fontFamily: MONO, fontSize: 11, color: C.mut }}>
+          cross-session reputation · axor-sentinel · snapshot v{snapshot.version}
+        </span>
+        <span style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim }}>
+          {ranked.length === 0 ? `${clean} resources, none flagged` : `${ranked.length} of ${clean + ranked.length} resources`}
+        </span>
+      </div>
+      {ranked.length === 0 ? (
+        <div className="px-4 py-3" style={{ fontFamily: MONO, fontSize: 11, color: C.mut }}>
+          A sentinel is watching this node and has flagged nothing. Unlike an
+          absent snapshot, this one is a verdict.
+        </div>
+      ) : (
+        ranked.map(([resource, level], i) => (
+          <div key={resource} className="px-4 py-3"
+               style={{ borderTop: i ? `1px solid ${C.line}` : "none" }}>
+            <div className="flex items-center gap-3">
+              <span style={{ fontFamily: MONO, fontSize: 12, color: C.text, flex: 1 }}>
+                {resource}
+              </span>
+              <span style={{ fontFamily: MONO, fontSize: 10.5, fontWeight: 700,
+                             color: LEVEL_COLOR[level] ?? C.mut }}>
+                {level}
+              </span>
+            </div>
+            {/* Why. The predicates are declared and decidable (P1–P4), not a
+                trained threshold, so they read as statements an operator can
+                check. */}
+            {(snapshot.verdict_facts[resource] ?? []).map((fact) => (
+              <div key={fact} style={{ fontFamily: MONO, fontSize: 10.5, color: C.mut,
+                                       paddingLeft: 12, marginTop: 4 }}>
+                · {fact}
+              </div>
+            ))}
+          </div>
+        ))
+      )}
+      <div className="px-4 py-2.5" style={{ borderTop: `1px solid ${C.line}`,
+                                            fontFamily: MONO, fontSize: 10.5, color: C.dim, lineHeight: 1.7 }}>
+        Computed by this node's own sentinel and posted out-dial — the plane does
+        not run the cycle and never enters the decision path. Reputation raises
+        caution; it denies nothing on its own.
+      </div>
+    </div>
+  );
+}
+
 function isHot(n: NodeInfo): boolean {
   return (n.reported?.level ?? "NORMAL") !== "NORMAL";
 }
@@ -276,6 +372,9 @@ function ControlBody({ focusNode, testBench }: { focusNode?: string; testBench: 
       {lens === "graph" && topo.data && sel &&
         topo.data.nodes.find((n) => n.node_id === sel)?.kind === "peer" && (
         <PeerCard node={topo.data.nodes.find((n) => n.node_id === sel)!} />
+      )}
+      {sel && topo.data?.nodes.find((n) => n.node_id === sel)?.kind !== "peer" && (
+        <ReputationCard nodeId={sel} />
       )}
 
       {/* Same tour anchor as SpawnGoverned: when nodes exist the tour spotlights

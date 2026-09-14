@@ -74,6 +74,9 @@ export default function TopologyGraph({
 }) {
   const pos = layout(payload);
   const hasPeers = payload.nodes.some((n) => n.kind === "peer");
+  const hasReputation = payload.nodes.some(
+    (n) => n.reputation?.flagged || n.reputation?.watch,
+  );
 
   const edgePath = (e: TopologyEdge): string => {
     const a = pos.get(e.from);
@@ -158,6 +161,24 @@ export default function TopologyGraph({
                   peer · opaque
                 </text>
               )}
+              {/* Cross-session reputation (ui-spec:416), from the node's OWN
+                  axor-sentinel. The badge only appears where a sentinel is
+                  reporting AND it found something: absence of a badge means
+                  "no cross-session verdict here", which is deliberately not
+                  drawn as a green one — an unwatched node must not read as the
+                  safest thing on the graph. The number is a count of flagged
+                  resources, and the panel below names them. */}
+              {!isPeer && (n.reputation?.flagged || n.reputation?.watch) ? (
+                <g data-testid={`topo-rep-${n.node_id}`}>
+                  <circle cx={p.x + 14} cy={p.y - 14} r="7.5" fill={C.bg}
+                    stroke={n.reputation.flagged ? C.red : C.amber} strokeWidth="1.5" />
+                  <text x={p.x + 14} y={p.y - 11} textAnchor="middle" fontSize="8"
+                    fontFamily={MONO} fontWeight={700}
+                    fill={n.reputation.flagged ? C.red : C.amber}>
+                    {n.reputation.flagged || n.reputation.watch}
+                  </text>
+                </g>
+              ) : null}
             </g>
           );
         })}
@@ -168,6 +189,11 @@ export default function TopologyGraph({
         <span>solid = delegation</span>
         <span>dashed = lateral (intra)</span>
         {hasPeers && <span style={{ color: C.violet }}>violet = inter-federation</span>}
+        {hasReputation && (
+          <span style={{ color: C.red }}>
+            corner badge = resources axor-sentinel flagged across sessions
+          </span>
+        )}
         <span style={{ marginLeft: "auto" }}>red edge = denied at the boundary</span>
       </div>
     </div>
