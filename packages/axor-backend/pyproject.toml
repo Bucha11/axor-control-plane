@@ -16,8 +16,13 @@ dependencies = [
   # now, and reads the recorded event through the kernel's own decoder. Neither
   # is mirrored here — a copy of a decoder is how a copy of a decision starts.
   "axor-core>=0.11,<0.12",
-  # 0.1.1 is the first release resolvable against axor-core 0.10.
-  "axor-eval>=0.1.1,<0.2",
+  # 0.2 is the first release carrying `audit.from_trace` — the one derivation of
+  # an EvidenceCase from a recorded trace. The audit used to run only inside the
+  # proxy, from its own in-memory run state, so a run that arrived here any
+  # other way carried real verdicts and no evidence at all. Imported, not
+  # restated: a platform that decided for itself what an EvidenceCase is would
+  # be a second answer to a question Eval already answers.
+  "axor-eval>=0.2,<0.3",
   # Attestation semantics — append-only, revocation-as-an-event, same-keyset
   # revocation, the required reason. Imported, not restated: a plane that
   # decided for itself what a valid attestation is would be a second answer to

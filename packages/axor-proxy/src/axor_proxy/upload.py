@@ -16,7 +16,7 @@ from typing import Any
 import anyio
 import httpx
 
-from axor_proxy.runs import Run, evidence_to_dict
+from axor_proxy.runs import Run
 
 
 class BackendUploader:
@@ -36,27 +36,25 @@ class BackendUploader:
         text = await anyio.Path(trace_path).read_text()
         events = [json.loads(line) for line in text.splitlines() if line.strip()]
         payload = {"node_id": run.node_id, "scenario": run.scenario, "events": events}
-        evidence = [evidence_to_dict(c) for c in run.evidence]
         client = self._client or httpx.AsyncClient(timeout=15.0)
         owns = self._client is None
         h = self._headers
         try:
             # raise_for_status so a backend 4xx (auth off-key, bad payload) is an
             # honest {"uploaded": false}, not a silent success.
-            (await client.post(
+            stored = (await client.post(
                 f"{self._base}/v1/ingest/{run.run_id}", json=payload, headers=h,
-            )).raise_for_status()
-            (await client.post(
-                f"{self._base}/v1/runs/{run.run_id}/evidence",
-                json={"node_id": run.node_id, "evidence": evidence}, headers=h,
-            )).raise_for_status()
-            # No pin call here. The must-block auto-pin (decision 11) is the
-            # backend's, decided in POST /v1/runs/{id}/evidence above: it is the
-            # system of record and it can see whether the trace actually
-            # recorded a denial for the pin to hold. Pinning from here too put
-            # the same policy in two places, and this one could not check.
+            ))
+            stored.raise_for_status()
+            # No evidence call, and no pin call. Both are the backend's, from
+            # the trace this request just delivered: the uploaded events carry
+            # the faults and the claim, so the system of record derives the same
+            # cases with `axor_eval.audit.from_trace` — the derivation this
+            # proxy used for its own answer. Posting them too was a second write
+            # of one derivation, and it was the reason the audit ran only where
+            # a proxy ran: a path that could not post evidence had none.
             return {"uploaded": True, "events": len(events),
-                    "evidence": len(evidence)}
+                    "evidence": int(stored.json().get("evidence", 0))}
         except httpx.HTTPError as exc:
             return {"uploaded": False, "error": type(exc).__name__, "detail": str(exc)}
         finally:

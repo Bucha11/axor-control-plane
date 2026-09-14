@@ -22,6 +22,7 @@ from axor_backend.deps import (
     StoreDep,
     SubgraphCacheDep,
 )
+from axor_backend.evidence import batch_has_claim, derive_for_run
 from axor_backend.limits import check_batch
 from axor_backend.tenancy import current_org_id, topic
 
@@ -35,11 +36,13 @@ async def ingest(
     store: StoreDep,
     bus: BroadcastDep,
     cache: SubgraphCacheDep,
+    notifier: NotifierDep,
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
 ) -> dict:
     node_id = body.get("node_id", "proxy")
+    scenario = body.get("scenario", "custom")
     events = check_batch(body.get("events", []))
-    await store.upsert_run(run_id, node_id, body.get("scenario", "custom"), now())
+    await store.upsert_run(run_id, node_id, scenario, now())
     result = await store.ingest_events(run_id, node_id, events, idempotency_key)
     # This run's causal subgraphs were derived from a shorter event list.
     cache.drop_run(current_org_id(), run_id)
@@ -51,15 +54,35 @@ async def ingest(
             topic("run", run_id),
             {"type": "event", "id": event_id, "line": line},
         )
-    return {"stored": len(result.rows)}
+    # The batch that carries the agent's answer is the one that finishes the
+    # run, and finishing a run is when it can be audited. Derived HERE rather
+    # than by each client, because "does this run contain a discrepancy" had
+    # two answers depending on which integration recorded it — and the deeper
+    # one, the adapter path, answered nothing at all.
+    derived = 0
+    if batch_has_claim(events):
+        cases = await derive_for_run(store, run_id, node_id, scenario)
+        derived = len(cases)
+        if cases:
+            await store_evidence(store, notifier, run_id, node_id, scenario, cases)
+    return {"stored": len(result.rows), "evidence": derived}
 
 
-@router.post("/runs/{run_id}/evidence")
-async def set_evidence(
-    run_id: str, body: dict, store: StoreDep, notifier: NotifierDep
+async def store_evidence(
+    store: object, notifier: object, run_id: str, node_id: str, scenario: str,
+    evidence: list[dict],
 ) -> dict:
-    evidence = body.get("evidence", [])
-    await store.set_evidence(run_id, evidence)
+    """Store a run's cases, and do everything that follows from having them.
+
+    One function because there are two ways a run acquires evidence — the
+    backend derives it on ingest (`axor_backend.evidence`), and a client posts
+    ready-made cases (a Lab package, the demo seed, an older uploader) — and
+    what happens NEXT must not depend on which. The auto-pin and the
+    `evidence_run` notification were reachable only through the route, so a
+    derived case would have been a case that notified nobody and pinned
+    nothing.
+    """
+    await store.set_evidence(run_id, evidence)  # type: ignore[attr-defined]
     # Run completed with >=1 EvidenceCase → notify (spec section 16 trigger).
     deviations = [c for c in evidence if c.get("deviation")]
     pinned = False
@@ -77,12 +100,12 @@ async def set_evidence(
         # the corpus can only report it unchecked forever. The evidence
         # notification below still fires — the finding is not lost, it just does
         # not become a regression test that cannot run.
-        pinned = await store.has_recorded_denial(run_id)
+        pinned = await store.has_recorded_denial(run_id)  # type: ignore[attr-defined]
         if pinned:
-            await store.pin(run_id, "must_block", body.get("scenario", ""))
-        await notifier.emit(
+            await store.pin(run_id, "must_block", scenario)  # type: ignore[attr-defined]
+        await notifier.emit(  # type: ignore[attr-defined]
             "evidence_run",
-            body.get("node_id", "proxy"),
+            node_id,
             {
                 "run_id": run_id,
                 "cases": len(deviations),
@@ -90,6 +113,20 @@ async def set_evidence(
             },
         )
     return {"ok": True, "notified": bool(deviations), "pinned": pinned}
+
+
+@router.post("/runs/{run_id}/evidence")
+async def set_evidence(
+    run_id: str, body: dict, store: StoreDep, notifier: NotifierDep
+) -> dict:
+    """Ready-made cases from a client that computed them elsewhere — a Lab
+    package, the demo seed. A run ingested with its claim needs no such call:
+    the backend derives the same cases from the trace on the way in."""
+    return await store_evidence(
+        store, notifier, run_id,
+        body.get("node_id", "proxy"), body.get("scenario", ""),
+        body.get("evidence", []),
+    )
 
 
 @router.get("/runs")
