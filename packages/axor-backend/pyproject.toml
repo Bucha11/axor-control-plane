@@ -28,6 +28,13 @@ dependencies = [
   # decided for itself what a valid attestation is would be a second answer to
   # a question Sentinel already answers.
   "axor-sentinel>=0.3.1,<0.4",
+  # The behavioural-health vocabulary, from the module that defines the payload
+  # `POST /v1/plane/{node}/probe-report` accepts. It was two literals copied
+  # into plane.py under a comment calling that "the same posture as everywhere
+  # else" — the opposite of the two lines above. The copy matched; nothing
+  # checked that it did, in either repository. 0.2 is the first release naming
+  # the vocabulary as a set rather than as four constants a consumer assembles.
+  "axor-probe>=0.2,<0.3",
   "fastapi>=0.111", "sse-starlette>=2.1", "uvicorn>=0.29",
   "sqlalchemy[asyncio]>=2.0", "asyncpg>=0.29",
   "aiosqlite>=0.20",

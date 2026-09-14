@@ -21,6 +21,7 @@ import json
 from collections.abc import AsyncIterator
 from typing import Any
 
+from axor_probe.integration import plane as probe_plane
 from fastapi import APIRouter, Header, HTTPException, Request
 from sse_starlette.sse import EventSourceResponse
 
@@ -510,12 +511,25 @@ async def consumed(node_id: str, body: dict, request: Request) -> dict:
     return {"cleared": key}
 
 
-# Verdict constants mirrored from axor-probe (the backend never imports it —
-# the payload shape is the whole contract, same posture as everywhere else).
-_PROBE_VERDICTS = frozenset({
-    "CONSISTENT", "DRIFT_DETECTED", "INCONCLUSIVE", "CONSISTENCY_ANOMALY",
-})
-_FAMILY_STATES = frozenset({"clean", "escaped", "unprobed"})
+# The probe vocabulary, imported from the module that DEFINES the payload this
+# route accepts (`axor_probe.integration.plane`). It was mirrored here as two
+# literals, with a comment calling that "the same posture as everywhere else" —
+# which was the opposite of the posture this backend takes to its other
+# neighbours, and the comments beside those dependencies say why:
+#
+#   axor-core     "Neither is mirrored here — a copy of a decoder is how a copy
+#                  of a decision starts."
+#   axor-sentinel "Imported, not restated: a plane that decided for itself what
+#                  a valid attestation is would be a second answer to a question
+#                  Sentinel already answers."
+#
+# The copy happened to match. Nothing checked that it did: `_PROBE_VERDICTS`
+# appeared nowhere but this file, and nothing in axor-probe knew a control plane
+# existed. A fifth verdict there and this route would have answered 400 to every
+# report from an upgraded node, with no test in either repository noticing.
+#
+# This is not only storage: `DRIFT_DETECTED` below decides whether a node's
+# operator is paged.
 
 
 @router.post("/{node_id}/probe-report", status_code=201)
@@ -534,17 +548,19 @@ async def post_probe_report(node_id: str, body: dict, request: Request) -> dict:
     """
     ctx = _ctx(request)
     verdict = body.get("overall_verdict")
-    if verdict not in _PROBE_VERDICTS:
+    if verdict not in probe_plane.VERDICTS:
         raise HTTPException(
-            400, f"overall_verdict must be one of {sorted(_PROBE_VERDICTS)}"
+            400,
+            f"overall_verdict must be one of {sorted(probe_plane.VERDICTS)}",
         )
     families = body.get("families", [])
     if not isinstance(families, list):
         raise HTTPException(400, "`families` must be a list")
     for fam in families:
-        if not isinstance(fam, dict) or fam.get("state") not in _FAMILY_STATES:
+        if not isinstance(fam, dict) or fam.get("state") not in probe_plane.FAMILY_STATES:
             raise HTTPException(
-                400, f"each family needs a state in {sorted(_FAMILY_STATES)}"
+                400,
+                f"each family needs a state in {sorted(probe_plane.FAMILY_STATES)}",
             )
         # `family` is validated because it is READ below, when a DRIFT_DETECTED
         # report names the escaped families in its notification. Checking only
@@ -560,7 +576,7 @@ async def post_probe_report(node_id: str, body: dict, request: Request) -> dict:
         {"type": "probe_report", "node_id": node_id, "report": body},
     )
     notifier = getattr(ctx, "notifier", None)
-    if notifier is not None and verdict == "DRIFT_DETECTED":
+    if notifier is not None and verdict == probe_plane.VERDICT_DRIFT_DETECTED:
         await notifier.emit(
             "behavioral_drift", node_id,
             {"escape_count": int(body.get("escape_count", 0)),

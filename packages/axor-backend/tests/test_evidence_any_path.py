@@ -147,9 +147,8 @@ class TestOneDerivation:
     ) -> None:
         """The proxy reads its cases off the trace it recorded with the same
         function; this asserts the backend's answer against it directly."""
-        from axor_eval.audit.from_trace import evidence_from_trace
-
         from axor_backend.evidence import evidence_payload
+        from axor_eval.audit.from_trace import evidence_from_trace
 
         lines = [FAULT, CALL, RESULT, DENIED, CLAIM]
         await ingest(client, "adapter_run", lines)
