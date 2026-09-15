@@ -14,7 +14,17 @@ classifiers = [
 # PlaneAdmission). It used to be axor-core[plane]; the kernel now keeps only the
 # primitives the plane steers through, so it can no longer depend on a client.
 dependencies = [
-  "axor-core>=0.10,<0.11",
+  # Held at <0.11 while axor-backend, in this same workspace, moved to >=0.11 —
+  # so the two intersected NOWHERE and `uv sync` answered "your workspace's
+  # requirements are unsatisfiable". A repository that could not install itself.
+  #
+  # Only the ceiling moves. This proxy imports nothing 0.11 added (the kernel's
+  # cross-boundary schemas, `policy.from_record`, the shared vectors — backend
+  # and Lab do, which is why THEIR floor is 0.11), and 110 tests pass against
+  # it. Raising the floor too would drop 0.10.x for no reason anyone can point
+  # at. No test here looked at the installed kernel, so the staleness was
+  # silent — tests/test_core_compatibility.py now does.
+  "axor-core>=0.10,<0.12",
   "axor-wrap[plane]>=0.1.0,<0.2",
   # 0.2 carries `audit.from_trace`: this proxy reads its cases off the trace it
   # recorded, with the same derivation the control plane runs over the uploaded
