@@ -25,7 +25,10 @@ dependencies = [
   # at. No test here looked at the installed kernel, so the staleness was
   # silent — tests/test_core_compatibility.py now does.
   "axor-core>=0.10,<0.12",
-  "axor-wrap[plane]>=0.1.0,<0.2",
+  # 0.2 moves with the backend's `wrap` extra: same library, same protocol
+  # v0.3 snapshot verification, and a workspace that pinned the two apart would
+  # be the conflict this repository just spent a commit removing.
+  "axor-wrap[plane]>=0.2,<0.3",
   # 0.2 carries `audit.from_trace`: this proxy reads its cases off the trace it
   # recorded, with the same derivation the control plane runs over the uploaded
   # run, instead of calling the audit layers from its own run state.

@@ -40,14 +40,13 @@ jobs:
       - uses: astral-sh/setup-uv@v4
         with:
           python-version: "3.12"
-      # axor-core / axor-eval are git-ref pinned (pyproject [tool.uv.sources]).
-      # For private ecosystem repos set AXOR_ECOSYSTEM_TOKEN (a PAT with read
-      # access); GITHUB_TOKEN only covers this repository.
-      - name: Authorize ecosystem git deps
-        run: |
-          git config --global url."https://x-access-token:${TOKEN}@github.com/".insteadOf "https://github.com/"
-        env:
-          TOKEN: ${{ secrets.AXOR_ECOSYSTEM_TOKEN || secrets.GITHUB_TOKEN }}
+      # No "Authorize ecosystem git deps" step: pyproject's [tool.uv.sources]
+      # says the git-ref era is over — every ecosystem dependency resolves from
+      # PyPI and `uv.lock` holds zero git sources. The step it replaced wrote a
+      # global `insteadOf` rewrite with a PAT on every job, for dependencies
+      # that no longer exist, and its comment still named axor-core and
+      # axor-eval as git-pinned. The Dockerfile's build-time secret stays: it is
+      # already conditional on the secret being present.
       - name: Sync workspace
         run: uv sync --all-packages
       - name: Lint
@@ -72,11 +71,6 @@ jobs:
       - uses: astral-sh/setup-uv@v4
         with:
           python-version: "3.12"
-      - name: Authorize ecosystem git deps
-        run: |
-          git config --global url."https://x-access-token:${TOKEN}@github.com/".insteadOf "https://github.com/"
-        env:
-          TOKEN: ${{ secrets.AXOR_ECOSYSTEM_TOKEN || secrets.GITHUB_TOKEN }}
       # The Playwright webServer boots the real backend + proxy (`uv run`), so
       # the Python workspace must be installed.
       - name: Sync workspace
@@ -120,11 +114,6 @@ jobs:
       - uses: astral-sh/setup-uv@v4
         with:
           python-version: "3.12"
-      - name: Authorize ecosystem git deps
-        run: |
-          git config --global url."https://x-access-token:${TOKEN}@github.com/".insteadOf "https://github.com/"
-        env:
-          TOKEN: ${{ secrets.AXOR_ECOSYSTEM_TOKEN || secrets.GITHUB_TOKEN }}
       - name: Export locked requirements (SBOM input)
         run: |
           uv sync --all-packages
