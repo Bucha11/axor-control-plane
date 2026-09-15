@@ -342,6 +342,8 @@ The §14.2 vault, scoped to a federation instead of one node.
 - **Injection is still proxy-side, sink-bound, byte-for-byte** (§14.2): the credential exists where the effect happens and nowhere upstream; a prompt-injected agent redirecting a call gets no credential (scope mismatch).
 - **Rotation is federation-wide config** (versioned), not a control-plane command — the plane may *revoke* federation-wide in an incident (narrowing), never grant (§12.0 rule extended to the federation).
 - **Break-glass: fail closed, federation-wide** (§14.2 decision #14 unchanged): vault down → injection impossible → typed denial at every node. No cached creds anywhere, ever.
+- **Every dispense states the call it is for**, and the plane records it: node, tool, endpoint, and the run — signed by the node when a pubkey is registered. Scope alone made a node-bound credential a standing licence to drain its scope with nothing tying any of it to work the node did. A caller that gates states the kernel's verdict, and a `deny` gets no credential; an observe-only caller states none rather than a `pass` it never computed.
+- **Envelope mode (§14.2 self-hosted-first, and its stated condition for hosted).** With a sealing public key registered, enrolment carries a `sealed_secret` and the plane refuses plaintext; the private half lives with the nodes and the backend needs no crypto at all. This is what makes the vault's custody question independent of who runs the backend — it is not trusted to decline to look, it is unable to. Availability remains the open half for hosted: fail-closed across someone else's uptime has no answer here yet, where self-hosted answers it with co-location. Pending one, co-location is enforced rather than assumed: the proxy refuses to arm vault mode unless the backend resolves into its own failure domain (loopback or private), and `AXOR_VAULT_ALLOW_REMOTE=1` is how an operator with an availability answer of their own says so — out loud, in the startup log. That does not answer the question; it stops a deployment reaching the unanswered case by accident.
 - **Inter-federation:** a foreign peer's credentials are never in our vault. We hold, at most, our own credential for authenticating *to* the peer — a tool credential like any other, scoped to that peer endpoint. Their creds are theirs (Ch.1 boundary).
 
 ## 2. Operator signing-key custody — vault SIGNS, never surrenders
@@ -454,7 +456,7 @@ Resolved during v2 drafting. Chapter references use the v2 numbering above.
 - N outbound plane connections for 100+ node trees (Ch.4): optional per-host telemetry aggregator, command path stays per-node. [experiment]
 - Signing-custody latency on command path (Ch.5): confirm off the enforcement path entirely. [design]
 - HSM vs software-KMS custody backend at self-hosted tier (Ch.5): pluggable, posture per deployment. [decision-pending]
-- Kùzu single-writer, TS typegen, heartbeat cadence: carried from architecture v0.1. [experiment]
+- ~~Kùzu single-writer~~ (closed: the stored graph was removed — value refs repeat across runs); TS typegen, heartbeat cadence: carried from architecture v0.1. [experiment]
 
 ## Build order
 

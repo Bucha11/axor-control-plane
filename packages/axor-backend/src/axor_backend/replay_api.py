@@ -10,8 +10,11 @@ from typing import Any
 
 from axor_core.contracts.canonical import ConsequenceClass
 from axor_core.kernel.events import Event, EventKind, Verdict, event_from_json_line
-from axor_core.kernel.replay import KernelConfig, ReplayResult, replay
+from axor_core.kernel.replay import KernelConfig, ReplayResult, ReplayStep, replay
 from axor_core.policy.value_policy import ValuePredicate
+
+from axor_backend.errors import ConfigInvalid
+from axor_backend.wrap_api import EFFECT_CLASSES
 
 
 def parse_trace(lines: list[str]) -> list[Event]:
@@ -145,22 +148,169 @@ def influence_ranking(
     return ranked
 
 
+def _kind(value: object) -> str:
+    return "null" if value is None else type(value).__name__
+
+
+def _obj(value: object, field: str) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        raise ConfigInvalid(f"{field} must be an object, got {_kind(value)}")
+    return value
+
+
+def _seq(value: object, field: str) -> list[Any]:
+    """A JSON list, refusing the bare string that looks like one.
+
+    ``frozenset("slack_post")`` is a set of nine single characters, so every
+    membership test the kernel runs against it answers False and the config
+    silently means the opposite of what was written — while the request still
+    answers 200 with a confident report. It is the one config typo that
+    produces a working call and a wrong policy, so it is refused, not coerced.
+    """
+    if isinstance(value, (str, bytes, dict)) or not isinstance(
+        value, (list, tuple, set, frozenset)
+    ):
+        hint = f" — wrap {value!r} in a list" if isinstance(value, str) else ""
+        raise ConfigInvalid(f"{field} must be a list, got {_kind(value)}{hint}")
+    return list(value)
+
+
+def _names(value: object, field: str) -> frozenset[str]:
+    items = _seq(value, field)
+    for item in items:
+        if not isinstance(item, str):
+            raise ConfigInvalid(
+                f"{field}: every entry must be a name, got {_kind(item)}"
+            )
+    return frozenset(items)
+
+
+def _value_set(value: object, field: str) -> frozenset[Any]:
+    """An admissible-value set: scalars, unlike :func:`_names`, since a trusted
+    set may enumerate numbers as legitimately as it enumerates strings."""
+    items = _seq(value, field)
+    for item in items:
+        if not isinstance(item, (str, int, float, bool)):
+            raise ConfigInvalid(
+                f"{field}: entries must be scalars, got {_kind(item)}"
+            )
+    return frozenset(items)
+
+
+def _number(value: object, field: str) -> int | float | None:
+    """A number or None. A cap the kernel compares with ``>=`` against a string
+    raises deep inside the fold, which surfaces as a 500 on a config typo."""
+    if value is None or (isinstance(value, (int, float)) and not isinstance(value, bool)):
+        return value
+    raise ConfigInvalid(f"{field} must be a number, got {_kind(value)}")
+
+
+def _weights(value: object) -> dict[str, float]:
+    weights = _obj(value, "tool_weights")
+    out: dict[str, float] = {}
+    for tool, weight in weights.items():
+        if _number(weight, f"tool_weights[{tool!r}]") is None:
+            raise ConfigInvalid(f"tool_weights[{tool!r}] must be a number, got null")
+        out[str(tool)] = weight
+    return out
+
+
+def _consequence_overrides(value: object) -> dict[str, ConsequenceClass]:
+    overrides = _obj(value, "consequence_overrides")
+    out: dict[str, ConsequenceClass] = {}
+    for tool, name in overrides.items():
+        if not isinstance(name, str) or name not in ConsequenceClass.__members__:
+            raise ConfigInvalid(
+                f"consequence_overrides[{tool!r}]: {name!r} is not a consequence "
+                f"class — one of {'|'.join(ConsequenceClass.__members__)}"
+            )
+        out[str(tool)] = ConsequenceClass[name]
+    return out
+
+
+def _predicates(tool: str, preds: object) -> list[ValuePredicate]:
+    field = f"value_policies[{tool!r}]"
+    out: list[ValuePredicate] = []
+    for i, raw in enumerate(_seq(preds, field)):
+        at = f"{field}[{i}]"
+        pred = _obj(raw, at)
+        arg = pred.get("arg")
+        if not isinstance(arg, str) or not arg:
+            raise ConfigInvalid(
+                f"{at}: 'arg' is required — it names the argument the predicate "
+                f"constrains"
+            )
+        out.append(ValuePredicate(
+            arg=arg,
+            kind=str(pred.get("kind", "enum")),
+            lo=_number(pred.get("lo"), f"{at}.lo"),
+            hi=_number(pred.get("hi"), f"{at}.hi"),
+            allowed=_value_set(pred.get("allowed", ()), f"{at}.allowed"),
+        ))
+    return out
+
+
 def kernel_config_from_json(d: dict[str, Any]) -> KernelConfig:
     """Accepts either the Config Builder shape ({"sinks": {...}}) or the
-    direct kernel shape ({"allowed_tools": [...], ...})."""
+    direct kernel shape ({"allowed_tools": [...], ...}).
+
+    Validated here rather than at the first gate that trips over it. All three
+    consumers (scrubber, counterfactual, regression corpus) answer 200 with a
+    confident-looking verdict computed from whatever survived a silent
+    coercion, so a malformed config is a 400 naming the field — never a 500,
+    and never a report.
+
+    The keys both shapes share are built once, in ``common``: the two branches
+    had drifted, and the ``sinks`` branch dropped ``positional_sinks`` and
+    ``consequence_overrides`` on the floor.
+    """
+    d = _obj(d, "config")
+    common: dict[str, Any] = {
+        "positional_sinks": _names(
+            d.get("positional_sinks", ()), "positional_sinks"
+        ),
+        "consequence_overrides": _consequence_overrides(
+            d.get("consequence_overrides", {})
+        ),
+        "budget_cap_calls": _number(d.get("budget_cap_calls"), "budget_cap_calls"),
+        "budget_cap_cost": _number(d.get("budget_cap_cost"), "budget_cap_cost"),
+        "tool_weights": _weights(d.get("tool_weights", {})),
+        "synthetic_taint_refs": _names(
+            d.get("synthetic_taint_refs", ()), "synthetic_taint_refs"
+        ),
+    }
     if "sinks" in d:
-        sinks: dict[str, dict[str, Any]] = d["sinks"]
-        egress = {n for n, s in sinks.items()
-                  if s.get("consequence_class") == "EXPORT"}
-        imperative = {n for n, s in sinks.items()
-                      if s.get("consequence_class") == "EXEC"}
+        sinks = _obj(d["sinks"], "sinks")
+        egress: set[str] = set()
+        imperative: set[str] = set()
         value_policies: dict[str, list[ValuePredicate]] = {}
         driving_args: dict[str, frozenset[str]] = {}
-        for name, sink in sinks.items():
-            trusted = sink.get("trusted_sets") or {}
+        for name, raw in sinks.items():
+            sink = _obj(raw, f"sinks[{name!r}]")
+            effect = sink.get("consequence_class")
+            # A misspelled class ("export", "?") used to make the sink neither
+            # egress nor imperative: a config that reads as governed, gates
+            # nothing, and reports safe to ship.
+            if effect not in EFFECT_CLASSES:
+                raise ConfigInvalid(
+                    f"sinks[{name!r}].consequence_class must be one of "
+                    f"{'|'.join(EFFECT_CLASSES)}, got {effect!r}"
+                )
+            if effect == "EXPORT":
+                egress.add(name)
+            elif effect == "EXEC":
+                imperative.add(name)
+            trusted = _obj(
+                sink.get("trusted_sets") or {}, f"sinks[{name!r}].trusted_sets"
+            )
             if trusted:
                 value_policies[name] = [
-                    ValuePredicate(arg=arg, kind="enum", allowed=frozenset(vals))
+                    ValuePredicate(
+                        arg=arg, kind="enum",
+                        allowed=_value_set(
+                            vals, f"sinks[{name!r}].trusted_sets[{arg!r}]"
+                        ),
+                    )
                     for arg, vals in trusted.items()
                 ]
                 driving_args[name] = frozenset(trusted.keys())
@@ -170,40 +320,26 @@ def kernel_config_from_json(d: dict[str, Any]) -> KernelConfig:
             imperative_sinks=frozenset(imperative),
             value_policies=value_policies,
             driving_args=driving_args,
-            budget_cap_calls=d.get("budget_cap_calls"),
-            budget_cap_cost=d.get("budget_cap_cost"),
-            tool_weights=dict(d.get("tool_weights", {})),
-            synthetic_taint_refs=frozenset(d.get("synthetic_taint_refs", ())),
+            **common,
         )
     return KernelConfig(
         allowed_tools=(
-            frozenset(d["allowed_tools"]) if d.get("allowed_tools") is not None else None
+            _names(d["allowed_tools"], "allowed_tools")
+            if d.get("allowed_tools") is not None else None
         ),
-        egress_sinks=frozenset(d.get("egress_sinks", ())),
-        imperative_sinks=frozenset(d.get("imperative_sinks", ())),
-        positional_sinks=frozenset(d.get("positional_sinks", ())),
+        egress_sinks=_names(d.get("egress_sinks", ()), "egress_sinks"),
+        imperative_sinks=_names(d.get("imperative_sinks", ()), "imperative_sinks"),
         value_policies={
-            tool: [
-                ValuePredicate(
-                    arg=p["arg"], kind=p.get("kind", "enum"),
-                    lo=p.get("lo"), hi=p.get("hi"),
-                    allowed=frozenset(p.get("allowed", ())),
-                )
-                for p in preds
-            ]
-            for tool, preds in d.get("value_policies", {}).items()
+            tool: _predicates(tool, preds)
+            for tool, preds in _obj(
+                d.get("value_policies", {}), "value_policies"
+            ).items()
         },
         driving_args={
-            tool: frozenset(args) for tool, args in d.get("driving_args", {}).items()
+            tool: _names(args, f"driving_args[{tool!r}]")
+            for tool, args in _obj(d.get("driving_args", {}), "driving_args").items()
         },
-        consequence_overrides={
-            tool: ConsequenceClass[name]
-            for tool, name in d.get("consequence_overrides", {}).items()
-        },
-        budget_cap_calls=d.get("budget_cap_calls"),
-        budget_cap_cost=d.get("budget_cap_cost"),
-        tool_weights=dict(d.get("tool_weights", {})),
-        synthetic_taint_refs=frozenset(d.get("synthetic_taint_refs", ())),
+        **common,
     )
 
 
@@ -238,41 +374,74 @@ def scrubber_payload(result: ReplayResult) -> dict[str, Any]:
     }
 
 
-def _recorded_denies(events: list[Event]) -> bool:
-    return any(
-        e.verdict is not None and e.verdict.value == "deny"
-        for e in events
-        if e.kind is EventKind.TOOL_CALL
-    )
+def _pinned_denials(result: ReplayResult) -> list[ReplayStep]:
+    """The calls this trace recorded as DENY — the boundary a must_block pin
+    exists to hold. Named steps, because "some step denies" is not the same
+    claim as "the step that stopped the attack still stops it"."""
+    return [
+        s for s in result.steps
+        if s.event.kind is EventKind.TOOL_CALL
+        and s.recorded_verdict is Verdict.DENY
+    ]
 
 
-def _reevaluated_denies(result: ReplayResult) -> bool:
-    return any(
-        s.reevaluated_verdict is not None and s.reevaluated_verdict.value == "deny"
-        for s in result.steps
-    )
+def _step_ref(step: ReplayStep) -> dict[str, Any]:
+    return {
+        "node_id": step.event.node_id,
+        "seq": step.event.seq,
+        "tool": str(step.event.payload.get("tool", "")),
+        "gate": step.event.gate,
+    }
 
 
 def regression_row(
     run_id: str, side: str, label: str, events: list[Event], config: KernelConfig
 ) -> dict[str, Any]:
-    """One corpus trace vs a candidate config (regression-report semantics):
+    """One corpus trace vs a candidate config (regression-report semantics).
 
-    must_block + still denies somewhere -> held; no denial left -> escaped.
-    must_pass + no new denial -> passed; new denial -> regressed.
+    must_block holds only if EVERY call the trace recorded as DENY still
+    denies. The old check asked whether the config denies *anything* in the
+    trace, which a config that allows the exfil and denies an unrelated benign
+    call satisfies — the corpus then answered ``held``, and ``safe_to_ship``,
+    for a config that ships the breach.
+
+    A must_block pin whose trace recorded no denial at all has nothing to hold:
+    it was recorded ungoverned, so the call that should be blocked is not
+    marked anywhere in it. That is ``unanchored`` — reported, and never counted
+    as safe to ship, because the alternative is to guess which denial was meant
+    and then call the guess a verification.
+
+    must_pass mirrors it: a regression is a call the trace recorded as PASS
+    that the candidate config now denies.
+
+    Steps after the first divergence are judged too. Under a config that denies
+    something earlier, the recorded tail is counterfactual and an escape there
+    might never be reached — but "the gate that held this value no longer holds
+    it" is the finding, and excusing it because an unrelated earlier call was
+    blocked is the same fail-open in a politer form.
     """
     result = replay(events, config)
-    denies_now = _reevaluated_denies(result)
+    pinned = _pinned_denials(result)
+    escaped_denials = [
+        _step_ref(s) for s in pinned if s.reevaluated_verdict is not Verdict.DENY
+    ]
+    new_denials = [
+        s for s in result.steps
+        if s.event.kind is EventKind.TOOL_CALL
+        and s.recorded_verdict is Verdict.PASS
+        and s.reevaluated_verdict is Verdict.DENY
+    ]
     if side == "must_block":
-        outcome = "held" if denies_now else "escaped"
+        if not pinned:
+            outcome = "unanchored"
+        else:
+            outcome = "escaped" if escaped_denials else "held"
     else:
-        outcome = "regressed" if result.first_divergence is not None and denies_now else "passed"
+        outcome = "regressed" if new_denials else "passed"
     first_new_deny = next(
         (
             {"seq": s.event.seq, "reason": s.deny.reason, "category": s.deny.category}
-            for s in result.steps
-            if s.deny is not None and s.recorded_verdict is not None
-            and s.reevaluated_verdict is not s.recorded_verdict
+            for s in new_denials if s.deny is not None
         ),
         None,
     )
@@ -283,4 +452,6 @@ def regression_row(
         "result": outcome,
         "first_divergence": result.first_divergence,
         "new_denial": first_new_deny,
+        "pinned_denials": len(pinned),
+        "escaped_denials": escaped_denials,
     }

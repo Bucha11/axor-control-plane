@@ -17,11 +17,22 @@ from pathlib import Path
 
 
 def cli() -> None:
-    # `axor-proxy wrap …` is a subcommand (run a CLI agent + submit its claim);
+    # `axor-proxy run …` is a subcommand (run a CLI agent + submit its claim);
     # everything else is the server, whose flat flag parser is kept unchanged.
-    if sys.argv[1:2] == ["wrap"]:
-        from axor_proxy.wrap import wrap_cli
-        raise SystemExit(wrap_cli(sys.argv[2:]))
+    #
+    # `wrap` is not a spelling of this command. In this codebase wrapping is
+    # what `axor_wrap.WrappedToolset` does to tool CALLABLES — gate, taint,
+    # verdict — and this subcommand does none of it; it runs a subprocess and
+    # submits its answer as the claim.
+    if sys.argv[1:2] == ["run"]:
+        from axor_proxy.run_cli import run_cli
+        raise SystemExit(run_cli(sys.argv[2:]))
+    # `axor-proxy vault …` — the two operations envelope mode needs and that
+    # nothing else can do for you: mint the deployment's sealing keypair, and
+    # seal a credential to it before enrolling. Both are local; the private half
+    # never leaves this machine, which is the whole property.
+    if sys.argv[1:2] == ["vault"]:
+        raise SystemExit(_vault_cli(sys.argv[2:]))
 
     parser = argparse.ArgumentParser(prog="axor-proxy")
     parser.add_argument("--config", type=Path, help="tools.json")
@@ -37,6 +48,11 @@ def cli() -> None:
     parser.add_argument("--backend-url",
                         default=os.environ.get("AXOR_BACKEND_URL"),
                         help="push trace + evidence to this backend on claim")
+    parser.add_argument("--token", default=os.environ.get("AXOR_PROXY_TOKEN"),
+                        help="require this bearer token on the /axor control "
+                             "routes (arm runs, inject faults, read traces). "
+                             "Unset = open, which is fine on loopback and not "
+                             "on a published port.")
     args = parser.parse_args()
 
     # The self-dial host (scripted agent + demo mock upstream) must be a routable
@@ -58,12 +74,56 @@ def cli() -> None:
 
     args.trace_dir.mkdir(parents=True, exist_ok=True)
     self_base = f"http://{self_host}:{args.port}"
-    app = create_app(ProxyState(tools=tools, trace_dir=args.trace_dir,
-                                backend_url=args.backend_url,
-                                self_base_url=self_base,
-                                ingest_key=os.environ.get("AXOR_INGEST_KEY")))
+    state = ProxyState(tools=tools, trace_dir=args.trace_dir,
+                       backend_url=args.backend_url,
+                       self_base_url=self_base,
+                       ingest_key=os.environ.get("AXOR_INGEST_KEY"),
+                       control_token=args.token)
+    if state.control_token is None and args.host not in ("127.0.0.1", "localhost", "::1"):
+        # Binding beyond loopback with no token means anyone who can reach the
+        # port can arm runs, inject faults into live tool traffic and read back
+        # every recorded trace. Say so, in the same voice the backend uses for
+        # its own open posture.
+        import logging
+
+        logging.getLogger("axor.proxy").warning(
+            "PROXY CONTROL SURFACE IS OPEN (no AXOR_PROXY_TOKEN) and bound to "
+            "%s — anyone who reaches this port can arm runs, inject faults and "
+            "read traces. Set a token for any non-loopback bind.", args.host,
+        )
+    app = create_app(state)
     uvicorn.run(app, host=args.host, port=args.port)
 
 
 if __name__ == "__main__":
     cli()
+
+
+def _vault_cli(argv: list[str]) -> int:
+    from axor_proxy.vault import generate_sealing_key, seal
+
+    parser = argparse.ArgumentParser(prog="axor-proxy vault")
+    sub = parser.add_subparsers(dest="cmd", required=True)
+    sub.add_parser("keygen", help="mint a credential-sealing keypair")
+    seal_cmd = sub.add_parser(
+        "seal", help="seal a credential to the deployment's sealing key")
+    seal_cmd.add_argument("--public-key", required=True,
+                          help="the deployment's sealing pubkey (hex)")
+    seal_cmd.add_argument("--secret", help="the credential; omit to read stdin")
+    args = parser.parse_args(argv)
+
+    if args.cmd == "keygen":
+        seed, public = generate_sealing_key()
+        # The seed goes to the nodes, the pubkey to the plane. Printed as the
+        # two env/route names they belong to, so the halves do not get swapped.
+        print(f"AXOR_CRED_SEALING_SEED={seed}")
+        print(f"public_key_hex={public}   "
+              f"# POST /v1/vault/creds/sealing-key")
+        return 0
+
+    secret = args.secret if args.secret is not None else sys.stdin.read().strip()
+    if not secret:
+        print("nothing to seal", file=sys.stderr)
+        return 2
+    print(seal(args.public_key, secret))
+    return 0

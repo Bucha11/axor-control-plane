@@ -112,6 +112,16 @@ export default function Onboarding() {
   // Adapter path is chosen up front (spec section 2, Axis A): it unlocks the
   // Control plane, taint graph and probe health. Proxy is the default depth.
   const [depth, setDepth] = useState<Extract<ConnectionMode, "proxy" | "adapter">>("proxy");
+  // Adapter path: the node needs a scoped ingest credential to speak on the
+  // plane at all once the backend has auth on, and it should be bound to this
+  // node so it cannot speak for another. Minting it is an admin action, so it
+  // happens here rather than being left as an undocumented prerequisite.
+  const [nodeId, setNodeId] = useState("agent-1");
+  const [nodeKey, setNodeKey] = useState<string | null>(null);
+  const mintNodeKey = useMutation({
+    mutationFn: () => api.createKey(["ingest"], `node ${nodeId}`, nodeId),
+    onSuccess: (k) => setNodeKey(k.secret),
+  });
   const connect = useApp((s) => s.connect);
 
   const preflight = useMutation({ mutationFn: api.proxyPreflight });
@@ -363,6 +373,57 @@ export default function Onboarding() {
               {depth === "adapter" ? "unlocks Control, taint graph, probe health" : "Eval core — Control is greyed until you wrap"}
             </span>
           </div>
+          {depth === "adapter" && (
+            <div style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 8, marginTop: 12, overflow: "hidden" }}>
+              <div style={{ padding: "10px 14px", borderBottom: `1px solid ${C.line}`, fontFamily: MONO, fontSize: 11, color: C.mut }}>
+                the adapter is code, not a toggle — this button and snippet are the whole setup
+              </div>
+              <div className="px-4 py-3" style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+                <span style={{ fontFamily: MONO, fontSize: 11.5, color: C.mut }}>node id</span>
+                <input value={nodeId} onChange={(e) => { setNodeId(e.target.value); setNodeKey(null); }}
+                  style={{ background: C.panel2, border: `1px solid ${C.line}`, borderRadius: 5, color: C.text,
+                           fontFamily: MONO, fontSize: 12, padding: "5px 9px", width: 160 }} />
+                <Tooltip content="Mints an ingest-scoped key bound to this node. The plane refuses it for any other node, so a compromised node cannot forge a neighbour's heartbeat or health verdict.">
+                  <button onClick={() => mintNodeKey.mutate()} disabled={!nodeId.trim() || mintNodeKey.isPending}
+                    style={btn({ color: C.text, borderColor: C.steel, fontSize: 12 })}>
+                    <Plug size={12} /> {mintNodeKey.isPending ? "minting…" : "Mint node-bound key"}
+                  </button>
+                </Tooltip>
+                {mintNodeKey.isError && (
+                  <span style={{ fontFamily: MONO, fontSize: 11, color: C.red }}>
+                    needs an admin credential — paste the operator token in Settings first
+                  </span>
+                )}
+              </div>
+              {nodeKey && (
+                <div className="px-4 pb-3" style={{ fontFamily: MONO, fontSize: 11, color: C.amber }}>
+                  shown once — copy it now, only its hash is stored
+                </div>
+              )}
+              <pre style={{ margin: 0, padding: "12px 14px", background: C.panel2, borderTop: `1px solid ${C.line}`,
+                            fontFamily: MONO, fontSize: 11.5, color: C.text, overflowX: "auto", lineHeight: 1.7 }}>
+{`pip install 'axor-wrap[plane]'
+
+from axor_wrap.runtime import wrap_callables
+from axor_wrap.connect import PlaneConnector
+
+toolset = wrap_callables({${tools.map((t) => t.name).join(", ") || "web_search"}})
+
+node = PlaneConnector(
+    "${window.location.origin}", "${nodeId || "agent-1"}",
+    ingest_key="${nodeKey ?? "<mint a key above>"}",
+).connect()
+node.gate(toolset)          # pause/stop from Control now holds real tool calls
+await node.run()            # heartbeat + desired-state subscription`}
+              </pre>
+              <div className="px-4 py-3" style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim, lineHeight: 1.6, borderTop: `1px solid ${C.line}` }}>
+                this is the posture half: pause / stop / budget reach the node and hold its tool calls.
+                one-shot injection, context excision and replan act at the intent boundary and need the
+                framework to hand axor-core the agent brain — GovernedSession(executor=Invokable,
+                admission=PlaneAdmission(session)).
+              </div>
+            </div>
+          )}
           {depth === "proxy" && (
             <div style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim, marginTop: 8, lineHeight: 1.6, border: `1px solid ${C.line}`, borderRadius: 6, padding: "8px 10px" }}>
               visibility: a hosted proxy sees your tool traffic (URLs, params, results) to observe it — that is how the audit works.

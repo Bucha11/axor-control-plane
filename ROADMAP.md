@@ -13,7 +13,7 @@ history, notification routing (channels + node globs)**.
 **Next**: OpenAI Agents SDK + CrewAI wrap recipes ·
 landing + docs site · benchmark harness (catch-rate table) · load-ceiling doc.
 
-**Later (needs demand)**: hosted multi-tenant (per-tenant Kùzu is stubbed) ·
+**Later (needs demand)**: hosted multi-tenant ·
 SSO/RBAC (Enterprise) · scheduled corpus CI + history (Team) · HA backend.
 
 **Non-goals**: prompt filtering (we govern execution, not text) · a pager (we

@@ -18,6 +18,17 @@ here AND present a valid signature there for a plane command to take effect.
 Scopes (least-privilege): ``read`` < ``ingest`` < ``operate`` < ``admin``.
 Higher scopes do not imply lower ones — a key lists exactly what it may do; the
 master token is the only all-scope principal.
+
+Two rules keep the ladder from leaking:
+
+- **Reading can be privileged.** ``_READ_POLICY`` is consulted before the
+  GET-defaults-to-read rule, so credential listing and the vault's inventory
+  surfaces are gated too. A policy entry that only guards writes does not guard
+  a surface whose *contents* are the secret.
+- **A key may be bound to one node.** Scopes say what a credential may do;
+  :attr:`Principal.node_id` says who it may do it AS. The plane checks it on
+  every upstream write, so an ingest key issued to one governed node cannot
+  forge its neighbour's telemetry.
 """
 from __future__ import annotations
 
@@ -28,49 +39,231 @@ from dataclasses import dataclass
 
 SCOPES = frozenset({"read", "ingest", "operate", "admin"})
 
-# Method+path prefix -> required scope. First match wins; GET defaults to read.
+
+def policy_path(path: str, root_path: str = "") -> str:
+    """The path the policy tables below are written against.
+
+    Every table here matches on a prefix of the request path, so the policy is
+    only as good as the agreement between the string it matches and the string
+    the router matches. Two ways they came apart:
+
+    * **A deployment mounted under a prefix.** ASGI hands the app the FULL path
+      and names the mount in ``root_path``; the router strips it before matching
+      routes, and this module did not. Behind ``uvicorn --root-path /api`` —
+      an ordinary reverse-proxy setup — ``GET /api/v1/keys`` matched no entry
+      and fell through to the GET-defaults-to-`read` rule, so a READ-ONLY key
+      listed every credential in the deployment. Writes fell to the unknown-path
+      default of `operate`, which mints API keys and enrolls vault credentials.
+      Nothing logged anything: the request was authorized, at the wrong bar.
+    * **Redundant separators.** ``//v1/keys`` starts with neither ``/v1/keys``
+      nor any other entry. Starlette happens not to route it, so it 404s rather
+      than escalating — but that is the router's behaviour saving the policy,
+      not the policy being right, and it would stop being true the day anything
+      in front normalizes.
+
+    So the policy matches a canonical path: mount prefix removed, empty segments
+    dropped, ``.`` and ``..`` resolved without escaping the root. Resolving
+    ``..`` here can only make the policy STRICTER than the router (which does
+    not resolve it): a path the router will 404 may be judged by the scope of
+    the route it spells, never the other way round.
+    """
+    if root_path and path.startswith(root_path):
+        # only if the server has not already stripped it (ASGI says it has not)
+        path = path[len(root_path):]
+    segments: list[str] = []
+    for segment in path.split("/"):
+        if not segment or segment == ".":
+            continue
+        if segment == "..":
+            if segments:
+                segments.pop()
+            continue
+        segments.append(segment)
+    canonical = "/" + "/".join(segments)
+    # a trailing slash is meaningful to `endswith` matching, so it is kept
+    return canonical + "/" if path.endswith("/") and canonical != "/" else canonical
+
+_READ_METHODS = ("GET", "HEAD", "OPTIONS")
+
+# Reads whose CONTENTS are privileged, matched BEFORE the "GET defaults to
+# read" rule. Without this the read default silently outranks the write table
+# below, and a policy entry meant to guard a surface only guards writing to it.
+# Everything not listed here reads with `read`.
+_READ_POLICY: tuple[tuple[str, str], ...] = (
+    # Listing keys is credential enumeration: ids, scopes, labels, dates.
+    ("/v1/keys", "admin"),
+    # Every enrolment with the nodes allowed to dispense it — the map of which
+    # node can reach which tool credential.
+    ("/v1/vault/creds/health", "admin"),
+    # The record of who requested a signature over what.
+    ("/v1/vault/signing/audit", "admin"),
+    # The same record for the other subsystem: what every dispensed credential
+    # was fetched for, which run, and whether the attestation was signed.
+    ("/v1/vault/creds/audit", "admin"),
+    # Which node's attestations verify against which key. Pubkeys are not
+    # secrets, but the map of registered nodes is the same operational config as
+    # the enrolment inventory above.
+    ("/v1/vault/creds/node-keys", "admin"),
+    # The key to seal against is public, but whether this deployment is in
+    # envelope mode at all is the shape of its custody — same bar as the rest.
+    ("/v1/vault/creds/sealing-key", "admin"),
+    # Pubkeys are explicitly NOT secrets (vault_signing module docstring), but
+    # the per-key operator allowlist is operational config, so: not `read`.
+    ("/v1/vault/signing/keys", "operate"),
+)
+
+# (prefix, suffix, scope) for writes whose parent prefix would otherwise assign
+# too low a bar. Matched before _WRITE_POLICY, so a privileged sub-route is not
+# swallowed by its parent's scope.
+_ROUTE_POLICY: tuple[tuple[str, str, str], ...] = (
+    # Adapter-side plane posts (the node reporting in / acking a one-shot) are
+    # ingest — a governed node's key must be able to heartbeat. Operator actions
+    # on the plane (command / facts / cascade-stop) stay operate.
+    ("/v1/plane/", "/telemetry", "ingest"),
+    ("/v1/plane/", "/consumed", "ingest"),
+    # A health check is the node reporting about ITSELF, out-dial, exactly like
+    # telemetry — the plane has no inbound path into a runtime and a battery is
+    # no exception. Left at `operate` it was unreachable by the only credential
+    # a node has, and axor-wrap treats a 4xx here as a programming error and
+    # raises, so the battery crashed instead of degrading.
+    ("/v1/plane/", "/probe-report", "ingest"),
+    # Same shape again: a node's own sentinel posting the reputation it computed
+    # across sessions. Out-dial, about itself, on the node's own credential. The
+    # plane cannot compute this and must not — the cycle runs where the agent
+    # runs (ui-spec §12.0) — so `operate` here would mean the only party that
+    # HAS the snapshot is the one party that cannot post it.
+    ("/v1/plane/", "/reputation", "ingest"),
+    # Influence ranking is subgraph ablation: replay with one value excised.
+    # Its siblings /v1/replay and /v1/regression are `read` for exactly that
+    # reason; this one inherited `ingest` from the /v1/runs/ prefix, so a
+    # read-only dashboard key could replay a trace but not rank it.
+    ("/v1/runs/", "/influence", "read"),
+    # Minting a share link publishes an EvidenceCase behind an unauthenticated
+    # read token. That is an operator decision, not part of uploading a trace —
+    # otherwise the proxy's ingest key doubles as a publishing credential.
+    ("/v1/runs/", "/share", "operate"),
+)
+
+# Method+path prefix -> required scope for WRITES. First match wins.
 # Open paths (no auth even when enabled) are handled separately below.
 _WRITE_POLICY: tuple[tuple[str, str], ...] = (
     ("/v1/ingest/", "ingest"),
     ("/v1/wrap/", "ingest"),          # code analysis, not an operational command
     ("/v1/runs/", "ingest"),          # POST .../evidence
     ("/v1/pins/", "ingest"),
-    ("/v1/plane/", "operate"),        # command / facts / consumed / telemetry
-    ("/v1/keys", "admin"),            # mint / list API keys
+    ("/v1/plane/", "operate"),        # command / facts / cascade-stop
+    ("/v1/keys", "admin"),            # mint / revoke API keys
     ("/v1/regression/schedule", "operate"),  # EE schedule is operator config
     ("/v1/regression", "read"),       # replay-only, no state change
     ("/v1/replay/", "read"),          # counterfactual POST is read-only
     ("/v1/notifications/", "operate"),
     ("/v1/lab/", "operate"),          # accepting a Lab deploy changes the corpus
+    # ── vault, longest prefix first: the two subsystems are not one surface ──
+    # A governed node fetches its own tool credential at call time, so this is
+    # a node-level read, not an operator action. Its real protection is the
+    # per-node dispense scope checked inside the vault (ToolCredentialVault).
+    ("/v1/vault/creds/dispense", "ingest"),
+    # Narrowing during an incident — operate, like every other narrowing.
+    ("/v1/vault/creds/revoke", "operate"),
+    # Signing an operator command. Not admin: this is exactly the action the
+    # `operate` scope names, and it is separately gated by the signing token
+    # and the per-key operator allowlist, and audited unconditionally.
+    ("/v1/vault/signing/sign", "operate"),
+    # Everything else in either vault is custody config: enroll, rotate, and
+    # creating a signing key.
+    ("/v1/vault/", "admin"),
+    # Verifying a license STORES and ACTIVATES it (app.license_verify), so it
+    # changes the deployment's entitlement state — admin, and never open.
+    ("/v1/license/verify", "admin"),
 )
 
-# Paths served without auth even when enabled: liveness, the deliberately
-# scoped-by-design share links (spec §8.3 — one case, its own read token), and
-# license verification (a pure utility over user-supplied input).
-_OPEN_PREFIXES: tuple[str, ...] = (
-    "/v1/healthz",
-    "/v1/auth/status",   # the UI queries this to decide whether to prompt
-    "/v1/share/",
-    "/v1/license/verify",
+# Served without auth even when it is enabled — as (method, prefix) pairs, not
+# bare prefixes: opening a path must not open every verb on it. `/v1/share/` is
+# a deliberately scoped-by-design read surface (spec §8.3 — one case, its own
+# read token); revoking one is an operator action and stays authenticated.
+_OPEN_ROUTES: tuple[tuple[str, str], ...] = (
+    ("GET", "/v1/healthz"),
+    ("GET", "/v1/auth/status"),  # the UI queries this to decide whether to prompt
+    ("GET", "/v1/share/"),
+    ("HEAD", "/v1/healthz"),
+    ("HEAD", "/v1/share/"),
 )
 
 
 def required_scope(method: str, path: str) -> str:
-    if method in ("GET", "HEAD", "OPTIONS"):
+    if method in _READ_METHODS:
+        for prefix, scope in _READ_POLICY:
+            if path.startswith(prefix):
+                return scope
         return "read"
-    # Adapter-side plane posts (the node reporting in / acking a one-shot) are
-    # ingest — the proxy's key must be able to heartbeat. Operator actions on
-    # the plane (command / facts / cascade-stop) stay operate.
-    if path.startswith("/v1/plane/") and path.endswith(("/telemetry", "/consumed")):
-        return "ingest"
+    for prefix, suffix, scope in _ROUTE_POLICY:
+        if path.startswith(prefix) and path.endswith(suffix):
+            return scope
     for prefix, scope in _WRITE_POLICY:
         if path.startswith(prefix):
             return scope
     return "operate"  # unknown write path: fail safe to a higher bar
 
 
-def is_open(path: str) -> bool:
-    return any(path.startswith(p) for p in _OPEN_PREFIXES)
+def is_open(method: str, path: str) -> bool:
+    """Whether this exact (method, path) is served without authentication."""
+    return any(
+        method == open_method and path.startswith(prefix)
+        for open_method, prefix in _OPEN_ROUTES
+    )
+
+
+# The only routes a browser opens DIRECTLY, where no Authorization header is
+# possible: an EventSource subscription and an <a href> export/download. These
+# alone accept `?token=`; everywhere else a query token is ignored, so a URL
+# copied out of a log or a history entry is not a working credential.
+#
+# `/events` used to be in this list and did not belong: `GET /v1/runs/{id}/events`
+# returns the run's whole event log as ordinary JSON and the UI fetches it with
+# the Authorization header (api.ts `runEvents`). Nothing opens it directly, so
+# the only thing the exception bought was a live credential in access logs,
+# browser history and Referer headers — with the full trace behind it.
+#
+# Adding to this list means claiming a header is IMPOSSIBLE for that route, not
+# merely inconvenient: `/v1/plane/{node}/desired` is an SSE stream and is
+# deliberately absent, because its subscriber is the node's own HTTP client,
+# which sets headers.
+_QUERY_TOKEN_SUFFIXES = ("/stream", "/export")
+
+
+def accepts_query_token(method: str, path: str) -> bool:
+    """Whether `?token=` is honoured for this route (see the note above)."""
+    return method in _READ_METHODS and path.endswith(_QUERY_TOKEN_SUFFIXES)
+
+
+# Upstream plane writes: the node reporting about ITSELF. A request to one of
+# these speaks AS the node named in the path, so a node-bound key must match it.
+# `/command` and `/cascade-stop` are excluded deliberately — they are operator
+# actions aimed AT a node, not the node speaking, and they carry their own
+# ed25519 signature check.
+_SPEAKS_AS_NODE_SUFFIXES = ("/telemetry", "/facts", "/consumed", "/probe-report")
+_PLANE_PREFIX = "/v1/plane/"
+
+
+def plane_node_of(method: str, path: str) -> str | None:
+    """The node_id a request claims to speak as, or None if it claims none.
+
+    Only upstream plane writes speak as a node; reads and operator commands do
+    not. Returns the ``{node_id}`` path segment so the caller can check it
+    against a node-bound credential.
+    """
+    if method in _READ_METHODS or not path.startswith(_PLANE_PREFIX):
+        return None
+    if not path.endswith(_SPEAKS_AS_NODE_SUFFIXES):
+        return None
+    node_id, _, suffix = path[len(_PLANE_PREFIX):].rpartition("/")
+    # Exactly one segment, matching the `{node_id}` the router binds. Without
+    # the emptiness test `/v1/plane/telemetry` — which names no node at all —
+    # yielded the node id "telemetry"; without the separator test a nested path
+    # yielded "a/b", which is not a node id any key can be bound to.
+    if not node_id or not suffix or "/" in node_id:
+        return None
+    return node_id
 
 
 def hash_secret(secret: str) -> str:
@@ -95,12 +288,26 @@ class Principal:
     # partition data. None for master/key principals (operator credentials).
     org: str | None = None
     role: str | None = None
-    tier: str | None = None
     user_id: str | None = None
     email: str | None = None
+    # A key minted FOR ONE NODE carries its node_id, and the plane refuses to
+    # let it speak for any other (see `may_speak_for`). Command signing protects
+    # the downstream direction; this is the upstream half — without it any
+    # ingest key can forge a neighbour's heartbeat, level or health verdict.
+    # None = unbound, the pre-existing behaviour for fleet-wide operator keys.
+    node_id: str | None = None
 
     def may(self, scope: str) -> bool:
         return scope in self.scopes
+
+    def may_speak_for(self, node_id: str) -> bool:
+        """Whether this principal may post telemetry/facts/health AS `node_id`.
+
+        An unbound principal (the master token, an operator key, a human login)
+        speaks for the whole fleet. A node-bound key speaks only for its own
+        node — so a compromised node cannot report on behalf of its neighbours.
+        """
+        return self.node_id is None or self.node_id == node_id
 
 
 MASTER = "master"

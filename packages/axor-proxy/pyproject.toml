@@ -14,11 +14,30 @@ classifiers = [
 # PlaneAdmission). It used to be axor-core[plane]; the kernel now keeps only the
 # primitives the plane steers through, so it can no longer depend on a client.
 dependencies = [
-  "axor-core>=0.10,<0.11",
-  "axor-wrap[plane]>=0.1.0,<0.2",
-  # 0.1.1 is the first release resolvable against axor-core 0.10.
-  "axor-eval>=0.1.1,<0.2",
+  # Held at <0.11 while axor-backend, in this same workspace, moved to >=0.11 —
+  # so the two intersected NOWHERE and `uv sync` answered "your workspace's
+  # requirements are unsatisfiable". A repository that could not install itself.
+  #
+  # Only the ceiling moves. This proxy imports nothing 0.11 added (the kernel's
+  # cross-boundary schemas, `policy.from_record`, the shared vectors — backend
+  # and Lab do, which is why THEIR floor is 0.11), and 110 tests pass against
+  # it. Raising the floor too would drop 0.10.x for no reason anyone can point
+  # at. No test here looked at the installed kernel, so the staleness was
+  # silent — tests/test_core_compatibility.py now does.
+  "axor-core>=0.10,<0.12",
+  # 0.2 moves with the backend's `wrap` extra: same library, same protocol
+  # v0.3 snapshot verification, and a workspace that pinned the two apart would
+  # be the conflict this repository just spent a commit removing.
+  "axor-wrap[plane]>=0.2,<0.3",
+  # 0.2 carries `audit.from_trace`: this proxy reads its cases off the trace it
+  # recorded, with the same derivation the control plane runs over the uploaded
+  # run, instead of calling the audit layers from its own run state.
+  "axor-eval>=0.2,<0.3",
   "httpx>=0.27",
+  # Sealed boxes (X25519 + XSalsa20-Poly1305) for envelope-mode credentials:
+  # the node opens what the plane stores and cannot. `cryptography`, which
+  # arrives with axor-wrap[plane], has no sealed-box primitive.
+  "pynacl>=1.5",
   "anyio>=4.0",
   "starlette>=0.37",
   "uvicorn>=0.29",

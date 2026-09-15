@@ -2,7 +2,10 @@
 (section 8.3), and the EE offline license check (monetization section 4)."""
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import pathlib
+from collections.abc import AsyncIterator
 
 import httpx
 import pytest
@@ -34,8 +37,12 @@ async def test_notifier_retries_then_dead_letters() -> None:
 
     n = Notifier(post=failing_post, max_attempts=3)
     n.subscribe("http://sink.test/hook", ["evidence_run"])
-    delivered = await n.emit("evidence_run", "node1", {"cases": 1})
-    assert delivered == 1
+    # emit SCHEDULES; the POSTs and their retries run off the caller's path, so
+    # observing them means draining. Inline delivery is what put forty seconds
+    # of a dead webhook on a governed node's heartbeat.
+    scheduled = await n.emit("evidence_run", "node1", {"cases": 1})
+    await n.drain()
+    assert scheduled == 1
     assert calls["n"] == 3  # retried up to max_attempts
     assert len(n.dead_letters) == 1
     assert n.dead_letters[0].error == "status 500"
@@ -53,6 +60,7 @@ async def test_notifier_hands_dead_letters_to_the_persistence_sink() -> None:
     n = Notifier(post=failing_post, max_attempts=2, dead_sink=sink)
     n.subscribe("http://sink.test/hook", ["node_stale"])
     await n.emit("node_stale", "node1", {"silent_for": 31})
+    await n.drain()
     assert len(persisted) == 1
     assert persisted[0].payload["trigger"] == "node_stale"
 
@@ -68,6 +76,7 @@ async def test_notifier_survives_a_broken_persistence_sink() -> None:
     n.subscribe("http://sink.test/hook", ["node_stale"])
     # Must not raise — the in-memory record still lands.
     assert await n.emit("node_stale", "node1", {}) == 1
+    await n.drain()
     assert len(n.dead_letters) == 1
 
 
@@ -78,13 +87,39 @@ async def test_notifier_debounce_suppresses_repeats() -> None:
         seen.append(body)
         return 200
 
-    n = Notifier(post=ok_post)
+    # An injected clock, because the debounce window has to be a real interval
+    # somebody can wait out. It used to be a counter that only a test advanced,
+    # so in every deployment it stood still and a debounce of any size muted
+    # the (trigger, node) pair permanently.
+    fake = [100.0]
+    n = Notifier(post=ok_post, clock=lambda: fake[0])
     n.subscribe("http://sink.test", ["level_transition_up"], debounce_seconds=5.0)
     assert await n.emit("level_transition_up", "n1", {"to": "LOCKED"}) == 1
     assert await n.emit("level_transition_up", "n1", {"to": "LOCKED"}) == 0  # debounced
-    n.tick(6.0)
+    fake[0] += 6.0
     assert await n.emit("level_transition_up", "n1", {"to": "LOCKED"}) == 1
+    await n.drain()
     assert len(seen) == 2
+
+
+async def test_a_debounce_window_actually_expires() -> None:
+    """The regression: with the default clock, five events over more than the
+    window must not collapse to one. This was `1` — the logical clock never
+    moved, so every later event measured a zero-length interval and a debounce
+    of any size was a permanent mute that looked like configuration working."""
+    seen = []
+
+    async def ok_post(url: str, body: dict) -> int:
+        seen.append(body)
+        return 200
+
+    n = Notifier(post=ok_post)
+    n.subscribe("http://sink.test", ["node_stale"], debounce_seconds=0.05)
+    for _ in range(5):
+        await n.emit("node_stale", "n1", {})
+        await asyncio.sleep(0.03)
+    await n.drain()
+    assert len(seen) >= 2, "the debounce window never expired"
 
 
 async def test_unknown_trigger_rejected() -> None:
@@ -192,16 +227,27 @@ async def test_cascade_stop_stops_the_whole_subtree(
 
 # ── evidence auto-pin ─────────────────────────────────────────────────────────
 
+def _call(seq: int, tool: str, verdict: str) -> dict:
+    return {"schema_version": "1.0", "seq": seq, "node_id": "n1",
+            "kind": "tool_call", "ts": "t", "causal_root": None, "gate": None,
+            "verdict": verdict,
+            "payload": {"tool": tool, "args": {}, "arg_refs": {}}}
+
+
 async def test_set_evidence_auto_pins_deviation_to_must_block(
     client: httpx.AsyncClient,
 ) -> None:
     store = client._app.state.store  # type: ignore[attr-defined]
-    await client.post("/v1/ingest/run_x", json={"node_id": "n1", "events": []})
-    # Evidence with a deviation → auto-pinned to the must_block corpus side.
-    await client.post("/v1/runs/run_x/evidence", json={
+    await client.post("/v1/ingest/run_x", json={
+        "node_id": "n1", "events": [_call(0, "slack_post", "deny")],
+    })
+    # Evidence with a deviation, over a trace that recorded the denial →
+    # auto-pinned to the must_block corpus side.
+    pinned = (await client.post("/v1/runs/run_x/evidence", json={
         "node_id": "n1", "scenario": "prompt_injection",
         "evidence": [{"case_id": "c1", "deviation": "exfil attempt"}],
-    })
+    })).json()
+    assert pinned == {"ok": True, "notified": True, "pinned": True}
     pins = await store.pinned()
     assert any(p["run_id"] == "run_x" and p["side"] == "must_block" for p in pins)
 
@@ -214,54 +260,45 @@ async def test_set_evidence_auto_pins_deviation_to_must_block(
     assert not any(p["run_id"] == "run_y" for p in pins)
 
 
+async def test_a_deviation_with_no_recorded_denial_is_not_auto_pinned(
+    client: httpx.AsyncClient,
+) -> None:
+    """The block side pins a denial to hold; a trace with none is not one.
+
+    A fabricated tool result — or any deviation caught with the gates in
+    observe mode — leaves a trace where every call passed. Pinned must_block,
+    it produces a corpus row the report can only ever mark unchecked
+    (`replay_api.regression_row`), and one such pin withholds `safe_to_ship`
+    from every config forever. The evidence notification still fires: the
+    finding is kept, it just does not become a regression test that cannot run.
+    """
+    store = client._app.state.store  # type: ignore[attr-defined]
+    notifier = client._app.state.notifier  # type: ignore[attr-defined]
+    fired: list[str] = []
+
+    async def capture(url: str, body: dict, org: str) -> None:
+        fired.append(body["trigger"])
+
+    notifier.subscribe("https://hook.test/x", ["evidence_run"], 0.0)
+    notifier._deliver = capture
+    await client.post("/v1/ingest/run_obs", json={
+        "node_id": "n1", "events": [_call(0, "web_search", "pass")],
+    })
+    body = (await client.post("/v1/runs/run_obs/evidence", json={
+        "node_id": "n1", "scenario": "tool-deprivation",
+        "evidence": [{"case_id": "c1", "deviation": "fabricated_tool_result"}],
+    })).json()
+    await notifier.drain()
+
+    assert body == {"ok": True, "notified": True, "pinned": False}
+    assert not any(p["run_id"] == "run_obs" for p in await store.pinned())
+    assert fired == ["evidence_run"]  # the finding is still reported
+
+
 # ── node_stale sweep ──────────────────────────────────────────────────────────
-
-async def test_stale_sweep_fires_once_per_stale_episode() -> None:
-    from datetime import UTC, datetime, timedelta
-
-    from axor_backend.broadcast import Broadcast
-    from axor_backend.monitor import stale_sweep
-
-    fired = []
-
-    async def capture(url: str, body: dict) -> int:
-        fired.append(body)
-        return 200
-
-    class FakeStore:
-        def __init__(self) -> None:
-            self.rows: list[dict] = []
-
-        async def list_reported(self) -> list[dict]:
-            return list(self.rows)
-
-    store = FakeStore()
-    notifier = Notifier(post=capture)
-    notifier.subscribe("http://sink.test", ["node_stale"])
-    broadcast = Broadcast()
-    now = datetime(2026, 7, 5, 12, 0, 0, tzinfo=UTC)
-
-    # Fresh node → not stale.
-    store.rows = [{"node_id": "n1", "level": "NORMAL",
-                   "updated_ts": (now - timedelta(seconds=5)).isoformat()}]
-    seen: set[str] = set()
-    assert await stale_sweep(store, notifier, broadcast, 30.0, seen, now) == 0
-
-    # Silent past 3T → fires once, and stays quiet on the next sweep (edge).
-    store.rows = [{"node_id": "n1", "level": "NORMAL",
-                   "updated_ts": (now - timedelta(seconds=40)).isoformat()}]
-    assert await stale_sweep(store, notifier, broadcast, 30.0, seen, now) == 1
-    assert await stale_sweep(store, notifier, broadcast, 30.0, seen, now) == 0
-    assert len(fired) == 1 and fired[0]["trigger"] == "node_stale"
-
-    # Heartbeats again (fresh), then goes silent → re-arms and fires anew.
-    store.rows = [{"node_id": "n1", "level": "NORMAL",
-                   "updated_ts": (now - timedelta(seconds=1)).isoformat()}]
-    assert await stale_sweep(store, notifier, broadcast, 30.0, seen, now) == 0
-    store.rows = [{"node_id": "n1", "level": "NORMAL",
-                   "updated_ts": (now - timedelta(seconds=40)).isoformat()}]
-    assert await stale_sweep(store, notifier, broadcast, 30.0, seen, now) == 1
-    assert len(fired) == 2
+# Moved to test_monitor.py: the edge detection is a column on the node's row
+# now, so the sweep needs a real store rather than a fake list of dicts, and it
+# has enough to say to want a file.
 
 
 # ── share + export ────────────────────────────────────────────────────────────
@@ -381,50 +418,143 @@ def _vendor_keypair() -> tuple[str, str]:
     return bytes(key).hex(), key.verify_key.encode().hex()
 
 
-async def test_valid_license_verifies_offline(client: httpx.AsyncClient) -> None:
+@contextlib.asynccontextmanager
+async def _client_pinned_to(
+    tmp_path: pathlib.Path, vendor_pubkey: str,
+) -> AsyncIterator[httpx.AsyncClient]:
+    """A backend whose deployment pins `vendor_pubkey` as its licensing trust
+    root. A license can only be verified against the pinned key, so a test that
+    mints its own vendor keypair has to pin it the way an operator would."""
+    app = create_app(
+        database_url=f"sqlite+aiosqlite:///{tmp_path}/lic.db",
+        operator_keys={}, allow_unsigned=True, vendor_pubkey=vendor_pubkey,
+    )
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://backend.test"
+    ) as c, app.router.lifespan_context(app):
+        yield c
+
+
+async def test_valid_license_verifies_offline(tmp_path: pathlib.Path) -> None:
     from axor_backend.ee.license import sign_license
 
     priv, pub = _vendor_keypair()
-    # Enterprise Platform = Security workspace + both modules + self-hosted
+    # Enterprise Platform = the top rung + a self-hosted runner
     # (axor-packaging.md §5); it is a security workspace_tier, not its own tier.
     lic = {"organization": "Acme", "workspace_tier": "security",
-           "modules": {"private_lab": True, "control_plane": True},
            "governed_node_ceiling": 50, "self_hosted_runner": True,
            "expires_at": "2027-01-01", "features": ["sso", "compliance_exports"]}
     license_json = sign_license(lic, priv)
-    resp = await client.post("/v1/license/verify", json={
-        "license_json": license_json, "vendor_pubkey": pub,
-    })
+    async with _client_pinned_to(tmp_path, pub) as client:
+        resp = await client.post("/v1/license/verify", json={
+            "license_json": license_json,
+        })
     assert resp.status_code == 200
     body = resp.json()
+    # Verified against the pinned key means active — there is no third state.
+    assert body["activated"] is True
     assert body["organization"] == "Acme"
     assert body["workspace_tier"] == "security"
-    assert body["modules"] == {"private_lab": True, "control_plane": True}
     assert body["governed_node_ceiling"] == 50
     assert "sso" in body["features"]
 
 
-async def test_tampered_license_rejected(client: httpx.AsyncClient) -> None:
+async def test_tampered_license_rejected(tmp_path: pathlib.Path) -> None:
     from axor_backend.ee.license import sign_license
 
     priv, pub = _vendor_keypair()
     lic = {"organization": "Acme", "workspace_tier": "team",
-           "modules": {"private_lab": True, "control_plane": False},
            "governed_node_ceiling": 5, "self_hosted_runner": False,
            "expires_at": "2027-01-01", "features": []}
     license_json = sign_license(lic, priv)
     tampered = license_json.replace('"governed_node_ceiling": 5',
                                     '"governed_node_ceiling": 9999')
-    resp = await client.post("/v1/license/verify", json={
-        "license_json": tampered, "vendor_pubkey": pub,
-    })
+    async with _client_pinned_to(tmp_path, pub) as client:
+        resp = await client.post("/v1/license/verify", json={
+            "license_json": tampered,
+        })
     assert resp.status_code == 403
+
+
+async def test_license_verify_refuses_a_vendor_key_from_the_request(
+    tmp_path: pathlib.Path,
+) -> None:
+    """A signature checked against a key from the same request proves nothing.
+
+    The route used to accept a caller-supplied `vendor_pubkey`, verify against
+    it, activate nothing, and return the parsed license anyway with
+    `activated: false` — organization, tier and node ceiling included.
+    The Settings panel renders those fields, so a self-signed license displayed
+    an enterprise entitlement that did not exist. Refused now, and nothing about
+    the deployment's entitlement moves.
+    """
+    from axor_backend.ee.license import sign_license
+
+    pinned_priv, pinned_pub = _vendor_keypair()
+    forged_priv, forged_pub = _vendor_keypair()
+    forged = sign_license(
+        {"organization": "Attacker", "workspace_tier": "security",
+         "governed_node_ceiling": 9999, "self_hosted_runner": True,
+         "expires_at": "2999-01-01", "features": ["sso"]},
+        forged_priv,
+    )
+    async with _client_pinned_to(tmp_path, pinned_pub) as client:
+        resp = await client.post("/v1/license/verify", json={
+            "license_json": forged, "vendor_pubkey": forged_pub,
+        })
+        assert resp.status_code == 400
+        assert "does not match" in resp.json()["detail"]
+        # Nothing leaked: the refusal carries no field of the forged license.
+        assert "Attacker" not in resp.text and "9999" not in resp.text
+        # And nothing activated.
+        status = (await client.get("/v1/license/status")).json()
+        assert status["active"] is False
+        assert status["vendor_key_configured"] is True
+        # Echoing the pinned key back is harmless — older clients send it.
+        real = sign_license(
+            {"organization": "Acme", "workspace_tier": "team",
+             "governed_node_ceiling": 5, "self_hosted_runner": False,
+             "expires_at": "2999-01-01", "features": []},
+            pinned_priv,
+        )
+        ok = await client.post("/v1/license/verify", json={
+            "license_json": real, "vendor_pubkey": pinned_pub,
+        })
+        assert ok.status_code == 200 and ok.json()["activated"] is True
+
+
+async def test_license_verify_without_a_pinned_key_says_so(
+    tmp_path: pathlib.Path,
+) -> None:
+    """No pin means no license can be checked — and the UI must be able to tell
+    that apart from "no license yet". Both used to render as a green summary:
+    with no env pin the operator's real vendor key verified, activated nothing,
+    and the panel showed the entitlement regardless."""
+    from axor_backend.ee.license import sign_license
+
+    priv, _pub = _vendor_keypair()
+    lic = sign_license(
+        {"organization": "Acme", "workspace_tier": "team",
+         "governed_node_ceiling": 5, "self_hosted_runner": False,
+         "expires_at": "2999-01-01", "features": []},
+        priv,
+    )
+    async with _client_pinned_to(tmp_path, "") as client:
+        resp = await client.post("/v1/license/verify", json={"license_json": lic})
+        assert resp.status_code == 400
+        assert "AXOR_VENDOR_PUBKEY" in resp.json()["detail"]
+        status = (await client.get("/v1/license/status")).json()
+        assert status["active"] is False
+        assert status["vendor_key_configured"] is False
+        # this deployment pins no organization either, so it would accept a
+        # license issued to anyone — reported, not assumed
+        assert status["licensed_to"] is None
 
 
 def test_license_expiry_degrades_to_readonly() -> None:
     from axor_backend.ee.license import License
 
-    lic = License(organization="A", workspace_tier="team", modules=(),
+    lic = License(organization="A", workspace_tier="team",
                   governed_node_ceiling=5, expires_at="2026-01-01",
                   features=("sso",))
     assert lic.enables("sso", today="2025-06-01") is True
@@ -433,27 +563,27 @@ def test_license_expiry_degrades_to_readonly() -> None:
 
 
 async def test_license_verify_reports_node_ceiling_telemetry(
-    client: httpx.AsyncClient,
+    tmp_path: pathlib.Path,
 ) -> None:
-    """§5: verify returns live_nodes/over_ceiling — a warning, never a block."""
+    """§5: verify reports the month's peak / over_ceiling — a warning, never a block."""
     from axor_backend.ee.license import sign_license
 
     priv, pub = _vendor_keypair()
     lic = sign_license({"organization": "A", "workspace_tier": "team",
-                        "modules": {"private_lab": True, "control_plane": True},
                         "governed_node_ceiling": 1, "self_hosted_runner": False,
                         "expires_at": "2999-01-01", "features": []}, priv)
-    # Two live nodes vs a ceiling of 1.
-    for node in ("ce_n1", "ce_n2"):
-        await client.post(f"/v1/plane/{node}/telemetry", json={
-            "run_id": f"{node}-hb",
-            "events": [{"seq": 0, "kind": "heartbeat",
-                        "payload": {"applied_version": 0, "level": "NORMAL"}}],
-        })
-    r = (await client.post("/v1/license/verify", json={
-        "license_json": lic, "vendor_pubkey": pub,
-    })).json()
-    assert r["live_nodes"] >= 2 and r["over_ceiling"] is True
+    async with _client_pinned_to(tmp_path, pub) as client:
+        # Two live nodes vs a ceiling of 1.
+        for node in ("ce_n1", "ce_n2"):
+            await client.post(f"/v1/plane/{node}/telemetry", json={
+                "run_id": f"{node}-hb",
+                "events": [{"seq": 0, "kind": "heartbeat",
+                            "payload": {"applied_version": 0, "level": "NORMAL"}}],
+            })
+        r = (await client.post("/v1/license/verify", json={
+            "license_json": lic,
+        })).json()
+    assert r["peak_nodes"] >= 2 and r["over_ceiling"] is True
 
 
 def test_license_cli_roundtrip(tmp_path, capsys) -> None:  # noqa: ANN001
@@ -464,7 +594,7 @@ def test_license_cli_roundtrip(tmp_path, capsys) -> None:  # noqa: ANN001
     assert main(["keygen"]) == 0
     keys = _json.loads(capsys.readouterr().out)
     assert main(["issue", "--key", keys["vendor_private_key"], "--org", "T",
-                 "--expires-at", "2999-01-01"]) == 0
+                 "--governed-nodes", "5", "--expires-at", "2999-01-01"]) == 0
     lic_file = tmp_path / "l.json"
     lic_file.write_text(capsys.readouterr().out)
     assert main(["verify", "--pubkey", keys["vendor_public_key"],
@@ -487,13 +617,113 @@ def test_license_cli_reads_key_from_file_and_env(
     key_file = tmp_path / "vendor.key"
     key_file.write_text(keys["vendor_private_key"] + "\n")
     assert main(["issue", "--key-file", str(key_file), "--org", "F",
-                 "--expires-at", "2999-01-01"]) == 0
+                 "--governed-nodes", "5", "--expires-at", "2999-01-01"]) == 0
     assert '"organization"' in capsys.readouterr().out
 
     monkeypatch.setenv("AXOR_VENDOR_KEY", keys["vendor_private_key"])
-    assert main(["issue", "--org", "E", "--expires-at", "2999-01-01"]) == 0
+    assert main(["issue", "--org", "E", "--governed-nodes", "5",
+                 "--expires-at", "2999-01-01"]) == 0
     assert '"organization"' in capsys.readouterr().out
 
     monkeypatch.delenv("AXOR_VENDOR_KEY")
     assert main(["issue", "--org", "N", "--expires-at", "2999-01-01"]) == 2
     assert "no signing key" in capsys.readouterr().err
+
+
+# ── delivery is off the caller's path ────────────────────────────────────────
+
+async def test_emit_does_not_wait_for_the_webhook() -> None:
+    """`emit` is called from the telemetry handler. Four attempts at a
+    ten-second timeout is forty seconds added to a heartbeat whose stale window
+    is thirty — so one customer's dead webhook drove their own nodes into
+    `node_stale`, which emitted again into the same dead webhook. A broken
+    notification sink looked like a failing fleet."""
+    import time as _time
+
+    async def slow_post(url: str, body: dict) -> int:
+        await asyncio.sleep(0.4)
+        return 500
+
+    n = Notifier(post=slow_post, max_attempts=2)
+    n.subscribe("http://sink.test", ["node_stale"])
+    started = _time.monotonic()
+    assert await n.emit("node_stale", "n1", {}) == 1
+    assert _time.monotonic() - started < 0.1, "emit blocked on the webhook"
+    await n.drain()
+    assert len(n.dead_letters) == 1  # still recorded, just not inline
+
+
+async def test_subscribing_the_same_webhook_twice_delivers_once() -> None:
+    """The store deduplicates on (url, triggers, pattern) and the in-memory
+    list appended unconditionally, so a repeated subscribe stored ONE row and
+    delivered TWICE — and a restart, rehydrating from those rows, silently went
+    back to once. The duplicate rate depended on uptime."""
+    sent = []
+
+    async def ok_post(url: str, body: dict) -> int:
+        sent.append(url)
+        return 200
+
+    n = Notifier(post=ok_post)
+    for _ in range(3):
+        n.subscribe("http://sink.test/hook", ["node_stale"], debounce_seconds=0.0)
+    assert await n.emit("node_stale", "n1", {}) == 1
+    await n.drain()
+    assert sent == ["http://sink.test/hook"]
+
+
+async def test_resubscribing_updates_rather_than_duplicating() -> None:
+    """Same identity, new debounce: the registration is updated in place."""
+    n = Notifier(post=lambda url, body: None)
+    n.subscribe("http://sink.test/hook", ["node_stale"], debounce_seconds=1.0)
+    n.subscribe("http://sink.test/hook", ["node_stale"], debounce_seconds=30.0,
+                label="oncall")
+    assert len(n._subs) == 1
+    assert n._subs[0].debounce_seconds == 30.0
+    assert n._subs[0].label == "oncall"
+
+
+async def test_saturation_is_dead_lettered_not_queued() -> None:
+    """A notifier that answers a flood by growing a task list without limit
+    trades a visible failure for an invisible one. The dead-letter log exists
+    because lost deliveries are evidence."""
+    from axor_backend.notifications import _MAX_IN_FLIGHT
+
+    async def hang(url: str, body: dict) -> int:
+        await asyncio.sleep(30)
+        return 200
+
+    n = Notifier(post=hang)
+    n.subscribe("http://sink.test", ["node_stale"])
+    # Bounded: emit SCHEDULES, so this loop is fast. Were delivery inline again
+    # it would sit here for hours, and a mutation that hangs the suite is a
+    # worse signal than one that fails it.
+    async with asyncio.timeout(5):
+        for i in range(_MAX_IN_FLIGHT + 5):
+            await n.emit("node_stale", f"n{i}", {})
+    assert len(n.dead_letters) >= 5
+    assert "saturated" in n.dead_letters[-1].error
+    for task in list(n._in_flight):
+        task.cancel()
+
+
+async def test_unsubscribe_stops_delivery_and_is_tenant_scoped() -> None:
+    """A registered webhook fired forever: there was no way to remove one
+    short of editing the database, while the body carries node ids, levels and
+    a permalink."""
+    sent = []
+
+    async def ok_post(url: str, body: dict) -> int:
+        sent.append((url, body["node_id"]))
+        return 200
+
+    n = Notifier(post=ok_post)
+    n.subscribe("http://sink.test/hook", ["node_stale"], org="org_a")
+    n.subscribe("http://sink.test/hook", ["node_stale"], org="org_b")
+
+    assert n.unsubscribe("http://sink.test/hook", org="org_a") == 1
+    assert await n.emit("node_stale", "n1", {}, org="org_a") == 0
+    # The other tenant's on-call is untouched — same URL, different subscriber.
+    assert await n.emit("node_stale", "n1", {}, org="org_b") == 1
+    await n.drain()
+    assert sent == [("http://sink.test/hook", "n1")]

@@ -1,0 +1,191 @@
+"""Run ingest and read — the upload path and the live audit stream.
+
+A trace arriving here becomes two things at once: rows in the event log and
+messages on the SSE bus. The log is the system of record and the only copy —
+value provenance and causal subgraphs are derived from these rows when a request
+asks for them, so there is no second index that a failure after the write could
+leave disagreeing with the first.
+"""
+from __future__ import annotations
+
+import json
+from collections.abc import AsyncIterator
+
+from fastapi import APIRouter, Header
+from sse_starlette.sse import EventSourceResponse
+
+from axor_backend.broadcast import messages as bus_messages
+from axor_backend.clock import now
+from axor_backend.deps import (
+    BroadcastDep,
+    NotifierDep,
+    StoreDep,
+    SubgraphCacheDep,
+)
+from axor_backend.evidence import batch_has_claim, derive_for_run
+from axor_backend.limits import check_batch
+from axor_backend.tenancy import current_org_id, topic
+
+router = APIRouter(prefix="/v1", tags=["runs"])
+
+
+@router.post("/ingest/{run_id}", status_code=202)
+async def ingest(
+    run_id: str,
+    body: dict,
+    store: StoreDep,
+    bus: BroadcastDep,
+    cache: SubgraphCacheDep,
+    notifier: NotifierDep,
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+) -> dict:
+    node_id = body.get("node_id", "proxy")
+    scenario = body.get("scenario", "custom")
+    events = check_batch(body.get("events", []))
+    await store.upsert_run(run_id, node_id, scenario, now())
+    result = await store.ingest_events(run_id, node_id, events, idempotency_key)
+    # This run's causal subgraphs were derived from a shorter event list.
+    cache.drop_run(current_org_id(), run_id)
+    # Only what was actually STORED goes on the wire, carrying the id a
+    # reconnecting subscriber resumes from. Publishing the request's lines
+    # instead re-broadcast every event of a duplicate batch, with no cursor.
+    for event_id, line in result.rows:
+        bus.publish(
+            topic("run", run_id),
+            {"type": "event", "id": event_id, "line": line},
+        )
+    # The batch that carries the agent's answer is the one that finishes the
+    # run, and finishing a run is when it can be audited. Derived HERE rather
+    # than by each client, because "does this run contain a discrepancy" had
+    # two answers depending on which integration recorded it — and the deeper
+    # one, the adapter path, answered nothing at all.
+    derived = 0
+    if batch_has_claim(events):
+        cases = await derive_for_run(store, run_id, node_id, scenario)
+        derived = len(cases)
+        if cases:
+            await store_evidence(store, notifier, run_id, node_id, scenario, cases)
+    return {"stored": len(result.rows), "evidence": derived}
+
+
+async def store_evidence(
+    store: object, notifier: object, run_id: str, node_id: str, scenario: str,
+    evidence: list[dict],
+) -> dict:
+    """Store a run's cases, and do everything that follows from having them.
+
+    One function because there are two ways a run acquires evidence — the
+    backend derives it on ingest (`axor_backend.evidence`), and a client posts
+    ready-made cases (a Lab package, the demo seed, an older uploader) — and
+    what happens NEXT must not depend on which. The auto-pin and the
+    `evidence_run` notification were reachable only through the route, so a
+    derived case would have been a case that notified nobody and pinned
+    nothing.
+    """
+    await store.set_evidence(run_id, evidence)  # type: ignore[attr-defined]
+    # Run completed with >=1 EvidenceCase → notify (spec section 16 trigger).
+    deviations = [c for c in evidence if c.get("deviation")]
+    pinned = False
+    if deviations:
+        # Auto-pin the must-block side here, at the system of record (decision
+        # 11): a trace carrying an EvidenceCase IS the regression corpus's block
+        # side, and pinning it should not depend on the uploading client
+        # remembering to POST /v1/pins. This is the ONLY auto-pin — the proxy
+        # used to POST /v1/pins itself, which put the same policy in two places.
+        #
+        # Only a trace that recorded a denial, though. The block side asks "does
+        # this config still make the denial this run made"; a run whose evidence
+        # is a fabricated tool result (or any deviation caught with the gates in
+        # observe mode) recorded no denial, so the pin has nothing to check and
+        # the corpus can only report it unchecked forever. The evidence
+        # notification below still fires — the finding is not lost, it just does
+        # not become a regression test that cannot run.
+        pinned = await store.has_recorded_denial(run_id)  # type: ignore[attr-defined]
+        if pinned:
+            await store.pin(run_id, "must_block", scenario)  # type: ignore[attr-defined]
+        await notifier.emit(  # type: ignore[attr-defined]
+            "evidence_run",
+            node_id,
+            {
+                "run_id": run_id,
+                "cases": len(deviations),
+                "permalink": f"/v1/runs/{run_id}",
+            },
+        )
+    return {"ok": True, "notified": bool(deviations), "pinned": pinned}
+
+
+@router.post("/runs/{run_id}/evidence")
+async def set_evidence(
+    run_id: str, body: dict, store: StoreDep, notifier: NotifierDep
+) -> dict:
+    """Ready-made cases from a client that computed them elsewhere — a Lab
+    package, the demo seed. A run ingested with its claim needs no such call:
+    the backend derives the same cases from the trace on the way in."""
+    return await store_evidence(
+        store, notifier, run_id,
+        body.get("node_id", "proxy"), body.get("scenario", ""),
+        body.get("evidence", []),
+    )
+
+
+@router.get("/runs")
+async def list_runs(store: StoreDep) -> list[dict]:
+    return await store.list_runs()
+
+
+@router.get("/runs/{run_id}/events")
+async def run_events(run_id: str, store: StoreDep) -> list[dict]:
+    return await store.run_events(run_id)
+
+
+@router.get("/runs/{run_id}/stream")
+async def run_stream(
+    run_id: str,
+    store: StoreDep,
+    bus: BroadcastDep,
+    last_event_id: str | None = Header(default=None, alias="Last-Event-ID"),
+) -> EventSourceResponse:
+    """Live colour-coded audit stream (spec section 8): replay from
+    Last-Event-ID, then live events.
+
+    The SSE id is the stored event's id, not its seq. seq is monotonic per node,
+    so on a multi-node run the ids repeated and a reconnect resumed from a
+    cursor that meant something different for every node — dropping whatever had
+    a lower seq on the nodes that were behind.
+    """
+    # Bind the tenant before the body starts streaming: the generator below is
+    # iterated after this handler returns, and the ambient org is not guaranteed
+    # to still be set by then.
+    run_topic = topic("run", run_id, current_org_id())
+    queue = bus.subscribe(run_topic)
+
+    async def stream() -> AsyncIterator[dict]:
+        try:
+            # A malformed Last-Event-ID must not kill the stream — replay all.
+            try:
+                after = int(last_event_id) if last_event_id else 0
+            except ValueError:
+                after = 0
+            delivered = after
+            for event_id, line in await store.run_events_after(run_id, after):
+                delivered = event_id
+                yield {"event": "event", "id": str(event_id), "data": line}
+            # Ends when the bus drops this reader; the client reconnects and
+            # the replay above closes the gap.
+            async for message in bus_messages(queue):
+                # A live message published before this subscriber finished its
+                # replay would otherwise be sent twice.
+                event_id = int(message.get("id") or 0)
+                if event_id and event_id <= delivered:
+                    continue
+                delivered = max(delivered, event_id)
+                yield {
+                    "event": "event",
+                    "id": str(event_id) if event_id else "",
+                    "data": json.dumps(message["line"], sort_keys=True),
+                }
+        finally:
+            bus.unsubscribe(run_topic, queue)
+
+    return EventSourceResponse(stream())

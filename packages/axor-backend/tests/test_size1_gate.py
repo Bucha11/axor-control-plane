@@ -4,6 +4,10 @@ A tree of size 1 must produce the exact behavior the deployed v0.13 path
 produces — byte-identical EvidenceCase, identical replay derivations. These
 tests re-derive both from the production code paths and byte-compare against
 the committed golden fixtures (generated once by scripts/gen_size1_golden.py).
+The scrubber's INPUT is frozen alongside them (`golden/size1/trace.json`): it
+used to be read live from `demo.EX_BLOCK_EVENTS`, so editing the demo — a
+product surface with a button behind it — moved the baseline of a break
+detector.
 
 DO NOT regenerate the fixtures to make this file pass. A diff here means the
 multi-agent layer changed single-agent production behavior — that is a
@@ -17,7 +21,6 @@ import pathlib
 
 import httpx
 import pytest
-from axor_backend.demo import EX_BLOCK_EVENTS
 from axor_backend.replay_api import parse_trace, scrubber_payload
 from axor_core.kernel.replay import replay
 from starlette.applications import Starlette
@@ -31,15 +34,82 @@ def canonical_dump(obj: object) -> str:
     return json.dumps(obj, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
 
 
+def _scrubber_now() -> dict:
+    """The fold, over the FROZEN input in `golden/size1/trace.json`.
+
+    This read `demo.EX_BLOCK_EVENTS` — the live demo fixture, which is a product
+    surface: it is what "load example adapter run" seeds, and it is edited when
+    the reference shape a customer copies has to change. That made a
+    production-break detector move whenever the demo did, and the last such edit
+    (giving a denied call the `reason` every real producer records) forced a
+    regeneration of a baseline this file's own header says must not be
+    regenerated to pass.
+
+    The input belongs to the gate now. It is the same bytes the baseline was
+    recorded from; it simply stops moving when the demo does, which is what lets
+    this file mean what it says.
+    """
+    raw = json.loads((GOLDEN / "trace.json").read_text("utf-8"))
+    return scrubber_payload(replay(parse_trace([json.dumps(e) for e in raw])))
+
+
+# What the fold COMPUTES for each step. Everything else a step carries — kind,
+# seq, gate, recorded_verdict, payload — is read straight off the recorded event
+# and echoed back, so it changes when the INPUT changes and says nothing about
+# the kernel. A whitelist, not a blacklist: a new derived field must be added
+# here deliberately, where forgetting to remove a new echoed one would silently
+# widen what counts as a production break.
+_DERIVED_STEP_KEYS = (
+    "state",
+    "reevaluated_verdict",
+    "deny_category",
+    "deny_reason",
+    "hypothetical",
+)
+
+
+def _derived_only(doc: object) -> dict:
+    """The scrubber payload reduced to what the fold actually derived."""
+    reduced = json.loads(canonical_dump(doc))
+    reduced["steps"] = [
+        {k: step[k] for k in _DERIVED_STEP_KEYS if k in step}
+        for step in reduced.get("steps", [])
+    ]
+    return reduced
+
+
+def test_size1_replay_derivation_unchanged() -> None:
+    """THE production-break check: everything the kernel fold derives — budget,
+    tainted refs, floor, level, verdicts — byte-identical to the baseline.
+
+    This is separated from the byte-for-byte test below because the two fail for
+    completely different reasons and only one of them is a break. A richer
+    recorded payload (the fixture growing a field a real adapter always emitted)
+    changes the echoed bytes and nothing else; THIS test stays green through
+    that, and goes red only if the fold itself behaves differently. If it is red,
+    do not regenerate anything."""
+    want = _derived_only(json.loads((GOLDEN / "scrubber.json").read_text("utf-8")))
+    got = _derived_only(_scrubber_now())
+    assert got == want, (
+        "size-1 replay DERIVATION changed — the fold behaves differently. "
+        "This is a production break, not a fixture update."
+    )
+
+
 def test_size1_scrubber_bytes_identical() -> None:
     """The kernel fold over the canonical single-node adapter trace derives the
-    exact scrubber payload production derives today."""
-    events = parse_trace([json.dumps(e) for e in EX_BLOCK_EVENTS])
-    got = canonical_dump(scrubber_payload(replay(events)))
+    exact scrubber payload production derives today.
+
+    If this is red while `test_size1_replay_derivation_unchanged` is green, the
+    fold is intact and the recorded INPUT changed shape. That is the one case
+    where regenerating is correct — and it is still an explicit decision, to be
+    justified in the commit that does it."""
+    got = canonical_dump(_scrubber_now())
     want = (GOLDEN / "scrubber.json").read_text("utf-8").rstrip("\n")
     assert got == want, (
-        "size-1 replay derivation changed — this is a production break, "
-        "not a fixture update"
+        "size-1 scrubber bytes changed. Check "
+        "test_size1_replay_derivation_unchanged: green means only the recorded "
+        "payload got richer; red means the fold changed and this is a break."
     )
 
 

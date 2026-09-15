@@ -37,10 +37,10 @@ Two implementations of the gate pipeline would eventually diverge and counterfac
 | Concern | Choice | Note |
 |---|---|---|
 | System of record (events, runs, EvidenceCases, desired state) | **Postgres**, append-only JSONB events + materialized views for UI | ClickHouse only if analytics volume forces it; not v1 |
-| Sentinel graph | **Kùzu everywhere** (decision: locked — no PG-CTE interim) | Embedded, Cypher-compatible surface, no server to operate on self-hosted. Hosted: per-tenant embedded DB files → tenant isolation for free. Behind a `GraphStore` interface; existing Neo4j remains a legacy backend on hosted until migrated — interface first, migration unhurried |
+| Sentinel graph | **Sentinel's own, imported not rebuilt** | The cross-session reputation graph is `axor-sentinel`'s: it is keyed on normalized resources, it accumulates between sessions on purpose, and it decides something (heat → flagged → degradation). The Control Plane consumes its output as signed facts on the plane. It does NOT keep a second graph: the value-provenance graph it used to store (embedded per-tenant DB, rebuilt at boot) was keyed on value refs, which the runtime mints per trace from a counter that restarts at zero — every run has a `v_ext_1`, so the store merged unrelated values and returned one run's edges for another's. Provenance is now derived from one run's events on request (`axor_backend.provenance`) and attestations are read from the fact log through Sentinel's own attestation rules |
 | Traces at rest | JSONL files (object storage on hosted, disk on self-hosted); PG stores metadata + pin status | Corpus quota (spec decision #11) enforced on pinned files |
 
-Consequence of Kùzu-everywhere: k-hop default cut (spec decision #6) and branch attestation queries are written once in Cypher-ish and run identically on both deployments — no dual query maintenance.
+Consequence: there is no graph database in either deployment. The k-hop default cut (spec decision #6) is a walk over one run's events, and branch attestations are rows in the fact log read through Sentinel's rules — one implementation, no dual query maintenance and no second store to keep true.
 
 ## 5. Control plane channel — outbound-only from the agent side
 
@@ -61,7 +61,7 @@ Consequence of Kùzu-everywhere: k-hop default cut (spec decision #6) and branch
 ## 8. Repo & deploy
 
 - Monorepo: **uv workspaces** (`kernel` / `proxy` / `backend` / `scenarios`) + pnpm for the frontend.
-- Self-hosted: docker-compose (proxy + backend + Postgres; Kùzu is embedded — no extra container) and standalone proxy via uvx.
+- Self-hosted: docker-compose (proxy + backend + Postgres — no other store) and standalone proxy via uvx.
 - Hosted: Fly.io/Railway-class with sticky sessions (process-local SSE buffer requirement). No k8s before real multi-tenant scale.
 
 ## 9. Product auth
@@ -74,6 +74,5 @@ Consequence of Kùzu-everywhere: k-hop default cut (spec decision #6) and branch
 
 ## Open (small, non-blocking)
 
-- Kùzu concurrent-writer model on hosted: one writer process per tenant DB — confirm this fits the ingest path before committing the per-tenant-file layout.
 - TS types for trace schema: generate from Pydantic (datamodel → JSON Schema → ts) rather than hand-maintain — pick the generator.
 - ECharts vs Recharts for the handful of v1 charts — cosmetic, decide at build time.

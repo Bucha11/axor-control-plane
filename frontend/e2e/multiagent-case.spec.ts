@@ -31,6 +31,42 @@ test.describe("multi-agent EvidenceCase", () => {
     // influence ranking derives on demand (subgraph ablation)
     await sub.getByRole("button", { name: /influence ranking/ }).click();
     await expect(sub.getByText("v_sum")).toBeVisible();
-    await expect(sub.getByText("ranked by subgraph ablation", { exact: false })).toBeVisible();
+    // The caption reports what was actually ablated. It used to claim the
+    // ranking was "bounded by causal-chain length" — which was not a bound the
+    // route enforced — and a refused ranking rendered as an empty list under
+    // that same sentence, reading as "no value drove this".
+    await expect(
+      sub.getByText(/ranked by subgraph ablation — deterministic, \d+ of \d+ upstream value/),
+    ).toBeVisible();
+    await expect(sub.getByTestId("influence-refused")).toHaveCount(0);
+  });
+
+  test("a refused influence ranking says why instead of rendering empty", async ({ page }) => {
+    // A case past the backend's ablation bound answers 422. That used to render
+    // as an empty list under "ranked by subgraph ablation" — the reader saw
+    // "no value drove this" where the backend had said "too many to ablate".
+    await page.route("**/v1/runs/*/influence", (route) =>
+      route.fulfill({
+        status: 422,
+        contentType: "application/json",
+        body: JSON.stringify({
+          detail:
+            "this case has 812 upstream values and one request ablates at most 200",
+        }),
+      }),
+    );
+    const ctx = await request.newContext();
+    await ctx.post(`${BACKEND}/v1/demo/seed-tree-run`);
+    await ctx.dispose();
+    await setConnection(page, { mode: "demo" });
+    await goHash(page, "eval/ex_tree");
+    const sub = page.getByTestId("causal-subgraph");
+    await expect(sub).toBeVisible({ timeout: 15_000 });
+    await sub.getByRole("button", { name: /influence ranking/ }).click();
+    await expect(sub.getByTestId("influence-refused")).toContainText(
+      "812 upstream values",
+    );
+    await expect(sub.getByText("ranked by subgraph ablation", { exact: false }))
+      .toHaveCount(0);
   });
 });

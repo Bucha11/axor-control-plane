@@ -19,6 +19,7 @@ const DEFAULT_CONFIG = JSON.stringify(
 function dot(res: RegressionRow["result"]): string {
   if (res === "regressed") return C.red;
   if (res === "escaped") return C.amber; // an attack no longer blocked — red-level severity, no design yet
+  if (res === "unanchored") return C.amber;
   return C.green;
 }
 
@@ -28,6 +29,7 @@ function label(res: RegressionRow["result"]): string {
     case "passed": return "still passes";
     case "regressed": return "REGRESSED";
     case "escaped": return "ESCAPED";
+    case "unanchored": return "NOT CHECKED";
   }
 }
 
@@ -41,6 +43,36 @@ function headline(report: RegressionReport): React.ReactNode {
   }
   if (report.escaped > 0) {
     parts.push(`${report.escaped} escape${report.escaped === 1 ? "" : "s"}`);
+  }
+  if (report.unanchored > 0) {
+    parts.push(`${report.unanchored} unchecked pin${report.unanchored === 1 ? "" : "s"}`);
+  }
+  if (report.skipped.length > 0) {
+    parts.push(`${report.skipped.length} unreadable pin${report.skipped.length === 1 ? "" : "s"}`);
+  }
+  // A corpus whose only pins are the canned demo runs has rows and no failures,
+  // and still cannot say the sentence: those pins are evidence about the demo.
+  if (parts.length === 0 && report.own_rows === 0 && report.demo_rows > 0) {
+    return (
+      <>
+        <span style={{ color: C.amber }}>
+          {report.demo_rows} demo pin{report.demo_rows === 1 ? "" : "s"}, none of
+          your own
+        </span>
+        {" "}— the canned runs check the shipped kernel against the shipped
+        attack. Pin one of your own runs to check yours.
+      </>
+    );
+  }
+  // A corpus with rows but no failures cannot reach here; one with NO rows can,
+  // and "v2 changes governed behavior" would be the wrong reason for it.
+  if (report.rows.length === 0) {
+    return (
+      <>
+        <span style={{ color: C.red }}>{parts.join(" + ") || "Nothing was checked"}</span>
+        {" "}— the corpus verified nothing, so it cannot say every attack is still blocked.
+      </>
+    );
   }
   return (
     <>
@@ -135,7 +167,7 @@ function ScheduleAndHistory({ parseConfig }: { parseConfig: () => Record<string,
                   <span style={{ color: h.safe_to_ship ? C.mut : C.text, flex: 1 }}>
                     {h.safe_to_ship
                       ? `safe — ${h.total} rows`
-                      : `${h.regressed} regressed · ${h.escaped} escaped of ${h.total}`}
+                      : `${h.regressed} regressed · ${h.escaped} escaped${h.unanchored ? ` · ${h.unanchored} not checked` : ""}${h.skipped ? ` · ${h.skipped} unreadable` : ""} of ${h.total}`}
                   </span>
                 </div>
               ))}
@@ -400,7 +432,10 @@ export default function Regression({ initialConfig }: { initialConfig?: string }
       />
 
       {report && (
-        report.rows.length === 0 ? (
+        // Only when there is genuinely nothing pinned. Pins that exist but could
+        // not be read also produce zero rows, and telling the operator to run an
+        // experiment would send them after a problem they do not have.
+        report.rows.length === 0 && report.skipped.length === 0 ? (
           <div style={{ fontFamily: MONO, fontSize: 12.5, color: C.mut }}>
             No pinned traces. Run an experiment (Eval) — discrepancy-bearing traces auto-pin the must-block side; add legitimate flows as must-pass.
           </div>
@@ -412,12 +447,35 @@ export default function Regression({ initialConfig }: { initialConfig?: string }
             <div style={{ fontFamily: MONO, fontSize: 12, color: C.mut, marginBottom: 20 }}>
               {held} attacks still blocked · {passed} legitimate flows still pass ·{" "}
               {report.regressed} regressed · {report.escaped} escaped
+              {report.unanchored > 0 ? ` · ${report.unanchored} not checked` : ""}
+              {report.skipped.length > 0 ? ` · ${report.skipped.length} unreadable` : ""}
             </div>
+
+            {report.skipped.length > 0 && (
+              <div style={{ marginBottom: 20, fontFamily: MONO, fontSize: 11.5 }}>
+                <div style={{ color: C.amber, marginBottom: 6 }}>
+                  Pinned, but the trace could not be read — these were not checked:
+                </div>
+                <div style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 8 }}>
+                  {report.skipped.map((p, i) => (
+                    <div key={p.run_id} className="px-4 py-2"
+                      style={{ borderTop: i ? `1px solid ${C.line}` : "none" }}>
+                      <span style={{ color: C.text }}>{p.run_id}</span>
+                      <span style={{ color: C.dim }}> · {p.side}</span>
+                      {p.label ? <span style={{ color: C.dim }}> · {p.label}</span> : null}
+                      <div style={{ color: C.mut, marginTop: 2 }}>{p.reason}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
 
             <div style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 8 }}>
               {report.rows.map((r, i) => {
-                const hot = r.result === "regressed" || r.result === "escaped";
-                const expandable = r.new_denial != null || r.first_divergence != null;
+                const hot = r.result !== "held" && r.result !== "passed";
+                const expandable =
+                  r.escaped_denials.length > 0 || r.result === "unanchored"
+                  || r.new_denial != null || r.first_divergence != null;
                 const isOpen = open === r.run_id;
                 return (
                   <div key={r.run_id} style={{ borderTop: i ? `1px solid ${C.line}` : "none" }}>
@@ -436,7 +494,9 @@ export default function Regression({ initialConfig }: { initialConfig?: string }
                       <span style={{
                         fontFamily: MONO, fontSize: 10.5,
                         fontWeight: hot ? 700 : 400,
-                        color: r.result === "regressed" ? C.red : r.result === "escaped" ? C.amber : C.dim,
+                        color: r.result === "regressed" ? C.red
+                          : r.result === "escaped" || r.result === "unanchored" ? C.amber
+                          : C.dim,
                       }}>
                         {label(r.result)}
                       </span>
@@ -447,16 +507,30 @@ export default function Regression({ initialConfig }: { initialConfig?: string }
                     {isOpen && expandable && (
                       <div className="px-4 pb-3 flex flex-col gap-2" style={{ paddingLeft: 40 }}>
                         <span style={{ fontFamily: MONO, fontSize: 11.5, color: C.mut, lineHeight: 1.6 }}>
-                          {r.new_denial
-                            ? <>NEW denial at step {r.new_denial.seq}: {r.new_denial.reason} ({r.new_denial.category})</>
-                            : <>first divergence at step {r.first_divergence}</>}
+                          {r.escaped_denials.length > 0 ? (
+                            <span style={{ color: C.amber }}>
+                              ESCAPED: {r.escaped_denials.map((d) => `${d.tool || "step"} @ ${d.node_id}:${d.seq}`).join(", ")}
+                              {" "}— recorded DENY, this config lets it through
+                              {" "}({r.escaped_denials.length} of {r.pinned_denials} pinned denial{r.pinned_denials === 1 ? "" : "s"})
+                            </span>
+                          ) : r.result === "unanchored" ? (
+                            <span style={{ color: C.amber }}>
+                              this trace recorded no denial, so there is nothing in it to
+                              check the config against — pin a run recorded under enforcement
+                            </span>
+                          ) : r.new_denial ? (
+                            <>NEW denial at step {r.new_denial.seq}: {r.new_denial.reason} ({r.new_denial.category})</>
+                          ) : (
+                            <>first divergence at step {r.first_divergence}</>
+                          )}
                           {" · "}{r.run_id}
                         </span>
                         <div className="flex items-center gap-2">
                           <button
                             onClick={() =>
                               navigate(`replay/${r.run_id}`, {
-                                cursor: r.new_denial?.seq ?? r.first_divergence ?? 0,
+                                cursor: r.escaped_denials[0]?.seq
+                                  ?? r.new_denial?.seq ?? r.first_divergence ?? 0,
                               })
                             }
                             style={btn({ color: C.steel, fontSize: 11, padding: "5px 10px" })}

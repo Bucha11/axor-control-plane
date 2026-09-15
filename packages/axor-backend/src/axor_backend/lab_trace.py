@@ -17,56 +17,72 @@ Faithfulness boundary (deliberately narrow, never widened by substitution):
   exactly that explicit-flow evidence (per-value ``labels`` / ``sources``), so
   the conversion is a re-expression of the SAME evidence, not a re-derivation
   under a different engine.
-* A Lab trace is only convertible when it was recorded under the REAL axor-core
-  kernel (``producer.kernel_version == axor-core@<installed build>``).  A trace
-  recorded under Lab's label-based ``reference_taint_floor_kernel`` — a different
-  engine — is NOT converted; the pin stays skipped with an honest reason.  A
-  real-kernel pin under a DIFFERENT build than the one installed here is likewise
-  left skipped (a build mismatch cannot claim reproduction).
-* Even a build-matched trace is only accepted after a REPRODUCTION self-check:
-  its converted events are replayed here through the real kernel under a config
-  compiled from the package's own tool manifests, and the pin is accepted only
-  if the recomputed verdict equals the recorded one.  A trace whose verdict would
-  not reproduce (e.g. one whose real-kernel decision leaned on content the ledger
-  does not carry) is left skipped rather than shipped as a false reproduction.
+* A trace is replayed only under the build that recorded it
+  (``producer.kernel_version`` == this backend's axor-core).  A build mismatch
+  cannot claim reproduction.  There is no longer a separate "is this a real
+  kernel" test: axor-core is the only kernel, axor-lab imports it rather than
+  carrying its own, and a trace naming anything else simply fails the build
+  comparison with the same honest reason.
+* The config is the one the package CARRIES (``runtime_configs``), checked
+  against the ``runtime_config_hashes`` recorded beside it.  This module used to
+  compile its own from the tool manifests, and it and the Lab's compiler
+  disagreed on every point that mattered — ``side_effecting`` read as egress,
+  ``effect.resolve`` never read, allowlist value-policies dropped entirely.  A
+  compiled config is carried, not re-derived.
+* Even a build-matched trace under its own config is only accepted after a
+  REPRODUCTION self-check: its events are replayed here and every recorded
+  verdict, in order, must come back.  A trace whose verdicts would not reproduce
+  (e.g. one whose decision leaned on content the ledger does not carry) is left
+  skipped rather than shipped as a false reproduction.
 """
 from __future__ import annotations
 
+import json
 from typing import Any
 
+from axor_core.contracts.schemas import validate as validate_schema
 from axor_core.kernel.events import Event, EventKind, Verdict, event_to_json_line
 from axor_core.kernel.replay import replay
 
 from axor_backend.lab_export import content_hash
-from axor_backend.replay_api import kernel_config_from_json
+from axor_backend.replay_api import KernelConfig, ValuePredicate
 
 # Lab ledger labels (lab_export.LABEL_*): a value with this label carries an
 # external source, i.e. it is integrity-tainted.
 _LABEL_UNTRUSTED = "untrusted_derived"
 _LABEL_SENSITIVE = "sensitive"
-# Lab source kinds that do NOT introduce external taint (a literal / prompt input).
-_TRUSTED_SOURCE_KINDS = frozenset({"constant", "prompt", "prompt_given"})
+# `sources` is the closed constructor set trace/v1 inducts over:
+# constant | external_read | mint | parse | cross_process_in. Only `constant` is
+# a trusted root. `mint` ("freshly created by the agent — per policy") is treated
+# as tainted: over-taint is the safe direction, and a value the CP cannot vouch
+# for is not one it may quietly clear.
+# This set used to read {constant, prompt, prompt_given} — two entries that are
+# not source kinds at all (`prompt_given` is a LABEL), so one of its three
+# members did anything.
+_TRUSTED_SOURCE_KINDS = frozenset({"constant"})
 # A valid axor_core TaintSource string; the ledger's origin detail
 # (which tool_result field) is not representable as a TaintSource, and the
 # verdict depends only on is_tainted (any source present), so an external read
 # maps to the honest generic external source.
 _EXTERNAL_TAINT_SOURCE = "unknown_external"
 
-# axor-core effect classes that make a tool an egress consequence (a sink taint
-# can breach through). Mirrors lab_export._EGRESS_CLASSES.
-_EGRESS_CLASSES = frozenset({"EXPORT", "EXEC"})
+
+class TraceNotConvertible(ValueError):
+    """The embedded trace cannot be converted into kernel events faithfully.
+
+    Raised rather than returning a partial conversion: a trace missing the
+    correlation a decision needs, or naming a value its own ledger does not
+    hold, does not produce "most of" a replay — it produces a replay of
+    something else.
+    """
 
 
 def installed_kernel_pin() -> str:
     """``axor-core@<version>`` for the axor-core build installed in THIS backend
-    — the only real-kernel build whose Lab traces this CP may faithfully replay."""
+    — the only build whose Lab traces this CP may faithfully replay."""
     import axor_core
 
     return f"axor-core@{getattr(axor_core, '__version__', 'unknown')}"
-
-
-def is_real_kernel_version(version: str) -> bool:
-    return version.startswith("axor-core@")
 
 
 def recorded_kernel_of(trace: dict[str, Any]) -> str:
@@ -74,6 +90,18 @@ def recorded_kernel_of(trace: dict[str, Any]) -> str:
     trace-metadata binding lab_export writes: ``producer.kernel_version``)."""
     producer: dict[str, Any] = trace.get("producer") or {}
     return str(producer.get("kernel_version", ""))
+
+
+def trace_schema_errors(trace: Any) -> list[str]:  # noqa: ANN401 - untrusted upload
+    """Every way the embedded body is not a ``trace/v1``, or [].
+
+    The bodies arrive inside an upload and used to go straight into the
+    converter, which read `values`, `events`, `arg_bindings` and `decision` off
+    whatever it was handed. A binding naming a value the ledger does not contain
+    was silently skipped, and the call replayed with less taint than the trace
+    recorded — the one direction of error that turns a DENY into a PASS.
+    """
+    return list(validate_schema("trace", trace))
 
 
 def _value_root(value: dict[str, Any]) -> dict[str, Any] | None:
@@ -92,6 +120,37 @@ def _value_root(value: dict[str, Any]) -> dict[str, Any] | None:
         "sources": [_EXTERNAL_TAINT_SOURCE] if tainted else [],
         "sensitive": sensitive,
     }
+
+
+def _decisions_by_call_id(trace: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    """``call_id`` → its gate decision, refusing anything ambiguous.
+
+    ``call_id`` is OPTIONAL in trace/v1, and its own description says it exists
+    "so replay pairs them by id (not just node order) and can detect a missing or
+    duplicated decision". This used to be a dict comprehension keyed on
+    ``str(event.get("call_id"))``: every event without one collapsed into the
+    single key ``"None"`` and every duplicate silently overwrote its
+    predecessor, so a two-call trace gave BOTH calls the last decision recorded
+    — an ALLOW came back carrying someone else's DENY.
+    """
+    decisions: dict[str, dict[str, Any]] = {}
+    for event in trace.get("events", []):
+        if event.get("type") != "gate_decision":
+            continue
+        call_id = event.get("call_id")
+        if not isinstance(call_id, str) or not call_id:
+            raise TraceNotConvertible(
+                "a gate_decision carries no call_id, so it cannot be paired with "
+                "the call it decided; trace/v1 makes call_id optional but a "
+                "replay of an unpaired decision is a replay of a guess"
+            )
+        if call_id in decisions:
+            raise TraceNotConvertible(
+                f"two gate_decision events share call_id {call_id!r} — one of the "
+                "two verdicts would be discarded, and which depends on array order"
+            )
+        decisions[call_id] = event.get("decision") or {}
+    return decisions
 
 
 def lab_trace_to_events(trace: dict[str, Any]) -> list[Event]:
@@ -114,11 +173,7 @@ def lab_trace_to_events(trace: dict[str, Any]) -> list[Event]:
     Ordering is preserved per node (CP replay folds each node's own ``seq``
     order); a fresh monotonic ``seq`` is assigned per node."""
     values = {str(v["value_id"]): v for v in trace.get("values", [])}
-    decisions: dict[str, dict[str, Any]] = {
-        str(e.get("call_id")): (e.get("decision") or {})
-        for e in trace.get("events", [])
-        if e.get("type") == "gate_decision"
-    }
+    decisions = _decisions_by_call_id(trace)
     events: list[Event] = []
     seq_by_node: dict[str, int] = {}
     registered: set[str] = set()
@@ -131,10 +186,14 @@ def lab_trace_to_events(trace: dict[str, Any]) -> list[Event]:
     def register(value_id: str, node: str) -> None:
         if value_id in registered:
             return
-        registered.add(value_id)
         value = values.get(value_id)
         if value is None:
-            return
+            raise TraceNotConvertible(
+                f"value_id {value_id!r} is bound by an event but absent from the "
+                "ledger; skipping it would replay the call with less taint than "
+                "the trace recorded"
+            )
+        registered.add(value_id)
         root = _value_root(value)
         if root is None:
             return  # trusted/constant value: nothing to fold, no event needed
@@ -151,12 +210,23 @@ def lab_trace_to_events(trace: dict[str, Any]) -> list[Event]:
             for value_id in event.get("produces_value_ids") or []:
                 register(str(value_id), node)
         elif etype == "tool_call_intent":
+            call_id = event.get("call_id")
+            if not isinstance(call_id, str) or not call_id:
+                raise TraceNotConvertible(
+                    "a tool_call_intent carries no call_id, so its gate decision "
+                    "cannot be identified"
+                )
+            if call_id not in decisions:
+                raise TraceNotConvertible(
+                    f"tool_call_intent {call_id!r} has no gate_decision; a call "
+                    "with no recorded verdict has nothing to reproduce"
+                )
             arg_bindings = {
                 str(k): str(v) for k, v in (event.get("arg_bindings") or {}).items()
             }
             for value_id in arg_bindings.values():
                 register(value_id, node)
-            decision = decisions.get(str(event.get("call_id"))) or {}
+            decision = decisions[call_id]
             verdict_str = str(decision.get("verdict", ""))
             verdict = (
                 Verdict.PASS if verdict_str == "ALLOW"
@@ -179,64 +249,59 @@ def lab_trace_to_events(trace: dict[str, Any]) -> list[Event]:
     return events
 
 
-def config_dict_from_manifests(manifests: list[dict[str, Any]]) -> dict[str, Any]:
-    """A regression-report config (the direct-kernel shape
-    ``kernel_config_from_json`` reads) compiled from the package's tool manifests.
+def kernel_config_from_governor_config(config: dict[str, Any]) -> KernelConfig:
+    """Read a carried ``runtime_configs`` body into a :class:`KernelConfig`.
 
-    Egress sinks are the tools whose effect is an export consequence
-    (default_class EXPORT/EXEC, or side_effecting); imperative sinks are the EXEC
-    ones; each sink's driving args come from ``effect.driving_args``.  This is the
-    same manifest→governor mapping the Lab used to produce the recorded verdict,
-    so replaying the converted events under it reproduces that verdict."""
-    egress: list[str] = []
-    imperative: list[str] = []
-    driving_args: dict[str, list[str]] = {}
-    for manifest in manifests:
-        if not isinstance(manifest, dict):
+    A translation between two representations of one control, not a second
+    compiler: every field is taken as written. ``untrusted_sources`` /
+    ``untrusted_fields`` have no counterpart and none is invented — they tell a
+    LIVE governor which tool results to mint taint from, while replay reads the
+    taint already recorded on each ``TOOL_RESULT``.
+    """
+    driving: dict[str, Any] = config.get("driving_args") or {}
+    value_policies: dict[str, list[ValuePredicate]] = {}
+    for tool, per_arg in (config.get("value_policies") or {}).items():
+        if not isinstance(per_arg, dict):
             continue
-        tool = str(manifest.get("id", ""))
-        if not tool:
-            continue
-        effect: dict[str, Any] = manifest.get("effect") or {}
-        default_class = str(effect.get("default_class", ""))
-        if default_class in _EGRESS_CLASSES or bool(manifest.get("side_effecting")):
-            egress.append(tool)
-        if default_class == "EXEC":
-            imperative.append(tool)
-        drivers = effect.get("driving_args")
-        if isinstance(drivers, list) and drivers:
-            driving_args[tool] = [str(a) for a in drivers]
-    return {
-        "egress_sinks": sorted(set(egress)),
-        "imperative_sinks": sorted(set(imperative)),
-        "driving_args": {t: v for t, v in sorted(driving_args.items())},
-    }
+        value_policies[str(tool)] = [
+            ValuePredicate(arg=str(arg), kind="enum",
+                           allowed=frozenset(str(v) for v in (rule or {}).get("enum", ())))
+            for arg, rule in per_arg.items()
+        ]
+    return KernelConfig(
+        egress_sinks=frozenset(str(t) for t in config.get("egress_sinks", ())),
+        imperative_sinks=frozenset(str(t) for t in config.get("imperative_sinks", ())),
+        value_policies=value_policies,
+        driving_args={str(t): frozenset(str(a) for a in args)
+                      for t, args in driving.items()},
+    )
 
 
-def reproduces_recorded_verdict(
-    events: list[Event], expected_verdict: str, manifests: list[dict[str, Any]]
+def reproduces_recorded_sequence(
+    events: list[Event], expected_sequence: list[str], config: KernelConfig,
 ) -> bool:
-    """Replay the converted events under the real axor-core kernel with a config
-    compiled from the package manifests and confirm the recomputed verdict of the
-    (single) recorded tool call equals ``expected_verdict`` — the no-engine-swap
-    proof that gates a pin as replayable."""
-    config = kernel_config_from_json(config_dict_from_manifests(manifests))
+    """Replay the converted events under the config the trace RAN under and
+    confirm the recomputed verdicts equal the pinned sequence, in order.
+
+    The pin carries the whole ordered sequence precisely so a multi-call trace
+    cannot match on its final verdict alone; this used to take the scalar
+    ``expected_verdict`` and compare only the last TOOL_CALL, leaving the
+    sequence read once by the validator and never used again.
+    """
     result = replay(events, config)
-    recomputed: Verdict | None = None
-    for step in result.steps:
-        if step.event.kind is EventKind.TOOL_CALL:
-            recomputed = step.reevaluated_verdict
-    if recomputed is None:
+    recomputed = [
+        step.reevaluated_verdict for step in result.steps
+        if step.event.kind is EventKind.TOOL_CALL
+    ]
+    if len(recomputed) != len(expected_sequence):
         return False
-    want = Verdict.DENY if expected_verdict == "DENY" else Verdict.PASS
-    return recomputed is want and result.first_divergence is None
+    want = [Verdict.DENY if v == "DENY" else Verdict.PASS for v in expected_sequence]
+    return recomputed == want and result.first_divergence is None
 
 
 def events_to_lines(events: list[Event]) -> list[dict[str, Any]]:
     """Kernel-schema JSON dicts (the ``events.line`` column shape) for storage,
     so ``Store.run_events`` returns them and ``_events_for`` replays them."""
-    import json
-
     return [json.loads(event_to_json_line(e)) for e in events]
 
 

@@ -106,6 +106,68 @@ async def test_scan_requires_files(client: httpx.AsyncClient) -> None:
     assert (await client.post("/v1/wrap/scan", json={"files": []})).status_code == 400
 
 
+@needs_wrap
+async def test_scan_refuses_two_files_under_one_path(client: httpx.AsyncClient) -> None:
+    """The browser's plain file picker exposes no directory, so it sends bare
+    filenames — and two modules both called tools.py used to overwrite each
+    other in the temp tree. The scan then answered 200 with the tools of
+    whichever won, and the Config Builder said "Found 1 tools" for an agent
+    with two: the missing one is undeclared, and undeclared is denied."""
+    resp = await client.post("/v1/wrap/scan", json={"files": [
+        {"path": "tools.py", "content": AGENT_PY},
+        {"path": "tools.py", "content": "# a different module, same name\n"},
+    ]})
+    assert resp.status_code == 400
+    assert "share the path 'tools.py'" in resp.json()["detail"]
+
+
+@needs_wrap
+async def test_scan_reports_the_files_it_could_not_parse(
+    client: httpx.AsyncClient,
+) -> None:
+    """`scan_project` skips what it cannot parse — honest inside the engine,
+    which can only return tools. Dropped from the response it became silent:
+    a stray syntax error, a newer grammar, a bad encoding, and the file's
+    tools are simply not in the answer with nothing pointing at it."""
+    resp = await client.post("/v1/wrap/scan", json={"files": [
+        {"path": "pkg/tools.py", "content": AGENT_PY},
+        {"path": "pkg/broken.py", "content": "def broken(:\n"},
+        {"path": "pkg/binary.py", "content": "x = 1\x00\n"},
+    ]})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert {t["id"] for t in body["tools"]} == {"read_inbox", "send_email"}
+    skipped = {f["path"]: f["reason"] for f in body["skipped"]}
+    assert set(skipped) == {"pkg/broken.py", "pkg/binary.py"}
+    assert "SyntaxError" in skipped["pkg/broken.py"]
+    assert "null bytes" in skipped["pkg/binary.py"]
+
+
+@needs_wrap
+async def test_a_clean_scan_reports_nothing_skipped(client: httpx.AsyncClient) -> None:
+    resp = await client.post("/v1/wrap/scan", json=_scan_body())
+    assert resp.status_code == 200 and resp.json()["skipped"] == []
+
+
+@needs_wrap
+async def test_scan_bounds_the_file_count_not_only_the_bytes(
+    client: httpx.AsyncClient,
+) -> None:
+    """A zero-byte file adds nothing to the byte total, so MAX_SCAN_BYTES did
+    not bound the count at all — 50 000 empty files answered 200 after 18s of
+    mkdir/write/rglob on one request."""
+    from axor_backend.wrap_api import MAX_SCAN_FILES
+
+    files = [{"path": f"d{i}/x.py", "content": ""} for i in range(MAX_SCAN_FILES + 1)]
+    resp = await client.post("/v1/wrap/scan", json={"files": files})
+    assert resp.status_code == 413
+    assert "2000 files" in resp.json()["detail"]
+
+    at_limit = files[:MAX_SCAN_FILES]
+    assert (await client.post("/v1/wrap/scan",
+                              json={"files": at_limit})).status_code == 200
+
+
 # ── manifests ─────────────────────────────────────────────────────────────────
 
 async def _scanned_tools(client: httpx.AsyncClient) -> list[dict]:
@@ -178,6 +240,52 @@ async def test_manifests_carry_sensitive_fields(client: httpx.AsyncClient) -> No
     resp = await client.post("/v1/wrap/manifests", json={"tools": [tool]})
     assert resp.status_code == 200
     assert resp.json()["manifests"][0]["sensitive_fields"] == ["result.body"]
+
+
+@needs_wrap
+async def test_an_effect_list_given_as_a_string_is_refused(
+    client: httpx.AsyncClient,
+) -> None:
+    """`_str_list` used to answer [] for anything that was not a list.
+
+    `driving_args: "to"` then compiled to a manifest that validates, a 200, and
+    a governance.yaml with no driving_args and no untrusted_sources — the
+    artifact the operator ships, gating nothing. The same typo in
+    sensitive_fields drops sensitive_sources, so the confidentiality floor
+    never arms.
+    """
+    tools = {t["id"]: t for t in await _scanned_tools(client)}
+    base = _classified(tools["send_email"], "EXPORT")
+    for field, value in (("driving_args", "to"),
+                         ("untrusted_fields", "result.*"),
+                         ("sensitive_fields", "result.body"),
+                         ("driving_args", {"to": True}),
+                         ("driving_args", [1])):
+        tool = {**base, "effect": {**base["effect"], field: value}}
+        resp = await client.post("/v1/wrap/manifests", json={"tools": [tool]})
+        assert resp.status_code == 400, (field, value)
+        assert f"effect.{field}" in resp.json()["detail"]
+
+    # Absent stays absent — the fields are optional, only wrong is refused.
+    ok = {**base, "effect": {"default_class": "EXPORT"}}
+    assert (await client.post("/v1/wrap/manifests",
+                              json={"tools": [ok]})).status_code == 200
+
+
+@needs_wrap
+async def test_the_compiled_governance_carries_what_was_declared(
+    client: httpx.AsyncClient,
+) -> None:
+    """The other half of the test above: correctly declared lists must reach
+    the YAML, so "refused" is not passing by way of compiling nothing."""
+    tools = {t["id"]: t for t in await _scanned_tools(client)}
+    tool = _classified(tools["send_email"], "EXPORT")
+    tool["effect"]["driving_args"] = ["to", "body"]
+    tool["effect"]["sensitive_fields"] = ["result.body"]
+    out = (await client.post("/v1/wrap/manifests", json={"tools": [tool]})).json()
+    yaml = out["governance_yaml"]
+    assert "driving_args:" in yaml and '- "to"' in yaml and '- "body"' in yaml
+    assert "sensitive_sources:" in yaml
 
 
 # ── engine absent → honest 501 (lazy import, masked via sys.modules) ─────────

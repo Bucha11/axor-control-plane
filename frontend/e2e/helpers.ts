@@ -26,6 +26,9 @@ interface ConnOpts {
   testBench?: boolean;
   tools?: { name: string; url: string }[];
   apiToken?: string;
+  // Arms the signed posture: with a key id selected, the client canonicalizes
+  // and signs every operator action through the vault before sending it.
+  signingKeyId?: string;
 }
 
 // Seed the persisted store BEFORE any script on the page runs. Mirrors zustand
@@ -40,6 +43,7 @@ export async function setConnection(page: Page, opts: ConnOpts): Promise<void> {
     },
     lastRunId: null,
     apiToken: opts.apiToken ?? "",
+    signingKeyId: opts.signingKeyId ?? "",
   };
   await page.addInitScript(
     (s) => window.localStorage.setItem("axor-app", JSON.stringify({ state: s, version: 0 })),
@@ -50,6 +54,39 @@ export async function setConnection(page: Page, opts: ConnOpts): Promise<void> {
 // Deep-link to a hash route (e.g. "replay/ex_block?cursor=3").
 export async function goHash(page: Page, hash: string): Promise<void> {
   await page.goto("/#/" + hash.replace(/^#?\/?/, ""));
+}
+
+// A node whose recorded trace carries a degradation fact, so Control has
+// something real to attest. The event is kernel-schema (the coverage recompute
+// reads the kernel trace, and a line without `schema_version` is plane
+// telemetry, not a fact); severity 2 is RESTRICTED.
+export async function seedDegradedNode(
+  request: APIRequestContext,
+  nodeId: string,
+  factId = "quar_0",
+): Promise<void> {
+  const r = await request.post(`${BACKEND}/v1/plane/${nodeId}/telemetry`, {
+    data: {
+      run_id: `${nodeId}-hb`,
+      scenario: "live",
+      events: [
+        {
+          schema_version: "1.0", seq: 0, node_id: nodeId, kind: "fact",
+          ts: "t", causal_root: "v_ext_1",
+          payload: {
+            fact_id: factId, fact_type: "source_quarantined", severity: 2,
+            reason: "untrusted source quarantined",
+          },
+        },
+        {
+          schema_version: "1.0", seq: 1, node_id: nodeId, kind: "heartbeat",
+          ts: "t",
+          payload: { applied_version: 0, level: "RESTRICTED", budget_remaining: null },
+        },
+      ],
+    },
+  });
+  expect(r.ok(), "degraded node telemetry should be accepted").toBeTruthy();
 }
 
 // Ingest the two canned adapter-fidelity runs (recorded verdicts + provenance)

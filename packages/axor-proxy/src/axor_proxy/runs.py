@@ -15,18 +15,41 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from axor_core.contracts.trace import DecisionTrace
-from axor_core.kernel.events import Event, EventKind
-from axor_eval.audit.retrieval_audit import RetrievalAuditLayer
-from axor_eval.audit.tool_audit import ToolAuditLayer
+from axor_core.kernel.events import Event, EventKind, Verdict
+from axor_eval.audit.from_trace import evidence_from_trace
 from axor_eval.contracts import AgentClaims, EvidenceCase
-from axor_eval.deprivation.engine import FaultRecord, ToolDeprivationEngine
+from axor_eval.deprivation.engine import ToolDeprivationEngine
 
 from axor_proxy.recorder import TraceRecorder
 
 # Fault modes the proxy applies WITHOUT calling upstream (the engine's wrapper
 # never invokes the original callable for these).
 _NO_UPSTREAM_MODES = frozenset({"silent_fail", "tool_substitution"})
+
+# The kernel category a vault credential refusal is recorded under. The plane
+# refused to hand this node a credential for this tool, which is the same thing
+# the capability gate decides: this node may not make this call. The kernel's
+# table (`axor_core.governor.GATE_OF_CATEGORY`) has no "vault" entry, and
+# writing one into the `gate` column would put a name outside the vocabulary a
+# recorded verdict may carry — the defect the demo trace was already fixed for.
+# The specific reason survives in the payload; `gate` stays a kernel gate name.
+VAULT_DENIAL_CATEGORY = "capability"
+
+
+def build_governor(manifests: list[dict[str, Any]], node_id: str) -> object:
+    """A ToolCallGovernor compiled from operator-supplied tool manifests.
+
+    The proxy is an HTTP boundary: there is no callable to wrap, so
+    `WrappedToolset` does not apply — but the governor underneath it does, and
+    it is the same one. Manifests are the operator's, never inferred: an MCP
+    `tools/list` names a tool and describes it, and nothing in that says whether
+    it EXPORTS. Guessing the effect class is precisely what the config builder
+    exists to stop, so a run is governed only when its manifests are handed in.
+    """
+    from axor_core.governor import ToolCallGovernor
+    from axor_wrap.compile import governor_kwargs
+
+    return ToolCallGovernor(**governor_kwargs(manifests), node_id=node_id)
 
 
 @dataclass(frozen=True)
@@ -50,6 +73,10 @@ class Run:
     faults: tuple[FaultSpec, ...]
     engine: ToolDeprivationEngine
     recorder: TraceRecorder
+    # Compiled from `manifests` when the run was armed with them; None means
+    # this run is observed, not governed, and every recorded call says so.
+    governor: object | None = None
+    manifests: tuple[dict[str, Any], ...] = ()
     seq: int = 0
     call_counts: dict[str, int] = field(default_factory=dict)
     claim_text: str | None = None
@@ -119,7 +146,8 @@ class RunManager:
         return pruned
 
     def start(
-        self, scenario: str, faults: list[dict[str, Any]], node_id: str = "proxy"
+        self, scenario: str, faults: list[dict[str, Any]], node_id: str = "proxy",
+        manifests: list[dict[str, Any]] | None = None,
     ) -> Run:
         run_id = f"run_{secrets.token_hex(4)}"
         specs = tuple(
@@ -140,6 +168,8 @@ class RunManager:
             faults=specs,
             engine=engine,
             recorder=TraceRecorder(self._trace_dir, run_id),
+            governor=build_governor(manifests, node_id) if manifests else None,
+            manifests=tuple(manifests or ()),
         )
         self._runs[run_id] = run
         self._armed.append(run_id)
@@ -183,13 +213,23 @@ class RunManager:
         kind: EventKind,
         payload: dict[str, Any],
         causal_root: str | None = None,
+        gate: str | None = None,
+        verdict: Verdict | None = None,
     ) -> Event:
+        """`gate` and `verdict` were not parameters, so nothing the proxy wrote
+        could carry either — every event left both columns null and the trace
+        was observation with no governance in it. A refused call recorded that
+        way is not merely unlabelled: the replay fold re-gates the TOOL_CALL
+        branch on `verdict`, so a null one reads as a call that HAPPENED and
+        charges the budget for it."""
         event = Event(
             seq=run.next_seq(),
             node_id=run.node_id,
             kind=kind,
             ts=_now_iso(),
             causal_root=causal_root,
+            gate=gate,
+            verdict=verdict,
             payload=payload,
         )
         await run.recorder.record(event)
@@ -200,6 +240,23 @@ class RunManager:
     async def submit_claim(
         self, run: Run, text: str, claims: dict[str, Any] | None
     ) -> list[EvidenceCase]:
+        """Record the answer, then read the cases off the recorded trace.
+
+        The audit layers used to be called here, from this run's in-memory
+        state, which made this process the only one in the ecosystem that
+        produced an EvidenceCase. A run that reached the control plane any
+        other way — an adapter-wrapped agent posting `kernel_events()`, a Lab
+        package, a direct `POST /v1/ingest` — carried real verdicts and no
+        evidence at all, because nothing on those paths ran the audit. The
+        derivation is `axor_eval.audit.from_trace` now, over the recorded
+        lines, so every path asks the same question of the same artifact.
+
+        The claim event carries the STRUCTURED claims, not just the fact that
+        there were some. Structured claims are what make a success verdict
+        deterministic rather than a free-text heuristic, so a trace recording
+        only `structured: true` could not be audited to the standard of the run
+        that produced it — and the trace is the portable artifact.
+        """
         run.claim_text = text
         if claims is not None:
             run.claims = AgentClaims(
@@ -207,17 +264,17 @@ class RunManager:
                 tools_used=tuple(claims.get("tools_used", ())),
                 token_count=claims.get("token_count"),
             )
-        await self.record(run, EventKind.CLAIM, {"text": text, "structured": claims is not None})
-
-        trace = DecisionTrace(
-            node_id=run.node_id, parent_id=None, depth=0, policy_name="proxy"
-        )
-        fault_log: list[FaultRecord] = run.engine.fault_log
-        cases = ToolAuditLayer().analyze(
-            trace, fault_log, text, scenario=run.scenario, claims=run.claims
-        )
-        cases += RetrievalAuditLayer().analyze(
-            trace, fault_log, text, scenario=run.scenario
+        payload: dict[str, Any] = {"text": text, "structured": claims is not None}
+        if claims is not None:
+            payload["claims"] = {
+                "tools_succeeded": sorted(run.claims.tools_succeeded),
+                "tools_used": list(run.claims.tools_used),
+                "token_count": run.claims.token_count,
+            }
+        await self.record(run, EventKind.CLAIM, payload)
+        cases = evidence_from_trace(
+            await run.recorder.lines(),
+            scenario=run.scenario, node_id=run.node_id, policy_name="proxy",
         )
         run.evidence = cases
         run.completed = True

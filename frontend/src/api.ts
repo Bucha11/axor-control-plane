@@ -109,13 +109,42 @@ export interface ScrubberStep {
 export interface GraphEdge {
   src: string;
   dst: string;
-  run_id: string;
 }
 
+// Provenance is scoped to one run: value refs are minted per trace from a
+// counter that restarts at zero, so `v_ext_1` names a different value in every
+// run and there is no edge that spans two of them.
 export interface GraphKhop {
   focus: string;
   nodes: string[];
   edges: GraphEdge[];
+}
+
+// One fact holding a node down. `severity` indexes the degradation ladder
+// (0=NORMAL..4=TERMINAL) and the node's level is max(severity) over the facts
+// no attestation covers — the kernel's own recompute, not the plane's.
+export interface DrivingFact {
+  fact_id: string;
+  fact_type: string;
+  severity: number;
+  reason: string;
+  // The value branch the fact was recorded against, when the trace named one.
+  causal_root: string | null;
+  // Operators whose unrevoked attestation covers this fact. Empty = uncovered,
+  // which is what makes it count toward the level.
+  covered_by: string[];
+}
+
+export interface NodeCoverage {
+  node_id: string;
+  run_id: string | null;
+  // What the node itself last reported. Never overwritten by attesting.
+  reported_level: string;
+  // What the level is once coverage is taken into account. Differs from
+  // reported_level until the node applies the attestation off its stream.
+  level: string;
+  facts: DrivingFact[];
+  covered: string[];
 }
 
 export interface BranchAttestation {
@@ -123,6 +152,9 @@ export interface BranchAttestation {
   operator: string;
   reason: string;
   revokes: string | null;
+  // Whether this coverage still stands. A revoked attestation stays in the
+  // history — append-only, nothing is deleted — and reads `false`.
+  in_effect: boolean;
 }
 
 export interface ScrubberPayload {
@@ -174,6 +206,60 @@ export interface ProbeHealth {
   max_drift_score_uncalibrated: number;
 }
 
+// What the localizer found (axor-probe `repair.localize`), as the node posted
+// it. `auto_excise` is the pure-tainted cut — no legitimate task content, so no
+// collateral; `escalate` names fragments that also carry real work and are only
+// cut when the operator explicitly confirms them.
+export interface RepairProposal {
+  verdict: "auto_excise" | "escalate_operator" | "no_drift_from_taint";
+  drift_fragments: string[];
+  excision: string[];
+  auto_excise: string[];
+  escalate: string[];
+  recommend_quarantine_all: boolean;
+  approximate: boolean;
+}
+
+// One commanded cut and its verifying re-probe. THREE states, not two:
+// `reprobe_verdict === null` means the node has not reported back yet, which is
+// not the same as a cut that failed — rendering it as `resolved: false` would
+// make an unmeasured heal look like a broken one.
+export interface HealAttempt {
+  id: number;
+  excision_id: string;
+  operator: string;
+  reason: string;
+  target_refs: string[];
+  families: string[];
+  requested_ts: string;
+  reprobe_verdict: string | null;
+  resolved: boolean | null;
+  outcome_ts: string | null;
+}
+
+export interface RepairState {
+  proposal: RepairProposal | null;
+  version: number;
+  pending: { id: string; target_refs: string[]; reason: string; operator: string } | null;
+  history: HealAttempt[];
+}
+
+// The same battery graded in axor-eval's vocabulary (BehavioralIntegrityAudit).
+// It is NOT an integrity score and says so in the payload: BEHAVIORAL_DRIFT is
+// an Experimental deviation type, excluded from `core_cases` whatever its
+// confidence. What it adds over the bare verdict is the TIER — escape-backed
+// drift is a structural fact about the probe output (deterministic, 1.0), a
+// consistency anomaly is judge-graded and discounted again when uncalibrated.
+export interface DriftCase {
+  deviation: string;
+  verdict_source: "deterministic" | "judge";
+  confidence: number;
+  observed_reality: Record<string, unknown>;
+  agent_claim: string;
+  experimental: boolean;
+  in_integrity_score: boolean;
+}
+
 export interface ProbeCheck {
   id: number;
   created_ts: string;
@@ -184,11 +270,41 @@ export interface ProbeCheck {
 }
 
 // Topology (spec v2 Ch.4 §6): derived from traced spawn/message events only.
+// Per-node cross-session reputation, as the node's own axor-sentinel last
+// reported it. `null` means NO sentinel is reporting for this node — an absence,
+// never a clean bill: "nobody watches this node across sessions" and "somebody
+// watches and found nothing" are opposite facts, and collapsing them would make
+// an unwatched node the safest-looking thing on the graph.
+export interface ReputationSummary {
+  version: number;
+  generated_at: number;
+  received_ts: string;
+  flagged: number;
+  watch: number;
+  clean: number;
+  resources: number;
+}
+
+// The whole snapshot, from GET /v1/plane/{node}/reputation. `verdict_facts`
+// names which predicate fired for each non-clean resource — a reputation number
+// on its own is an accusation.
+export interface ReputationSnapshot {
+  version: number;
+  generated_at: number;
+  received_ts: string;
+  resource_reputation: Record<string, number>;
+  container_reputation: Record<string, number>;
+  resource_level: Record<string, "CLEAN" | "WATCH" | "FLAGGED">;
+  container_level: Record<string, "CLEAN" | "WATCH" | "FLAGGED">;
+  verdict_facts: Record<string, string[]>;
+}
+
 export interface TopologyNode {
   node_id: string;
   kind: "self" | "peer";
   desired?: { version: number; state: Record<string, unknown> } | null;
   reported?: NodeInfo["reported"];
+  reputation?: ReputationSummary | null;
 }
 
 export interface TopologyEdge {
@@ -210,15 +326,41 @@ export interface RegressionRow {
   run_id: string;
   side: string;
   label: string;
-  result: "held" | "escaped" | "passed" | "regressed";
+  // `unanchored`: a must-block pin whose trace recorded no denial, so there is
+  // nothing in it to check the candidate config against.
+  result: "held" | "escaped" | "passed" | "regressed" | "unanchored";
   first_divergence: number | null;
   new_denial: { seq: number; reason: string; category: string } | null;
+  pinned_denials: number;
+  escaped_denials: { node_id: string; seq: number; tool: string; gate: string | null }[];
+  // A pin on one of the canned demo runs, seeded by /v1/demo/*.
+  demo: boolean;
+}
+
+// A pin the corpus could not read at all — deleted events, a telemetry-only
+// run, or a Lab package recorded under another kernel build. It produces no row,
+// so it is not `unanchored`; it is simply absent from the check, and it
+// withholds `safe_to_ship` for the same reason.
+export interface SkippedPin {
+  run_id: string;
+  side: string;
+  label: string;
+  reason: string;
 }
 
 export interface RegressionReport {
   rows: RegressionRow[];
   regressed: number;
   escaped: number;
+  unanchored: number;
+  skipped: SkippedPin[];
+  // How much of the corpus is this deployment's own evidence, and how much
+  // shipped with the product. `safe_to_ship` counts `own_rows`: the canned
+  // pins prove the shipped kernel denies the shipped attack, and "every attack
+  // still blocked" is a sentence about THIS deployment's agents. Two clicks on
+  // the in-app demo used to turn a corpus that had verified nothing green.
+  own_rows: number;
+  demo_rows: number;
   safe_to_ship: boolean;
 }
 
@@ -246,13 +388,15 @@ export interface DeadLetter {
 export interface LicenseInfo {
   organization: string;
   workspace_tier: string; // "community" | "team" | "security"
-  modules: { private_lab: boolean; control_plane: boolean };
   governed_node_ceiling: number;
   self_hosted_runner: boolean;
   expires_at: string;
   features: string[];
   live_nodes?: number;
   over_ceiling?: boolean;
+  // True on every 200 — verified against the pinned key and stored. Kept
+  // because "verified" and "active" being the same thing is worth asserting.
+  activated?: boolean;
 }
 
 // Wrap engine (/v1/wrap): real code scan for the Config Builder. The engine is
@@ -375,6 +519,112 @@ function b64utf8(s: string): string {
   return btoa(bin);
 }
 
+export interface UsageMonth {
+  month: string;
+  // The billing basis: the most nodes on any one day, and which day — a fleet
+  // is as big as it ever ran, and the customer can point at the date.
+  peak_nodes: number;
+  peak_day: string | null;
+  // Exceeds the peak whenever nodes are replaced rather than added, which is
+  // exactly why it is not what gets billed.
+  distinct_nodes: number;
+  days: { day: string; nodes: number }[];
+  over_ceiling: boolean;
+}
+
+export interface UsageReport {
+  governed_node_ceiling: number | null;
+  months: UsageMonth[];
+}
+
+export interface Statement {
+  month: string;
+  organization: string;
+  workspace_tier: string;
+  currency: string;
+  base_cents: number;
+  included_nodes: number;
+  peak_nodes: number;
+  peak_day: string | null;
+  billable_nodes: number;
+  overage_cents: number;
+  total_cents: number;
+  // The month is still running, so the peak can still rise.
+  provisional: boolean;
+  computed_on: string;
+  // False for a contracted rung: usage measured, total withheld — inventing a
+  // list price would put a figure nobody agreed to in front of a customer.
+  priced: boolean;
+  note: string;
+}
+
+export interface VaultCredential {
+  tool: string;
+  endpoint: string;
+  version: number;
+  revoked: boolean;
+  scope_nodes: string[];
+  header: string;
+  scheme: string;
+  // Whether this deployment can read this credential at all.
+  sealed: boolean;
+}
+
+export interface VaultCredsHealth {
+  enrolled: VaultCredential[];
+}
+
+export interface VaultEnrollment {
+  tool: string;
+  endpoint: string;
+  secret: string;
+  scope_nodes: string[];
+  header: string;
+  scheme: string;
+}
+
+export interface DispenseRow {
+  // Row id, for paging further back (`before_id`). Rows come newest first.
+  audit_id: number;
+  node_id: string;
+  tool: string;
+  endpoint: string;
+  version: number;
+  run_id: string | null;
+  seq: number | null;
+  verdict: string | null;
+  signed: boolean;
+  principal: string;
+  ts: string;
+}
+
+// The credential subsystem's own token, in its own header — the wall (spec v2
+// Ch.5 §3). Sent on every /v1/vault/creds route and nowhere else, so a browser
+// that can dispense still cannot request a signature.
+function afCreds(path: string, init: RequestInit = {}): Promise<Response> {
+  const token = useApp.getState().vaultCredsToken;
+  return af(path, {
+    ...init,
+    headers: {
+      ...(init.headers as Record<string, string> | undefined),
+      ...(token ? { "X-Vault-Creds-Token": token } : {}),
+    },
+  });
+}
+
+// Seal a credential to the deployment's sealing key, in the operator's browser.
+// libsodium's own sealed box (X25519 + XSalsa20-Poly1305), byte-identical to
+// what the node opens with pynacl — no primitive is reimplemented here, and the
+// wasm is loaded only when someone actually enrols something.
+async function sealSecret(publicKeyHex: string, secret: string): Promise<string> {
+  const sodium = (await import("libsodium-wrappers")).default;
+  await sodium.ready;
+  return sodium.to_base64(
+    sodium.crypto_box_seal(sodium.from_string(secret), sodium.from_hex(publicKeyHex)),
+    sodium.base64_variants.ORIGINAL,
+  );
+}
+
 // Signed command posture (protocol §6): the browser canonicalizes the payload
 // itself (byte-identical to the adapter's kernel), then asks the vault signing
 // custody to sign exactly those bytes. The operator key never enters the
@@ -419,6 +669,14 @@ export const api = {
 
   topology: () => af("/v1/plane/topology").then((r) => j<TopologyPayload>(r)),
 
+  // What a node's axor-sentinel found across sessions — the one axis in the
+  // product that survives between them. The cycle runs on the NODE (enforcement
+  // stays local; the plane never enters the decision path, ui-spec 12.0) and
+  // posts the snapshot out-dial; this reads what it posted.
+  reputation: (nodeId: string) =>
+    af(`/v1/plane/${nodeId}/reputation`).then((r) =>
+      j<{ reputation: ReputationSnapshot | null }>(r)),
+
   subgraph: (runId: string, anchor: CaseAnchor) =>
     af(`/v1/runs/${runId}/subgraph?anchor_node=${encodeURIComponent(anchor.node_id)}&anchor_seq=${anchor.seq}`)
       .then((r) => j<SubgraphPayload>(r)),
@@ -427,16 +685,97 @@ export const api = {
     af(`/v1/runs/${runId}/containment?anchor_node=${encodeURIComponent(anchor.node_id)}&anchor_seq=${anchor.seq}`)
       .then((r) => j<ContainmentReport>(r)),
 
-  influence: (runId: string, anchor: CaseAnchor, config: Record<string, unknown>) =>
+  // `refs` narrows the ablation to the values you want ranked. A case with more
+  // upstream values than the backend will ablate in one request answers 422
+  // rather than ranking a truncated subset, so the caller has a knob.
+  influence: (
+    runId: string, anchor: CaseAnchor, config: Record<string, unknown>,
+    refs?: string[],
+  ) =>
     af(`/v1/runs/${runId}/influence`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ anchor_node: anchor.node_id, anchor_seq: anchor.seq, config }),
-    }).then((r) => j<{ ranking: InfluenceEntry[] }>(r)),
+      body: JSON.stringify({
+        anchor_node: anchor.node_id, anchor_seq: anchor.seq, config,
+        ...(refs ? { refs } : {}),
+      }),
+    }).then((r) =>
+      j<{
+        ranking: InfluenceEntry[];
+        ablated_refs: number;
+        available_refs: number;
+      }>(r),
+    ),
 
   vaultCredsHealth: () =>
-    af("/v1/vault/creds/health").then((r) =>
-      j<{ enrolled: { tool: string; endpoint: string; version: number; revoked: boolean; scope_nodes: string[] }[] }>(r)),
+    afCreds("/v1/vault/creds/health").then((r) => j<VaultCredsHealth>(r)),
+
+  // Envelope mode (ui-spec §14.2). Registering a sealing PUBLIC key is what
+  // stops this deployment storing plaintext at all; the private half is minted
+  // by `axor-proxy vault keygen` on the operator's own machine and never enters
+  // the browser — pasting it here would be handing over the one thing the mode
+  // exists to keep away from the backend.
+  vaultSealingKey: () =>
+    afCreds("/v1/vault/creds/sealing-key").then(
+      (r) => j<{ public_key_hex: string | null; envelope_mode: boolean }>(r)),
+  registerSealingKey: (publicKeyHex: string) =>
+    afCreds("/v1/vault/creds/sealing-key", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ public_key_hex: publicKeyHex }),
+    }).then((r) => j<{ registered: boolean }>(r)),
+
+  // Whose dispense attestations verify. Also a pubkey, also not a secret.
+  vaultNodeKeys: () =>
+    afCreds("/v1/vault/creds/node-keys").then((r) => j<Record<string, string>>(r)),
+  registerNodeKey: (nodeId: string, publicKeyHex: string) =>
+    afCreds("/v1/vault/creds/node-keys", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ node_id: nodeId, public_key_hex: publicKeyHex }),
+    }).then((r) => j<{ registered: boolean }>(r)),
+
+  // Enrol. In envelope mode the secret is sealed HERE, in the operator's own
+  // browser, and only the ciphertext is posted — one step for the operator and
+  // one fewer place the plaintext exists than a shell command would leave it.
+  vaultEnroll: async (body: VaultEnrollment, sealingKey: string | null) => {
+    const { secret, ...rest } = body;
+    const payload: Record<string, unknown> = { ...rest };
+    if (sealingKey) payload.sealed_secret = await sealSecret(sealingKey, secret);
+    else payload.secret = secret;
+    const r = await afCreds("/v1/vault/creds/enroll", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    return j<{ tool: string; endpoint: string; version: number }>(r);
+  },
+  vaultRotate: async (
+    tool: string, endpoint: string, secret: string, sealingKey: string | null,
+  ) => {
+    const payload: Record<string, unknown> = { tool, endpoint };
+    if (sealingKey) payload.sealed_secret = await sealSecret(sealingKey, secret);
+    else payload.secret = secret;
+    const r = await afCreds("/v1/vault/creds/rotate", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    return j<{ version: number }>(r);
+  },
+  vaultRevoke: (tool: string, endpoint: string) =>
+    afCreds("/v1/vault/creds/revoke", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ tool, endpoint }),
+    }).then((r) => j<{ revoked: boolean; version: number }>(r)),
+
+  // What every dispensed credential was fetched for. Never the credential.
+  // NEWEST FIRST, and `limit` is what the caller will render: the route used to
+  // be capped in storage, so asking for "everything" was bounded by something
+  // else. Page further back with `before_id` from the last row's `audit_id`.
+  vaultCredsAudit: (limit = 6) =>
+    afCreds(`/v1/vault/creds/audit?limit=${limit}`).then((r) => j<DispenseRow[]>(r)),
 
   vaultSigningKeys: () =>
     af("/v1/vault/signing/keys").then((r) =>
@@ -456,16 +795,24 @@ export const api = {
       body: JSON.stringify({ key_id: keyId, operators }),
     }).then((r) => j<{ key_id: string; public_key_hex: string; operators: string[] }>(r)),
 
-  vaultSigningAudit: () =>
-    af("/v1/vault/signing/audit").then((r) =>
-      j<{ operator: string; key_id: string; payload_sha256: string; granted: boolean; ts: string }[]>(r)),
+  // Newest first; see `vaultCredsAudit` for `limit` and `before_id`.
+  vaultSigningAudit: (limit = 5) =>
+    af(`/v1/vault/signing/audit?limit=${limit}`).then((r) =>
+      j<{ audit_id: number; operator: string; key_id: string;
+          payload_sha256: string; granted: boolean; ts: string }[]>(r)),
 
   spawnGovernedTree: () =>
     af("/axor/governed/spawn-tree", { method: "POST" }).then((r) =>
       j<{ run_id: string; nodes: Record<string, string>; denials: number; events: number }>(r)),
 
+  // The canned 4-node tree, straight into the plane — no proxy involved. It is
+  // what Control's "load the canned tree" button seeds; the live alternative
+  // (spawnGovernedTree) runs real IntentLoops but only produces delegation
+  // edges, so the lateral hop and the undeclared foreign peer come from here.
   seedTreeRun: () =>
-    af("/v1/demo/seed-tree-run", { method: "POST" }).then((r) => j<unknown>(r)),
+    af("/v1/demo/seed-tree-run", { method: "POST" }).then(
+      (r) => j<{ seeded: string[]; config: Record<string, unknown> }>(r),
+    ),
   command: async (nodeId: string, version: number, state: Record<string, unknown>) => {
     // One timestamp, signed and sent — the adapter reconstructs the exact bytes
     // from (node_id, version, body=state, timestamp), so they must match.
@@ -541,7 +888,10 @@ export const api = {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ files }),
-    }).then((r) => j<{ tools: WrapTool[] }>(r)),
+      // `skipped` names the .py files the parser could not read. They are part
+      // of the answer: a tool in a skipped file is absent from the config, and
+      // undeclared is denied.
+    }).then((r) => j<{ tools: WrapTool[]; skipped: { path: string; reason: string }[] }>(r)),
   wrapManifests: (tools: (Omit<Partial<WrapTool>, "guess"> & { id: string; effect: WrapEffect })[]) =>
     af("/v1/wrap/manifests", {
       method: "POST",
@@ -608,6 +958,15 @@ export const api = {
         ...(routing?.nodePattern ? { node_pattern: routing.nodePattern } : {}),
       }),
     }).then((r) => j<{ subscribed: string; triggers: string[] }>(r)),
+  // A registered webhook used to fire forever: there was no way to remove one
+  // short of editing the database, while the body it receives carries node
+  // ids, levels, a permalink, and for license_expiring the licensed org.
+  unsubscribeNotifications: (url: string) =>
+    af("/v1/notifications/unsubscribe", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ url }),
+    }).then((r) => j<{ unsubscribed: string; removed: number }>(r)),
   listSubscriptions: () =>
     af("/v1/notifications/subscriptions").then((r) =>
       j<{ url: string; triggers: string[]; debounce_seconds: number;
@@ -620,7 +979,8 @@ export const api = {
   regressionHistory: (limit = 50) =>
     af(`/v1/regression/history?limit=${limit}`).then((r) =>
       j<{ created_ts: string; source: string; regressed: number; escaped: number;
-          skipped: number; total: number; safe_to_ship: boolean }[]>(r),
+          unanchored: number; skipped: number; total: number;
+          safe_to_ship: boolean }[]>(r),
     ),
   getRegressionSchedule: () =>
     af("/v1/regression/schedule").then((r) =>
@@ -637,14 +997,39 @@ export const api = {
     af("/v1/license/status").then((r) =>
       j<{
         active: boolean;
+        // Whether the DEPLOYMENT pins a vendor public key (AXOR_VENDOR_PUBKEY).
+        // Without one no license can be checked at all — a different problem
+        // from "no license yet", with a different fix, and the panel has to be
+        // able to say which.
+        vendor_key_configured: boolean;
+        // The organization a license must name to activate here (AXOR_ORG).
+        // Empty means ANY vendor-signed license activates, including one issued
+        // to somebody else — which the panel has to be able to say.
+        licensed_to?: string;
+        // Whether this deployment renews itself and reports usage, or whether
+        // somebody has to remember to paste a new license every term.
+        auto_renewal?: boolean;
+        usage_reporting?: boolean;
         organization?: string;
         workspace_tier?: string;
-        modules?: { private_lab: boolean; control_plane: boolean };
         governed_node_ceiling?: number;
         self_hosted_runner?: boolean;
         expires_at?: string;
+        // Counted from today, so the panel does not make the operator do date
+        // arithmetic on the one number that has a deadline attached.
+        days_remaining?: number;
+        expired?: boolean;
       }>(r),
     ),
+
+  // ── governed-node usage, and the statement drawn from it ───────────────────
+  // Their fleet history and their own bill. Both were reachable only by curl:
+  // measured, priced, tested, and invisible to the customer they are about.
+  licenseUsage: (months = 3) =>
+    af(`/v1/license/usage?months=${months}`).then((r) => j<UsageReport>(r)),
+  licenseInvoice: (month?: string) =>
+    af(`/v1/license/invoice${month ? `?month=${month}` : ""}`).then(
+      (r) => j<Statement>(r)),
 
   // ── operator interventions over the plane (spec §12) ───────────────────────
   appendFact: async (nodeId: string, fact: Record<string, unknown>) => {
@@ -661,17 +1046,70 @@ export const api = {
     });
     return j<{ appended: boolean }>(r);
   },
-  cascadeStop: (nodeId: string) =>
-    af(`/v1/plane/${nodeId}/cascade-stop`, { method: "POST" }).then(
-      (r) => j<{ stopped: string[]; count: number }>(r),
-    ),
+  // The blast-radius kill switch, and the third operator action the plane
+  // verifies a signature for. It was the one the client did not sign: a bare
+  // POST with no body, which a signed deployment answers 409 ("stale version
+  // None") — so on exactly the deployments the vault exists for, Cascade stop
+  // did not work at all. The dev posture has an empty keyring and takes the BFS
+  // fallback, which ignores the body, so nothing ever surfaced it.
+  //
+  // The signed payload is the delta the backend rebuilds, not one the client
+  // invents: `{stopped: true, cascade: true}` to the subtree ROOT — the tree
+  // distributes the signal child-ward along spawn edges (spec v2 Ch.4 §6).
+  cascadeStop: async (nodeId: string, version: number) => {
+    const timestamp = new Date().toISOString();
+    const sig = signingArmed()
+      ? await vaultSign({
+          node_id: nodeId,
+          version,
+          body: { stopped: true, cascade: true },
+          timestamp,
+        })
+      : "";
+    const r = await af(`/v1/plane/${nodeId}/cascade-stop`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ version, operator: "op_ui", timestamp, sig }),
+    });
+    return j<{ stopped: string[]; count: number; mode?: string }>(r);
+  },
 
   // The node's last behavioral health check, plus the series behind it. `latest`
   // is null until a node has posted one — "no check yet", which is not the same
   // as a healthy agent. This is drift, never an Eval metric (ui-spec 8.2).
   probeReport: (nodeId: string) =>
     af(`/v1/plane/${nodeId}/probe-report`).then((r) =>
-      j<{ latest: ProbeHealth | null; history: ProbeCheck[] }>(r)),
+      j<{ latest: ProbeHealth | null; history: ProbeCheck[];
+          drift_case: DriftCase | null }>(r)),
+
+  // What the localizer proposed, what is in flight, and how past heals ended.
+  repair: (nodeId: string) =>
+    af(`/v1/plane/${nodeId}/repair`).then((r) => j<RepairState>(r)),
+
+  // Self-heal, in the two steps it actually is.
+  //
+  // The first asks the plane to SHAPE the cut: axor-probe's `excision_request`
+  // turns the node's proposal into a `pending_excision` body, refusing one that
+  // the proposal does not authorize (422). It writes nothing.
+  //
+  // The second is the ordinary signed command door — the same one Control uses
+  // to pause a node — carrying that body. It has to be this door: an excision
+  // is an operator instruction to delete part of a running agent's context, and
+  // a route that wrote it without a signature would be the unsigned way into
+  // the channel the operator keyring exists to protect.
+  //
+  // Until this existed, "Self-heal" appended an operator_attestation fact and
+  // told the operator to await a verifying re-probe. Nothing had been cut.
+  selfHeal: async (
+    nodeId: string, reason: string, includeEscalated = false,
+  ) => {
+    const shaped = await af(`/v1/plane/${nodeId}/repair/excision-request`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ reason, include_escalated: includeEscalated }),
+    }).then((r) => j<{ state: Record<string, unknown>; version: number }>(r));
+    return api.command(nodeId, shaped.version, shaped.state);
+  },
 
   // ── governed node: a real axor-core IntentLoop wired to the plane ──────────
   spawnGoverned: () =>
@@ -685,22 +1123,31 @@ export const api = {
       (r) => j<{ seeded: string[]; config: Record<string, unknown> }>(r),
     ),
 
-  // ── taint / provenance graph (spec decision 6) ─────────────────────────────
-  graphKhop: (focus: string, k = 2, limit = 100) =>
-    af(`/v1/graph/khop?focus=${encodeURIComponent(focus)}&k=${k}&limit=${limit}`).then(
+  // ── per-run value provenance & attestations (spec decision 6) ──────────────
+  runProvenance: (runId: string, focus: string, k = 2, limit = 100) =>
+    af(`/v1/runs/${encodeURIComponent(runId)}/provenance` +
+       `?focus=${encodeURIComponent(focus)}&k=${k}&limit=${limit}`).then(
       (r) => j<GraphKhop>(r),
     ),
-  graphAttestations: (ref: string) =>
-    af(`/v1/graph/attestations?ref=${encodeURIComponent(ref)}`).then(
+  nodeCoverage: (nodeId: string) =>
+    af(`/v1/plane/${encodeURIComponent(nodeId)}/coverage`).then(
+      (r) => j<NodeCoverage>(r),
+    ),
+  runAttestations: (runId: string, ref: string) =>
+    af(`/v1/runs/${encodeURIComponent(runId)}/attestations` +
+       `?ref=${encodeURIComponent(ref)}`).then(
       (r) => j<BranchAttestation[]>(r),
     ),
 
   // ── EE license (monetization 4) ────────────────────────────────────────────
-  verifyLicense: (licenseJson: string, vendorPubkey: string) =>
+  // The vendor public key is NOT sent: the trust root is deployment config
+  // (AXOR_VENDOR_PUBKEY), and a signature checked against a key supplied in the
+  // same request proves nothing. A 200 here means verified AND active.
+  verifyLicense: (licenseJson: string) =>
     af("/v1/license/verify", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ license_json: licenseJson, vendor_pubkey: vendorPubkey }),
+      body: JSON.stringify({ license_json: licenseJson }),
     }).then((r) => j<LicenseInfo>(r)),
 
   // ── auth: local token + scoped API keys (architecture section 9) ───────────
@@ -712,14 +1159,36 @@ export const api = {
     af("/v1/keys").then((r) =>
       j<{ key_id: string; scopes: string[]; label: string; created_ts: string }[]>(r),
     ),
-  createKey: (scopes: string[], label: string) =>
+  // `nodeId` binds the key to ONE governed node: the plane then refuses it for
+  // any other, so a compromised node cannot forge its neighbour's heartbeat,
+  // level or health verdict. Omit it for a fleet-wide operator key.
+  createKey: (scopes: string[], label: string, nodeId?: string) =>
     af("/v1/keys", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ scopes, label }),
-    }).then((r) => j<{ key_id: string; secret: string; scopes: string[] }>(r)),
+      body: JSON.stringify(nodeId ? { scopes, label, node_id: nodeId } : { scopes, label }),
+    }).then((r) =>
+      j<{ key_id: string; secret: string; scopes: string[]; node_id: string | null }>(r),
+    ),
   revokeKey: (keyId: string) =>
     af(`/v1/keys/${keyId}`, { method: "DELETE" }).then((r) => j<{ revoked: string }>(r)),
+  // Every mint and revoke, newest first. `listKeys` answers "what exists now",
+  // which a revoke erases; this answers "what was issued", which it does not.
+  keysAudit: (limit = 8) =>
+    af(`/v1/keys/audit?limit=${limit}`).then((r) =>
+      j<
+        {
+          audit_id: number;
+          action: "mint" | "revoke";
+          ts: string;
+          key_id: string;
+          scopes?: string[];
+          node_id?: string | null;
+          label?: string;
+          by: { kind: string; id: string | null };
+        }[]
+      >(r),
+    ),
 };
 
 // Live audit stream (spec 8): SSE of colour-coded events for a run. Returns an

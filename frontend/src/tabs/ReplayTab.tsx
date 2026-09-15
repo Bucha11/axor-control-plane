@@ -291,7 +291,7 @@ export default function ReplayTab({ runId: runIdProp, cursor: cursorProp }: { ru
             </div>
           )}
 
-          {curRef && <TaintGraph key={curRef} focus={curRef} />}
+          {curRef && <TaintGraph key={`${runId}:${curRef}`} runId={runId} focus={curRef} />}
 
           {!fork ? (
             <Tooltip content="Fork a counterfactual from this run: change one policy and see how the recorded trace would re-gate — deterministic, no model call.">

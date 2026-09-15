@@ -15,19 +15,38 @@ jobs:
   # ── Python: lint + unit + backend E2E (real backend/proxy subprocesses) ──────
   python:
     runs-on: ubuntu-latest
+    # The suite runs on SQLite; production runs on Postgres. Until this service
+    # existed the only thing that ever touched Postgres was the deploy job's
+    # three-route smoke, which does not run on pull requests — so the second
+    # dialect was a claim, and the first thing it cost was a migration that
+    # passed every test and could not be applied to the production database at
+    # all (Postgres does not rename a table's constraints when the table is
+    # renamed; SQLite has no such rule). `-m postgres` closes that gap.
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: axor
+          POSTGRES_PASSWORD: ci
+          POSTGRES_DB: axor_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U axor"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      AXOR_TEST_POSTGRES_URL: postgresql+asyncpg://axor:ci@127.0.0.1:5432/axor_test
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v4
         with:
           python-version: "3.12"
-      # axor-core / axor-eval are git-ref pinned (pyproject [tool.uv.sources]).
-      # For private ecosystem repos set AXOR_ECOSYSTEM_TOKEN (a PAT with read
-      # access); GITHUB_TOKEN only covers this repository.
-      - name: Authorize ecosystem git deps
-        run: |
-          git config --global url."https://x-access-token:${TOKEN}@github.com/".insteadOf "https://github.com/"
-        env:
-          TOKEN: ${{ secrets.AXOR_ECOSYSTEM_TOKEN || secrets.GITHUB_TOKEN }}
+      # No "Authorize ecosystem git deps" step: pyproject's [tool.uv.sources]
+      # says the git-ref era is over — every ecosystem dependency resolves from
+      # PyPI and `uv.lock` holds zero git sources. The step it replaced wrote a
+      # global `insteadOf` rewrite with a PAT on every job, for dependencies
+      # that no longer exist, and its comment still named axor-core and
+      # axor-eval as git-pinned. The Dockerfile's build-time secret stays: it is
+      # already conditional on the secret being present.
       - name: Sync workspace
         run: uv sync --all-packages
       - name: Lint
@@ -37,6 +56,10 @@ jobs:
       # failure there is legible, then the whole suite.
       - name: Backend E2E
         run: uv run pytest -q -m e2e
+      # Named separately so a dialect failure is legible as one, rather than
+      # arriving inside a 300-test run.
+      - name: Postgres dialect
+        run: uv run pytest -q -m postgres
       - name: Tests
         run: uv run pytest -q
 
@@ -48,11 +71,6 @@ jobs:
       - uses: astral-sh/setup-uv@v4
         with:
           python-version: "3.12"
-      - name: Authorize ecosystem git deps
-        run: |
-          git config --global url."https://x-access-token:${TOKEN}@github.com/".insteadOf "https://github.com/"
-        env:
-          TOKEN: ${{ secrets.AXOR_ECOSYSTEM_TOKEN || secrets.GITHUB_TOKEN }}
       # The Playwright webServer boots the real backend + proxy (`uv run`), so
       # the Python workspace must be installed.
       - name: Sync workspace
@@ -96,11 +114,6 @@ jobs:
       - uses: astral-sh/setup-uv@v4
         with:
           python-version: "3.12"
-      - name: Authorize ecosystem git deps
-        run: |
-          git config --global url."https://x-access-token:${TOKEN}@github.com/".insteadOf "https://github.com/"
-        env:
-          TOKEN: ${{ secrets.AXOR_ECOSYSTEM_TOKEN || secrets.GITHUB_TOKEN }}
       - name: Export locked requirements (SBOM input)
         run: |
           uv sync --all-packages

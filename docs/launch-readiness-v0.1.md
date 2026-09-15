@@ -19,7 +19,7 @@ Status legend: ☐ open · ◐ partial exists · ☑ done.
 | P1 | **Concurrent runs per proxy** | One active run at a time (v1) breaks the first team that shares a proxy. Done when: N armed runs keyed by header/route, docs updated. | ☑ |
 | P1 | **OpenAI Agents SDK + CrewAI adapters** | The Invokable wrap is axor-core-native; the two biggest agent frameworks need a 20-line published recipe each (full middleware later). Done when: `examples/` runs green in CI against both. | ◐ (recipes published in examples/; CI-green needs LLM keys — honest note in examples/README) |
 | P1 | **Retention/rotation** | Unbounded events table + trace dir. Done when: `AXOR_RETENTION_DAYS` prunes runs + traces, documented. | ☑ |
-| P2 | Hosted multi-tenancy (per-tenant Kùzu is stubbed) — explicitly **not** for launch; self-host only. | | ◐ |
+| P2 | Hosted multi-tenancy — explicitly **not** for launch; self-host only. | | ◐ |
 
 ## 2. Security & trust posture — the first thing a security buyer greps
 

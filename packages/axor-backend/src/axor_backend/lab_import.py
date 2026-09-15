@@ -23,12 +23,16 @@ import json
 from dataclasses import dataclass
 from typing import Any
 
-from axor_backend.errors import BackendError
-from axor_backend.lab_export import condition_config_hash
+from axor_core.contracts.schemas import validate as validate_schema
 
-CP_DEPLOY_SCHEMA = "axor-cp-deploy/v1"
-_VALID_VERDICTS = frozenset({"ALLOW", "DENY"})
-_EFFECT_CLASSES = frozenset({"READ", "WRITE", "EXPORT", "EXEC"})
+from axor_backend.errors import BackendError
+from axor_backend.lab_export import condition_config_hash, content_hash
+from axor_backend.limits import MAX_EVENTS_PER_RUN, MAX_PINS_PER_PACKAGE
+
+# The schema_version const, the verdict pair and the effect classes were all
+# restated here as frozensets. They are the format's, and the format is
+# `axor_core.contracts.schemas`; what is left below is this backend's own.
+_PIN_PREFIX = "lab:"
 # pins land in the runs-keyed corpus table; run_id column is 64 chars
 _PIN_RUN_ID_MAX = 64
 
@@ -78,123 +82,134 @@ def package_id_of(package: dict[str, Any]) -> str:
 
 
 def validate_cp_deploy(package: Any) -> list[str]:  # noqa: ANN401 - untrusted upload
-    """Every structural problem with the uploaded package, or []."""
+    """Every problem with the uploaded package, or [].
+
+    Two halves, kept apart on purpose.
+
+    The SHAPE is `axor_core.contracts.schemas`' `cp-deploy` — the format's one
+    definition, which the kernel owns and the Lab's exporter writes to. It used
+    to be restated here by hand, forty lines of it, which is how a producer and
+    a consumer in two repositories drift without either noticing.
+
+    What stays below is what a schema cannot know: that a fingerprint matches the
+    payload it claims to describe, and that a caller-chosen id fits the corpus
+    key and does not repeat. Those are this platform's, and they are the ones
+    that were actually wrong.
+    """
     if not isinstance(package, dict):
         return ["package must be a JSON object (the cp-deploy.json content)"]
-    errors: list[str] = []
-    if package.get("schema_version") != CP_DEPLOY_SCHEMA:
-        errors.append(
-            f"schema_version {package.get('schema_version')!r} is not {CP_DEPLOY_SCHEMA!r}"
-        )
-    # finalized state only: an evidence-backed export sets verified=true; a
-    # template (export_cp_template) is an unverified config dump and is refused
+    errors: list[str] = list(validate_schema("cp-deploy", package))
+    # An unverified TEMPLATE is schema-valid — `verified` is a boolean and the
+    # Lab legitimately emits both — so refusing one is the consumer's policy, not
+    # the format's. A config dump must never be mistaken for a proven handoff.
     if package.get("verified") is not True:
         errors.append(
             "package is not a finalized evidence-backed export (verified must be "
             "true; a template/unverified dump carries no evidence)"
         )
     kernel = package.get("kernel")
-    if not isinstance(kernel, str) or not kernel:
-        errors.append("kernel must be a non-empty string")
     policy = package.get("policy")
-    if not isinstance(policy, dict):
-        errors.append("policy must be an object")
     recorded = package.get("config_hash")
-    if not isinstance(recorded, str) or not recorded:
-        errors.append("config_hash must be a non-empty string")
-    elif isinstance(kernel, str) and isinstance(policy, dict):
-        try:
-            recomputed = condition_config_hash(kernel, policy)
-        except Exception as exc:  # noqa: BLE001 - canonicalization of untrusted input
-            errors.append(f"kernel+policy are not canonicalizable: {exc}")
-        else:
-            if recorded != recomputed:
-                errors.append(
-                    f"config_hash {recorded} does not match the exported "
-                    f"kernel+policy ({recomputed}) — not the measured config"
-                )
-    if not isinstance(package.get("parametric_config_hash"), str) or not package.get(
-        "parametric_config_hash"
-    ):
-        errors.append("parametric_config_hash must be a non-empty string")
-    errors += _manifest_errors(package.get("tool_manifests"))
-    errors += _regression_errors(package.get("regressions"))
-    errors += _regression_traces_errors(
-        package.get("regression_traces"), package.get("regressions")
-    )
-    source = package.get("source")
-    if not isinstance(source, dict) or not source.get("bundle_id") or not source.get(
-        "condition_id"
-    ):
-        errors.append("source must be an object naming bundle_id and condition_id")
+    if isinstance(recorded, str) and recorded:
+        if isinstance(kernel, str) and isinstance(policy, dict):
+            try:
+                recomputed = condition_config_hash(kernel, policy)
+            except Exception as exc:  # noqa: BLE001 - untrusted input
+                errors.append(f"kernel+policy are not canonicalizable: {exc}")
+            else:
+                if recorded != recomputed:
+                    errors.append(
+                        f"config_hash {recorded} does not match the exported "
+                        f"kernel+policy ({recomputed}) — not the measured config"
+                    )
+    errors += _manifest_key_errors(package.get("tool_manifests"))
+    errors += _pin_key_errors(package.get("regressions"))
+    errors += _trace_body_errors(package.get("regression_traces"))
     return errors
 
 
-def _manifest_errors(manifests: Any) -> list[str]:  # noqa: ANN401 - untrusted upload
-    if not isinstance(manifests, list) or not manifests:
-        return ["tool_manifests must be a non-empty list"]
+def _manifest_key_errors(manifests: Any) -> list[str]:  # noqa: ANN401 - untrusted upload
+    """Duplicate tool ids — the one manifest rule the schema cannot state.
+
+    The CP turns the manifest list into a config keyed by tool id, so two
+    manifests sharing an id become one entry and the loser's effect class,
+    driving args and sensitive fields are gone. Everything else about a manifest
+    is `tool-manifest/v1`'s to say, and it says it.
+    """
+    if not isinstance(manifests, list):
+        return []
     errors: list[str] = []
     seen: set[str] = set()
     for i, manifest in enumerate(manifests):
-        where = f"tool_manifests[{i}]"
         if not isinstance(manifest, dict):
-            errors.append(f"{where} is not an object")
             continue
-        if manifest.get("schema_version") != "tool-manifest/v1":
-            errors.append(f"{where}: schema_version is not 'tool-manifest/v1'")
         tool_id = manifest.get("id")
-        if not isinstance(tool_id, str) or not tool_id:
-            errors.append(f"{where}: id must be a non-empty string")
-        elif tool_id in seen:
-            errors.append(f"{where}: duplicate tool id {tool_id!r}")
-        else:
-            seen.add(tool_id)
-        if not isinstance(manifest.get("args_schema"), dict):
-            errors.append(f"{where}: args_schema must be an object")
-        effect = manifest.get("effect")
-        if not isinstance(effect, dict):
-            errors.append(f"{where}: effect must be an object")
-        else:
-            if str(effect.get("default_class")) not in _EFFECT_CLASSES:
-                errors.append(
-                    f"{where}: effect.default_class {effect.get('default_class')!r} "
-                    f"is not one of {sorted(_EFFECT_CLASSES)}"
-                )
-            if not isinstance(effect.get("driving_args"), list):
-                errors.append(f"{where}: effect.driving_args must be a list")
-        if not isinstance(manifest.get("side_effecting"), bool):
-            errors.append(f"{where}: side_effecting must be a boolean")
+        if not isinstance(tool_id, str):
+            continue
+        if tool_id in seen:
+            errors.append(
+                f"tool_manifests[{i}]: duplicate tool id {tool_id!r} — the "
+                "manifests are compiled into a config keyed by id, so one of "
+                "the two would silently replace the other"
+            )
+        seen.add(tool_id)
     return errors
 
 
-def _regression_errors(regressions: Any) -> list[str]:  # noqa: ANN401 - untrusted upload
-    if regressions is None:
-        return ["regressions must be a list (may be empty)"]
+def _pin_key_errors(regressions: Any) -> list[str]:  # noqa: ANN401 - untrusted upload
+    """What the corpus, not the format, requires of the pins.
+
+    The schema types every pin field and bounds `trace_id` at 60. These are the
+    three things it still cannot express: how many pins one request may ask this
+    CP to replay, whether the id fits THIS backend's corpus key, and whether a
+    pin's summary verdict agrees with the sequence it claims to summarize.
+    """
     if not isinstance(regressions, list):
-        return ["regressions must be a list"]
+        return []
     errors: list[str] = []
+    if len(regressions) > MAX_PINS_PER_PACKAGE:
+        errors.append(
+            f"{len(regressions)} regression pins exceeds the per-package ceiling "
+            f"of {MAX_PINS_PER_PACKAGE} (AXOR_MAX_PINS_PER_PACKAGE) — each pin is "
+            "hashed, converted and REPLAYED before this request answers"
+        )
+    budget = _PIN_RUN_ID_MAX - len(_PIN_PREFIX)
+    seen: set[str] = set()
     for i, pin in enumerate(regressions):
-        where = f"regressions[{i}]"
         if not isinstance(pin, dict):
-            errors.append(f"{where} is not an object")
             continue
-        if not isinstance(pin.get("trace_id"), str) or not pin.get("trace_id"):
-            errors.append(f"{where}: trace_id must be a non-empty string")
+        where = f"regressions[{i}]"
+        trace_id = pin.get("trace_id")
+        if isinstance(trace_id, str) and trace_id:
+            # The schema states this bound too, because a sender that only
+            # learns it from a rejection has already built the package. But the
+            # bound exists BECAUSE of this column, so this is where it is
+            # measured: if the corpus key ever narrows, a schema-valid package
+            # is still one this backend cannot store without truncating the id
+            # — and a truncated key merges two pins into one row, losing
+            # whichever side was written first.
+            if len(trace_id) > budget:
+                errors.append(
+                    f"{where}: trace_id is {len(trace_id)} characters; the corpus "
+                    f"stores it as `{_PIN_PREFIX}{{trace_id}}` in a "
+                    f"{_PIN_RUN_ID_MAX}-character key, so at most {budget} fit. "
+                    "Truncating would collide two pins into one."
+                )
+            if trace_id in seen:
+                errors.append(
+                    f"{where}: duplicate trace_id {trace_id!r} — two pins on one "
+                    "id resolve to a single corpus row, and which side survives "
+                    "depends on array order"
+                )
+            seen.add(trace_id)
         verdict = pin.get("expected_verdict")
-        if verdict not in _VALID_VERDICTS:
-            errors.append(
-                f"{where}: expected_verdict {verdict!r} is not one of "
-                f"{sorted(_VALID_VERDICTS)}"
-            )
-        ref = pin.get("trace_ref")
-        if not isinstance(ref, str) or not ref.startswith("sha256:"):
-            errors.append(f"{where}: trace_ref must be a sha256: content hash")
         sequence = pin.get("expected_sequence")
-        if not isinstance(sequence, list) or not sequence:
-            errors.append(f"{where}: expected_sequence must be a non-empty list")
-        elif any(str(v) not in _VALID_VERDICTS for v in sequence):
-            errors.append(f"{where}: expected_sequence contains a non-verdict entry")
-        elif verdict in _VALID_VERDICTS and str(sequence[-1]) != verdict:
+        if (
+            isinstance(sequence, list)
+            and sequence
+            and isinstance(verdict, str)
+            and str(sequence[-1]) != verdict
+        ):
             errors.append(
                 f"{where}: expected_verdict {verdict} contradicts the final "
                 f"recorded verdict {sequence[-1]}"
@@ -202,28 +217,49 @@ def _regression_errors(regressions: Any) -> list[str]:  # noqa: ANN401 - untrust
     return errors
 
 
-def _regression_traces_errors(
-    regression_traces: Any,  # noqa: ANN401 - untrusted upload
-    regressions: Any,  # noqa: ANN401 - untrusted upload
-) -> list[str]:
-    """``regression_traces`` is an ADDITIVE map {trace_id: trace body} the Lab
-    export embeds so the CP can REPLAY the pins (not merely record their hashes).
-    It is optional for backward compatibility — a package without it is valid, its
-    pins simply stay skipped — but when present it must be a JSON object, and every
-    body must be an object naming its own trace_id."""
-    if regression_traces is None:
-        return []
+def _trace_body_errors(regression_traces: Any) -> list[str]:  # noqa: ANN401 - untrusted upload
+    """A carried trace body must be filed under its own id.
+
+    `regression_traces` is the map the CP replays pins from. The schema requires
+    each body to HAVE a trace_id; only a reader holding both can check it is the
+    key it was stored under, and a body under someone else's key would be
+    replayed as evidence for the wrong pin.
+    """
     if not isinstance(regression_traces, dict):
-        return ["regression_traces must be an object mapping trace_id -> trace body"]
-    errors: list[str] = []
+        return []
+    errors = [
+        f"regression_traces[{trace_id!r}]: body trace_id does not match its key"
+        for trace_id, body in regression_traces.items()
+        if isinstance(body, dict) and str(body.get("trace_id", "")) != str(trace_id)
+    ]
+    # …and it must not be larger than a run is allowed to be. A carried trace is
+    # written into the events table under `lab:{trace_id}` and read back like any
+    # other run — every read loading it whole — so the per-run ceiling applies to
+    # it. The store enforces it too; refusing here means the whole package is
+    # rejected with every reason listed, rather than a deploy that writes some
+    # pins and then raises on one.
     for trace_id, body in regression_traces.items():
-        where = f"regression_traces[{trace_id!r}]"
         if not isinstance(body, dict):
-            errors.append(f"{where} is not an object")
             continue
-        if str(body.get("trace_id", "")) != str(trace_id):
-            errors.append(f"{where}: body trace_id does not match its key")
+        carried = body.get("events")
+        if isinstance(carried, list) and len(carried) > MAX_EVENTS_PER_RUN:
+            errors.append(
+                f"regression_traces[{trace_id!r}]: carries {len(carried)} events, "
+                f"past the per-run ceiling of {MAX_EVENTS_PER_RUN} "
+                f"(AXOR_MAX_EVENTS_PER_RUN) — a pin is replayed as a run, and "
+                f"every read of a run loads it whole"
+            )
     return errors
+
+
+def _pin_run_id(trace_id: str) -> str:
+    """The corpus key for a Lab pin.
+
+    No truncation: `validate_cp_deploy` refuses a trace_id that would not fit,
+    because a key silently cut to length turns two pins into one row and loses
+    whichever side was written first.
+    """
+    return f"{_PIN_PREFIX}{trace_id}"
 
 
 def pin_plans(package: dict[str, Any], package_id: str) -> list[PinPlan]:
@@ -234,7 +270,7 @@ def pin_plans(package: dict[str, Any], package_id: str) -> list[PinPlan]:
     for pin in package.get("regressions", []):
         side = "must_block" if pin["expected_verdict"] == "DENY" else "must_pass"
         plans.append(PinPlan(
-            run_id=f"lab:{pin['trace_id']}"[:_PIN_RUN_ID_MAX],
+            run_id=_pin_run_id(pin["trace_id"]),
             side=side,
             label=f"lab:{package_id}",
         ))
@@ -246,30 +282,35 @@ def deploy_plans(package: dict[str, Any], package_id: str) -> list[PinDeployPlan
     whether its carried trace can be faithfully replayed on this CP.
 
     A pin is REPLAYABLE only when the package embeds the pin's trace body, the
-    body content-hashes to the pin's ``trace_ref``, the trace was recorded under
-    the REAL axor-core kernel matching THIS backend's installed build, the trace
-    converts to kernel events, AND replaying those events under a config compiled
-    from the package manifests reproduces the pinned verdict.  Otherwise the pin
-    is created exactly as before and left ``skipped`` with an honest reason — the
-    engine is never substituted to force a replay."""
+    body content-hashes to the pin's ``trace_ref`` and is a valid ``trace/v1``,
+    the trace was recorded under the axor-core build installed HERE, it converts
+    to kernel events, the package carries the config that scenario ran under,
+    that config matches its own recorded hash, AND replaying the events under it
+    reproduces the pinned verdict sequence in order.  Otherwise the pin is
+    created exactly as before and left ``skipped`` with a reason that names which
+    of those failed — never a substituted engine and never a re-derived config.
+    """
     from axor_backend.lab_trace import (
+        TraceNotConvertible,
         events_to_lines,
         installed_kernel_pin,
-        is_real_kernel_version,
+        kernel_config_from_governor_config,
         lab_trace_to_events,
         recorded_kernel_of,
-        reproduces_recorded_verdict,
+        reproduces_recorded_sequence,
         trace_matches_ref,
+        trace_schema_errors,
     )
 
     traces: dict[str, Any] = package.get("regression_traces") or {}
-    manifests: list[dict[str, Any]] = package.get("tool_manifests") or []
+    configs: dict[str, Any] = package.get("runtime_configs") or {}
+    config_hashes: dict[str, Any] = package.get("runtime_config_hashes") or {}
     installed = installed_kernel_pin()
     plans: list[PinDeployPlan] = []
     for pin in package.get("regressions", []):
         trace_id = str(pin["trace_id"])
         side = "must_block" if pin["expected_verdict"] == "DENY" else "must_pass"
-        run_id = f"lab:{trace_id}"[:_PIN_RUN_ID_MAX]
+        run_id = _pin_run_id(trace_id)
         label = f"lab:{package_id}"
 
         def skip(reason: str) -> PinDeployPlan:
@@ -284,28 +325,48 @@ def deploy_plans(package: dict[str, Any], package_id: str) -> list[PinDeployPlan
         if not trace_matches_ref(trace, str(pin.get("trace_ref", ""))):
             plans.append(skip("embedded trace body does not match the pin trace_ref"))
             continue
-        recorded_kernel = recorded_kernel_of(trace)
-        if not is_real_kernel_version(recorded_kernel):
+        schema_errors = trace_schema_errors(trace)
+        if schema_errors:
             plans.append(skip(
-                f"recorded under reference kernel ({recorded_kernel!r}); CP replays "
-                "the real axor-core kernel and will not substitute it"
+                f"embedded body is not a valid trace/v1: {schema_errors[0]}"
             ))
             continue
+        recorded_kernel = recorded_kernel_of(trace)
         if recorded_kernel != installed:
             plans.append(skip(
                 f"kernel build mismatch (recorded {recorded_kernel!r}, this CP runs "
                 f"{installed!r}); refusing to claim reproduction under a different build"
             ))
             continue
+        scenario_id = str((trace.get("trial") or {}).get("scenario_id", ""))
+        governor_config = configs.get(scenario_id)
+        if not isinstance(governor_config, dict):
+            plans.append(skip(
+                f"package carries no runtime config for scenario {scenario_id!r}; "
+                "the CP replays the control the verdict was recorded under and "
+                "will not compile a second one from the manifests"
+            ))
+            continue
+        recorded_hash = config_hashes.get(scenario_id)
+        if recorded_hash and content_hash(governor_config) != str(recorded_hash):
+            plans.append(skip(
+                f"runtime config for scenario {scenario_id!r} does not match its "
+                "recorded hash — it is not the config that ran"
+            ))
+            continue
         try:
             events = lab_trace_to_events(trace)
-        except Exception as exc:  # noqa: BLE001 - untrusted embedded body
+        except TraceNotConvertible as exc:
             plans.append(skip(f"trace did not convert to kernel events: {exc}"))
             continue
-        if not reproduces_recorded_verdict(events, str(pin["expected_verdict"]), manifests):
+        sequence = [str(v) for v in pin.get("expected_sequence") or []]
+        if not reproduces_recorded_sequence(
+            events, sequence, kernel_config_from_governor_config(governor_config),
+        ):
             plans.append(skip(
-                "recorded verdict would not reproduce under axor-core replay with the "
-                "package's manifests (leaving skipped rather than faking reproduction)"
+                "recorded verdicts would not reproduce under axor-core replay with "
+                "the config this trace ran under (leaving skipped rather than "
+                "faking reproduction)"
             ))
             continue
         plans.append(PinDeployPlan(

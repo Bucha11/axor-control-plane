@@ -29,12 +29,12 @@ test.describe("replay", () => {
     await expect(page.getByText(/excluded from scores/)).toBeVisible();
   });
 
-  test("the provenance graph draws a value's derivation", async ({ page }) => {
+  test("the provenance panel draws a value's derivation", async ({ page }) => {
     await goHash(page, `replay/${SEEDED.block}`);
     // Step 1 (email_read → v_mail) produces a value ref, so selecting it focuses
-    // the provenance graph on that value. Boxes are titled "N. <label>".
+    // provenance on that value. Boxes are titled "N. <label>".
     await page.getByTitle(/^1\. /).click();
-    await expect(page.getByText("provenance graph", { exact: false })).toBeVisible();
+    await expect(page.getByText("provenance · run", { exact: false })).toBeVisible();
     await expect(page.getByText("v_mail", { exact: false }).first()).toBeVisible();
   });
 

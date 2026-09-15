@@ -28,6 +28,7 @@ async def client(tmp_path: pathlib.Path, signing_key: SigningKey) -> httpx.Async
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app), base_url="http://backend.test"
     ) as c:
+        c._app = app  # type: ignore[attr-defined]
         # trigger startup (table creation)
         async with app.router.lifespan_context(app):
             yield c
@@ -137,9 +138,23 @@ async def test_unknown_operator_rejected(client: httpx.AsyncClient) -> None:
 async def test_attestation_requires_reason_and_is_append_only(
     client: httpx.AsyncClient, signing_key: SigningKey
 ) -> None:
+    # Run r0 has to actually hold f1: an attestation may only cover a fact the
+    # run it names recorded (plane._check_run_scope). This fixture used to
+    # cover an id no run had, which is the mistake that check now catches —
+    # the subject here is the reason requirement and append-only, so give it a
+    # real fact to vouch for.
+    await client.post("/v1/plane/n0/telemetry", json={
+        "run_id": "r0", "events": [{
+            "schema_version": "1.0", "seq": 0, "node_id": "n0", "kind": "fact",
+            "ts": "t", "causal_root": "v_ext_1",
+            "payload": {"fact_id": "f1", "fact_type": "source_quarantined",
+                        "severity": 2, "reason": "untrusted source"},
+        }],
+    })
     ts = datetime.now(UTC).isoformat()
     fact = {"fact_id": "a1", "fact_type": "operator_attestation",
-            "severity": 0, "covers": ["f1"], "operator": OP, "reason": ""}
+            "severity": 0, "run_id": "r0", "covers": ["f1"],
+            "operator": OP, "reason": ""}
     body = {"fact": fact, "operator": OP, "timestamp": ts,
             "sig": _sign(signing_key, "n0", 0, fact, ts)}
     resp = await client.post("/v1/plane/n0/facts", json=body)
@@ -269,3 +284,157 @@ async def test_regression_report_both_sides(client: httpx.AsyncClient) -> None:
     assert by_id["run_attack"]["result"] == "held"
     assert by_id["run_legit"]["result"] == "regressed"
     assert by_id["run_legit"]["new_denial"]["category"] == "capability"
+
+
+async def test_two_commands_signed_for_one_version_cannot_both_apply(
+    client: httpx.AsyncClient, signing_key: SigningKey,
+) -> None:
+    """The operator signature covers (node_id, version, delta, timestamp), so a
+    command may only land at the version it was signed for.
+
+    The route's own stale-version check is check-then-act — two commands
+    claiming version 1 both read "expected 1" and both passed it. The store used
+    to merge them into versions 1 and 2, which meant the second command was
+    stored under a version its signature does not cover: the audit record and
+    the signature disagree. Now the loser is refused and re-signs.
+    """
+    import asyncio
+
+    both = await asyncio.gather(
+        client.post("/v1/plane/n_sig/command",
+                    json=_cmd(signing_key, "n_sig", 1, {"a": 1})),
+        client.post("/v1/plane/n_sig/command",
+                    json=_cmd(signing_key, "n_sig", 1, {"b": 2})),
+        return_exceptions=True,
+    )
+    codes = sorted(r.status_code for r in both)
+    assert codes == [202, 409], f"expected one accept and one refusal, got {codes}"
+
+    winner = next(r for r in both if r.status_code == 202).json()
+    assert winner["version"] == 1
+    # Exactly the winning delta is stored — the refused one left no trace.
+    nodes = (await client.get("/v1/plane/nodes")).json()
+    desired = next(n for n in nodes if n["node_id"] == "n_sig")["desired"]
+    assert desired["version"] == 1
+    assert desired["state"] == winner["state"]
+    assert len(desired["state"]) == 1, "the refused command must not be merged in"
+
+
+def _hb(node: str, seq: int, level: str, applied: int = 0) -> dict:
+    return {"run_id": f"{node}-hb", "events": [{
+        "schema_version": "1.0", "seq": seq, "node_id": node, "kind": "heartbeat",
+        "ts": "2026-01-01T00:00:00Z",
+        "payload": {"applied_version": applied, "level": level},
+    }]}
+
+
+async def test_a_retried_batch_does_not_roll_the_level_back(
+    client: httpx.AsyncClient,
+) -> None:
+    """Delivery is at-least-once: the adapter resends a batch whenever its ack
+    is lost, under the same Idempotency-Key. The telemetry route used to apply
+    its side effects from the REQUEST's lines, so a resend re-applied an old
+    heartbeat — a node that had degraded to LOCKED read NORMAL in the console
+    again. That is the plane's one job told backwards."""
+    await client.post("/v1/plane/n_rb/telemetry", json=_hb("n_rb", 0, "NORMAL"),
+                      headers={"Idempotency-Key": "A"})
+    await client.post("/v1/plane/n_rb/telemetry", json=_hb("n_rb", 1, "LOCKED"),
+                      headers={"Idempotency-Key": "B"})
+
+    resend = await client.post("/v1/plane/n_rb/telemetry",
+                               json=_hb("n_rb", 0, "NORMAL"),
+                               headers={"Idempotency-Key": "A"})
+    assert resend.json()["stored"] == 0
+
+    node = next(n for n in (await client.get("/v1/plane/nodes")).json()
+                if n["node_id"] == "n_rb")
+    assert node["reported"]["level"] == "LOCKED"
+
+
+async def test_a_restarted_node_is_still_heard(client: httpx.AsyncClient) -> None:
+    """A restarted adapter numbers its events from zero again. If it reuses a
+    run id, the new heartbeats collide with the previous process's rows and
+    store nothing — but they carry genuinely new state, so they must still be
+    applied. Gating the side effects on "rows were written" instead of on the
+    Idempotency-Key made a restarted node go permanently dark: reporting
+    LOCKED while the console showed whatever it said before the restart."""
+    await client.post("/v1/plane/n_rs/telemetry", json=_hb("n_rs", 0, "NORMAL"),
+                      headers={"Idempotency-Key": "run1-0"})
+
+    # Same run, same seq, new batch: the process restarted.
+    restarted = await client.post("/v1/plane/n_rs/telemetry",
+                                  json=_hb("n_rs", 0, "LOCKED", applied=5),
+                                  headers={"Idempotency-Key": "run2-0"})
+    assert restarted.json()["stored"] == 0, "the row really does collide"
+
+    node = next(n for n in (await client.get("/v1/plane/nodes")).json()
+                if n["node_id"] == "n_rs")
+    assert node["reported"]["level"] == "LOCKED"
+    assert node["reported"]["applied_version"] == 5
+
+
+async def test_a_batch_that_climbs_and_falls_still_reports_the_peak(
+    client: httpx.AsyncClient,
+) -> None:
+    """Reported state is LWW, so only the last heartbeat survives — but a batch
+    that went NORMAL -> LOCKED -> NORMAL really did reach LOCKED, and the
+    operator is entitled to be told even though nothing will remember it."""
+    seen: list[dict] = []
+
+    async def sink(url: str, body: dict) -> int:
+        seen.append(body)
+        return 200
+
+    app = client._app  # type: ignore[attr-defined]
+    app.state.notifier._post = sink  # noqa: SLF001
+    app.state.notifier.subscribe("http://sink.test/h", ["level_transition_up"])
+
+    await client.post("/v1/plane/n_pk/telemetry", json={
+        "run_id": "n_pk-hb",
+        "events": [
+            {"schema_version": "1.0", "seq": i, "node_id": "n_pk",
+             "kind": "heartbeat", "ts": "t",
+             "payload": {"applied_version": 0, "level": level}}
+            for i, level in enumerate(["NORMAL", "LOCKED", "NORMAL"])
+        ],
+    })
+
+    node = next(n for n in (await client.get("/v1/plane/nodes")).json()
+                if n["node_id"] == "n_pk")
+    assert node["reported"]["level"] == "NORMAL", "LWW: the last one is stored"
+    climbs = [b for b in seen if b.get("trigger") == "level_transition_up"]
+    assert [(b["from"], b["to"]) for b in climbs] == [("NORMAL", "LOCKED")], \
+        "the peak it passed through must page exactly once"
+
+
+async def test_the_fleet_read_surfaces_do_not_scale_with_node_count(
+    client: httpx.AsyncClient,
+) -> None:
+    """/v1/plane/nodes and /topology render EVERY node and the UI polls them.
+    Built from the per-node getters they cost three round trips per node — 151
+    SELECTs for 50 nodes. The count must not depend on how many nodes there
+    are."""
+    from sqlalchemy import event
+
+    app = client._app  # type: ignore[attr-defined]
+    counted = {"n": 0}
+
+    @event.listens_for(app.state.store.engine.sync_engine, "before_cursor_execute")
+    def _count(conn, cursor, statement, params, context, executemany) -> None:  # noqa: ANN001
+        if statement.lstrip().upper().startswith("SELECT"):
+            counted["n"] += 1
+
+    async def cost(path: str) -> int:
+        counted["n"] = 0
+        await client.get(path)
+        return counted["n"]
+
+    for i in range(3):
+        await client.post(f"/v1/plane/few{i}/telemetry", json=_hb(f"few{i}", 0, "NORMAL"))
+    small = (await cost("/v1/plane/nodes"), await cost("/v1/plane/topology"))
+
+    for i in range(30):
+        await client.post(f"/v1/plane/many{i}/telemetry", json=_hb(f"many{i}", 0, "NORMAL"))
+    large = (await cost("/v1/plane/nodes"), await cost("/v1/plane/topology"))
+
+    assert small == large, f"query count grew with the fleet: {small} -> {large}"

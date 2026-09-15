@@ -151,6 +151,15 @@ export default function CausalSubgraph({
         </button>
         {openRank && (
           <div className="px-4 pb-3" style={{ paddingLeft: 34 }}>
+            {rank.isError && (
+              // A refused ranking used to render as an empty list under a
+              // caption that described a ranking — the reader saw "no value
+              // drove this" where the backend had said "too many to ablate".
+              <div data-testid="influence-refused"
+                style={{ fontFamily: MONO, fontSize: 10, color: C.amber, lineHeight: 1.5 }}>
+                {String(rank.error).replace(/^Error:\s*/, "").slice(0, 400)}
+              </div>
+            )}
             {(rank.data?.ranking ?? []).map((r) => (
               <div key={r.ref} className="flex items-center gap-3 py-1">
                 <span style={{ fontFamily: MONO, fontSize: 11, color: C.text, flex: 1 }}>{r.ref}</span>
@@ -160,9 +169,13 @@ export default function CausalSubgraph({
                 <span style={{ fontFamily: MONO, fontSize: 10, color: C.mut, width: 34 }}>{r.influence.toFixed(2)}</span>
               </div>
             ))}
-            <div style={{ fontFamily: MONO, fontSize: 9.5, color: C.dim, marginTop: 6 }}>
-              ranked by subgraph ablation — deterministic, bounded by causal-chain length
-            </div>
+            {rank.data && (
+              <div style={{ fontFamily: MONO, fontSize: 9.5, color: C.dim, marginTop: 6 }}>
+                ranked by subgraph ablation — deterministic,{" "}
+                {rank.data.ablated_refs} of {rank.data.available_refs} upstream
+                value{rank.data.available_refs === 1 ? "" : "s"} ablated
+              </div>
+            )}
           </div>
         )}
       </div>

@@ -2,8 +2,9 @@
 // Wired to /v1/plane/nodes; divergence between desired and reported is rendered, not hidden.
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Circle, Gauge, GitBranch, Pause, Play, Shield, Square, Syringe } from "lucide-react";
+import { Circle, Gauge, GitBranch, Pause, Play, Square, Syringe } from "lucide-react";
 import { api, NodeInfo } from "../api";
+import Coverage from "../components/Coverage";
 import TopologyGraph, { PeerCard } from "../components/TopologyGraph";
 import { isAdapter, useApp } from "../store";
 import { C, MONO, btn } from "../theme";
@@ -12,6 +13,102 @@ import Coach from "../components/Coach";
 import Tooltip from "../components/Tooltip";
 
 const REFETCH_MS = 5000;
+
+const LEVEL_COLOR: Record<string, string> = {
+  FLAGGED: C.red, WATCH: C.amber, CLEAN: C.dim,
+};
+
+// What the node's OWN axor-sentinel found across sessions (ui-spec:416).
+//
+// This is the one axis in the product that survives between sessions: axor-core
+// sees one session, axor-eval one scenario, axor-probe one battery, and this
+// plane one node's posture. Sentinel is what watches a resource across all of
+// them, which is what catches an exfiltration staged over dozens of
+// individually normal sessions.
+//
+// It runs on the NODE and must — enforcement stays local, the plane never
+// enters the decision path (ui-spec 12.0). The plane renders what the node
+// posted, and renders the FACTS beside each verdict: a reputation number on its
+// own is an accusation, and the predicate that fired is what an operator acts
+// on.
+function ReputationCard({ nodeId }: { nodeId: string }) {
+  const rep = useQuery({
+    queryKey: ["reputation", nodeId],
+    queryFn: () => api.reputation(nodeId),
+    refetchInterval: REFETCH_MS,
+  });
+  const snapshot = rep.data?.reputation ?? null;
+
+  // No sentinel reporting for this node. Said plainly and NOT drawn as clean:
+  // "nobody watches this node across sessions" and "somebody watches and found
+  // nothing" are opposite facts.
+  if (snapshot === null) {
+    return (
+      <div style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 8,
+                    padding: "10px 14px", marginTop: 8, fontFamily: MONO, fontSize: 11,
+                    color: C.dim, lineHeight: 1.7 }}>
+        No cross-session reputation for <span style={{ color: C.mut }}>{nodeId}</span> —
+        no axor-sentinel is reporting here. That is an absence of evidence, not a
+        clean record, so nothing on this node is coloured for it.
+      </div>
+    );
+  }
+
+  const ranked = Object.entries(snapshot.resource_level)
+    .filter(([, level]) => level !== "CLEAN")
+    .sort(([, a], [, b]) => (a === "FLAGGED" ? -1 : 0) - (b === "FLAGGED" ? -1 : 0));
+  const clean = Object.values(snapshot.resource_level).filter((l) => l === "CLEAN").length;
+
+  return (
+    <div style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 8, marginTop: 8 }}>
+      <div className="flex items-center justify-between px-4 py-2.5"
+           style={{ borderBottom: `1px solid ${C.line}` }}>
+        <span style={{ fontFamily: MONO, fontSize: 11, color: C.mut }}>
+          cross-session reputation · axor-sentinel · snapshot v{snapshot.version}
+        </span>
+        <span style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim }}>
+          {ranked.length === 0 ? `${clean} resources, none flagged` : `${ranked.length} of ${clean + ranked.length} resources`}
+        </span>
+      </div>
+      {ranked.length === 0 ? (
+        <div className="px-4 py-3" style={{ fontFamily: MONO, fontSize: 11, color: C.mut }}>
+          A sentinel is watching this node and has flagged nothing. Unlike an
+          absent snapshot, this one is a verdict.
+        </div>
+      ) : (
+        ranked.map(([resource, level], i) => (
+          <div key={resource} className="px-4 py-3"
+               style={{ borderTop: i ? `1px solid ${C.line}` : "none" }}>
+            <div className="flex items-center gap-3">
+              <span style={{ fontFamily: MONO, fontSize: 12, color: C.text, flex: 1 }}>
+                {resource}
+              </span>
+              <span style={{ fontFamily: MONO, fontSize: 10.5, fontWeight: 700,
+                             color: LEVEL_COLOR[level] ?? C.mut }}>
+                {level}
+              </span>
+            </div>
+            {/* Why. The predicates are declared and decidable (P1–P4), not a
+                trained threshold, so they read as statements an operator can
+                check. */}
+            {(snapshot.verdict_facts[resource] ?? []).map((fact) => (
+              <div key={fact} style={{ fontFamily: MONO, fontSize: 10.5, color: C.mut,
+                                       paddingLeft: 12, marginTop: 4 }}>
+                · {fact}
+              </div>
+            ))}
+          </div>
+        ))
+      )}
+      <div className="px-4 py-2.5" style={{ borderTop: `1px solid ${C.line}`,
+                                            fontFamily: MONO, fontSize: 10.5, color: C.dim, lineHeight: 1.7 }}>
+        Computed by this node's own sentinel and posted out-dial — the plane does
+        not run the cycle and never enters the decision path. Reputation raises
+        caution; it denies nothing on its own.
+      </div>
+    </div>
+  );
+}
 
 function isHot(n: NodeInfo): boolean {
   return (n.reported?.level ?? "NORMAL") !== "NORMAL";
@@ -26,6 +123,16 @@ function SpawnGoverned({ switchToAdapter }: { switchToAdapter?: boolean }) {
   const [err, setErr] = useState<string | null>(null);
   const spawnTree = useMutation({
     mutationFn: () => api.spawnGovernedTree(),
+    onSuccess: async () => {
+      setErr(null);
+      if (switchToAdapter) connect("adapter");
+      await qc.invalidateQueries({ queryKey: ["nodes"] });
+      await qc.invalidateQueries({ queryKey: ["topology"] });
+    },
+    onError: (e: Error) => setErr(e.message),
+  });
+  const seedTree = useMutation({
+    mutationFn: () => api.seedTreeRun(),
     onSuccess: async () => {
       setErr(null);
       if (switchToAdapter) connect("adapter");
@@ -63,9 +170,27 @@ function SpawnGoverned({ switchToAdapter }: { switchToAdapter?: boolean }) {
           {spawnTree.isPending ? "spawning tree…" : "Spawn a governed demo TREE"}
         </button>
       </Tooltip>
+      {/* The canned tree, which until now had no way in: the backend route
+          existed and nothing called it, so the lateral hop and the undeclared
+          foreign peer — edge kinds a live spawn does not produce — were
+          reachable only from the test suite. It also needs no proxy. */}
+      <Tooltip content="Loads the canned 4-node tree straight into the plane — no proxy needed. It carries what a live spawn does not: a lateral hop between siblings, and a send to an UNDECLARED foreign peer, denied at the boundary and drawn as an opaque node.">
+        <button
+          onClick={() => seedTree.mutate()}
+          disabled={seedTree.isPending}
+          style={{ ...btn({ color: C.mut, fontSize: 11.5, padding: "7px 12px" }), marginTop: 8 }}
+        >
+          {seedTree.isPending ? "loading…" : "or load the canned tree (lateral + foreign peer)"}
+        </button>
+      </Tooltip>
       {err && (
         <div style={{ fontFamily: MONO, fontSize: 11, color: C.red, marginTop: 8 }}>
           {err} — is the proxy running with a backend URL?
+        </div>
+      )}
+      {seedTree.isSuccess && (
+        <div style={{ fontFamily: MONO, fontSize: 11, color: C.dim, marginTop: 8 }}>
+          canned tree loaded — 4 nodes plus the opaque foreign peer, on the map below.
         </div>
       )}
       {spawn.isSuccess && (
@@ -111,11 +236,17 @@ function ControlBody({ focusNode, testBench }: { focusNode?: string; testBench: 
   });
   const [sel, setSel] = useState<string | null>(focusNode ?? null);
   const [lens, setLens] = useState<"list" | "graph">("list");
+  const list = nodes.data ?? [];
   const topo = useQuery({
     queryKey: ["topology"],
     queryFn: api.topology,
     refetchInterval: REFETCH_MS,
-    enabled: lens === "graph",
+    // Also when there is nothing to operate: `/v1/plane/nodes` lists nodes with
+    // desired or reported state, i.e. nodes that heartbeat or have been
+    // commanded — a traced tree's children are in the topology and not in that
+    // list. Gating this query on the graph lens meant Control said "no governed
+    // nodes connected yet" while it held the whole tree.
+    enabled: lens === "graph" || list.length === 0,
   });
   const [more, setMore] = useState(false);
   const [cmdError, setCmdError] = useState<string | null>(null);
@@ -136,15 +267,12 @@ function ControlBody({ focusNode, testBench }: { focusNode?: string; testBench: 
     onError: (err: Error) => setCmdError(err.message),
   });
 
-  const attest = useMutation({
-    mutationFn: ({ nodeId, fact }: { nodeId: string; fact: Record<string, unknown> }) =>
-      api.appendFact(nodeId, fact),
-    onSuccess: () => setCmdError(null),
-    onError: (err: Error) => setCmdError(err.message),
-  });
-
   const cascade = useMutation({
-    mutationFn: (nodeId: string) => api.cascadeStop(nodeId),
+    // The version the signed command carries is the same one every other
+    // command uses: the node's current desired version plus one. A signed
+    // deployment refuses anything else with a 409 naming what it expected.
+    mutationFn: ({ nodeId, version }: { nodeId: string; version: number }) =>
+      api.cascadeStop(nodeId, version),
     onSuccess: () => {
       setCmdError(null);
       void qc.invalidateQueries({ queryKey: ["nodes"] });
@@ -160,15 +288,28 @@ function ControlBody({ focusNode, testBench }: { focusNode?: string; testBench: 
     );
   }
 
-  const list = nodes.data ?? [];
+  const traced = topo.data?.nodes ?? [];
   if (list.length === 0) {
     return (
       <div style={{ maxWidth: 640, margin: "0 auto" }}>
         <div style={{ fontFamily: MONO, fontSize: 12.5, color: C.mut }}>
-          No governed nodes connected yet. Point your axor-core adapter at the plane —
-          or spawn a real governed demo node right now:
+          {traced.length > 0
+            ? <>No node is reporting to the plane yet, so there is nothing to pause
+                or stop — but {traced.length} node{traced.length === 1 ? "" : "s"} have
+                traced here, and the shape they describe is below.</>
+            : <>No governed nodes connected yet. Point your axor-core adapter at the
+                plane — or spawn a real governed demo node right now:</>}
         </div>
         <SpawnGoverned />
+        {topo.data && traced.length > 0 && (
+          <div className="mt-4">
+            <TopologyGraph
+              payload={topo.data}
+              selected={sel}
+              onSelect={(id) => setSel(sel === id ? null : id)}
+            />
+          </div>
+        )}
       </div>
     );
   }
@@ -231,6 +372,9 @@ function ControlBody({ focusNode, testBench }: { focusNode?: string; testBench: 
       {lens === "graph" && topo.data && sel &&
         topo.data.nodes.find((n) => n.node_id === sel)?.kind === "peer" && (
         <PeerCard node={topo.data.nodes.find((n) => n.node_id === sel)!} />
+      )}
+      {sel && topo.data?.nodes.find((n) => n.node_id === sel)?.kind !== "peer" && (
+        <ReputationCard nodeId={sel} />
       )}
 
       {/* Same tour anchor as SpawnGoverned: when nodes exist the tour spotlights
@@ -379,7 +523,10 @@ function ControlBody({ focusNode, testBench }: { focusNode?: string; testBench: 
                 <button
                   onClick={() => {
                     if (!node) return;
-                    cascade.mutate(node.node_id);
+                    cascade.mutate({
+                      nodeId: node.node_id,
+                      version: (node.desired?.version ?? 0) + 1,
+                    });
                   }}
                   disabled={cascade.isPending}
                   style={btn({ color: C.mut, fontSize: 11, padding: "6px 10px" })}
@@ -422,29 +569,13 @@ function ControlBody({ focusNode, testBench }: { focusNode?: string; testBench: 
                   <Syringe size={12} /> Inject next turn
                 </button>
               </Tooltip>
-              <Tooltip content="Vouch for this value's branch — an append-only reputation event that lowers its suspicion. A reason is required and recorded.">
-                <button
-                  onClick={() => {
-                    if (!node) return;
-                    const reason = window.prompt("Attestation reason (required — recorded, append-only):");
-                    if (!reason) { if (reason === "") setCmdError("attestation requires a reason"); return; }
-                    attest.mutate({
-                      nodeId: node.node_id,
-                      fact: {
-                        fact_id: `att_${Date.now()}`,
-                        fact_type: "operator_attestation",
-                        reason, operator: "op_ui",
-                      },
-                    });
-                  }}
-                  disabled={attest.isPending}
-                  style={btn({ color: C.mut, fontSize: 11, padding: "6px 10px" })}
-                >
-                  <Shield size={12} /> Attest branch
-                </button>
-              </Tooltip>
             </div>
           )}
+
+          {/* What is actually holding this node down, and what vouching for it
+              would discharge. `covers` names fact ids (the kernel's contract),
+              so attesting is a choice of which fact — not a gesture. */}
+          <Coverage nodeId={node.node_id} refetchMs={REFETCH_MS} />
 
           {cmdError && (
             <div className="mt-3" style={{ fontFamily: MONO, fontSize: 11, color: C.red }}>

@@ -10,14 +10,21 @@ import { IdentityError, login, signup } from "../identity";
 import { MODE_LABEL, useApp } from "../store";
 import { C, MONO, btn } from "../theme";
 import Coach from "../components/Coach";
+import ToolCredentials from "../components/ToolCredentials";
+import UsageAndBilling from "../components/UsageAndBilling";
 import { useStartTour } from "../components/Tour";
 
+// Every trigger the backend emits. A trigger that fires and cannot be
+// subscribed to is a notification nobody receives — which is how
+// `license_expiring` and `behavioral_drift` sat here, emitted and unreachable.
 const TRIGGERS = [
   { id: "level_transition_up", label: "degradation level rises" },
   { id: "evidence_run", label: "run completes with an EvidenceCase" },
   { id: "heat_threshold", label: "Sentinel heat crosses a threshold" },
   { id: "node_stale", label: "a node goes stale" },
+  { id: "behavioral_drift", label: "Probe reports behavioral drift" },
   { id: "regression_failed", label: "a corpus run regresses (config CI)" },
+  { id: "license_expiring", label: "the license nears expiry (30/14/7/3/1 days)" },
 ];
 
 const KEY_SCOPES = ["read", "ingest", "operate", "admin"];
@@ -124,7 +131,6 @@ export default function Settings() {
   const [chanLabel, setChanLabel] = useState("");
   const [nodePattern, setNodePattern] = useState("");
   const [licenseJson, setLicenseJson] = useState("");
-  const [vendorKey, setVendorKey] = useState("");
   const [keyScopes, setKeyScopes] = useState<string[]>(["ingest"]);
   const [keyLabel, setKeyLabel] = useState("");
   const [mintedSecret, setMintedSecret] = useState<string | null>(null);
@@ -138,20 +144,36 @@ export default function Settings() {
     retry: false,
   });
 
+  // The listing above shows what still exists, so a revoke erases the evidence
+  // that a key was ever issued. This is the log that survives one.
+  const keysAudit = useQuery({
+    queryKey: ["api-keys-audit"],
+    queryFn: () => api.keysAudit(),
+    enabled: authStatus.data?.authenticated === true && (authStatus.data?.scopes ?? []).includes("admin"),
+    retry: false,
+  });
+
   const mintKey = useMutation({
     mutationFn: () => api.createKey(keyScopes, keyLabel),
     onSuccess: (r) => {
       setMintedSecret(r.secret);
       void qc.invalidateQueries({ queryKey: ["api-keys"] });
+      void qc.invalidateQueries({ queryKey: ["api-keys-audit"] });
     },
   });
   const revokeKey = useMutation({
     mutationFn: (keyId: string) => api.revokeKey(keyId),
-    onSuccess: () => void qc.invalidateQueries({ queryKey: ["api-keys"] }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ["api-keys"] });
+      void qc.invalidateQueries({ queryKey: ["api-keys-audit"] });
+    },
   });
 
   const licenseStatus = useQuery({ queryKey: ["license-status"], queryFn: api.licenseStatus });
   const eeActive = licenseStatus.data?.active === true;
+  // undefined while the status query is in flight — the button stays disabled
+  // rather than flashing enabled and then failing.
+  const vendorKeyPinned = licenseStatus.data?.vendor_key_configured;
   const subscriptions = useQuery({ queryKey: ["subscriptions"], queryFn: api.listSubscriptions });
 
   const subscribe = useMutation({
@@ -162,8 +184,20 @@ export default function Settings() {
       }),
     onSuccess: () => void qc.invalidateQueries({ queryKey: ["subscriptions"] }),
   });
+  const unsubscribe = useMutation({
+    mutationFn: (target: string) => api.unsubscribeNotifications(target),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ["subscriptions"] }),
+  });
+  // A 200 means the license is verified AND active, so everything that renders
+  // an entitlement has to be refetched — otherwise the panel says "active" while
+  // Regression still shows its EE controls locked.
   const license = useMutation({
-    mutationFn: () => api.verifyLicense(licenseJson, vendorKey),
+    mutationFn: () => api.verifyLicense(licenseJson),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ["license-status"] });
+      void qc.invalidateQueries({ queryKey: ["regression-schedule"] });
+      void qc.invalidateQueries({ queryKey: ["regression-history"] });
+    },
   });
 
   const toggle = (id: string) =>
@@ -289,6 +323,27 @@ export default function Settings() {
                     <Trash2 size={12} color={C.dim} style={{ cursor: "pointer" }} onClick={() => revokeKey.mutate(k.key_id)} />
                   </div>
                 ))}
+                {(keysAudit.data ?? []).length > 0 && (
+                  <div className="mt-3" data-testid="key-lifecycle-audit">
+                    <div style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim, letterSpacing: "0.08em", marginBottom: 6 }}>
+                      ISSUED &amp; REVOKED · newest first
+                    </div>
+                    {/* Already newest-first from the route; rendered as it arrives. */}
+                    {(keysAudit.data ?? []).map((a) => (
+                      <div key={a.audit_id} className="flex items-center gap-2 py-0.5">
+                        <span style={{ fontFamily: MONO, fontSize: 10.5, width: 46,
+                          color: a.action === "revoke" ? C.red : C.green }}>{a.action}</span>
+                        <span style={{ fontFamily: MONO, fontSize: 10.5, color: C.text }}>{a.key_id}</span>
+                        <span style={{ fontFamily: MONO, fontSize: 10.5, color: C.mut }}>
+                          {(a.scopes ?? []).join(",")}{a.node_id ? ` @${a.node_id}` : ""}
+                        </span>
+                        <span style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim, flex: 1, textAlign: "right" }}>
+                          by {a.by.id ?? a.by.kind} · {a.ts.slice(0, 19).replace("T", " ")}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
             )}
           </>
@@ -378,9 +433,19 @@ export default function Settings() {
               ACTIVE SUBSCRIPTIONS
             </div>
             {(subscriptions.data ?? []).map((s, i) => (
-              <div key={i} style={{ fontFamily: MONO, fontSize: 11, color: C.mut, marginTop: 4 }}>
-                {s.label ? `[${s.label}] ` : ""}{s.url} · {s.triggers.join(", ")}
-                {s.node_pattern !== "*" ? ` · nodes: ${s.node_pattern}` : ""}
+              <div key={i} className="flex items-center gap-2" style={{ fontFamily: MONO, fontSize: 11, color: C.mut, marginTop: 4 }}>
+                <span>
+                  {s.label ? `[${s.label}] ` : ""}{s.url} · {s.triggers.join(", ")}
+                  {s.node_pattern !== "*" ? ` · nodes: ${s.node_pattern}` : ""}
+                </span>
+                <button
+                  aria-label={`unsubscribe ${s.url}`}
+                  onClick={() => unsubscribe.mutate(s.url)}
+                  disabled={unsubscribe.isPending}
+                  style={btn({ color: C.mut, fontSize: 10, padding: "1px 7px" })}
+                >
+                  unsubscribe
+                </button>
               </div>
             ))}
           </>
@@ -403,6 +468,11 @@ export default function Settings() {
         )}
       </Section>
 
+      {/* Their fleet history and their own bill. */}
+      <Section title="GOVERNED-NODE USAGE & BILLING">
+        <UsageAndBilling />
+      </Section>
+
       {/* License */}
       <Section title="ENTERPRISE LICENSE">
         <div style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim, marginBottom: 10 }}>
@@ -410,6 +480,48 @@ export default function Settings() {
           channel, and it never calls us. Expiry degrades EE to read-only; safety is
           never gated.
         </div>
+        {/* The ACTIVE license, from /v1/license/status. The panel used to show
+            only the response to a paste, so a deployment that had been licensed
+            for months showed nothing until somebody pasted again — and the
+            fields with a deadline attached (days left, expired, whether this
+            deployment renews itself at all) were not rendered anywhere. */}
+        {licenseStatus.data && (
+          <div className="mb-3" style={{ fontFamily: MONO, fontSize: 11 }}>
+            {licenseStatus.data.active ? (
+              <div style={{ color: (licenseStatus.data.days_remaining ?? 99) <= 14 ? C.amber : C.green }}>
+                active · {licenseStatus.data.organization} ·{" "}
+                {licenseStatus.data.workspace_tier} · expires{" "}
+                {licenseStatus.data.expires_at}
+                {typeof licenseStatus.data.days_remaining === "number" && (
+                  <> · {licenseStatus.data.days_remaining} days left</>
+                )}
+              </div>
+            ) : licenseStatus.data.expired ? (
+              <div style={{ color: C.red }}>
+                EXPIRED on {licenseStatus.data.expires_at} — EE surfaces are
+                read-only. Safety is not gated and never was.
+              </div>
+            ) : (
+              <div style={{ color: C.dim }}>no license active on this deployment</div>
+            )}
+            <div style={{ color: C.dim, fontSize: 10, marginTop: 3 }}>
+              {licenseStatus.data.auto_renewal
+                ? "auto-renewal configured (AXOR_LICENSE_RENEWAL_URL)"
+                : "no auto-renewal — a new license has to be pasted here each term"}
+              {" · "}
+              {licenseStatus.data.usage_reporting
+                ? "usage reported on the renewal channel"
+                : "usage not reported"}
+            </div>
+            {licenseStatus.data.vendor_key_configured && !licenseStatus.data.licensed_to && (
+              <div style={{ color: C.amber, fontSize: 10, marginTop: 3 }}>
+                AXOR_ORG is unset, so ANY vendor-signed license activates here —
+                including one issued to another customer. Set it to the name on
+                your license.
+              </div>
+            )}
+          </div>
+        )}
         <textarea
           value={licenseJson}
           onChange={(e) => setLicenseJson(e.target.value)}
@@ -418,14 +530,21 @@ export default function Settings() {
           className="w-full mb-2"
           style={{ background: C.panel2, border: `1px solid ${C.line}`, borderRadius: 5, color: C.text, fontFamily: MONO, fontSize: 11, padding: 8, resize: "vertical", outline: "none" }}
         />
-        <input
-          value={vendorKey}
-          onChange={(e) => setVendorKey(e.target.value)}
-          placeholder="vendor public key (hex)"
-          className="w-full mb-3"
-          style={{ background: C.bg, border: `1px solid ${C.line}`, borderRadius: 5, color: C.text, fontFamily: MONO, fontSize: 11, padding: "7px 9px", outline: "none" }}
-        />
-        <button onClick={() => license.mutate()} disabled={!licenseJson || !vendorKey || license.isPending} style={btn({ color: C.steel, fontSize: 12 })}>
+        {vendorKeyPinned === false && (
+          <div className="mb-3" style={{ fontFamily: MONO, fontSize: 11, color: C.amber }}>
+            This deployment pins no vendor public key, so a license signature
+            cannot be checked against anything. Set <code>AXOR_VENDOR_PUBKEY</code>{" "}
+            (see <code>.env.example</code>) and restart. The key ships with the
+            distribution — it is deliberately not something this screen accepts,
+            because a signature checked against a key typed in beside it proves
+            nothing.
+          </div>
+        )}
+        <button
+          onClick={() => license.mutate()}
+          disabled={!licenseJson || vendorKeyPinned !== true || license.isPending}
+          style={btn({ color: C.steel, fontSize: 12 })}
+        >
           {license.isPending ? <Loader2 size={13} className="animate-spin" /> : null} Verify license
         </button>
         {license.isError && (
@@ -436,14 +555,11 @@ export default function Settings() {
         {license.data && (
           <>
             <div className="mt-2" style={{ fontFamily: MONO, fontSize: 11, color: C.green }}>
-              {license.data.organization} · {license.data.workspace_tier} workspace ·{" "}
-              {[
-                license.data.modules?.private_lab && "Private Lab",
-                license.data.modules?.control_plane &&
-                  `Control Plane (up to ${license.data.governed_node_ceiling} nodes)`,
-              ]
-                .filter(Boolean)
-                .join(" + ") || "no modules"}
+              active · {license.data.organization} · {license.data.workspace_tier} workspace ·{" "}
+              {/* One ladder: a rung entitles the Private Lab and the Control
+                  Plane alike, so there are no module flags left to render —
+                  only how many nodes the rung was sold with. */}
+              {`up to ${license.data.governed_node_ceiling} governed nodes`}
               {license.data.self_hosted_runner ? " · self-hosted" : ""} · expires{" "}
               {license.data.expires_at} · {license.data.features.join(", ") || "no EE features"}
             </div>
@@ -468,9 +584,8 @@ export default function Settings() {
 // federation". The separation is backend-enforced (separate credentials);
 // the UI mirrors it structurally.
 function FederationVault() {
-  const creds = useQuery({ queryKey: ["vault-creds"], queryFn: api.vaultCredsHealth });
   const keys = useQuery({ queryKey: ["vault-keys"], queryFn: api.vaultSigningKeys });
-  const audit = useQuery({ queryKey: ["vault-audit"], queryFn: api.vaultSigningAudit });
+  const audit = useQuery({ queryKey: ["vault-audit"], queryFn: () => api.vaultSigningAudit() });
   const qc = useQueryClient();
 
   // Signed command posture (protocol §6). The token authorizes sign requests;
@@ -499,27 +614,7 @@ function FederationVault() {
   const signedPosture = Boolean(signingKeyId);
   return (
     <div className="flex gap-4 mb-4" data-testid="federation-vault" style={{ alignItems: "stretch" }}>
-      <div className="p-4 flex-1" style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 8 }}>
-        <div style={{ fontSize: 10, fontFamily: MONO, color: C.dim, letterSpacing: "0.1em", marginBottom: 8 }}>
-          FEDERATION VAULT · TOOL CREDENTIALS
-        </div>
-        <div style={{ fontFamily: MONO, fontSize: 10.5, color: C.mut, marginBottom: 10, lineHeight: 1.6 }}>
-          dispensed at the sink, per-node scope, fail-closed. rotation is config;
-          the plane may revoke, never grant.
-        </div>
-        {(creds.data?.enrolled ?? []).length === 0 ? (
-          <div style={{ fontFamily: MONO, fontSize: 11, color: C.dim }}>no credentials enrolled</div>
-        ) : (
-          (creds.data?.enrolled ?? []).map((e) => (
-            <div key={`${e.tool}-${e.endpoint}`} className="flex items-center gap-2 py-1" style={{ fontFamily: MONO, fontSize: 11 }}>
-              <span style={{ color: e.revoked ? C.dim : C.text, textDecoration: e.revoked ? "line-through" : "none" }}>{e.tool}</span>
-              <span style={{ color: C.dim, fontSize: 10 }}>v{e.version}</span>
-              <span style={{ color: C.dim, fontSize: 10 }}>scope: {e.scope_nodes.join(", ") || "none"}</span>
-              {e.revoked && <span style={{ color: C.red, fontSize: 10 }}>revoked</span>}
-            </div>
-          ))
-        )}
-      </div>
+      <ToolCredentials />
       <div className="p-4 flex-1" style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 8 }}>
         <div style={{ fontSize: 10, fontFamily: MONO, color: C.dim, letterSpacing: "0.1em", marginBottom: 8 }}>
           FEDERATION VAULT · SIGNING KEYS
@@ -540,9 +635,14 @@ function FederationVault() {
           ))
         )}
         {(audit.data ?? []).length > 0 && (
-          <div className="mt-2 pt-2" style={{ borderTop: `1px solid ${C.line}` }}>
+          <div className="mt-2 pt-2" data-testid="sign-request-audit"
+            style={{ borderTop: `1px solid ${C.line}` }}>
             <div style={{ fontFamily: MONO, fontSize: 9.5, color: C.dim, letterSpacing: "0.08em", marginBottom: 4 }}>SIGN-REQUEST AUDIT</div>
-            {(audit.data ?? []).slice(-5).reverse().map((a, i) => (
+            {/* The rows arrive NEWEST FIRST. This was `slice(-5).reverse()`,
+                which was right while the route returned oldest-first and became
+                "the five OLDEST of the page, upside down" when it stopped —
+                a log panel showing stale rows as the latest. */}
+            {(audit.data ?? []).map((a, i) => (
               <div key={i} className="flex items-center gap-2 py-0.5" style={{ fontFamily: MONO, fontSize: 10 }}>
                 <span style={{ color: a.granted ? C.green : C.red }}>{a.granted ? "signed" : "refused"}</span>
                 <span style={{ color: C.text }}>{a.operator}</span>
