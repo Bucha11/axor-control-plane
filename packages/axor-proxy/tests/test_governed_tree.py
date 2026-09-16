@@ -29,7 +29,25 @@ async def test_tree_produces_three_nodes_and_real_containment() -> None:
     deny = next(line for line in lines if line.get("verdict") == "deny")
     assert deny["node_id"] == ids["orch"]
     assert deny["payload"]["tool"] == "slack_post"
-    assert deny["gate"] == "taint_enforcement"
+    # The gate NAME the kernel's table gives for the taint_enforcement
+    # category. This asserted the category itself, which is not a name a
+    # recorded verdict may carry.
+    assert deny["gate"] == "taint_floor"
+    assert deny["payload"]["reason"]
+
+
+async def test_every_recorded_gate_is_a_gate_name() -> None:
+    """The produced trace is what a customer's Control Plane stores and shows,
+    so the `gate` field has to carry a name from the kernel's own table rather
+    than the internal denial category — the leak `GATE_OF_CATEGORY` is exported
+    to prevent, and that axor-lab shipped once already."""
+    from axor_core.governor import GATE_OF_CATEGORY
+
+    names = frozenset(GATE_OF_CATEGORY.values())
+    lines, _, _ = await run_governed_tree("g")
+    gates = {line["gate"] for line in lines if line.get("gate") is not None}
+    assert gates, "the tree records at least one denial"
+    assert gates <= names, f"{sorted(gates - names)} are not gate names"
 
 
 async def test_tree_events_fold_through_kernel_replay() -> None:

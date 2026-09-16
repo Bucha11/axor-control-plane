@@ -14,10 +14,11 @@ async def test_governed_session_records_a_taint_denial() -> None:
     lines, denials = await run_governed_session("gov-test", session)
 
     assert denials == 1
-    # The denied step is a real taint_enforcement verdict on the egress sink.
+    # The denied step is a real taint_enforcement verdict on the egress sink,
+    # recorded under the gate NAME that category maps to.
     denial = next(line for line in lines if line.get("verdict") == "deny")
     assert denial["kind"] == "tool_call"
-    assert denial["gate"] == "taint_enforcement"
+    assert denial["gate"] == "taint_floor"
     assert denial["payload"]["tool"] == "slack_post"
     # It carries the provenance of the value it tried to exfiltrate.
     assert denial["payload"]["arg_refs"] == {"text": "v_web_result"}

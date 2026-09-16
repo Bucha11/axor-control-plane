@@ -1,7 +1,7 @@
 [project]
 name = "axor-backend"
-version = "0.1.0"
-description = "FastAPI backend: trace ingest, control plane (SSE+POST), replay API, GraphStore."
+version = "0.2.0"
+description = "FastAPI backend: trace ingest, control plane (SSE+POST), replay and provenance API."
 requires-python = ">=3.12"
 readme = "README.md"
 license = { text = "Apache-2.0" }
@@ -11,12 +11,52 @@ classifiers = [
   "Programming Language :: Python :: 3.12",
 ]
 dependencies = [
-  "axor-core>=0.10,<0.11",
-  # 0.1.1 is the first release resolvable against axor-core 0.10.
-  "axor-eval>=0.1.1,<0.2",
+  # 0.11 is the first release carrying `policy.from_record` and the shared
+  # taint-floor vectors: the incident export decides with the kernel's own gate
+  # now, and reads the recorded event through the kernel's own decoder. Neither
+  # is mirrored here — a copy of a decoder is how a copy of a decision starts.
+  "axor-core>=0.11,<0.12",
+  # 0.2 is the first release carrying `audit.from_trace` — the one derivation of
+  # an EvidenceCase from a recorded trace. The audit used to run only inside the
+  # proxy, from its own in-memory run state, so a run that arrived here any
+  # other way carried real verdicts and no evidence at all. Imported, not
+  # restated: a platform that decided for itself what an EvidenceCase is would
+  # be a second answer to a question Eval already answers. Also the grader for
+  # a probe battery (`audit.behavioral_audit`): axor-probe and axor-eval may
+  # not import each other (P-34), so this backend is the only component that
+  # can join them — and the only one that can notice their two copies of the
+  # verdict vocabulary diverging.
+  "axor-eval>=0.2,<0.3",
+  # Attestation semantics — append-only, revocation-as-an-event, same-keyset
+  # revocation, the required reason. Imported, not restated: a plane that
+  # decided for itself what a valid attestation is would be a second answer to
+  # a question Sentinel already answers.
+  #
+  # 0.4 is the first release carrying the snapshot WIRE shape
+  # (`snapshot_payload` / `snapshot_from_payload`). Until then this dependency
+  # bought two pure predicates and a claim of alignment with a component that
+  # was not running anywhere: the cross-session reputation axis — the only
+  # thing in this product that survives between sessions — had no route, no
+  # table and no surface here, so `prior_heat` was structurally 0.0 because
+  # there was no heat to discharge. The node's sentinel reports it now.
+  "axor-sentinel>=0.4,<0.5",
+  # The behavioural-health vocabulary, from the module that defines the payload
+  # `POST /v1/plane/{node}/probe-report` accepts. It was two literals copied
+  # into plane.py under a comment calling that "the same posture as everywhere
+  # else" — the opposite of the two lines above. The copy matched; nothing
+  # checked that it did, in either repository. 0.2 is the first release naming
+  # the vocabulary as a set rather than as four constants a consumer assembles,
+  # and carrying `integration.eval.audit_payload` — the re-keying from the
+  # posted health payload into the eval feed, which differs by one field name
+  # and silently floors the graded confidence when a consumer does it by hand.
+  # 0.2.1, not 0.2: the tag v0.2.0 exists in that repository and nothing was
+  # ever uploaded under it, so `axor-probe==0.2.0` resolves to the OLD 0.1.0
+  # content or to nothing at all. The floor names the release that actually
+  # carries `integration.eval.audit_payload` and the plane vocabulary this
+  # backend imports.
+  "axor-probe>=0.2.1,<0.3",
   "fastapi>=0.111", "sse-starlette>=2.1", "uvicorn>=0.29",
   "sqlalchemy[asyncio]>=2.0", "asyncpg>=0.29",
-  "kuzu>=0.4",
   "aiosqlite>=0.20",
   "alembic>=1.13",
   "pynacl>=1.5",
@@ -25,7 +65,12 @@ dependencies = [
 [project.optional-dependencies]
 # Wrap engine for /v1/wrap (scan agent code -> tool manifests / governance).
 # The routes answer 501 when the extra is absent.
-wrap = ["axor-wrap>=0.1,<0.2"]
+# 0.2 carries the signed-snapshot half of protocol v0.3 — `apply_snapshot`
+# taking the per-key `commands`. On 0.1 the round-trip tests in
+# test_signed_snapshot.py SKIP (they probe the signature and refuse to pass
+# against an adapter that ignores the field), so the floor is what makes this
+# plane's half verifiable end to end rather than only on this side of the wire.
+wrap = ["axor-wrap>=0.2,<0.3"]
 # Accepting axor-identity login tokens. Absent, identity login is simply off
 # (operator master token + scoped API keys still work); the routes never 501
 # — resolve_principal only reaches the verifier when a JWKS is configured.

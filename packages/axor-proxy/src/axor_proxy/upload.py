@@ -16,7 +16,7 @@ from typing import Any
 import anyio
 import httpx
 
-from axor_proxy.runs import Run, evidence_to_dict
+from axor_proxy.runs import Run
 
 
 class BackendUploader:
@@ -36,29 +36,25 @@ class BackendUploader:
         text = await anyio.Path(trace_path).read_text()
         events = [json.loads(line) for line in text.splitlines() if line.strip()]
         payload = {"node_id": run.node_id, "scenario": run.scenario, "events": events}
-        evidence = [evidence_to_dict(c) for c in run.evidence]
         client = self._client or httpx.AsyncClient(timeout=15.0)
         owns = self._client is None
         h = self._headers
         try:
             # raise_for_status so a backend 4xx (auth off-key, bad payload) is an
             # honest {"uploaded": false}, not a silent success.
-            (await client.post(
+            stored = (await client.post(
                 f"{self._base}/v1/ingest/{run.run_id}", json=payload, headers=h,
-            )).raise_for_status()
-            (await client.post(
-                f"{self._base}/v1/runs/{run.run_id}/evidence",
-                json={"node_id": run.node_id, "evidence": evidence}, headers=h,
-            )).raise_for_status()
-            if any(c.deviation is not None for c in run.evidence):
-                # Auto-pin the must-block side (decision 11): traces carrying an
-                # EvidenceCase are the regression corpus's block side.
-                (await client.post(
-                    f"{self._base}/v1/pins/{run.run_id}",
-                    json={"side": "must_block", "label": run.scenario}, headers=h,
-                )).raise_for_status()
+            ))
+            stored.raise_for_status()
+            # No evidence call, and no pin call. Both are the backend's, from
+            # the trace this request just delivered: the uploaded events carry
+            # the faults and the claim, so the system of record derives the same
+            # cases with `axor_eval.audit.from_trace` — the derivation this
+            # proxy used for its own answer. Posting them too was a second write
+            # of one derivation, and it was the reason the audit ran only where
+            # a proxy ran: a path that could not post evidence had none.
             return {"uploaded": True, "events": len(events),
-                    "evidence": len(evidence)}
+                    "evidence": int(stored.json().get("evidence", 0))}
         except httpx.HTTPError as exc:
             return {"uploaded": False, "error": type(exc).__name__, "detail": str(exc)}
         finally:

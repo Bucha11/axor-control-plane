@@ -1,0 +1,381 @@
+"""Sink-side credential injection (ui-spec §14.2, spec v2 Ch.5 §1).
+
+This module is the one place the proxy breaks its own first rule, and it does so
+deliberately and narrowly. Section 6 says auth is passthrough, byte-for-byte —
+the proxy never parses, substitutes or stores credentials — and §14.2 says vault
+mode is the reversal of exactly that, names the price ("the proxy now holds and
+injects credentials, becoming a high-value target") and bounds it:
+
+* **A mode, never the default.** Opt-in per tool, and the opt-in is the PROXY
+  operator's (``AXOR_VAULT_TOOLS``), not the vault's. If enrolling a credential
+  were enough to switch a tool into vault mode, a change on the plane would turn
+  off passthrough for a proxy whose operator never agreed to it. Section 6 stays
+  literally true for every tool not in that list.
+* **Nothing is stored, and nothing is cached.** The credential is fetched at
+  call time and lives in one request object. Decision #14 forbids a TTL cache in
+  terms: it "would reintroduce the secret-on-proxy this feature exists to
+  remove".
+* **Fail closed, federation-wide** (decision #14). Vault unreachable, credential
+  missing, revoked, or out of this node's scope → a typed denial and NO upstream
+  call. A deny is enforcement working; availability is the vault's problem.
+* **The endpoint is not the agent's to choose.** The (tool, endpoint) pair sent
+  to the vault comes from the proxy's own tool table, so a prompt-injected agent
+  redirecting a call at attacker.example is asking for a credential enrolled
+  against a different endpoint, and is refused. Scope is operator config,
+  inaccessible from runtime reads.
+* **Every fetch says what it is for.** The dispense carries an attestation
+  naming the call — node, tool, endpoint, and the run it belongs to — which the
+  plane checks against what is being fetched and records. This proxy states no
+  VERDICT, and that is the honest answer rather than a missing field: it is
+  observe-only, it never gates, so it has no kernel decision to attest. A
+  wrapped runtime does, and states it.
+* **Signed when there is a key to sign with.** ``AXOR_NODE_SIGNING_SEED`` makes
+  the attestation non-repudiable — on a hosted deployment the customer can
+  verify their own dispense log against their own node's key without trusting
+  the backend that stored it. Absent a seed the dispense still works and the
+  row reads ``signed: false``; what must not happen is an unsigned fetch that
+  looks signed.
+
+ENVELOPE MODE. When the deployment has a sealing key registered, the plane holds
+a `sealed_secret` it cannot open and hands that back instead. The private half
+lives here (``AXOR_CRED_SEALING_SEED``), the box is opened in this process, and
+the plaintext exists for the length of one request — which is the same lifetime
+it had before, except that now it never existed anywhere else. That is §14.2's
+stated condition for a hosted vault: the backend is not trusted to decline to
+look, it is unable to.
+
+Fail closed applies here too and is easy to get wrong: a sealed credential the
+node cannot open is a denial, never a call without it, and never a fall back to
+some other value.
+
+What the agent sees is what §14.2 is for: a credential it never held cannot be
+exfiltrated by anything it says. The proxy REPLACES the injection header rather
+than adding to it — an agent-supplied Authorization on a vault-mode tool is
+discarded, because "the agent's config holds vault references, never keys".
+"""
+from __future__ import annotations
+
+import ipaddress
+import logging
+import os
+import socket
+from dataclasses import dataclass
+from datetime import UTC, datetime
+from typing import Any
+from urllib.parse import urlparse
+
+import httpx
+from axor_core.kernel.jcs import canonicalize
+
+
+class CredentialDenied(Exception):
+    """Typed denial. Carries the reason the call was refused, never a secret."""
+
+    def __init__(self, reason: str) -> None:
+        super().__init__(reason)
+        self.reason = reason
+
+
+def generate_sealing_key() -> tuple[str, str]:
+    """A credential-sealing keypair: (private seed hex, public key hex).
+
+    X25519 sealed boxes. The public half is registered with the plane so the
+    operator's enrolment can seal to it; the private half belongs with the nodes
+    and must never reach the backend — the whole property is that it cannot.
+    """
+    from nacl.public import PrivateKey
+
+    key = PrivateKey.generate()
+    return bytes(key).hex(), bytes(key.public_key).hex()
+
+
+def seal(public_key_hex: str, secret: str) -> str:
+    """Seal a credential to a deployment's sealing key, base64 for transport.
+
+    Anyone with the public half can seal — that is what makes enrolment possible
+    without the decryption key ever leaving the nodes.
+    """
+    import base64
+
+    from nacl.public import PublicKey, SealedBox
+
+    box = SealedBox(PublicKey(bytes.fromhex(public_key_hex)))
+    return base64.b64encode(box.encrypt(secret.encode())).decode()
+
+
+@dataclass(frozen=True)
+class Credential:
+    secret: str
+    version: int
+    header: str
+    scheme: str
+
+    def applied_to(self, headers: list[tuple[bytes, bytes]]) -> list[tuple[bytes, bytes]]:
+        """The forwarded headers with this credential in place.
+
+        REPLACES any inbound header of the same name: on a vault-mode tool the
+        agent's own value is not a fallback, it is the thing being removed.
+        """
+        name = self.header.encode()
+        lowered = name.lower()
+        value = f"{self.scheme} {self.secret}".strip().encode()
+        return [*[(k, v) for k, v in headers if k.lower() != lowered], (name, value)]
+
+
+def vault_tools(raw: str | None = None) -> frozenset[str]:
+    """Tools this proxy injects credentials for. Empty = pure passthrough."""
+    value = raw if raw is not None else os.environ.get("AXOR_VAULT_TOOLS", "")
+    return frozenset(t.strip() for t in value.split(",") if t.strip())
+
+
+ALLOW_REMOTE_ENV = "AXOR_VAULT_ALLOW_REMOTE"
+
+
+class VaultPostureRefused(Exception):
+    """Vault mode was armed against a backend whose uptime nobody here owns."""
+
+
+def _remote(host: str) -> str | None:
+    """Why this host is somebody else's, or None if it shares fate with us.
+
+    Loopback is the same machine; RFC1918/ULA is the same network (compose, a
+    pod, a VPC) — either way the vault goes down when this proxy does, which is
+    what "co-location" means. Anything else is a different failure domain, and
+    that includes a name that does not resolve: vault mode's entire cost is this
+    backend's availability, so "I cannot tell what this is" is not a posture to
+    arm it under.
+
+    Link-local is deliberately NOT co-located even though it shares a link: it
+    is the range that carries the cloud metadata service, and a backend URL
+    pointing into it is a stranger thing than the override is.
+    """
+    try:
+        infos = socket.getaddrinfo(host, None, proto=socket.IPPROTO_TCP)
+    except socket.gaierror as exc:
+        return f"{host!r} does not resolve ({exc})"
+    for info in infos:
+        address = ipaddress.ip_address(info[4][0])
+        if address.is_link_local:
+            return f"{host!r} resolves to the link-local address {address}"
+        if not (address.is_loopback or address.is_private):
+            return f"{host!r} resolves to the public address {address}"
+    return None
+
+
+def check_vault_colocation(
+    backend_url: str, allow_remote: bool | None = None,
+) -> None:
+    """Refuse vault mode against a backend this deployment does not share fate with.
+
+    §14.2 decision #14 is `fail closed`: vault unreachable → no credential → the
+    tool call is denied, and no TTL cache is permitted because it "would
+    reintroduce the secret-on-proxy this feature exists to remove". That is the
+    right call, and it converts every availability event into a governance
+    denial. The spec answers the resulting question only for one shape —
+    "availability is solved where it belongs — vault HA, co-location on
+    self-hosted" — and `spec-v2-multiagent.md` records that the other shape has
+    no answer yet: "fail-closed across someone else's uptime has no answer here
+    yet, where self-hosted answers it with co-location".
+
+    So co-location stops being an assumption and becomes a check. Envelope mode
+    already answered CUSTODY for a hosted backend (the plane cannot open what it
+    holds); this is about UPTIME, which envelope mode does not touch.
+
+    ``AXOR_VAULT_ALLOW_REMOTE=1`` proceeds anyway — an operator who has an
+    availability answer of their own is entitled to it — and says out loud what
+    has been accepted. What it stops is getting there by accident.
+    """
+    if allow_remote is None:
+        allow_remote = os.environ.get(ALLOW_REMOTE_ENV, "") == "1"
+    host = urlparse(backend_url).hostname
+    if not host:
+        raise VaultPostureRefused(
+            f"vault mode needs a backend URL with a host; got {backend_url!r}"
+        )
+    why = _remote(host)
+    if why is None:
+        return
+    if allow_remote:
+        logging.getLogger("axor.proxy").warning(
+            "VAULT MODE IS ARMED AGAINST A REMOTE BACKEND (%s, %s=1). Vault "
+            "mode fails closed by design — no cache, no break-glass — so every "
+            "second that backend is unreachable is a second your agent's tool "
+            "calls are DENIED, and its uptime is not this deployment's to "
+            "control. ui-spec §14.2 answers availability with co-location; for "
+            "a remote vault there is no answer in the spec, so the answer has "
+            "to be yours.", why, ALLOW_REMOTE_ENV,
+        )
+        return
+    raise VaultPostureRefused(
+        f"vault mode (AXOR_VAULT_TOOLS) is armed against {backend_url!r}, but "
+        f"{why} — a different failure domain from this proxy. Vault mode fails "
+        f"closed by design (ui-spec §14.2 decision #14): no cache, no "
+        f"break-glass, so every moment that backend is unreachable is a moment "
+        f"this agent's tool calls are denied. §14.2 solves availability with "
+        f"co-location and says nothing about a remote vault. Co-locate the "
+        f"backend, or set {ALLOW_REMOTE_ENV}=1 to accept that its uptime is "
+        f"your answer to give."
+    )
+
+
+class CredentialVault:
+    """Dispense client. One call, one credential, no memory of it."""
+
+    def __init__(
+        self,
+        backend_url: str,
+        ingest_key: str | None = None,
+        client: httpx.AsyncClient | None = None,
+        creds_token: str | None = None,
+        timeout: float = 10.0,
+        signing_seed: str | None = None,
+        sealing_seed: str | None = None,
+    ) -> None:
+        self._base = backend_url.rstrip("/")
+        self._client = client
+        self._timeout = timeout
+        self._headers: dict[str, str] = {}
+        if ingest_key:
+            # A node-bound `ingest` key: the plane refuses a key bound to one
+            # node that asks for another's credential (routers/vault._speaking_as).
+            self._headers["Authorization"] = f"Bearer {ingest_key}"
+        token = (
+            creds_token if creds_token is not None
+            else os.environ.get("AXOR_VAULT_CREDS_TOKEN", "")
+        )
+        if token:
+            self._headers["X-Vault-Creds-Token"] = token
+        # ed25519 seed, hex. Node keys are the node's own — this one never
+        # leaves the process, and only its public half is registered with the
+        # plane (POST /v1/vault/creds/node-keys).
+        self._seed = (
+            signing_seed if signing_seed is not None
+            else os.environ.get("AXOR_NODE_SIGNING_SEED", "")
+        ) or ""
+        # The private half of the deployment's credential-sealing key. Present
+        # only on the nodes; the backend has never seen it and cannot.
+        self._sealing_seed = (
+            sealing_seed if sealing_seed is not None
+            else os.environ.get("AXOR_CRED_SEALING_SEED", "")
+        ) or ""
+
+    def attest(
+        self, node_id: str, tool: str, endpoint: str,
+        *, run_id: str | None = None, seq: int | None = None,
+        verdict: str | None = None, causal_root: str | None = None,
+    ) -> dict[str, Any]:
+        """What this fetch is for, signed when a node seed is configured.
+
+        `verdict` is left unset by this proxy on purpose — it observes, it does
+        not gate, so it has no kernel decision to state. Claiming `pass` would
+        be asserting an approval nothing computed.
+        """
+        attestation: dict[str, Any] = {
+            "node_id": node_id, "tool": tool, "endpoint": endpoint,
+            "timestamp": datetime.now(UTC).isoformat(),
+        }
+        for key, value in (("run_id", run_id), ("seq", seq),
+                           ("verdict", verdict), ("causal_root", causal_root)):
+            if value is not None:
+                attestation[key] = value
+        if self._seed:
+            from cryptography.hazmat.primitives.asymmetric.ed25519 import (
+                Ed25519PrivateKey,
+            )
+
+            key = Ed25519PrivateKey.from_private_bytes(bytes.fromhex(self._seed))
+            attestation["sig"] = key.sign(canonicalize(attestation)).hex()
+        return attestation
+
+    async def dispense(
+        self, node_id: str, tool: str, endpoint: str,
+        *, run_id: str | None = None, seq: int | None = None,
+        verdict: str | None = None, causal_root: str | None = None,
+    ) -> Credential:
+        """Fetch the credential for this exact (tool, endpoint), or refuse.
+
+        Every failure is a `CredentialDenied` — a refused dispense, an
+        unreachable vault and a malformed answer are the same thing to the
+        caller: no credential, so no call.
+        """
+        client = self._client or httpx.AsyncClient(timeout=self._timeout)
+        owns = self._client is None
+        try:
+            response = await client.post(
+                f"{self._base}/v1/vault/creds/dispense",
+                json={
+                    "node_id": node_id, "tool": tool, "endpoint": endpoint,
+                    "attestation": self.attest(
+                        node_id, tool, endpoint, run_id=run_id, seq=seq,
+                        verdict=verdict, causal_root=causal_root,
+                    ),
+                },
+                headers=self._headers,
+            )
+        except httpx.HTTPError as exc:
+            raise CredentialDenied(
+                f"credential vault unreachable ({type(exc).__name__}); "
+                f"fail-closed, {tool} was not called"
+            ) from exc
+        finally:
+            if owns:
+                await client.aclose()
+        if response.status_code != 200:
+            detail = _detail(response)
+            raise CredentialDenied(
+                f"vault refused the credential for ({tool}, {endpoint}): {detail}"
+            )
+        try:
+            body = response.json()
+            return Credential(
+                secret=self._plaintext(body, tool, endpoint),
+                version=int(body["version"]),
+                header=str(body.get("header") or "Authorization"),
+                scheme=str(body.get("scheme", "Bearer")),
+            )
+        except CredentialDenied:
+            raise
+        except (ValueError, KeyError, TypeError) as exc:
+            raise CredentialDenied(
+                f"vault answered something that is not a credential: {exc}"
+            ) from exc
+
+    def _plaintext(self, body: dict, tool: str, endpoint: str) -> str:
+        """The secret to inject — opening the sealed box when there is one.
+
+        A sealed credential the node cannot open is a DENIAL. Falling through to
+        the plaintext field, or to any other value, would turn the one failure
+        this whole mode exists to make impossible into a quiet unauthenticated
+        call.
+        """
+        sealed = body.get("sealed_secret")
+        if not sealed:
+            return str(body["secret"])
+        if not self._sealing_seed:
+            raise CredentialDenied(
+                f"({tool}, {endpoint}) is sealed and this node has no sealing "
+                "key (AXOR_CRED_SEALING_SEED) — fail-closed, it was not called"
+            )
+        import base64
+
+        from nacl.exceptions import CryptoError
+        from nacl.public import PrivateKey, SealedBox
+
+        try:
+            key = PrivateKey(bytes.fromhex(self._sealing_seed))
+            return SealedBox(key).decrypt(base64.b64decode(sealed)).decode()
+        except (CryptoError, ValueError, TypeError) as exc:
+            raise CredentialDenied(
+                f"the sealed credential for ({tool}, {endpoint}) does not open "
+                f"with this node's sealing key: {type(exc).__name__}"
+            ) from exc
+
+
+def _detail(response: httpx.Response) -> str:
+    """The vault's own reason, or the status. Never the response body verbatim —
+    a credential surface's error text is not something to relay wholesale."""
+    try:
+        detail = response.json().get("detail")
+    except ValueError:
+        detail = None
+    return str(detail) if detail else f"HTTP {response.status_code}"

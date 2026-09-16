@@ -29,6 +29,13 @@ import hashlib
 from dataclasses import dataclass, field
 from typing import Any
 
+from axor_core.policy.from_record import (
+    IncompleteRecord,
+    causal_root_from_record,
+    normalized_from_record,
+)
+from axor_core.policy.gates import taint_gate
+
 from axor_backend.errors import BackendError
 from axor_backend.signing import jcs_canonical
 
@@ -56,12 +63,6 @@ _EGRESS_CLASSES = frozenset({"EXPORT", "EXEC"})
 _RESULT_FIELD = "content"
 
 _PREVIEW_LEN = 80
-
-# typed "argument not passed" sentinels: `None` is a meaningful value for both
-# the driving value id and the unresolved reason, so absence needs its own mark
-_UNSET_STR: str = "\x00unset"
-_UNSET_DICT: dict[str, Any] = {}
-
 
 class LabExportError(BackendError):
     """The run cannot be converted to a Lab incident package; ``reasons`` lists
@@ -108,6 +109,14 @@ class _Call:
     # the driving args the producing kernel DECLARED for this sink, when it
     # recorded them; empty for a proxy-depth trace that carries no declaration.
     declared_driving: list[str] = field(default_factory=list)
+    # What the kernel decided ON, exactly as it recorded it: the structural
+    # projection, the driving value's causal root, and whether the
+    # confidentiality floor was up. `axor_core.policy.gates.taint_gate` takes
+    # these three and nothing else, so recomputing a verdict needs no content —
+    # and needs no reimplementation of the gate either.
+    normalized: dict[str, Any] = field(default_factory=dict)
+    driving_root: dict[str, Any] | None = None
+    floor_active: bool = False
     decision: dict[str, Any] | None = None
 
 
@@ -120,6 +129,11 @@ class _Value:
     derived_from: list[str] = field(default_factory=list)
     decision_value: Any = None
     bound: bool = False
+    # True only for a value the MODEL composed from its context. `trace/v1`'s
+    # `transformations` enum reserves `model_extraction` for exactly that, and a
+    # tool-derived value must not claim it — a summarizer output is not an LLM
+    # extraction, and the constructor set is closed on purpose.
+    model_composed: bool = False
 
     @property
     def untrusted(self) -> bool:
@@ -191,11 +205,27 @@ def build_incident_package(
             "no untrusted source in the recorded run (no tool_result carries a "
             "tainted root) — a Lab scenario needs an injection vector"
         )
+    # The scenario's violation predicate reads `prov(args.<driving>)`, so an
+    # egress sink is only usable if the recording says which argument drives it.
+    # Testing only for `egress` here and the stronger condition later meant a run
+    # was refused for "no egress consequence", the operator added a sink, and it
+    # was refused again — by a DIFFERENT message, raised alone, after the reason
+    # list had already been reported. Every reason, in one list, is this module's
+    # whole contract with its caller.
+    usable_sinks = [t for t in tools.values() if t.egress and t.driving_args]
     if not any(t.egress for t in tools.values()):
         reasons.append(
             "no recorded egress consequence (tool_call with "
-            "normalized.destination_kind external_domain/workspace_share) — a "
-            "Lab scenario needs a WRITE/EXPORT/EXEC sink to breach"
+            "normalized.destination_kind external_domain/workspace_share, or a "
+            "tool the operator declared an egress sink) — a Lab scenario needs a "
+            "WRITE/EXPORT/EXEC sink to breach"
+        )
+    elif not usable_sinks:
+        reasons.append(
+            "every recorded egress sink is missing its driving argument "
+            "(`driving_args` on the tool_call payload) — the Lab scenario's "
+            "violation predicate is written over `prov(args.<driving>)` and "
+            "cannot be expressed without one"
         )
 
     manifests = [_manifest(t) for t in tools.values()]
@@ -255,19 +285,30 @@ def _model_values(
     any.
     """
     provenance: dict[str, Any] = payload.get("arg_provenance") or {}
+    # The untrusted values live in the model's context at this call. trace/v1 is
+    # explicit that a model_extraction's `derived_from` is ALL of them, not a
+    # guessed subset: nobody proved which one the model copied, and the
+    # conservative join is what the soundness argument rests on
+    # (contracts/provenance-semantics.md §2). Without these edges a composed
+    # value had no traceable parent at all, and the ledger ended up naming a
+    # source that does not exist.
+    live_untrusted = sorted(v.value_id for v in values.values() if v.untrusted)
     minted: dict[str, str] = {}
     for arg in declared:
         if arg in arg_refs or arg not in provenance:
             continue
         recorded = provenance[arg] or {}
         value_id = f"m_{node}_{seq}_{arg}"
+        sources = [str(x) for x in (recorded.get("sources") or [])]
         values[value_id] = _Value(
             value_id=value_id,
             tool="",  # no producing tool — it did not come out of one
-            sources=[str(x) for x in (recorded.get("sources") or [])],
+            sources=sources,
             sensitive=bool(recorded.get("sensitive")),
+            derived_from=list(live_untrusted) if sources else [],
             decision_value=args.get(arg),
             bound=True,
+            model_composed=True,
         )
         minted[arg] = value_id
     return minted
@@ -339,6 +380,9 @@ def _scan(
                 egress=bool(roles.get("egress_sink"))
                 or str(normalized.get("destination_kind", "")) in _EGRESS_DESTINATIONS,
                 declared_driving=declared,
+                normalized=dict(normalized),
+                driving_root=payload.get("driving_root"),
+                floor_active=bool(payload.get("floor_active")),
             )
             calls.append(call)
             last_call[node] = call
@@ -425,6 +469,48 @@ def _tool_table(calls: list[_Call], values: dict[str, _Value]) -> dict[str, _Too
 
 
 # ── manifests / condition / scenario synthesis ───────────────────────────────
+
+
+def _origin_sources(
+    value: _Value, values: dict[str, _Value]
+) -> list[dict[str, Any]]:
+    """The external reads whose taint reached this value — its causal ROOT.
+
+    trace/v1 is explicit that `sources` is "the transitive causal_root" while
+    `derived_from` is "the immediate edge". This emitted neither: it named the
+    value's own producing tool as an `external_read`, so a summary of an injected
+    email claimed the injection entered at the SUMMARIZER — pointing an
+    investigator at the tool that carried the taint rather than the one that let
+    it in. A model-composed value, having no producing tool, emitted the dangling
+    `tool_result:` instead.
+
+    Walking `derived_from` back to the values that root a taint (untrusted with
+    no parent) gives the set the schema asks for. A superset is allowed
+    (over-taint); an omission is a soundness bug — so a cycle or a missing parent
+    stops that branch rather than dropping the whole answer.
+    """
+    if not value.untrusted:
+        return []
+    roots: dict[str, dict[str, Any]] = {}
+    seen: set[str] = set()
+    stack = [value.value_id]
+    while stack:
+        vid = stack.pop()
+        if vid in seen:
+            continue
+        seen.add(vid)
+        current = values.get(vid)
+        if current is None or not current.untrusted:
+            continue
+        parents = [p for p in current.derived_from if p in values]
+        if parents:
+            stack.extend(parents)
+        elif current.tool:
+            roots[current.tool] = {
+                "kind": "external_read",
+                "origin_ref": f"tool_result:{current.tool}",
+            }
+    return [roots[tool] for tool in sorted(roots)]
 
 
 def _manifest(t: _Tool) -> dict[str, Any]:
@@ -557,7 +643,13 @@ def _scenario(
 
 
 def _violation_call(calls: list[_Call], tools: dict[str, _Tool]) -> _Call:
-    """The egress call the violation predicate names: prefer the recorded DENY."""
+    """The egress call the violation predicate names: prefer the recorded DENY.
+
+    `build_incident_package` has already refused a run with no usable sink, and
+    with the complete reason list rather than this one on its own — so reaching
+    the raise below means those two checks disagree, which is a bug here and not
+    a property of the run.
+    """
     egress_calls = [c for c in calls if tools[c.tool].egress and tools[c.tool].driving_args]
     denied = [c for c in egress_calls if c.verdict == "deny"]
     if denied:
@@ -565,12 +657,12 @@ def _violation_call(calls: list[_Call], tools: dict[str, _Tool]) -> _Call:
     if egress_calls:
         return egress_calls[0]
     raise LabExportError(
-        ["no egress call with a bound driving argument — cannot express the "
-         "violation predicate over the recorded run"]
+        ["internal: no egress call with a bound driving argument reached scenario "
+         "synthesis, which the convertibility checks should have refused first"]
     )
 
 
-# ── reference-kernel decisions (the convertibility proof) ────────────────────
+# ── kernel decisions (the convertibility proof) ──────────────────────────────
 
 
 def _decide_all(
@@ -579,93 +671,122 @@ def _decide_all(
     values: dict[str, _Value],
     reasons: list[str],
 ) -> None:
-    """Recompute every call's decision under Lab's reference taint-floor decide
-    (enforcement on, empty allowlist) and require it to agree with the recorded
-    verdict — the exported trace must import with ``replay: match``."""
+    """Recompute every call with the KERNEL'S OWN GATE and require it to agree
+    with the recorded verdict — the exported trace must import with
+    ``replay: match``.
+
+    This used to be a hand-written mirror of ``lab_runner.kernel.Kernel.decide``,
+    living inside the platform whose own contributing rules say the kernel is
+    imported and never reimplemented. It reimplemented it because the obvious
+    reading is that the real kernel needs content a recorded trace does not
+    carry. It does not: ``ToolCallGovernor`` needs content because it is the
+    LEDGER, and by the time a call is recorded the ledger's answer is already in
+    the event — ``driving_root`` is a serialized ``CausalRoot`` and
+    ``taint_gate`` takes nothing else about the value.
+    """
     for call in calls:
         tool = tools.get(call.tool)
         if tool is None:  # unreachable: every call registers its tool
             continue
-        decision = _reference_decide(call, tool, values)
+        try:
+            decision = _kernel_decide(call, tool, values)
+        except IncompleteRecord as exc:
+            # Refusing to export beats guessing. A missing field here is one the
+            # verdict turns on, and defaulting it to its permissive value is how
+            # a recorded DENY comes back as a replayed ALLOW.
+            reasons.append(
+                f"{call.tool!r} at {call.node}:{call.seq} cannot be re-decided — {exc}"
+            )
+            continue
         recorded = "ALLOW" if call.verdict == "pass" else "DENY"
         if decision["verdict"] != recorded:
             reasons.append(
                 f"recorded verdict {recorded} for {call.tool!r} at "
-                f"{call.node}:{call.seq} would not reproduce under label-based "
-                f"replay (recomputed {decision['verdict']}: {decision['reason']})"
+                f"{call.node}:{call.seq} would not reproduce under the kernel's "
+                f"taint floor (recomputed {decision['verdict']}: {decision['reason']})"
             )
             continue
         call.decision = decision
 
 
-def _reference_decide(
+def _driving_binding(
+    call: _Call, tool: _Tool, values: dict[str, _Value]
+) -> tuple[str | None, dict[str, Any] | None]:
+    """The ledger id of the call's driving value, and the typed reason when
+    there is none.
+
+    A fail-closed decision must not invent a ``v_unresolved`` ledger id — the
+    trace would then fail its own validation and the most interesting incidents
+    would be unpublishable. ``driving_unresolved`` carries the reason instead.
+    """
+    driving_args = sorted(tool.driving_args)
+    if not driving_args:
+        return None, {"kind": "no_driving_args"}
+    first = driving_args[0]
+    bound = call.arg_refs.get(first)
+    if bound is None:
+        return None, {"kind": "unresolved_argument", "arg": first}
+    return bound, None
+
+
+def _recorded_root(call: _Call, tool: _Tool, values: dict[str, _Value]) -> dict[str, Any]:
+    """The causal root the kernel decided this call on.
+
+    Prefer what the kernel WROTE DOWN (``driving_root``): it is that kernel's own
+    answer over the real content, computed by the ledger at the moment of the
+    call. Falling back to the union of the driving args' recorded value roots is
+    for a trace from a producer that predates the field; it is the same algebra
+    (a causal root is the union of its inputs') so it over-taints at worst, which
+    is the safe direction.
+    """
+    if call.driving_root is not None:
+        return dict(call.driving_root)
+    sources: set[str] = set()
+    sensitive = False
+    for arg in sorted(tool.driving_args):
+        ref = call.arg_refs.get(arg)
+        value = values.get(ref) if ref else None
+        if value is None:
+            continue
+        sources.update(value.sources)
+        sensitive = sensitive or value.sensitive
+    return {"sources": sorted(sources), "sensitive": sensitive}
+
+
+def _kernel_decide(
     call: _Call, tool: _Tool, values: dict[str, _Value]
 ) -> dict[str, Any]:
-    """Mirror of ``lab_runner.kernel.Kernel.decide`` for the manifests this
-    module synthesizes (no resolve rules, empty allowlist, enforcement on)."""
-    driving_args = sorted(tool.driving_args)
-    if driving_args and driving_args[0] in call.arg_refs:
-        driving_value_id: str | None = call.arg_refs[driving_args[0]]
-        unresolved: dict[str, Any] | None = None
-    elif not driving_args:
-        driving_value_id, unresolved = None, {"kind": "no_driving_args"}
-    else:
-        driving_value_id = None
-        unresolved = {"kind": "unresolved_argument", "arg": driving_args[0]}
+    """One call through ``axor_core.policy.gates.taint_gate``."""
+    where = f"{call.node}:{call.seq}"
+    normalized = normalized_from_record(call.tool, call.normalized, where=where)
+    root = causal_root_from_record(_recorded_root(call, tool, values))
+    driving_value_id, unresolved = _driving_binding(call, tool, values)
 
-    def decision(
-        verdict: str, reason: str, *,
-        dv: str | None = _UNSET_STR,
-        unres: dict[str, Any] | None = _UNSET_DICT,
-        projection: str | None = None,
-    ) -> dict[str, Any]:
-        d: dict[str, Any] = {
-            "verdict": verdict, "gate": GATE_TAINT_FLOOR,
-            "driving_value_id": driving_value_id if dv is _UNSET_STR else dv,
-            "reason": reason,
-        }
-        if projection is not None:
-            d["projection"] = projection
-        u = unresolved if unres is _UNSET_DICT else unres
-        if d["driving_value_id"] is None and u is not None:
-            d["driving_unresolved"] = u
-        return d
-
-    effect_class = "EXPORT" if tool.egress else "READ"
-    if effect_class in _EGRESS_CLASSES:
-        if not driving_args:
-            return decision(
-                "DENY",
-                f"egress sink {call.tool} declares no driving_args; cannot "
-                "verify provenance (fail-closed)",
-                projection=PROJECTION_UNTRUSTED,
-            )
-        for arg_name in driving_args:
-            bound = call.arg_refs.get(arg_name)
-            labels = tuple(values[bound].labels()) if bound in values else ()
-            if not labels:
-                return decision(
-                    "DENY",
-                    f"egress sink {call.tool}: driving arg {arg_name!r} has no "
-                    "resolvable provenance (fail-closed)",
-                    dv=bound,
-                    unres=None if bound is not None
-                    else {"kind": "unresolved_argument", "arg": arg_name},
-                    projection=PROJECTION_UNTRUSTED,
-                )
-            if LABEL_UNTRUSTED in labels:
-                # no operator allowlist is recorded for the run → no supersession
-                return decision(
-                    "DENY",
-                    f"egress sink {call.tool}: driving arg {arg_name!r} is "
-                    f"{LABEL_UNTRUSTED} and not allowlisted",
-                    dv=call.arg_refs[arg_name],
-                    projection=PROJECTION_UNTRUSTED,
-                )
-        return decision(
-            "ALLOW", f"effect {effect_class}: every driving arg is trusted or allowlisted"
-        )
-    return decision("ALLOW", f"effect {effect_class}: no egress gate applies")
+    denial = taint_gate(
+        call.tool,
+        normalized,
+        root,
+        floor_active=call.floor_active,
+        # The operator's declaration of what exfiltrates. The gate also reads the
+        # normalizer's structural guess, so passing the tool here only ADDS the
+        # declared half — which is the half that knows a deployment's vocabulary
+        # (`send_email` normalises to `none`).
+        egress_sinks=frozenset({call.tool}) if tool.egress else frozenset(),
+    )
+    decision: dict[str, Any] = {
+        "verdict": "ALLOW" if denial is None else "DENY",
+        "gate": GATE_TAINT_FLOOR,
+        "driving_value_id": driving_value_id,
+        "reason": (
+            denial.reason if denial is not None
+            else f"kernel taint floor: no gate applies to {call.tool}"
+        ),
+    }
+    if denial is not None:
+        decision["projection"] = PROJECTION_UNTRUSTED
+    if driving_value_id is None and unresolved is not None:
+        decision["driving_unresolved"] = unresolved
+    return decision
 
 
 # ── trace assembly ───────────────────────────────────────────────────────────
@@ -706,10 +827,7 @@ def _trace(
         row: dict[str, Any] = {
             "value_id": value.value_id,
             "labels": value.labels(),
-            "sources": (
-                [{"kind": "external_read", "origin_ref": f"tool_result:{value.tool}"}]
-                if value.untrusted else []
-            ),
+            "sources": _origin_sources(value, values),
             "decision_value": value.decision_value,
             "canonical_value_hash": content_hash(value.decision_value),
         }
@@ -717,6 +835,12 @@ def _trace(
             row["preview"] = value.decision_value[:_PREVIEW_LEN]
         if value.derived_from:
             row["derived_from"] = list(value.derived_from)
+        # `model_extraction` means an LLM produced the value from its context.
+        # A tool-derived value is not that, and the enum has no entry for "a
+        # tool computed it" — so it claims nothing rather than the wrong
+        # constructor. `transformations` is optional; `sources` carries the
+        # provenance either way.
+        if value.model_composed:
             row["transformations"] = ["model_extraction"]
         ledger.append(row)
 

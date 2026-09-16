@@ -57,6 +57,9 @@ export default function EvidenceCase({
   replayStep?: number;
 }) {
   const [shareUrl, setShareUrl] = useState<string | null>(null);
+  // The token behind that link. The panel called the permalink "revocable" and
+  // offered no way to revoke it — the backend has had the route all along.
+  const [shareToken, setShareToken] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   // CP → Lab funnel state: null = untouched, [] = exported OK, else the honest
   // list of reasons the run is not convertible to a Lab incident package.
@@ -77,11 +80,16 @@ export default function EvidenceCase({
     },
   });
 
+  const revoked = useMutation({
+    mutationFn: (token: string) => api.revokeShare(token),
+  });
+
   const share = useMutation({
     mutationFn: () => api.shareCase(runId, caseIndex),
     onSuccess: (r) => {
       const absolute = `${window.location.origin}${r.url}`;
       setShareUrl(absolute);
+      setShareToken(r.token);
       void navigator.clipboard?.writeText(absolute).then(() => {
         setCopied(true);
         setTimeout(() => setCopied(false), 1500);
@@ -180,10 +188,20 @@ export default function EvidenceCase({
           Renders nothing for size-1 — the receipt above IS the v0.13 case. */}
       {c.anchor && <CausalSubgraph runId={runId} anchor={c.anchor} />}
       {shareUrl && (
-        <div className="px-4 py-2" style={{ borderTop: `1px solid ${C.line}` }}>
+        <div className="px-4 py-2 flex items-center gap-2" style={{ borderTop: `1px solid ${C.line}` }}>
           <span style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim }}>
-            revocable permalink · observations only, no raw bodies · {shareUrl}
+            {revoked.isSuccess ? "revoked · this link no longer opens" : "revocable permalink"}
+            {" · observations only, no raw bodies · "}{shareUrl}
           </span>
+          {shareToken && !revoked.isSuccess && (
+            <button
+              onClick={() => revoked.mutate(shareToken)}
+              disabled={revoked.isPending}
+              style={{ ...action(C.mut), fontSize: 10 }}
+            >
+              revoke
+            </button>
+          )}
         </div>
       )}
     </div>

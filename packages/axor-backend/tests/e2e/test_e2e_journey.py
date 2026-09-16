@@ -67,9 +67,10 @@ async def test_seeded_corpus_drives_replay_graph_and_regression(
     cf = (await http.post("/v1/replay/ex_block", json={"config": noexec})).json()
     assert cf["first_divergence"] == 2
 
-    # Taint graph folded the provenance edge (email → summary).
-    g = (await http.get("/v1/graph/khop", params={"focus": "v_mail", "k": 3})).json()
-    assert {"src": "v_mail", "dst": "v_sum", "run_id": "ex_block"} in g["edges"]
+    # Provenance derives the edge (email → summary) from the run's own events.
+    g = (await http.get("/v1/runs/ex_block/provenance",
+                        params={"focus": "v_mail", "k": 3})).json()
+    assert {"src": "v_mail", "dst": "v_sum"} in g["edges"]
 
     # Two-sided regression: golden is safe; breaking the legit flow is not.
     good = (await http.post("/v1/regression", json={"config": cfg})).json()

@@ -195,9 +195,16 @@ function ExpertEval() {
             </div>
           </div>
         </Panel>
-        <Panel tag="§2 · ADAPTER" title="Cross-session lineage" locked lockLabel="available with adapter">
+        {/* Still locked here, and still static — this whole surface is a
+            reference render, not a wired one. But the label named the wrong
+            key: the adapter is what this tab is already about, so an operator
+            who HAS one read "available with adapter" beside a panel it did not
+            unlock. Cross-session reputation comes from a node's own
+            axor-sentinel, and the live version of it is on Control. */}
+        <Panel tag="§8.1 · SENTINEL" title="Cross-session reputation" locked
+               lockLabel="connect axor-sentinel — live on Control">
           <div className="p-3" style={{ height: 90 }}>
-            <div style={{ fontFamily: MONO, fontSize: 11, color: C.mut }}>cross-session taint · policy laundering · federation…</div>
+            <div style={{ fontFamily: MONO, fontSize: 11, color: C.mut }}>staged exfiltration across sessions · P1–P4 predicates · per-resource verdicts…</div>
           </div>
         </Panel>
       </div>

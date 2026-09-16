@@ -50,10 +50,10 @@ test.describe("adoption", () => {
     const cases: [string, string | RegExp][] = [
       ["config-builder", "consequence class"],
       ["get-started", "byte-for-byte"],
-      ["health", "re-anchors"],
+      ["health", "localizer blames"],
       ["settings", "dead-letter"],
       ["expert", "one screen"],
-      ["pricing", "two modules"],
+      ["pricing", "one ladder"],
     ];
     for (const [hash, expected] of cases) {
       await goHash(page, hash);

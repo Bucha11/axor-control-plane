@@ -3,11 +3,11 @@
 // established — and the current session focus (last run). It is deliberately
 // small: everything server-derived stays in Query.
 import { create } from "zustand";
-import { persist } from "zustand/middleware";
+import { createJSONStorage, persist } from "zustand/middleware";
 
 // The connection model (spec section 2). Depth determines the availability
 // ladder: demo/proxy see the Eval core; adapter additionally unlocks Control,
-// the taint graph, Probe health, and branch attestation.
+// value provenance, Probe health, and branch attestation.
 export type ConnectionMode = "none" | "demo" | "proxy" | "adapter";
 
 export interface ConnectionState {
@@ -37,6 +37,11 @@ interface AppState {
   // a sign request). Empty => unsigned dev posture (AXOR_ALLOW_UNSIGNED=1).
   signingKeyId: string;
   vaultSigningToken: string;
+  // The other half of the wall (spec v2 Ch.5 §3): its own token, in its own
+  // header, so being able to dispense a credential never grants the ability to
+  // request a signature. Kept apart in the store for the same reason it is kept
+  // apart on the wire.
+  vaultCredsToken: string;
   // Adoption (spec: quiet-until-wrong, so learning is opt-in). Learn mode reveals
   // per-surface coach notes; `learnSeen` gates the one-time first-visit nudge;
   // `coachDismissed` remembers which notes the user closed.
@@ -56,6 +61,7 @@ interface AppState {
   clearSession: () => void;
   setSigningKeyId: (id: string) => void;
   setVaultSigningToken: (token: string) => void;
+  setVaultCredsToken: (token: string) => void;
   setLearnMode: (v: boolean) => void;
   markLearnSeen: () => void;
   dismissCoach: (id: string) => void;
@@ -73,6 +79,84 @@ export const MODE_LABEL: Record<ConnectionMode, string> = {
   adapter: "adapter · full governance",
 };
 
+// Keys whose values are credentials; everything else is UI preference.
+const SECRET_KEYS = [
+  "apiToken", "refreshToken", "vaultSigningToken", "vaultCredsToken",
+] as const;
+
+// One Storage face over two backing stores: session for the secret half of the
+// persisted blob, local for the rest. zustand/persist writes a single JSON
+// string, so the split happens on the way in and is reassembled on the way out.
+// Every access is guarded: storage throws outright in some privacy modes, and
+// a half-written or hand-edited entry must degrade to "not signed in" rather
+// than break rehydration and with it the whole app.
+function safeGet(store: Storage, name: string): string | null {
+  try {
+    return store.getItem(name);
+  } catch {
+    return null;
+  }
+}
+
+function safeSet(store: Storage, name: string, value: string): void {
+  try {
+    store.setItem(name, value);
+  } catch {
+    /* storage unavailable — the session simply does not persist */
+  }
+}
+
+const splitStorage: Storage = {
+  get length() {
+    return window.localStorage.length;
+  },
+  key: (i) => window.localStorage.key(i),
+  clear: () => {
+    window.localStorage.clear();
+    window.sessionStorage.clear();
+  },
+  removeItem: (name) => {
+    window.localStorage.removeItem(name);
+    window.sessionStorage.removeItem(name);
+  },
+  getItem: (name) => {
+    const durable = safeGet(window.localStorage, name);
+    if (durable === null) return null;
+    try {
+      const parsed = JSON.parse(durable);
+      const secret = safeGet(window.sessionStorage, name);
+      if (secret !== null) {
+        parsed.state = { ...parsed.state, ...JSON.parse(secret).state };
+      }
+      return JSON.stringify(parsed);
+    } catch {
+      // Unparseable persisted state: start clean instead of throwing out of
+      // rehydration, which would take the app down on load.
+      return null;
+    }
+  },
+  setItem: (name, value) => {
+    let parsed: { state: Record<string, unknown> };
+    try {
+      parsed = JSON.parse(value);
+    } catch {
+      return;
+    }
+    const secretState: Record<string, unknown> = {};
+    const durableState: Record<string, unknown> = { ...parsed.state };
+    for (const key of SECRET_KEYS) {
+      secretState[key] = parsed.state[key];
+      // keep the shape stable for readers that run before rehydration, and
+      // overwrite any token an older build left on disk
+      durableState[key] = "";
+    }
+    safeSet(window.sessionStorage, name,
+            JSON.stringify({ ...parsed, state: secretState }));
+    safeSet(window.localStorage, name,
+            JSON.stringify({ ...parsed, state: durableState }));
+  },
+};
+
 export const useApp = create<AppState>()(
   persist(
     (set) => ({
@@ -83,6 +167,7 @@ export const useApp = create<AppState>()(
       identityEmail: "",
       signingKeyId: "",
       vaultSigningToken: "",
+      vaultCredsToken: "",
       learnMode: false,
       learnSeen: false,
       coachDismissed: [],
@@ -106,6 +191,7 @@ export const useApp = create<AppState>()(
       clearSession: () => set({ apiToken: "", refreshToken: "", identityEmail: "" }),
       setSigningKeyId: (id) => set({ signingKeyId: id }),
       setVaultSigningToken: (token) => set({ vaultSigningToken: token }),
+      setVaultCredsToken: (token) => set({ vaultCredsToken: token }),
       setLearnMode: (v) => set({ learnMode: v, learnSeen: true }),
       markLearnSeen: () => set({ learnSeen: true }),
       dismissCoach: (id) =>
@@ -117,6 +203,22 @@ export const useApp = create<AppState>()(
       resetCoach: () => set({ coachDismissed: [] }),
       setTourStep: (step) => set({ tourStep: step }),
     }),
-    { name: "axor-app" },
+    {
+      name: "axor-app",
+      // Credentials live in sessionStorage, everything else in localStorage.
+      //
+      // The bearer token, the identity refresh token and the vault signing
+      // token were all persisted to localStorage, which means an XSS on this
+      // origin walks away with API access AND the ability to ask the signing
+      // custody for signatures over arbitrary payloads. sessionStorage does
+      // not make XSS harmless, but it scopes the credential to the tab that
+      // obtained it and drops it when that tab closes, instead of leaving it
+      // on disk indefinitely.
+      //
+      // The trade: opening the app in a new tab asks you to sign in again.
+      // For a governance console that is the right side of the trade.
+      storage: createJSONStorage(() => splitStorage),
+      partialize: (s) => s,
+    },
   ),
 );

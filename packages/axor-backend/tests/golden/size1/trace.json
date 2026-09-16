@@ -1,0 +1,213 @@
+[
+  {
+    "schema_version": "1.0",
+    "seq": 0,
+    "node_id": "adapter-demo-block",
+    "kind": "tool_call",
+    "ts": "2026-07-06T00:00:00Z",
+    "causal_root": null,
+    "gate": null,
+    "verdict": "pass",
+    "payload": {
+      "tool": "email_read",
+      "args": {},
+      "arg_refs": {},
+      "driving_args": [],
+      "driving_root": {
+        "sources": [],
+        "sensitive": false
+      },
+      "floor_active": false,
+      "normalized": {
+        "operation": "other",
+        "target_kind": "workdir",
+        "destination_kind": "none",
+        "provenance": "unknown",
+        "reads_secret_like_data": false,
+        "writes_outside_workdir": false,
+        "executes_generated_code": false,
+        "after_external_read": false,
+        "after_secret_access": false,
+        "data_flow": "none"
+      }
+    }
+  },
+  {
+    "schema_version": "1.0",
+    "seq": 1,
+    "node_id": "adapter-demo-block",
+    "kind": "tool_result",
+    "ts": "2026-07-06T00:00:00Z",
+    "causal_root": null,
+    "gate": null,
+    "verdict": null,
+    "payload": {
+      "tool": "email_read",
+      "value_ref": "v_mail",
+      "root": {
+        "sources": [
+          "web"
+        ],
+        "sensitive": false
+      }
+    }
+  },
+  {
+    "schema_version": "1.0",
+    "seq": 2,
+    "node_id": "adapter-demo-block",
+    "kind": "tool_call",
+    "ts": "2026-07-06T00:00:00Z",
+    "causal_root": null,
+    "gate": null,
+    "verdict": "pass",
+    "payload": {
+      "tool": "bash",
+      "args": {
+        "cmd": "ls"
+      },
+      "arg_refs": {},
+      "driving_args": [],
+      "driving_root": {
+        "sources": [],
+        "sensitive": false
+      },
+      "floor_active": false,
+      "normalized": {
+        "operation": "other",
+        "target_kind": "workdir",
+        "destination_kind": "none",
+        "provenance": "unknown",
+        "reads_secret_like_data": false,
+        "writes_outside_workdir": false,
+        "executes_generated_code": false,
+        "after_external_read": false,
+        "after_secret_access": false,
+        "data_flow": "none"
+      }
+    }
+  },
+  {
+    "schema_version": "1.0",
+    "seq": 3,
+    "node_id": "adapter-demo-block",
+    "kind": "tool_result",
+    "ts": "2026-07-06T00:00:00Z",
+    "causal_root": null,
+    "gate": null,
+    "verdict": null,
+    "payload": {
+      "tool": "bash",
+      "value_ref": "v_ls",
+      "root": {
+        "sources": [],
+        "sensitive": false
+      }
+    }
+  },
+  {
+    "schema_version": "1.0",
+    "seq": 4,
+    "node_id": "adapter-demo-block",
+    "kind": "tool_call",
+    "ts": "2026-07-06T00:00:00Z",
+    "causal_root": null,
+    "gate": null,
+    "verdict": "pass",
+    "payload": {
+      "tool": "summarize",
+      "args": {
+        "text": "…"
+      },
+      "arg_refs": {
+        "text": "v_mail"
+      },
+      "driving_args": [
+        "text"
+      ],
+      "driving_root": {
+        "sources": [
+          "web"
+        ],
+        "sensitive": false
+      },
+      "floor_active": false,
+      "normalized": {
+        "operation": "other",
+        "target_kind": "workdir",
+        "destination_kind": "none",
+        "provenance": "unknown",
+        "reads_secret_like_data": false,
+        "writes_outside_workdir": false,
+        "executes_generated_code": false,
+        "after_external_read": false,
+        "after_secret_access": false,
+        "data_flow": "none"
+      }
+    }
+  },
+  {
+    "schema_version": "1.0",
+    "seq": 5,
+    "node_id": "adapter-demo-block",
+    "kind": "tool_result",
+    "ts": "2026-07-06T00:00:00Z",
+    "causal_root": null,
+    "gate": null,
+    "verdict": null,
+    "payload": {
+      "tool": "summarize",
+      "value_ref": "v_sum",
+      "root": {
+        "sources": [
+          "web"
+        ],
+        "sensitive": false
+      }
+    }
+  },
+  {
+    "schema_version": "1.0",
+    "seq": 6,
+    "node_id": "adapter-demo-block",
+    "kind": "tool_call",
+    "ts": "2026-07-06T00:00:00Z",
+    "causal_root": null,
+    "gate": "taint_floor",
+    "verdict": "deny",
+    "payload": {
+      "tool": "slack_post",
+      "args": {
+        "text": "…"
+      },
+      "arg_refs": {
+        "text": "v_sum"
+      },
+      "driving_args": [
+        "text"
+      ],
+      "driving_root": {
+        "sources": [
+          "web"
+        ],
+        "sensitive": false
+      },
+      "floor_active": false,
+      "normalized": {
+        "operation": "other",
+        "target_kind": "external_url",
+        "destination_kind": "external_domain",
+        "provenance": "external_web",
+        "reads_secret_like_data": false,
+        "writes_outside_workdir": false,
+        "executes_generated_code": false,
+        "after_external_read": false,
+        "after_secret_access": false,
+        "data_flow": "local_to_external"
+      },
+      "roles": {
+        "egress_sink": true
+      }
+    }
+  }
+]

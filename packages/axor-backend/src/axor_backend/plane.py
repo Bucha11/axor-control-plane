@@ -7,6 +7,8 @@ POST /v1/plane/{node_id}/facts      append-only facts (attestations)
 POST /v1/plane/{node_id}/consumed   one-shot consumption ack (injection/excision)
 POST /v1/plane/{node_id}/probe-report  behavioral health check posted by the node
 GET  /v1/plane/{node_id}/probe-report  last check + the series behind it
+GET  /v1/plane/{node_id}/repair        the localizer's proposal + heal history
+POST /v1/plane/{node_id}/repair/excision-request  shape a cut (does NOT command)
 
 Merge/absorb semantics live in axor_core.kernel.state.DesiredState — the
 backend persists and fans out; it does not interpret. Signature verification
@@ -19,20 +21,42 @@ from __future__ import annotations
 
 import json
 from collections.abc import AsyncIterator
-from datetime import UTC, datetime
 from typing import Any
 
+from axor_probe.integration import plane as probe_plane
+from axor_sentinel.sentinel.snapshot import (
+    SnapshotRejected,
+    snapshot_from_payload,
+)
 from fastapi import APIRouter, Header, HTTPException, Request
 from sse_starlette.sse import EventSourceResponse
 
-from axor_backend.errors import CommandRejected
+from axor_backend.attestations import (
+    ATTESTATION_FACT_TYPE,
+    AttestationError,
+)
+from axor_backend.attestations import (
+    validate_fact as validate_attestation,
+)
+from axor_backend.broadcast import messages as bus_messages
+from axor_backend.clock import now, today
+from axor_backend.coverage import coverage, facts_of_run
+from axor_backend.drift_evidence import drift_case
+from axor_backend.errors import (
+    CommandRejected,
+    ConcurrentUpdate,
+    StaleVersion,
+)
+from axor_backend.limits import check_batch
 from axor_backend.signing import signed_payload
+from axor_backend.tenancy import current_org_id, topic
+from axor_backend.traces import kernel_events_or_empty
 
 router = APIRouter(prefix="/v1/plane")
 
-
-def _now() -> str:
-    return datetime.now(UTC).isoformat()
+# The degradation ladder, as an order. A node climbs it on its own; the plane
+# only records where it says it is, and pages on the way UP.
+_LEVELS = {"NORMAL": 0, "CAUTIOUS": 1, "RESTRICTED": 2, "LOCKED": 3, "TERMINAL": 4}
 
 
 def _ctx(request: Request) -> Any:  # noqa: ANN401 - app.state is dynamic
@@ -64,14 +88,54 @@ async def command(node_id: str, body: dict, request: Request) -> dict:
     elif not ctx.allow_unsigned:
         raise HTTPException(403, "no operator keys registered; commands rejected")
 
-    new_version, state = await ctx.store.bump_desired(node_id, delta)
+    # The store re-checks the version it was signed for, atomically. The 409
+    # above is the friendly early answer; this is the one that actually holds
+    # when two commands arrive together.
+    new_version, state = await _apply(
+        ctx, node_id, delta, expect_version=version - 1,
+        signature=_signature(ctx, operator, timestamp, sig),
+    )
+    # A commanded cut opens the heal half of the heal->verify pair. The hook is
+    # HERE, at the write that actually reaches the node's desired state, not on
+    # the surface that offers the cut: an excision is an excision whether it
+    # came from the health panel, a CLI, or curl, and the pair has to close for
+    # all three.
+    await _open_heal(ctx, node_id, delta, operator)
     message = {
         "type": "delta", "node_id": node_id, "version": new_version,
         "state": state, "delta": delta, "operator": operator,
         "timestamp": timestamp, "sig": sig,
     }
-    ctx.broadcast.publish(f"plane:{node_id}", message)
+    ctx.broadcast.publish(topic("plane", node_id), message)
     return {"node_id": node_id, "version": new_version, "state": state}
+
+
+async def _open_heal(
+    ctx: Any, node_id: str, delta: dict, operator: str,  # noqa: ANN401
+) -> None:
+    """Record a commanded `pending_excision` as an open heal attempt."""
+    excision = delta.get("pending_excision")
+    if not isinstance(excision, dict):
+        return
+    excision_id = str(excision.get("id") or excision.get("excision_id") or "")
+    if not excision_id:
+        # The adapter keys at-most-once off this id (protocol §4). An excision
+        # without one is not a one-shot and its heal cannot be verified either,
+        # so it is refused rather than delivered and silently untracked.
+        raise HTTPException(400, "pending_excision requires an `id`")
+    latest = await ctx.store.latest_probe_report(node_id)
+    families = [
+        f.get("family") for f in (latest or {}).get("families", [])
+        if isinstance(f, dict) and f.get("state") == probe_plane.FAMILY_ESCAPED
+    ]
+    await ctx.store.open_heal_attempt(
+        node_id, excision_id,
+        str(excision.get("operator") or operator),
+        str(excision.get("reason", "")),
+        [str(r) for r in excision.get("target_refs", [])],
+        [str(f) for f in families if f],
+        now(),
+    )
 
 
 @router.post("/{node_id}/cascade-stop", status_code=202)
@@ -100,8 +164,14 @@ async def cascade_stop(node_id: str, request: Request, body: dict | None = None)
             )
         except CommandRejected as exc:
             raise HTTPException(403, str(exc)) from exc
-        new_version, state = await ctx.store.bump_desired(node_id, delta)
-        ctx.broadcast.publish(f"plane:{node_id}", {
+        new_version, state = await _apply(
+            ctx, node_id, delta, expect_version=version - 1,
+            signature=_signature(
+                ctx, body.get("operator", ""), body.get("timestamp", ""),
+                body.get("sig", ""),
+            ),
+        )
+        ctx.broadcast.publish(topic("plane", node_id), {
             "type": "delta", "node_id": node_id, "version": new_version,
             "state": state, "delta": delta,
             "operator": body.get("operator", ""),
@@ -123,8 +193,8 @@ async def cascade_stop(node_id: str, request: Request, body: dict | None = None)
         frontier = children
     stopped = []
     for nid in subtree:
-        new_version, state = await ctx.store.bump_desired(nid, {"stopped": True})
-        ctx.broadcast.publish(f"plane:{nid}", {
+        new_version, state = await _apply(ctx, nid, {"stopped": True})
+        ctx.broadcast.publish(topic("plane", nid), {
             "type": "delta", "node_id": nid, "version": new_version,
             "state": state, "delta": {"stopped": True},
             "operator": "op_ui", "timestamp": "", "sig": "",
@@ -136,21 +206,35 @@ async def cascade_stop(node_id: str, request: Request, body: dict | None = None)
 @router.get("/{node_id}/desired")
 async def desired_stream(node_id: str, request: Request) -> EventSourceResponse:
     ctx = _ctx(request)
-    queue = ctx.broadcast.subscribe(f"plane:{node_id}")
+    # The response body is iterated after this handler returns, so the topic
+    # binds the tenant NOW rather than relying on the ambient one later.
+    node_topic = topic("plane", node_id, current_org_id())
+    queue = ctx.broadcast.subscribe(node_topic)
 
     async def stream() -> AsyncIterator[dict]:
         try:
             current = await ctx.store.get_desired(node_id)
             version, state = current if current else (0, {})
+            # `commands` carries the signed command behind each key of
+            # `state`, so a reconnecting node can verify what it is about to
+            # apply instead of taking the plane's word for it (protocol §3/§6).
+            # Without it the snapshot was the hole in end-to-end signing: a
+            # delta was checked, and the same fields pushed as a snapshot were
+            # not.
             yield {"event": "snapshot",
-                   "data": _json({"node_id": node_id, "version": version,
-                                  "state": state})}
-            while True:
-                message = await queue.get()
+                   "data": _json({
+                       "node_id": node_id, "version": version, "state": state,
+                       "commands": await ctx.store.desired_commands(node_id),
+                   })}
+            # `messages` ends when the bus drops this reader for falling
+            # behind, which is what makes the node reconnect and take a fresh
+            # snapshot. Parked on the queue it would stay deaf to every later
+            # pause/stop while going on heartbeating happily.
+            async for message in bus_messages(queue):
                 yield {"event": message.get("type", "delta"),
                        "data": _json(message)}
         finally:
-            ctx.broadcast.unsubscribe(f"plane:{node_id}", queue)
+            ctx.broadcast.unsubscribe(node_topic, queue)
 
     return EventSourceResponse(stream())
 
@@ -164,40 +248,213 @@ async def telemetry(
 ) -> dict:
     ctx = _ctx(request)
     run_id = body.get("run_id", node_id)
-    lines: list[dict[str, Any]] = body.get("events", [])
-    await ctx.store.upsert_run(run_id, node_id, body.get("scenario", "live"), _now())
-    stored = await ctx.store.ingest_events(run_id, node_id, lines, idempotency_key)
+    # Same door as /v1/ingest, and it has to be: the batch is held, parsed and
+    # folded in memory, so its size is a resource the caller controls — and a
+    # line the kernel cannot read poisons every later read of the run whichever
+    # of the two routes let it in.
+    lines: list[dict[str, Any]] = check_batch(body.get("events", []))
+    await ctx.store.upsert_run(run_id, node_id, body.get("scenario", "live"), now())
+    # Delivery is at-least-once: a batch is resent whenever its ack is lost, so
+    # applying its effects again would overwrite the node's reported state with a
+    # level it had already left — a node degraded to LOCKED read NORMAL in the
+    # console, which is the plane's one job told backwards. The Idempotency-Key
+    # is what says "already accepted", and it is the ONLY thing that says it.
+    # Whether rows were written does not: an adapter that restarts numbers its
+    # events from zero again on the same keepalive run, so a genuinely new report
+    # can collide with the previous process's rows and store nothing. Gating on
+    # that would make a restarted node go permanently dark.
+    result = await ctx.store.ingest_events(run_id, node_id, lines, idempotency_key)
+    if not result.replayed:
+        await _fold_reported(ctx, node_id, run_id, lines)
+    # A node that dials in is a node the customer is running today. Recorded on
+    # every delivery, replays included: the record is per (node, day) and a
+    # replay means the day was already noted, so noting it again costs one cache
+    # hit and gating it on `replayed` would lose the day of a node whose only
+    # successful delivery that day was a resend.
+    await _note_active(ctx, node_id)
+    # Each stored event carries the id a reconnecting subscriber resumes from.
+    for event_id, line in result.rows:
+        ctx.broadcast.publish(
+            topic("run", run_id),
+            {"type": "event", "id": event_id, "line": line},
+        )
+    return {"stored": len(result.rows)}
+
+
+async def _note_active(ctx: Any, node_id: str) -> None:  # noqa: ANN401
+    """Record that this node reported today, for the governed-node meter.
+
+    `ctx.active_today` maps (org, node) to the UTC day already written by THIS
+    deployment. A heartbeat every ten seconds must not be a write every ten
+    seconds; the row is idempotent by primary key anyway, so the cache saves a
+    round trip and never decides correctness — a restart simply re-records
+    today, and a stale entry costs at most one missing write for a day that is
+    already recorded.
+
+    It lives on app.state rather than in a module global because a module
+    global outlives the database it was describing: two apps in one process
+    (every test file here, and any embedding) would share one cache over two
+    stores, and the second would silently record nothing.
+    """
+    org = current_org_id()
+    day = today()
+    if ctx.active_today.get((org, node_id)) == day:
+        return
+    await ctx.store.record_node_activity(node_id, day)
+    ctx.active_today[(org, node_id)] = day
+
+
+async def _fold_reported(
+    ctx: Any,  # noqa: ANN401 - app.state is dynamic
+    node_id: str,
+    run_id: str,
+    lines: list[dict[str, Any]],
+) -> None:
+    """Fold a batch's heartbeats into the node's reported state, once.
+
+    Only the last heartbeat survives in the store — reported state is LWW — so
+    the batch is walked to find it and written once, rather than read-and-written
+    per line. The walk still compares each step, because a batch that climbs
+    NORMAL -> LOCKED -> NORMAL really did reach LOCKED, and the operator is
+    entitled to be told even though nothing in the store will remember it.
+    """
+    heartbeats = [ln for ln in lines if ln.get("kind") == "heartbeat"]
+    if any(ln.get("kind") == "operator_intervention" for ln in lines):
+        await ctx.store.mark_intervened(run_id)
+    if not heartbeats:
+        return
+
+    prior = await ctx.store.get_reported(node_id)          # one read
+    level = prior["level"] if prior else "NORMAL"
+    climbs: list[tuple[str, str]] = []
+    for line in heartbeats:
+        reached = str((line.get("payload") or {}).get("level", "NORMAL"))
+        if _LEVELS.get(reached, 0) > _LEVELS.get(level, 0):
+            climbs.append((level, reached))
+        level = reached
+
+    last = heartbeats[-1].get("payload") or {}
+    await ctx.store.upsert_reported(                        # one write
+        node_id,
+        applied_version=int(last.get("applied_version", 0)),
+        level=str(last.get("level", "NORMAL")),
+        budget_remaining=last.get("budget_remaining"),
+        ts=now(),
+    )
+    # Broadcast what was STORED, so a live panel and a reload agree.
+    ctx.broadcast.publish(
+        topic("plane", node_id),
+        {"type": "reported", "node_id": node_id, "reported": last},
+    )
+    # Upward degradation transition — spec §16 trigger.
     notifier = getattr(ctx, "notifier", None)
-    _LEVELS = {"NORMAL": 0, "CAUTIOUS": 1, "RESTRICTED": 2, "LOCKED": 3, "TERMINAL": 4}
-    for line in lines:
-        kind = line.get("kind")
-        if kind == "heartbeat":
-            hb = line.get("payload", {})
-            prior = await ctx.store.get_reported(node_id)
-            await ctx.store.upsert_reported(
-                node_id,
-                applied_version=int(hb.get("applied_version", 0)),
-                level=str(hb.get("level", "NORMAL")),
-                budget_remaining=hb.get("budget_remaining"),
-                ts=_now(),
-            )
-            ctx.broadcast.publish(
-                f"plane:{node_id}",
-                {"type": "reported", "node_id": node_id, "reported": hb},
-            )
-            # Notify on an upward level transition (spec section 16 trigger).
-            new_level = str(hb.get("level", "NORMAL"))
-            old_level = prior["level"] if prior else "NORMAL"
-            if notifier is not None and _LEVELS.get(new_level, 0) > _LEVELS.get(old_level, 0):
-                await notifier.emit(
-                    "level_transition_up", node_id,
-                    {"from": old_level, "to": new_level,
-                     "permalink": f"/v1/plane/nodes#{node_id}"},
-                )
-        if kind == "operator_intervention":
-            await ctx.store.mark_intervened(run_id)
-        ctx.broadcast.publish(f"run:{run_id}", {"type": "event", "line": line})
-    return {"stored": stored}
+    if notifier is None:
+        return
+    for from_level, to_level in climbs:
+        await notifier.emit(
+            "level_transition_up", node_id,
+            {"from": from_level, "to": to_level,
+             "permalink": f"/v1/plane/nodes#{node_id}"},
+        )
+
+
+def _check_attestation(fact: dict, signing_operator: str) -> None:
+    """Admit an operator attestation, or say exactly why not.
+
+    Three refusals, all 400 — an attestation the plane stores but cannot place
+    or attribute is worse than one it never took:
+
+    * Sentinel's own rule (reason + operator identity, decision 8), imported
+      rather than restated, so the plane and Sentinel cannot come to disagree
+      about what a valid attestation is.
+    * ``run_id``, whenever the attestation vouches for anything at all. It can
+      vouch two ways, and both are minted per run. ``covers`` names FACT IDS —
+      the kernel's contract (:class:`axor_core.kernel.events.Fact`), and what
+      ``compute_level`` discharges — and the trace bridge mints those as
+      ``deg_{seq}`` / ``quar_{seq}``. ``causal_root`` names a value branch —
+      Sentinel's contract (:class:`AttestationRecord.causal_root`) — and the
+      runtime mints those as ``v_ext_1``. Both counters restart at zero every
+      run, so without the run neither is identified and the coverage lands on
+      every other run's fact or ref of the same name. An attestation with
+      neither is a recorded operator note on the node: it vouches for nothing,
+      appears on no branch's surface, discharges no fact, and needs no run.
+    * The fact's ``operator`` must be the operator whose key signed the request.
+      The signature covers the fact body, so the two were always transmitted
+      together — but nothing compared them, and the attribution the whole surface
+      exists to record is the field that was not checked. Unsigned deployments
+      (no keyring, ``allow_unsigned``) have no signing operator to compare
+      against; there the fact's own claim is all there is.
+    """
+    try:
+        validate_attestation(fact)
+    except AttestationError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    if (fact.get("covers") or fact.get("causal_root")) and not fact.get("run_id"):
+        raise HTTPException(
+            400, "an attestation that vouches for something requires run_id: "
+                 "fact ids and value refs alike are unique only inside the run "
+                 "that minted them",
+        )
+    claimed = str(fact.get("operator") or "")
+    if signing_operator and claimed != signing_operator:
+        raise HTTPException(
+            403,
+            f"attestation claims operator {claimed!r} but is signed by "
+            f"{signing_operator!r}",
+        )
+
+
+async def _check_run_scope(ctx: Any, fact: dict) -> None:  # noqa: ANN401
+    """The two things only the run can answer, so they cannot be checked above.
+
+    * **The fact id must not be one the run already recorded.** `append_fact`
+      enforces append-only within the fact log, and the run's own facts live in
+      the event log — different tables, no shared uniqueness. So an attestation
+      could take a recorded fact's id, and `coverage` merged the two by id: the
+      degradation fact was replaced by an attestation, `compute_level` skips
+      attestations, and a severity-4 quarantine went TERMINAL -> NORMAL under a
+      note whose `covers` was empty. Descent by deletion, with the fact gone
+      from the panel rather than shown discharged.
+    * **Every id in `covers` must be a fact of that run.** The door already
+      demands `run_id` whenever an attestation vouches for anything, because
+      fact ids are unique only inside the run that minted them. Naming an id
+      that run does not have is the same mistake one step further, and it used
+      to answer 201 and do nothing — a transposed character bought silence. It
+      also refuses attesting a fact that has not happened yet, which is
+      "trust this forever" rather than Sentinel's "I checked, resume watching".
+
+    Reading the run back costs what any read of a run costs (docs/ops-limits.md,
+    bounded by AXOR_MAX_EVENTS_PER_RUN). An operator appending a fact is rare and
+    deliberate; getting this wrong is permanent, because the fact log is
+    append-only and nothing can delete the collision afterwards.
+    """
+    run_id = str(fact.get("run_id") or "")
+    if not run_id:
+        return  # vouches for nothing and reaches no run's coverage
+    try:
+        events = await kernel_events_or_empty(ctx.store, run_id)
+    except HTTPException as exc:
+        raise HTTPException(
+            400,
+            f"cannot place this attestation in run {run_id}: its trace does "
+            f"not read back ({exc.detail})",
+        ) from exc
+    run_facts = facts_of_run(events)
+    fact_id = str(fact.get("fact_id") or "")
+    if fact_id in run_facts:
+        raise HTTPException(
+            409,
+            f"run {run_id} already recorded a fact with id {fact_id!r}. An "
+            f"attestation COVERS a fact, it never takes its id — taking it "
+            f"would replace the fact instead of discharging it.",
+        )
+    unknown = sorted({str(c) for c in (fact.get("covers") or ())} - set(run_facts))
+    if unknown:
+        raise HTTPException(
+            400,
+            f"run {run_id} has no fact(s) {unknown}; an attestation can only "
+            f"cover facts that run recorded. It has: {sorted(run_facts) or 'none'}.",
+        )
 
 
 @router.post("/{node_id}/facts", status_code=201)
@@ -209,8 +466,8 @@ async def append_fact(node_id: str, body: dict, request: Request) -> dict:
     operator = body.get("operator", "")
     timestamp = body.get("timestamp", "")
     sig = body.get("sig", "")
-    if fact.get("fact_type") == "operator_attestation" and not fact.get("reason"):
-        raise HTTPException(400, "attestation requires a reason (decision 8)")
+    if fact.get("fact_type") == ATTESTATION_FACT_TYPE:
+        _check_attestation(fact, operator)
     if not ctx.keyring.empty:
         try:
             ctx.keyring.verify(
@@ -220,18 +477,15 @@ async def append_fact(node_id: str, body: dict, request: Request) -> dict:
             raise HTTPException(403, str(exc)) from exc
     elif not ctx.allow_unsigned:
         raise HTTPException(403, "no operator keys registered; facts rejected")
-    appended = await ctx.store.append_fact(node_id, fact, _now())
+    # After the signature, not before: this one reads the whole run back, and an
+    # unverified caller should not be able to spend that.
+    if fact.get("fact_type") == ATTESTATION_FACT_TYPE:
+        await _check_run_scope(ctx, fact)
+    appended = await ctx.store.append_fact(node_id, fact, now())
     if not appended:
         raise HTTPException(409, "fact_id already exists (append-only)")
-    # An operator attestation is an append-only node over the branch it covers
-    # (spec 8.1.1) — mirror it into the taint graph so the graph's attestation
-    # surface and the fact log stay one story.
-    graph = getattr(ctx, "graph", None)
-    if graph is not None and fact.get("fact_type") == "operator_attestation":
-        import json as _json
-        await graph.append_attestation(_json.dumps(fact))
     ctx.broadcast.publish(
-        f"plane:{node_id}",
+        topic("plane", node_id),
         {"type": "fact", "node_id": node_id, "fact": fact,
          "operator": operator, "timestamp": timestamp, "sig": sig},
     )
@@ -255,6 +509,39 @@ async def append_fact(node_id: str, body: dict, request: Request) -> dict:
     return {"appended": True}
 
 
+@router.get("/{node_id}/coverage")
+async def node_coverage(node_id: str, request: Request) -> dict:
+    """What this node's level is made of, and what an attestation would change.
+
+    The answer is the kernel's own recompute (``compute_level`` over the facts
+    and their coverage), not a second opinion held here — see
+    :mod:`axor_backend.coverage`. It is what makes "attest branch" an action
+    rather than a gesture: the operator sees the facts holding the node down,
+    which fact ids an attestation would have to name, and what the level becomes
+    once it does.
+
+    ``reported_level`` is the node's own last word and is never overwritten by
+    this. A node converges when the attestation reaches it on its desired-state
+    stream; until then the two differ, and the divergence is rendered rather
+    than hidden (protocol, section 5).
+    """
+    ctx = _ctx(request)
+    run_id = await ctx.store.latest_run_for_node(node_id)
+    reported = await ctx.store.get_reported(node_id)
+    if run_id is None:
+        # Not an error: a node that has never reported has no facts and nothing
+        # to attest. Saying so beats a 404 the panel would have to guess about.
+        return {"node_id": node_id, "run_id": None,
+                "reported_level": (reported or {}).get("level", "NORMAL"),
+                "level": "NORMAL", "facts": [], "covered": []}
+    report = coverage(
+        await kernel_events_or_empty(ctx.store, run_id),
+        await ctx.store.attestation_facts(run_id),
+        reported_level=(reported or {}).get("level", "NORMAL"),
+    )
+    return {"node_id": node_id, "run_id": run_id, **report}
+
+
 @router.post("/{node_id}/consumed", status_code=200)
 async def consumed(node_id: str, body: dict, request: Request) -> dict:
     ctx = _ctx(request)
@@ -265,12 +552,25 @@ async def consumed(node_id: str, body: dict, request: Request) -> dict:
     return {"cleared": key}
 
 
-# Verdict constants mirrored from axor-probe (the backend never imports it —
-# the payload shape is the whole contract, same posture as everywhere else).
-_PROBE_VERDICTS = frozenset({
-    "CONSISTENT", "DRIFT_DETECTED", "INCONCLUSIVE", "CONSISTENCY_ANOMALY",
-})
-_FAMILY_STATES = frozenset({"clean", "escaped", "unprobed"})
+# The probe vocabulary, imported from the module that DEFINES the payload this
+# route accepts (`axor_probe.integration.plane`). It was mirrored here as two
+# literals, with a comment calling that "the same posture as everywhere else" —
+# which was the opposite of the posture this backend takes to its other
+# neighbours, and the comments beside those dependencies say why:
+#
+#   axor-core     "Neither is mirrored here — a copy of a decoder is how a copy
+#                  of a decision starts."
+#   axor-sentinel "Imported, not restated: a plane that decided for itself what
+#                  a valid attestation is would be a second answer to a question
+#                  Sentinel already answers."
+#
+# The copy happened to match. Nothing checked that it did: `_PROBE_VERDICTS`
+# appeared nowhere but this file, and nothing in axor-probe knew a control plane
+# existed. A fifth verdict there and this route would have answered 400 to every
+# report from an upgraded node, with no test in either repository noticing.
+#
+# This is not only storage: `DRIFT_DETECTED` below decides whether a node's
+# operator is paged.
 
 
 @router.post("/{node_id}/probe-report", status_code=201)
@@ -289,34 +589,92 @@ async def post_probe_report(node_id: str, body: dict, request: Request) -> dict:
     """
     ctx = _ctx(request)
     verdict = body.get("overall_verdict")
-    if verdict not in _PROBE_VERDICTS:
+    if verdict not in probe_plane.VERDICTS:
         raise HTTPException(
-            400, f"overall_verdict must be one of {sorted(_PROBE_VERDICTS)}"
+            400,
+            f"overall_verdict must be one of {sorted(probe_plane.VERDICTS)}",
         )
     families = body.get("families", [])
     if not isinstance(families, list):
         raise HTTPException(400, "`families` must be a list")
     for fam in families:
-        if not isinstance(fam, dict) or fam.get("state") not in _FAMILY_STATES:
+        if not isinstance(fam, dict) or fam.get("state") not in probe_plane.FAMILY_STATES:
             raise HTTPException(
-                400, f"each family needs a state in {sorted(_FAMILY_STATES)}"
+                400,
+                f"each family needs a state in {sorted(probe_plane.FAMILY_STATES)}",
             )
-    report_id = await ctx.store.add_probe_report(node_id, body, _now())
+        # `family` is validated because it is READ below, when a DRIFT_DETECTED
+        # report names the escaped families in its notification. Checking only
+        # `state` left the name unchecked, so a report without one raised a
+        # KeyError — a 500 on the route a node posts its own health to, which
+        # axor-wrap treats as a programming error and re-raises. The battery
+        # crashed instead of the report being rejected.
+        if not isinstance(fam.get("family"), str) or not fam["family"]:
+            raise HTTPException(400, "each family needs a non-empty `family` name")
+    # The repair proposal rides along when the node ran the localizer. It is
+    # optional — a battery without one is a battery, and a node that does not
+    # localize still reports health — but a malformed one is refused rather
+    # than stored: this is the object an operator's excision is built from, and
+    # the refusal has to happen while the node is still there to hear it.
+    if "repair_proposal" in body:
+        try:
+            probe_plane.proposal_from_payload(body["repair_proposal"])
+        except ValueError as exc:
+            raise HTTPException(400, f"repair_proposal: {exc}") from exc
+    report_id = await ctx.store.add_probe_report(node_id, body, now())
+    outcomes = await _close_heals(ctx, node_id, verdict)
     ctx.broadcast.publish(
-        f"plane:{node_id}",
+        topic("plane", node_id),
         {"type": "probe_report", "node_id": node_id, "report": body},
     )
     notifier = getattr(ctx, "notifier", None)
-    if notifier is not None and verdict == "DRIFT_DETECTED":
+    if notifier is not None and verdict == probe_plane.VERDICT_DRIFT_DETECTED:
+        # The graded tier travels with the page. Two reports that both say
+        # DRIFT_DETECTED are not the same news: one backed by canary escapes is
+        # a deterministic fact about the probe output, the other is a
+        # judge-graded anomaly discounted again for being uncalibrated. On-call
+        # was being handed the same line for both.
+        graded = drift_case(body) or {}
         await notifier.emit(
             "behavioral_drift", node_id,
             {"escape_count": int(body.get("escape_count", 0)),
              "probes_sent": int(body.get("probes_sent", 0)),
              "families": [f["family"] for f in families
                           if f.get("state") == "escaped"],
+             "verdict_source": graded.get("verdict_source"),
+             "confidence": graded.get("confidence"),
              "permalink": f"/v1/plane/nodes#{node_id}"},
         )
-    return {"stored": True, "id": report_id}
+    return {"stored": True, "id": report_id, "heals_verified": outcomes}
+
+
+async def _close_heals(ctx: Any, node_id: str, verdict: str) -> list[dict]:  # noqa: ANN401
+    """Fold this report into every commanded cut still awaiting verification.
+
+    The FIRST report after a cut is the verifying re-probe, whichever battery
+    it happens to be — a node reports its own health, it does not run one
+    battery per excision. Later reports describe a later state and leave the
+    closed verdict alone, which is what makes the pair readable afterwards:
+    "this cut was followed by this result", not "the node is fine now".
+
+    `resolved` is axor-probe's, not a comparison written again here.
+    """
+    outcomes = []
+    for attempt in await ctx.store.open_heal_attempts(node_id):
+        outcome = probe_plane.heal_outcome(
+            attempt["excision_id"], attempt["operator"],
+            tuple(attempt["families"]), verdict,
+        )
+        await ctx.store.close_heal_attempt(
+            attempt["id"], outcome.reprobe_verdict, outcome.resolved, now(),
+        )
+        outcomes.append({
+            "excision_id": outcome.excision_id, "operator": outcome.operator,
+            "healed_families": list(outcome.healed_families),
+            "reprobe_verdict": outcome.reprobe_verdict,
+            "resolved": outcome.resolved, "caption": outcome.caption,
+        })
+    return outcomes
 
 
 @router.get("/{node_id}/probe-report")
@@ -329,9 +687,200 @@ async def get_probe_report(node_id: str, request: Request) -> dict:
     (ui-spec 8.2).
     """
     ctx = _ctx(request)
+    latest = await ctx.store.latest_probe_report(node_id)
     return {
-        "latest": await ctx.store.latest_probe_report(node_id),
+        "latest": latest,
         "history": await ctx.store.probe_report_history(node_id),
+        # The same battery, graded in axor-eval's vocabulary — the tier this
+        # plane used to discard. Null when the verdict is not a deviation, and
+        # `in_integrity_score: false` on the case itself: drift answers "has my
+        # agent changed?", never "does my agent lie under fault?" (ui-spec 8.2).
+        "drift_case": drift_case(latest),
+    }
+
+
+@router.get("/{node_id}/repair")
+async def get_repair(node_id: str, request: Request) -> dict:
+    """What the localizer found, what was cut, and whether it worked.
+
+    `proposal` is the RepairProposal the node posted with its last battery, or
+    null when it did not run the localizer — there is nothing to offer an
+    operator then, and the panel says so rather than offering a cut with no
+    verdict behind it. `pending` is the excision currently sitting in desired
+    state (delivered, not yet consumed). `history` is the heal->verify pairs,
+    newest first, including the ones still waiting for their re-probe.
+    """
+    ctx = _ctx(request)
+    latest = await ctx.store.latest_probe_report(node_id)
+    current = await ctx.store.get_desired(node_id)
+    state = current[1] if current else {}
+    return {
+        "proposal": (latest or {}).get("repair_proposal"),
+        "version": current[0] if current else 0,
+        "pending": state.get("pending_excision"),
+        "history": await ctx.store.heal_attempt_history(node_id),
+    }
+
+
+@router.post("/{node_id}/repair/excision-request")
+async def build_excision(node_id: str, body: dict, request: Request) -> dict:
+    """Turn the node's repair proposal into a `pending_excision` command body.
+
+    This route SHAPES; it does not command. The body it returns goes back
+    through `POST /{node}/command`, which is the one door into desired state
+    and the one that checks an operator signature. Writing the excision here
+    would have been a second door into the same channel that skipped the
+    signature — on the deployments the operator keyring exists for, the
+    convenient route would have been the unsigned one.
+
+    The body is built by `axor_probe.integration.plane.excision_request`, so
+    the rule that fragments the localizer ESCALATED are not cut without an
+    explicit `include_escalated` is enforced by the library that decided which
+    fragments those were, not by a copy of the rule living here.
+    """
+    ctx = _ctx(request)
+    reason = body.get("reason", "")
+    if not isinstance(reason, str) or not reason.strip():
+        raise HTTPException(400, "reason is required")
+    latest = await ctx.store.latest_probe_report(node_id)
+    payload = (latest or {}).get("repair_proposal")
+    if payload is None:
+        raise HTTPException(
+            409,
+            "no repair proposal for this node: the last battery did not "
+            "localize the drift, so there is nothing to excise",
+        )
+    try:
+        proposal = probe_plane.proposal_from_payload(payload)
+    except ValueError as exc:  # pragma: no cover - refused at ingest
+        raise HTTPException(500, f"stored repair_proposal is not one: {exc}") from exc
+
+    excision_id = str(body.get("excision_id") or f"exc_{node_id}_{latest['id']}")
+    try:
+        command_body = probe_plane.excision_request(
+            proposal, excision_id=excision_id, reason=reason.strip(),
+            operator=str(body.get("operator", "op_ui")),
+            include_escalated=bool(body.get("include_escalated", False)),
+        )
+    except probe_plane.ExcisionNotApplicable as exc:
+        # 422: the request is well-formed, the proposal does not authorize it.
+        raise HTTPException(422, str(exc)) from exc
+
+    current = await ctx.store.get_desired(node_id)
+    return {
+        "state": {"pending_excision": command_body},
+        "version": (current[0] if current else 0) + 1,
+        "escalated_included": bool(body.get("include_escalated", False)),
+    }
+
+
+# ── cross-session reputation ──────────────────────────────────────────────────
+#
+# The one axis in this product that survives between sessions. axor-core sees
+# one session, axor-eval one scenario, axor-probe one battery, and this plane
+# one node's posture; axor-sentinel is what watches a resource across all of
+# them, which is what catches an exfiltration staged over dozens of
+# individually normal sessions.
+#
+# It runs on the NODE, beside axor-core, and it must: ui-spec §12.0 — enforcement
+# stays local, the plane never enters the decision path. A reputation cycle
+# running here, feeding a node's own decisions, is precisely what that
+# architecture forbids. So the snapshot is posted out-dial, exactly like
+# telemetry and the health check, and the plane's job is the one ui-spec:416
+# gives it: render the reputation, per node.
+#
+# What arrives is `axor_sentinel.sentinel.snapshot`'s own shape, parsed by its
+# own `snapshot_from_payload` — the checksum check, the finite suspicion
+# codomain and the level vocabulary all belong to the library that computes
+# them. A plane that decided for itself what a reputation verdict is would be a
+# second answer to the question Sentinel exists to answer.
+
+
+@router.post("/{node_id}/reputation", status_code=201)
+async def post_reputation(node_id: str, body: dict, request: Request) -> dict:
+    """Ingest one ReputationSnapshot from a node's axor-sentinel.
+
+    Refused (400) when the payload is not a snapshot — including a checksum
+    that does not match the maps it carries. On disk that check catches a lost
+    bit between two processes that trust each other; over this wire the maps
+    and their checksum arrive together from somewhere else, and clearing a
+    FLAGGED resource is exactly the edit worth making.
+
+    A snapshot no newer than the one held is accepted and NOT stored (200-shaped
+    `{"stored": false}` in a 201 body would lie, so the answer says which). The
+    version is monotonic at the sentinel that wrote it, so an older one is a
+    retry or a reorder — never news, and never a reason to walk a node's
+    reputation backwards.
+    """
+    ctx = _ctx(request)
+    try:
+        snapshot = snapshot_from_payload(body)
+    except SnapshotRejected as exc:
+        raise HTTPException(400, f"reputation snapshot: {exc}") from exc
+
+    stored = await ctx.store.put_reputation(
+        node_id, snapshot.version, snapshot.generated_at, body, now(),
+    )
+    if not stored:
+        held = await ctx.store.reputation(node_id)
+        raise HTTPException(
+            409,
+            f"snapshot version {snapshot.version} is not newer than the "
+            f"version {held['version']} already held for this node",
+        )
+    ctx.broadcast.publish(
+        topic("plane", node_id),
+        {"type": "reputation", "node_id": node_id, "version": snapshot.version},
+    )
+    notifier = getattr(ctx, "notifier", None)
+    flagged = sorted(
+        rid for rid, level in snapshot.resource_level.items() if level == "FLAGGED"
+    )
+    if notifier is not None and flagged:
+        await notifier.emit(
+            "heat_threshold", node_id,
+            {"flagged": flagged, "version": snapshot.version,
+             "facts": {rid: snapshot.verdict_facts.get(rid, []) for rid in flagged},
+             "permalink": f"/v1/plane/nodes#{node_id}"},
+        )
+    return {"stored": True, "version": snapshot.version, "flagged": len(flagged)}
+
+
+@router.get("/{node_id}/reputation")
+async def get_reputation(node_id: str, request: Request) -> dict:
+    """The node's last reported reputation, or null.
+
+    Null means this node has no sentinel reporting — an absence of evidence,
+    rendered as such and never as a clean bill, the same rule the health panel
+    holds for a node that never posted a battery.
+    """
+    return {"reputation": await _ctx(request).store.reputation(node_id)}
+
+
+def _reputation_summary(snapshot: dict | None) -> dict | None:
+    """Per-node counts for the topology annotation, or None.
+
+    None is a node whose sentinel has never reported, and it renders as an
+    absence. It is NOT `flagged: 0`: "nobody is watching this node across
+    sessions" and "somebody is watching and found nothing" are opposite facts,
+    and collapsing them would make an unwatched node the cleanest thing on the
+    graph.
+    """
+    if snapshot is None:
+        return None
+    levels = snapshot.get("resource_level") or {}
+    counts = {"FLAGGED": 0, "WATCH": 0, "CLEAN": 0}
+    for level in levels.values():
+        if level in counts:
+            counts[level] += 1
+    return {
+        "version": snapshot.get("version"),
+        "generated_at": snapshot.get("generated_at"),
+        "received_ts": snapshot.get("received_ts"),
+        "flagged": counts["FLAGGED"],
+        "watch": counts["WATCH"],
+        "clean": counts["CLEAN"],
+        "resources": len(levels),
     }
 
 
@@ -392,14 +941,24 @@ async def topology(request: Request) -> dict:
     # Plane-connected nodes with no traced edges still render (size-1 lists).
     for nid in await ctx.store.list_nodes():
         touch(nid)
+    # Three queries for the whole fleet, not three per node.
+    desired_by_node = await ctx.store.all_desired()
+    reported_by_node = await ctx.store.all_reported()
+    reputation_by_node = await ctx.store.all_reputation()
     for n in nodes.values():
         if n["kind"] != "self":
             continue  # foreign peers are opaque: no posture, no interventions
-        current = await ctx.store.get_desired(n["node_id"])
+        current = desired_by_node.get(n["node_id"])
         n["desired"] = (
             {"version": current[0], "state": current[1]} if current else None
         )
-        n["reported"] = await ctx.store.get_reported(n["node_id"])
+        n["reported"] = reported_by_node.get(n["node_id"])
+        # ui-spec:416 — "topology annotated with cross-session reputation per
+        # node". Summarised, not the whole snapshot: this surface is polled and
+        # a sentinel's resource map is unbounded. The counts say whether to
+        # look; `GET /{node}/reputation` is where the resources and the facts
+        # behind each verdict are.
+        n["reputation"] = _reputation_summary(reputation_by_node.get(n["node_id"]))
     return {
         "nodes": sorted(nodes.values(), key=lambda n: n["node_id"]),
         "edges": sorted(edges.values(), key=lambda e: (e["from"], e["to"], e["kind"])),
@@ -411,18 +970,68 @@ async def nodes(request: Request) -> list[dict]:
     """Topology data: desired next to reported — divergence is rendered, not
     hidden (protocol, section 5)."""
     ctx = _ctx(request)
+    # Four queries for the whole fleet. Built per node this cost three round
+    # trips each — 151 of them for 50 nodes, on a surface the UI polls.
+    desired_by_node = await ctx.store.all_desired()
+    reported_by_node = await ctx.store.all_reported()
+    facts_by_node = await ctx.store.facts_by_node()
     out = []
     for node_id in await ctx.store.list_nodes():
-        current = await ctx.store.get_desired(node_id)
+        current = desired_by_node.get(node_id)
         out.append({
             "node_id": node_id,
             "desired": (
                 {"version": current[0], "state": current[1]} if current else None
             ),
-            "reported": await ctx.store.get_reported(node_id),
-            "facts": await ctx.store.node_facts(node_id),
+            "reported": reported_by_node.get(node_id),
+            "facts": facts_by_node.get(node_id, []),
         })
     return out
+
+
+def _signature(
+    ctx: Any, operator: str, timestamp: str, sig: str,  # noqa: ANN401
+) -> dict[str, str] | None:
+    """The triple to record with a delta, or None when nothing was verified.
+
+    An open deployment (no keyring) checks no signature, so it has none to
+    record — and recording the caller's unverified claim would be worse than
+    recording nothing: the adapter would be handed a `sig` that fails
+    verification, when the truth is that this field was never signed at all.
+    """
+    if ctx.keyring.empty:
+        return None
+    return {"operator": operator, "timestamp": timestamp, "sig": sig}
+
+
+async def _apply(
+    ctx: Any,  # noqa: ANN401 - app.state is dynamic
+    node_id: str,
+    delta: dict[str, Any],
+    *,
+    expect_version: int | None = None,
+    signature: dict[str, str] | None = None,
+) -> tuple[int, dict[str, Any]]:
+    """Write a desired-state delta, turning the store's two concurrency
+    outcomes into the answers an operator can act on.
+
+    Both are 409, and both mean the same thing to the caller — the command was
+    NOT applied, re-read the version and send it again. They are separate types
+    because only one of them is safe to retry inside the store.
+
+    `signature` is the verified (operator, timestamp, sig) this delta arrived
+    with, kept so the desired-state snapshot can hand the adapter the signed
+    command behind each field. Omitted on an unsigned bump, which drops the
+    affected keys' recorded commands rather than borrowing them.
+    """
+    try:
+        return await ctx.store.bump_desired(
+            node_id, delta, expect_version=expect_version, signature=signature,
+        )
+    except StaleVersion as exc:
+        raise HTTPException(409, str(exc)) from exc
+    except ConcurrentUpdate as exc:
+        raise HTTPException(409, str(exc)) from exc
 
 
 def _json(value: dict) -> str:

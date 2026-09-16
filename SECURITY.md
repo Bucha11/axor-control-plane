@@ -24,7 +24,7 @@ scrubbed again at export time (`share._scrub`).
 deployments; schema is migrated by alembic at boot.
 
 **Failure mode: Axor down ⇒ agent unaffected.** The control plane is an
-*advisory overlay* (protocol v0.2): the adapter enforces locally with its own
+*advisory overlay* (protocol v0.3): the adapter enforces locally with its own
 config; the plane channel only carries operator intent. If the backend is
 unreachable, a governed agent keeps enforcing its local policy and simply
 stops reporting; the observe-only proxy on failure returns 502 for armed runs
@@ -33,9 +33,14 @@ and never silently fabricates a response.
 **Operator command integrity.** Plane commands are Ed25519-signed over
 RFC 8785 (JCS) canonical bytes. The backend verifies as defense in depth, but
 the **adapter re-verifies with operator public keys from its own config** — a
-compromised backend cannot forge commands. Floats are rejected in signed
-payloads by construction. Dev mode (`AXOR_ALLOW_UNSIGNED=1`) disables this and
-is loudly logged at boot.
+compromised backend cannot forge commands. That covers the snapshot the
+desired-state stream opens with as well as the deltas after it (protocol v0.3
+§3): the snapshot carries the signed command behind each field, the adapter
+checks every one, and a field no command accounts for refuses the whole
+snapshot. Until v0.3 the snapshot was unsigned, and reconnect — which is
+routine, not exceptional — was a way around this paragraph. Floats are rejected
+in signed payloads by construction. Dev mode (`AXOR_ALLOW_UNSIGNED=1`) disables
+this and is loudly logged at boot.
 
 **API access control.** Opt-in bearer auth: unset token = open (dev), set
 token = enforced. Scoped API keys (`read < ingest < operate < admin`) are

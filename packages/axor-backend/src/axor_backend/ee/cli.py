@@ -3,7 +3,13 @@ hand-writing code. Same Ed25519 + JCS stack the plane uses; fully offline.
 
   axor-license keygen                            → vendor keypair (hex)
   axor-license issue --key-file <path> --org …   → signed license-file JSON
+      --governed-nodes defaults to the rung's standard allowance; departing
+      from it is allowed and announced, so a Team license with 500 nodes is a
+      decision rather than a typo.
       (key sources, preferred first: --key-file, AXOR_VENDOR_KEY env, --key)
+      prints the customer's .env block alongside, so the organization name is
+      copied rather than retyped — it must match `AXOR_ORG` EXACTLY or the
+      deployment refuses the license, and it is a free-text company name.
   axor-license verify --pubkey <pub> <file>      → validity + fields
 
 Commercial module (ee/) — see ee/LICENSE.
@@ -15,7 +21,13 @@ import json
 import sys
 from datetime import UTC, datetime
 
-from axor_backend.ee.license import KNOWN_MODULES, LicenseError, sign_license, verify_license
+from axor_backend.ee.license import (
+    TIER_NODE_CEILING,
+    TIERS,
+    LicenseError,
+    sign_license,
+    verify_license,
+)
 
 
 def _keygen(_args: argparse.Namespace) -> int:
@@ -50,19 +62,62 @@ def _issue(args: argparse.Namespace) -> int:
             file=sys.stderr,
         )
         return 2
+    tier = args.workspace_tier
+    standard = TIER_NODE_CEILING.get(tier)
+    nodes = args.governed_nodes
+    if nodes is None:
+        if standard is None:
+            print(
+                f"the {tier} rung is negotiated and has no standard fleet size: "
+                "pass --governed-nodes with the number in the contract.",
+                file=sys.stderr,
+            )
+            return 2
+        nodes = standard
+    elif nodes <= 0:
+        # The ceiling used to be decorative, so a zero passed unnoticed. It is
+        # compared to the live fleet on every housekeeping sweep now, and a
+        # license with a ceiling of zero means a warning every pass about a
+        # customer who has paid. It never blocks a node — it just accuses one.
+        print(
+            "--governed-nodes must be above 0: the deployment compares its live "
+            "fleet against it on every sweep, so 0 warns forever about a "
+            "customer who has paid.",
+            file=sys.stderr,
+        )
+        return 2
+    elif standard is not None and nodes != standard:
+        # Deliberate is fine, silent is not: the standard sale is one number per
+        # rung, and a license that departs from it should say so while it can
+        # still be reissued.
+        print(
+            f"note: the {tier} rung is sold with {standard} governed nodes; this "
+            f"license is being issued with {nodes}.",
+            file=sys.stderr,
+        )
     lic = {
         "organization": args.org,
         "workspace_tier": args.workspace_tier,
-        "modules": {
-            "private_lab": args.private_lab,
-            "control_plane": args.control_plane,
-        },
-        "governed_node_ceiling": args.governed_nodes,
+        "governed_node_ceiling": nodes,
         "self_hosted_runner": args.self_hosted,
         "expires_at": args.expires_at,
         "features": args.features or [],
     }
-    print(sign_license(lic, key))
+    signed = sign_license(lic, key)
+    print(signed)
+    if not args.no_env_block:
+        from nacl.signing import SigningKey  # noqa: PLC0415
+
+        pub = SigningKey(bytes.fromhex(key)).verify_key.encode().hex()
+        print(
+            "\n# ── send this to the customer with the license file ──\n"
+            f"# AXOR_ORG must match the license EXACTLY or it is refused.\n"
+            f"AXOR_ORG={args.org}\n"
+            f"AXOR_VENDOR_PUBKEY={pub}\n"
+            f"# expires {args.expires_at} — EE goes read-only after that date;\n"
+            "# safety features are untouched and never require a license.",
+            file=sys.stderr,
+        )
     return 0
 
 
@@ -79,7 +134,6 @@ def _verify(args: argparse.Namespace) -> int:
         "status": status,
         "organization": lic.organization,
         "workspace_tier": lic.workspace_tier,
-        "modules": {m: lic.has_module(m) for m in KNOWN_MODULES},
         "governed_node_ceiling": lic.governed_node_ceiling,
         "self_hosted_runner": lic.self_hosted_runner,
         "expires_at": lic.expires_at,
@@ -106,20 +160,19 @@ def main(argv: list[str] | None = None) -> int:
     )
     issue.add_argument("--org", required=True, help="organization name")
     issue.add_argument(
-        "--workspace-tier", default="team", choices=["community", "team", "security"],
-        help="Private Lab workspace tier (axor-packaging.md §1)",
+        "--workspace-tier", default="team", choices=list(TIERS),
+        help="the ladder rung (axor-packaging.md §1). One ladder: a rung "
+             "entitles the Private Lab and the Control Plane alike.",
     )
     issue.add_argument(
-        "--private-lab", action=argparse.BooleanOptionalAction, default=True,
-        help="enable the Private Lab module (on by default for paid tiers)",
+        "--governed-nodes", type=int, default=None,
+        help="governed-node ceiling. Omit for the rung's standard allowance "
+             f"({', '.join(f'{t}={n}' for t, n in TIER_NODE_CEILING.items())}); "
+             "enterprise is negotiated and requires one.",
     )
     issue.add_argument(
-        "--control-plane", action=argparse.BooleanOptionalAction, default=False,
-        help="enable the Control Plane production-governance module (add-on)",
-    )
-    issue.add_argument(
-        "--governed-nodes", type=int, default=0,
-        help="governed-node ceiling (Control Plane); 0 when the module is off",
+        "--no-env-block", action="store_true",
+        help="suppress the customer .env block printed on stderr",
     )
     issue.add_argument(
         "--self-hosted", action=argparse.BooleanOptionalAction, default=False,

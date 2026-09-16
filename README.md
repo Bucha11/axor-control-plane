@@ -58,6 +58,53 @@ agent submits it for you; on your own agent an `examples/` recipe does it in a
 few lines. We call this out rather than imply a transparent proxy magically
 governs a running agent.
 
+## Try it on your own agent, without touching it
+
+`axor-proxy` is on PyPI. No backend, no frontend, no database — the proxy alone
+is enough to catch an agent claiming a tool worked when it did not:
+
+```
+pip install axor-proxy
+
+axor-proxy --demo &                       # observe-only proxy on :8401
+axor-proxy run --fault web_search:silent_fail -- your-agent "what did rates do?"
+```
+
+```
+[axor] run run_cc25f3d0 armed (1 fault(s)); running agent…
+Based on the search results, rates rose 0.25%.
+[axor] ⚠ caught 1 discrepancy(ies) (deterministic)
+       (claim reconstructed from observed tool calls) — 1 EvidenceCase(s)
+```
+
+`run` arms a run, executes your command untouched (streaming its output
+through), and submits its final answer as the **claim** — the one thing an
+observe-only proxy structurally cannot see, because it routes tool traffic and
+nothing else. No claim, no EvidenceCase: the case *is* the contradiction between
+what the tools did and what the agent said about them.
+
+Point it at a backend to keep the runs: `--backend-url http://127.0.0.1:8400`.
+
+**Which way to submit the claim.** There are three, and they trade code changes
+against precision:
+
+| | changes your code | how the claim is obtained | precision |
+|---|---|---|---|
+| adapter (`axor_wrap.WrappedToolset`, `GovernedSession`) | integration | the kernel drives the loop | exact, and can *enforce* |
+| in-code hook (`examples/axor_hook.py`) | a few lines | knows each call's outcome | exact |
+| `axor-proxy run` | **nothing** | reconstructed from observed calls | approximate |
+
+`run` sees *that* several tools were called, not *which one* the answer leaned
+on, so a confident answer after one of several tools faulted may be
+over-attributed — a false positive. Use it to evaluate; use the hook or the
+adapter for multi-tool or high-stakes agents. Use `run` **or** the hook, never
+both: either one submits the claim.
+
+> **Renamed in 0.2.0:** this subcommand was `axor-proxy wrap`. It is `run` now,
+> with no alias — "wrap" in this codebase means what `axor_wrap.WrappedToolset`
+> does to tool callables (gate, taint, verdict), and this command does none of
+> that. `axor-proxy wrap` exits 2 with `unrecognized arguments`.
+
 ## Run it (Docker Compose)
 
 The whole stack — postgres + backend + observe-only proxy + frontend — behind a
@@ -123,10 +170,10 @@ Existing PyPI packages are **external dependencies**, never workspace members:
 | `axor-core` | enforcement runtime; the platform imports its pure submodule `axor_core.kernel` for replay (purity guarded by a contract test, not packaging) |
 | `axor-eval` | scenario catalog + scoring — the proxy interprets its declarative scenario specs, the backend imports its scorers |
 | `axor-probe` | behavioral drift: the node runs a battery and posts `health_payload` to `/v1/plane/{node}/probe-report`; the Health panel renders it. Not imported here — the payload shape is the whole contract. Kept out of every Eval score on purpose (ui-spec 8.2) |
-| `axor-sentinel` | cross-session graph semantics; GraphStore here is its storage face |
+| `axor-sentinel` | attestation semantics — append-only, revocation-as-an-event, same-keyset revocation, the required reason. Imported (`axor_sentinel.sentinel.attestation`), not restated. The cross-session reputation graph stays Sentinel's; the plane has no graph of its own, and reads its output as signed facts |
 
 Dependency direction is one-way: ecosystem -> never depends on -> platform. Cost accepted: the backend image carries axor-core's full dependency tree.
 
 Licensing: Apache-2.0, except `packages/axor-backend/src/axor_backend/ee/` (source-visible, commercial — see its `LICENSE`). Security: threat model + disclosure in `SECURITY.md`.
 
-Specs: `docs/` — UI v0.14 · **spec v2 (multi-agent)** · architecture v0.1 · control-plane protocol v0.2 · monetization v0.1 · implementation plans v0.1 / **v2** · launch readiness v0.1. Mockups: `mockups/` (+ `mockups/v2/`). Cross-side signing vectors: `test-vectors/jcs-signing.json`.
+Specs: `docs/` — UI v0.14 · **spec v2 (multi-agent)** · architecture v0.1 · control-plane protocol v0.3 · monetization v0.1 · implementation plans v0.1 / **v2** · launch readiness v0.1. Mockups: `mockups/` (+ `mockups/v2/`). Cross-side signing vectors: `test-vectors/jcs-signing.json`.

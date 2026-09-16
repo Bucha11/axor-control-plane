@@ -346,7 +346,9 @@ Hard rules:
 - **Detection fills names and signatures, never consequence classes.** Inferring "this looks like an export" and being wrong is a silent relaxation of fail-closed. Classification is the human step by design, not a temporary limitation. An unclassified candidate is treated as undeclared: denied.
 - **The user's code is never modified.** The wrapper is a separate module importing their entry point; the emitted package diff against the upload is exactly two new files. Reviewable, revertible.
 - **The §9 boundary stands:** we wrap tools and the entry point; we do not rewrite arbitrary agent loops. If the entry point can't be identified, the builder says so and falls back to the scaffold + instructions, not to guessing.
-- **Where analysis runs:** hosted upload gets the same explicit visibility notice as the hosted proxy (§6). The private path is `axor wrap ./my_agent` — the same analysis locally via CLI, opening the builder pre-filled with results; code never leaves the machine. Self-hosted parity is a launch requirement, not a follow-up.
+- **Where analysis runs:** hosted upload gets the same explicit visibility notice as the hosted proxy (§6). The private path is **self-hosting** — the wrap engine ships in the deployment image (`uv sync --all-packages` installs it), so on a self-hosted stack `POST /v1/wrap/scan` runs on the operator's own machine and the source never leaves their infrastructure. Self-hosted parity is a launch requirement, not a follow-up, and it is met by the deployment rather than by a second code path.
+
+  This previously specified a `axor wrap ./my_agent` CLI that would open the builder pre-filled. That command never existed, and building it would have been a bridge to nowhere: it solves a strict subset of what self-hosting already solves, for the one user who is evaluating the hosted product and will end up self-hosting anyway. The CLI that *does* exist — `axor-wrap scan | manifest | config` — is the repo-and-CI surface for generating tool manifests that get committed and fed to the governor. That is its job; the builder's file upload is the convenience version of it, not the other way round.
 
 ---
 

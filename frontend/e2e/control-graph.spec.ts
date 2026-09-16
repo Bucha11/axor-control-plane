@@ -36,6 +36,45 @@ test.describe("control graph lens", () => {
     await expect(page.getByTestId("topology-graph")).toBeVisible();
   });
 
+  test("the canned tree is reachable from the product, not only from a test", async ({ page }) => {
+    // The backend route existed and nothing in the app called it: the lateral
+    // hop and the undeclared foreign peer — edge kinds the live proxy spawn
+    // does not produce — were seedable only by POSTing the endpoint by hand.
+    // The button lives where the product puts its demo affordances: the screen
+    // you see before Control has anything of yours on it.
+    await setConnection(page, { mode: "proxy" });
+    await goHash(page, "control");
+    await page.getByRole("button", { name: /load the canned tree/ }).click();
+    // Seeding from here also connects in adapter mode, so Control swaps to the
+    // real view — the confirmation line belongs to the screen that stays.
+    await page.getByRole("button", { name: "graph", exact: true }).click();
+    for (const n of ["tree-orch", "tree-research", "tree-writer", "tree-scraper"]) {
+      await expect(page.getByTestId(`topo-node-${n}`)).toBeVisible();
+    }
+    // the two things only this tree carries
+    await expect(page.getByText("dashed = lateral (intra)")).toBeVisible();
+    await expect(page.getByTestId("topo-node-partner-agent")).toBeVisible();
+  });
+
+  test("a traced tree is shown even when nothing is reporting to the plane", async ({ page }) => {
+    // `/v1/plane/nodes` lists what heartbeats or has been commanded. A traced
+    // tree's nodes are in neither, so Control answered "no governed nodes
+    // connected yet" while holding the whole topology. The plane list is
+    // stubbed because the suite shares one backend: other specs leave nodes on
+    // it, and "nothing is reporting" is not otherwise reproducible here.
+    const ctx = await request.newContext();
+    await ctx.post(`${BACKEND}/v1/demo/seed-tree-run`);
+    await ctx.dispose();
+    await page.route("**/v1/plane/nodes", (route) =>
+      route.fulfill({ json: [] }));
+
+    await goHash(page, "control");
+    await expect(page.getByText(/have traced here/)).toBeVisible();
+    await expect(page.getByText(/No governed nodes connected yet/)).toHaveCount(0);
+    await expect(page.getByTestId("topo-node-tree-orch")).toBeVisible();
+    await expect(page.getByTestId("topo-node-partner-agent")).toBeVisible();
+  });
+
   test("list stays the default lens (quiet-until-wrong)", async ({ page }) => {
     const ctx = await request.newContext();
     const nid = uniqueNode("lens-default");

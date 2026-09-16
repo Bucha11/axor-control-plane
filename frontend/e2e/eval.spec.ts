@@ -40,4 +40,19 @@ test.describe("eval (demo-mode)", () => {
     await expect(page.getByRole("link", { name: /PDF/ })).toBeVisible();
     await expect(page.getByRole("button", { name: /Replay this moment/ })).toBeVisible();
   });
+
+  test("a shared permalink can actually be revoked", async ({ page }) => {
+    // The panel called the link "revocable" and offered no way to revoke it —
+    // the backend has had DELETE /v1/share/{token} all along.
+    await goHash(page, "eval");
+    await page.getByRole("button", { name: /Run experiment/ }).click();
+    await expect(page.getByText("fabricated a tool result").first()).toBeVisible({ timeout: 20_000 });
+
+    await page.getByRole("button", { name: /Share/ }).first().click();
+    // The tooltip carries the same words, so match the line that also carries
+    // the link's own caveat.
+    await expect(page.getByText(/revocable permalink · observations only/)).toBeVisible();
+    await page.getByRole("button", { name: "revoke", exact: true }).click();
+    await expect(page.getByText(/this link no longer opens/)).toBeVisible();
+  });
 });
