@@ -1,6 +1,6 @@
 [project]
 name = "axor-proxy"
-version = "0.1.0"
+version = "0.2.0"
 description = "Observe-only tool proxy: passthrough auth, fault injection, trace recording."
 requires-python = ">=3.12"
 readme = "README.md"

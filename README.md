@@ -58,6 +58,53 @@ agent submits it for you; on your own agent an `examples/` recipe does it in a
 few lines. We call this out rather than imply a transparent proxy magically
 governs a running agent.
 
+## Try it on your own agent, without touching it
+
+`axor-proxy` is on PyPI. No backend, no frontend, no database — the proxy alone
+is enough to catch an agent claiming a tool worked when it did not:
+
+```
+pip install axor-proxy
+
+axor-proxy --demo &                       # observe-only proxy on :8401
+axor-proxy run --fault web_search:silent_fail -- your-agent "what did rates do?"
+```
+
+```
+[axor] run run_cc25f3d0 armed (1 fault(s)); running agent…
+Based on the search results, rates rose 0.25%.
+[axor] ⚠ caught 1 discrepancy(ies) (deterministic)
+       (claim reconstructed from observed tool calls) — 1 EvidenceCase(s)
+```
+
+`run` arms a run, executes your command untouched (streaming its output
+through), and submits its final answer as the **claim** — the one thing an
+observe-only proxy structurally cannot see, because it routes tool traffic and
+nothing else. No claim, no EvidenceCase: the case *is* the contradiction between
+what the tools did and what the agent said about them.
+
+Point it at a backend to keep the runs: `--backend-url http://127.0.0.1:8400`.
+
+**Which way to submit the claim.** There are three, and they trade code changes
+against precision:
+
+| | changes your code | how the claim is obtained | precision |
+|---|---|---|---|
+| adapter (`axor_wrap.WrappedToolset`, `GovernedSession`) | integration | the kernel drives the loop | exact, and can *enforce* |
+| in-code hook (`examples/axor_hook.py`) | a few lines | knows each call's outcome | exact |
+| `axor-proxy run` | **nothing** | reconstructed from observed calls | approximate |
+
+`run` sees *that* several tools were called, not *which one* the answer leaned
+on, so a confident answer after one of several tools faulted may be
+over-attributed — a false positive. Use it to evaluate; use the hook or the
+adapter for multi-tool or high-stakes agents. Use `run` **or** the hook, never
+both: either one submits the claim.
+
+> **Renamed in 0.2.0:** this subcommand was `axor-proxy wrap`. It is `run` now,
+> with no alias — "wrap" in this codebase means what `axor_wrap.WrappedToolset`
+> does to tool callables (gate, taint, verdict), and this command does none of
+> that. `axor-proxy wrap` exits 2 with `unrecognized arguments`.
+
 ## Run it (Docker Compose)
 
 The whole stack — postgres + backend + observe-only proxy + frontend — behind a

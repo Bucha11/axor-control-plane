@@ -39,6 +39,47 @@ jobs:
       - uses: astral-sh/setup-uv@v4
         with:
           python-version: "3.12"
+      # Without this, a tag that does not match the package version is the
+      # quietest failure in the repository. `uv build` builds whatever pyproject
+      # says, and `skip-existing` below then skips it as already-published — so
+      # the job goes GREEN having released nothing. Measured: v0.1.1 and v0.1.2
+      # both ran green and PyPI stayed on 0.1.0, because nobody had bumped
+      # either package. Two releases evaporated behind a checkmark.
+      #
+      # One tag publishes both packages, so both must carry the tag's version.
+      # Every sibling repository (core, wrap, eval, probe, sentinel) has this
+      # check; this one did not.
+      - name: Verify tag matches ${{ matrix.pkg }} version
+        run: |
+          python - << 'EOF'
+          import pathlib
+          import re
+          import sys
+          import tomllib
+
+          ref = "${{ github.ref_name }}"
+          m = re.fullmatch(r"v(\d+\.\d+\.\d+)", ref)
+          if not m:
+              print(f"Tag {ref!r} must match vX.Y.Z")
+              sys.exit(1)
+          tag_version = m.group(1)
+
+          pkg = "${{ matrix.pkg }}"
+          path = pathlib.Path("packages") / pkg / "pyproject.toml"
+          data = tomllib.loads(path.read_text(encoding="utf-8"))
+          pkg_version = data["project"]["version"]
+
+          if tag_version != pkg_version:
+              print(
+                  f"Version mismatch: tag={tag_version}, {path}={pkg_version}.\n"
+                  f"One tag releases every package in this workspace, so each "
+                  f"must be bumped to the tag's version before tagging. "
+                  f"Publishing would otherwise skip silently as already-released."
+              )
+              sys.exit(1)
+          print(f"Version check passed: {pkg} {pkg_version}")
+          EOF
+
       - name: Build ${{ matrix.pkg }} (sdist + wheel)
         run: uv build --package ${{ matrix.pkg }} -o dist/
       - name: Publish ${{ matrix.pkg }} to PyPI (trusted publishing)
@@ -47,6 +88,9 @@ jobs:
           packages-dir: dist/
           # A re-run (e.g. re-tag to pick up an images fix) then skips an
           # already-published version instead of failing the whole workflow.
+          # Safe now that the version check above runs first: skipping can only
+          # mean "this exact release already went out", never "the tag and the
+          # package disagree and nobody noticed".
           skip-existing: true
 
   images:

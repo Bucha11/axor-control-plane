@@ -1,6 +1,6 @@
 [project]
 name = "axor-backend"
-version = "0.1.0"
+version = "0.2.0"
 description = "FastAPI backend: trace ingest, control plane (SSE+POST), replay and provenance API."
 requires-python = ">=3.12"
 readme = "README.md"
