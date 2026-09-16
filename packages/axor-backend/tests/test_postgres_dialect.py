@@ -23,7 +23,6 @@ each — alembic creates the tables inside it and it is dropped afterwards.
 from __future__ import annotations
 
 import asyncio
-import json
 import os
 import pathlib
 import uuid
@@ -150,9 +149,14 @@ async def test_a_trace_reads_back_in_append_order(pg_store: Store) -> None:
     await pg_store.upsert_run("ex_tree", demo.TREE_ORCH, "d", "2026-01-01T00:00:00")
     await pg_store.ingest_events("ex_tree", demo.TREE_ORCH, demo.TREE_EVENTS, None)
     authored = [(e["node_id"], e["seq"]) for e in demo.TREE_EVENTS]
+    # `run_events` hands back the dicts the JSON column holds. It used to return
+    # raw strings for every caller to decode on the event loop; the decode moved
+    # into a worker thread, and the SQLite twin of this test moved with it while
+    # this one did not — it is deselected unless a real Postgres is attached, so
+    # the whole local suite stayed green and CI caught it.
     stored = [
-        (json.loads(raw)["node_id"], json.loads(raw)["seq"])
-        for raw in await pg_store.run_events("ex_tree")
+        (line["node_id"], line["seq"])
+        for line in await pg_store.run_events("ex_tree")
     ]
     assert stored == authored
 
