@@ -107,8 +107,8 @@ both: either one submits the claim.
 
 ## Run it (Docker Compose)
 
-The whole stack — postgres + backend + observe-only proxy + frontend — behind a
-single origin:
+The whole stack — postgres + backend + identity + observe-only proxy + frontend
+— behind a single origin:
 
 ```
 cp .env.example .env          # set AXOR_PG_PASSWORD; GITHUB_TOKEN to build private deps
@@ -116,12 +116,14 @@ GITHUB_TOKEN=ghp_… docker compose up --build
 ```
 
 Open **http://localhost:8080** and click **Run demo-mode** (mock tools, zero
-credentials). The frontend reverse-proxies `/v1` → backend and `/axor` → proxy,
-so the browser talks to one origin; the proxy starts in demo-mode and
-auto-uploads runs to the backend. For a real deployment set
-`AXOR_OPERATOR_KEYS` and `AXOR_ALLOW_UNSIGNED=0` (see `.env.example`); the
-`GITHUB_TOKEN` is build-only (a BuildKit secret) and never lands in an image
-layer.
+credentials). The frontend reverse-proxies `/v1` → backend (`:8400`), `/axor` →
+proxy (`:8401`) and `/identity` → the login service (`:8402`), so the browser
+talks to one origin; the proxy starts in demo-mode and auto-uploads runs to the
+backend. For a real deployment set `AXOR_OPERATOR_KEYS`,
+`AXOR_ALLOW_UNSIGNED=0`, `AXOR_PROXY_TOKEN` and a stable
+`AXOR_IDENTITY_SIGNING_KEY` (see `.env.example`); the `GITHUB_TOKEN` is
+build-only (a BuildKit secret), never lands in an image layer, and is optional
+in a build network that already reaches the dependency sources.
 
 ## Dev (without containers)
 
@@ -134,20 +136,47 @@ uv run axor-proxy --demo --backend-url http://127.0.0.1:8400 &
 cd frontend && pnpm i && pnpm dev        # http://localhost:5173
 ```
 
+Vite proxies `/v1` → `:8400` and `/axor` → `:8401`; it does **not** proxy
+`/identity`, so human login is off in this loop — the operator master token and
+scoped API keys are what Settings expects. To develop against login too, add
+the identity service and point both ends at it:
+
+```
+AXOR_IDENTITY_PORT=8402 uv run axor-identity &       # it binds :8081 by default
+#  backend:  AXOR_IDENTITY_JWKS_URL=http://127.0.0.1:8402/.well-known/jwks.json
+#  frontend: VITE_IDENTITY_URL=http://127.0.0.1:8402
+```
+
 ## What's in the monorepo
 
 | Package | What | Rule that shapes it |
 |---|---|---|
 | `packages/axor-proxy` | Observe-only tool proxy + a demo governed node (real `axor_core` IntentLoop) | Auth passthrough byte-for-byte; two intervention points only (fault, observation) |
-| `packages/axor-backend` | FastAPI: ingest, plane service (SSE+POST), replay/regression, taint graph, notifications, share/export, auth, EE license | Backend persists and fans out; it never interprets governance — that's the kernel's |
+| `packages/axor-backend` | FastAPI: ingest, plane service (SSE+POST), replay/regression, taint graph, provenance, notifications, vault, Lab import/export, share/export, auth, EE license | Backend persists and fans out; it never interprets governance — that's the kernel's |
+| `packages/axor-identity` | Human login: users, orgs, memberships, sessions; issues EdDSA access tokens + revocable refresh tokens, publishes a JWKS | Standalone — its own app, database and signing key. The backend and the Lab *verify* its tokens locally; nobody calls it per request |
 | `frontend/` | React + TS (Zustand, TanStack Query, hash router; SVG taint graph) | quiet-until-wrong; TS types generated from the kernel event schema |
 
 Supporting surfaces the loop rests on: **Config Builder** (declare
 sinks/policies → a replayable config; budgets are call/cost caps enforced at the
-loop boundary, in replay parity), **Notifications** (webhook on level-up /
-heat-threshold / evidence-run / node-stale, with retries + dead-letter), and
-**Auth** (opt-in master token + scoped API keys `read < ingest < operate <
-admin`; EE license via offline Ed25519 verification).
+loop boundary, in replay parity), **Notifications** (webhook on
+`level_transition_up` / `heat_threshold` / `evidence_run` / `node_stale` /
+`regression_failed` / `behavioral_drift` / `license_expiring`, with retries +
+dead-letter), **Vault** (tool credentials dispensed at the sink so the agent
+never holds them, and a separate signing vault behind its own credential; mint
+and seal locally with `axor-proxy vault keygen` / `seal`), and **Auth** — three
+credentials that compose:
+
+- an opt-in **master token** (`AXOR_API_TOKEN`), the only all-scope principal;
+- **scoped API keys**, `read` · `ingest` · `operate` · `admin`. Least-privilege
+  by name, not a ladder: a higher scope does **not** imply a lower one, so an
+  `admin` key does not read. A key may also be bound to one node, which is what
+  stops an ingest key forging its neighbour's telemetry;
+- **human login** via `axor-identity` — the backend verifies its access tokens
+  against the published JWKS and maps the token's `org` + `role` onto scopes and
+  a tenant, so a logged-in request only ever sees its own organization's data.
+
+EE licensing is offline Ed25519 verification against an operator-pinned vendor
+key (`AXOR_VENDOR_PUBKEY`); a key supplied in the request is refused.
 
 ## Running a tree of agents?
 
@@ -167,9 +196,10 @@ Existing PyPI packages are **external dependencies**, never workspace members:
 
 | Package | Role here |
 |---|---|
-| `axor-core` | enforcement runtime; the platform imports its pure submodule `axor_core.kernel` for replay (purity guarded by a contract test, not packaging) |
+| `axor-core` | enforcement runtime. The platform imports the pure `axor_core.kernel` for replay, degradation and canonical (RFC 8785) bytes, plus `axor_core.policy` and `axor_core.contracts` on the Lab export/import path — a copy of a decoder is how a copy of a decision starts. The declared range is held to the *installed* kernel by a contract test (`packages/axor-proxy/tests/test_core_compatibility.py`), not by packaging |
+| `axor-wrap` | the runtime that wraps tool callables — `WrappedToolset` (gate, taint, verdict) and `GovernedSession`, which is what "adapter depth" means. Via the `plane` extra it also carries the control-plane client the kernel no longer ships: the proxy's governed node connects with `axor_wrap.plane` (`PlaneClient` / `PlaneSession` / `PlaneAdmission`), and value refs are minted by its per-trace ledger (`axor_wrap.trace`) |
 | `axor-eval` | scenario catalog + scoring — the proxy interprets its declarative scenario specs, the backend imports its scorers |
-| `axor-probe` | behavioral drift: the node runs a battery and posts `health_payload` to `/v1/plane/{node}/probe-report`; the Health panel renders it. Not imported here — the payload shape is the whole contract. Kept out of every Eval score on purpose (ui-spec 8.2) |
+| `axor-probe` | behavioral drift: the node runs a battery and posts `health_payload` to `/v1/plane/{node}/probe-report`; the Health panel renders it. Imported, not restated — `axor_probe.integration.plane` *is* that door's vocabulary, and `axor_probe.integration.eval` re-keys the payload for grading. axor-probe and axor-eval may not import each other, so this backend is the only component that can hold the wire between them. The graded case stays out of every Eval score on purpose (ui-spec §8.2): derived on read beside the health report, never stored as run evidence |
 | `axor-sentinel` | attestation semantics — append-only, revocation-as-an-event, same-keyset revocation, the required reason. Imported (`axor_sentinel.sentinel.attestation`), not restated. The cross-session reputation graph stays Sentinel's; the plane has no graph of its own, and reads its output as signed facts |
 
 Dependency direction is one-way: ecosystem -> never depends on -> platform. Cost accepted: the backend image carries axor-core's full dependency tree.

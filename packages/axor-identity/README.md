@@ -56,6 +56,9 @@ bound to (user, org), expiring and revocable. `/v1/refresh` rotates it.
 
 ## Configuration
 
+- `AXOR_IDENTITY_HOST` / `AXOR_IDENTITY_PORT` — bind address (default
+  `127.0.0.1:8081`). The control-plane's compose file overrides both, which is
+  why the stack reaches it on `:8402`.
 - `AXOR_IDENTITY_DATABASE_URL` — async SQLAlchemy URL (default: local SQLite).
 - `AXOR_IDENTITY_SIGNING_KEY` — Ed25519 private key, PEM (PKCS#8). If unset a
   key is generated at boot (**dev only** — tokens die with the process and no
