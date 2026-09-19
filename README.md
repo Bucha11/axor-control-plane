@@ -163,10 +163,10 @@ models. It proves the detector is deterministic and never fires on an honest
 run. Real-LLM catch rates (lower, per-model) are the next milestone: same
 harness, swap a persona for a live loop.
 
-**500+ tests across 70 files, and the ones that matter boot the real thing.**
-20 Playwright specs drive the actual UI against the actual stack; the backend
-E2E suite boots real backend and proxy processes and talks to them over
-HTTP/SSE. CI also runs
+**931 tests green, and the ones that matter boot the real thing.** That is
+`uv run pytest -m "not e2e"` on the workspace; 20 Playwright specs drive the
+actual UI against the actual stack, and the backend E2E suite boots real backend
+and proxy processes and talks to them over HTTP/SSE. CI also runs
 the dialect-sensitive suite against a real Postgres, `pip-audit` + `pnpm audit`
 with an SBOM artifact, and a **deploy gate** that builds the compose stack,
 waits for health and smokes the single origin before merge.
@@ -191,10 +191,10 @@ provable.
 
 | | |
 |---|---|
-| **Carried, not laundered** | Taint rides *in the message*: labels travel with values in every envelope between agents, so a fabrication delegated through two siblings arrives still tainted. Hop count cleans nothing; the export gate denies at the boundary. → *containment counted per boundary, and a systemic outcome as a label pair (`fabricated_failure → honest_failure`), never a score.* |
+| **Carried, not laundered** | Taint rides *in the message*: labels travel with values in every envelope between agents, so a value fabricated at a leaf arrives at the orchestrator two delegation hops later still tainted. Hop count cleans nothing; the export gate denies at the boundary. → *containment counted per boundary, and a systemic outcome as a label pair (`fabricated_failure → honest_failure`), never a score.* |
 | **Topology, live** | Control's graph lens draws your federation from traced spawn events — never self-reported parents: delegation and lateral edges, denials flashing where they happened. → *the kill switch scales to the whole subtree, as one signed command to its root.* |
 | **One case, three nodes** | A fabrication at the root caused by a fault at a leaf is **one** EvidenceCase, anchored at the consequence, carrying the minimal chain that produced it — origin, conduit, container — plus an influence ranking by deterministic subgraph ablation. → *"who lied first" is a diagram, not a debate.* |
-| **Foreign agents** | Peers under someone else's keys are declared like sinks: L0 by default, identity buys attribution, signed agreements buy a bounded discount — never label authority, and critical sinks ignore discounts entirely. → *a compromised partner cannot launder taint into your tree.* |
+| **Foreign agents** | Peers under someone else's keys are declared like sinks in the Config Builder: L0 by default, identity buys attribution, a signed agreement buys a bounded discount — never label authority, and critical sinks ignore discounts entirely. → *a compromised partner cannot launder taint into your tree.* The ladder itself is `axor_core.federation.ladder`'s and is applied by the runtime at the boundary; this plane declares peers into the config, renders the opaque peer in the graph lens, and reads back the recorded verdict of a peer send as a gated consequence. Unlike budgets, the discount arithmetic is **not** re-derived by kernel replay under a candidate config. |
 
 → **[docs/multiagent.md](docs/multiagent.md)** for the full model (topology
 lens, containment two-tree view, a real three-node governed tree over the
