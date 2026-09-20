@@ -38,7 +38,12 @@ dependencies = [
   # the node opens what the plane stores and cannot. `cryptography`, which
   # arrives with axor-wrap[plane], has no sealed-box primitive.
   "pynacl>=1.5",
-  "anyio>=4.0",
+  # >=4.14.2 avoids CVE-2026-63374 / CVE-2026-64847 / CVE-2026-63349, which the
+  # pip-audit CI gate flagged on 4.14.1. The floor is raised rather than only
+  # the lock bumped: anyio also arrives transitively (httpx, starlette,
+  # sse-starlette), so without a declared floor the next `uv lock` is free to
+  # resolve back to a vulnerable release.
+  "anyio>=4.14.2",
   "starlette>=0.37",
   "uvicorn>=0.29",
 ]
