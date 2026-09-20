@@ -163,10 +163,12 @@ models. It proves the detector is deterministic and never fires on an honest
 run. Real-LLM catch rates (lower, per-model) are the next milestone: same
 harness, swap a persona for a live loop.
 
-**931 tests green, and the ones that matter boot the real thing.** That is
-`uv run pytest -m "not e2e"` on the workspace; 20 Playwright specs drive the
-actual UI against the actual stack, and the backend E2E suite boots real backend
-and proxy processes and talks to them over HTTP/SSE. CI also runs
+**931 backend tests + 91 browser tests green, and the ones that matter boot the
+real thing.** `uv run pytest -m "not e2e"` is 931 passed; `pnpm e2e` is 91
+Playwright cases over 20 spec files, driving the real React app in Chromium
+against a real backend and a real observe-only proxy — Playwright boots all
+three itself. The backend's own E2E suite boots the processes and talks to them
+over HTTP/SSE. CI also runs
 the dialect-sensitive suite against a real Postgres, `pip-audit` + `pnpm audit`
 with an SBOM artifact, and a **deploy gate** that builds the compose stack,
 waits for health and smokes the single origin before merge.
