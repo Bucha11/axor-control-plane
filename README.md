@@ -124,6 +124,10 @@ cp .env.example .env
 docker compose pull && docker compose up -d --no-build
 ```
 
+`AXOR_TAG` in `.env` picks between them and defaults to `latest`. Until the
+first `vX.Y.Z` tag is cut only `:edge` exists — set `AXOR_TAG=edge`, or just
+build from the clone above, which needs nothing either way.
+
 Open **http://localhost:8080** and click **Run demo-mode** (mock tools, zero
 credentials). The frontend reverse-proxies `/v1` → backend and `/axor` → proxy,
 so the browser talks to one origin; the proxy starts in demo-mode and
