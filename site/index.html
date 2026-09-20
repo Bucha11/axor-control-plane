@@ -55,6 +55,10 @@
   th,td { border:1px solid var(--line); padding:8px 10px; text-align:left; color:var(--mut); }
   th { color:var(--text); background:var(--panel); font-weight:600; }
   td.ok { color:var(--green); } td.warn { color:var(--amber); }
+  /* Four rungs: at this wrap the default auto-fit leaves the last card alone on
+     a second row. A wider minimum makes it an even 2x2, and still collapses to
+     one column on a phone. */
+  #pricing .grid { grid-template-columns:repeat(auto-fit,minmax(330px,1fr)); }
   .price { text-align:center; }
   .price .amount { font-size:17px; color:var(--text); margin:6px 0 2px; }
   .price .per { color:var(--dim); font-size:11px; margin-bottom:10px; }
@@ -203,6 +207,7 @@
   claim. It proves the detector is deterministic and never fires on an honest run, against
   constructed personas. Real-LLM catch rates (lower, per-model) are the next milestone — same
   harness, swap a persona for a live loop.</p>
+  <div class="quick"><b>python -m axor_eval.benchmarks.catch_rate --trials 50</b>   # the table below, from scratch</div>
   <table class="mono">
     <tr><th>persona \ fault mode</th><th>silent_fail</th><th>corrupt_retrieval</th><th>instruction_injection</th><th>tool_substitution</th></tr>
     <tr><td>misbehaving persona (structured claims)</td><td class="ok">100%</td><td class="ok">100%</td><td class="ok">100%</td><td class="ok">100%</td></tr>
@@ -211,8 +216,8 @@
     <tr><td>real LLM agents (per model)</td><td colspan="4" class="warn">pending — reported when measured</td></tr>
   </table>
   <div class="grid" style="margin-top:14px">
-    <div class="card"><h3 class="mono">140+ tests, all E2E-real</h3><p>Playwright drives the actual UI against the actual stack; the backend E2E suite boots real processes. The deploy gate smokes the compose stack on Postgres before merge.</p></div>
-    <div class="card"><h3 class="mono">Limits, not adjectives</h3><p>50 concurrent SSE subscribers, zero drops, perfect fan-out; ~70 rps ingest ceiling on the dev DB — published in docs/ops-limits.md with the script that measured it.</p></div>
+    <div class="card"><h3 class="mono">931 + 91 tests, all E2E-real</h3><p><code>uv run pytest -m "not e2e"</code> is 931 passed; <code>pnpm e2e</code> is 91 Playwright cases driving the actual React app in Chromium against a real backend and proxy — Playwright boots all three itself. The deploy gate smokes the compose stack on Postgres before merge.</p></div>
+    <div class="card"><h3 class="mono">Limits, not adjectives</h3><p>~150 rps ingest ceiling on Postgres (p50 ≈ 0.27 s), ~70 rps on the SQLite dev default; 50 concurrent SSE subscribers, zero drops, perfect 50× fan-out — published in docs/ops-limits.md with the script that measured it, including where SSE fan-out overtakes the database.</p></div>
     <div class="card"><h3 class="mono">Same kernel enforces and replays</h3><p>Replay isn't a reconstruction — it's the identical pure function over the recorded trace. That's why the receipt is evidence, not narrative. Paper in submission.</p></div>
   </div>
 </div></section>
@@ -233,17 +238,21 @@
   <p class="h2sub">Line 1: anything that makes an agent <b style="color:var(--text)">safer</b> is free forever — that's structural, not a promo.
   Line 2: you pay only for how your <b style="color:var(--text)">org</b> runs it.</p>
   <div class="grid">
-    <div class="card price"><h3 class="mono">Free</h3><div class="amount mono">$0</div><div class="per mono">open source · unlimited agents</div>
-      <p>Everything above: catch, replay, govern, regress, export, self-host.</p>
+    <div class="card price"><h3 class="mono">Community</h3><div class="amount mono">$0</div><div class="per mono">open source · local &amp; public · 1 governed node</div>
+      <p>Everything above: catch, replay, counterfactuals, regression corpus, export, self-host. Runtime enforcement on one node.</p>
       <p style="margin-top:10px"><a class="mono" href="#run">compose up →</a></p></div>
-    <div class="card price hl"><h3 class="mono">Team</h3><div class="amount mono">$250 / env·mo</div><div class="per mono">first company deployments · per environment, not per node</div>
-      <p>Hosted convenience, scheduled corpus CI, routing rules.</p>
+    <div class="card price"><h3 class="mono">Team Workspace</h3><div class="amount mono">$299 / mo</div><div class="per mono">10 governed nodes included · +$75/node beyond</div>
+      <p>Production connections and live intervention, scheduled regression CI + run history, notification routing.</p>
       <p style="margin-top:10px"><a class="mono" href="mailto:sales@axor.dev?subject=Axor%20Team">get Team →</a></p></div>
-    <div class="card price"><h3 class="mono">Enterprise</h3><div class="amount mono">annual</div><div class="per mono">SSO · RBAC · air-gapped · compliance reports</div>
-      <p>From $20–50k/yr. Offline license — never phones home.</p>
+    <div class="card price hl"><h3 class="mono">Security Workspace</h3><div class="amount mono">$1,500 / mo</div><div class="per mono">50 governed nodes included · +$50/node beyond</div>
+      <p>The security unit: incident → regression conversion, scheduled suites, policy / kernel comparison.</p>
+      <p style="margin-top:10px"><a class="mono" href="mailto:sales@axor.dev?subject=Axor%20Security">get Security →</a></p></div>
+    <div class="card price"><h3 class="mono">Enterprise Platform</h3><div class="amount mono">from $30k / yr</div><div class="per mono">contracted · negotiated fleet size</div>
+      <p>Everything in Security, on a contract. SSO/SAML/SCIM, RBAC, VPC / air-gapped and compliance exports are <b style="color:var(--amber)">planned</b>, not shipped. Offline license — never phones home.</p>
       <p style="margin-top:10px"><a class="mono" href="mailto:sales@axor.dev?subject=Axor%20Enterprise">talk to us →</a></p></div>
   </div>
-  <p class="under-cta mono" style="margin-top:12px">worried about vendor risk? the escape hatch is structural: the safety layer is Apache-2.0 — if we vanish, your governance doesn't.</p>
+  <p class="under-cta mono" style="margin-top:12px">every rung self-hosts; Enterprise is a contract over the same ladder, not a separate product. the app's Pricing tab is the canonical list and chips each unshipped feature <b style="color:var(--amber)">planned</b> rather than listing it as if it exists.</p>
+  <p class="under-cta mono" style="margin-top:6px">worried about vendor risk? the escape hatch is structural: the safety layer is Apache-2.0 — if we vanish, your governance doesn't.</p>
 </div></section>
 
 <!-- ── URGENCY (honest) ──────────────────────────────────────────────────── -->
