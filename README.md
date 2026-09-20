@@ -124,9 +124,14 @@ cp .env.example .env
 docker compose pull && docker compose up -d --no-build
 ```
 
-`AXOR_TAG` in `.env` picks between them and defaults to `latest`. Until the
-first `vX.Y.Z` tag is cut only `:edge` exists — set `AXOR_TAG=edge`, or just
-build from the clone above, which needs nothing either way.
+`AXOR_TAG` in `.env` picks between them and defaults to `latest`. `latest`
+tracks the newest `vX.Y.Z` tag, so between releases it is *older* than this
+checkout — set `AXOR_TAG=edge` to run what main is at, or build from the clone
+above, which matches it by construction. What each tag actually points at:
+
+```
+docker buildx imagetools inspect ghcr.io/bucha11/axor-platform:latest
+```
 
 Open **http://localhost:8080** and click **Run demo-mode** (mock tools, zero
 credentials). The frontend reverse-proxies `/v1` → backend and `/axor` → proxy,
