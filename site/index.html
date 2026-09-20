@@ -24,6 +24,28 @@
   nav a { color:var(--mut); text-decoration:none; font-size:12.5px; margin-left:16px; }
   nav a:hover { color:var(--text); }
   nav a.cta { color:var(--green); border:1px solid var(--green); border-radius:5px; padding:5px 10px; }
+  /* The header is sticky, so a jump to #pricing would otherwise park the
+     heading underneath it. Anchored targets reserve its height instead; the
+     variable is re-declared in the narrow layout below, where it is taller. */
+  :root { --hdr:78px; }
+  section[id], #run { scroll-margin-top:var(--hdr); }
+  /* Narrow: brand and nav no longer fit on one row, and flex was resolving
+     that by wrapping the BRAND into three lines. Stack them deliberately and
+     let the links wrap among themselves — every section stays reachable, which
+     a hamburger would not be worth any script to achieve on one page. */
+  @media (max-width:760px) {
+    /* worst case here is the two-row nav at phone width (measured 116px) */
+    :root { --hdr:130px; }
+    header { padding:12px 0; }
+    header .wrap { flex-direction:column; align-items:flex-start; gap:9px; }
+    .brand { font-size:13px; }
+    nav { display:flex; flex-wrap:wrap; align-items:center; gap:9px 14px; }
+    nav a { margin-left:0; }
+    /* The depth ladder and the catch-rate table are 4 and 5 columns; neither
+       fits a phone. Let each scroll inside its own box instead of scrolling
+       the whole page sideways, which is how they were resolving it. */
+    table { display:block; width:max-content; max-width:100%; overflow-x:auto; }
+  }
   .hero { padding:56px 0 36px; }
   .eyebrow { font-size:12px; font-weight:700; letter-spacing:.14em; margin-bottom:14px; }
   h1 { font-size:36px; line-height:1.2; font-weight:700; margin-bottom:12px; }
@@ -58,7 +80,9 @@
   /* Four rungs: at this wrap the default auto-fit leaves the last card alone on
      a second row. A wider minimum makes it an even 2x2, and still collapses to
      one column on a phone. */
-  #pricing .grid { grid-template-columns:repeat(auto-fit,minmax(330px,1fr)); }
+  /* min() so auto-fit may go BELOW the 330px minimum on a narrow phone —
+     a bare minmax(330px,1fr) cannot, and overflows the viewport instead. */
+  #pricing .grid { grid-template-columns:repeat(auto-fit,minmax(min(330px,100%),1fr)); }
   .price { text-align:center; }
   .price .amount { font-size:17px; color:var(--text); margin:6px 0 2px; }
   .price .per { color:var(--dim); font-size:11px; margin-bottom:10px; }
