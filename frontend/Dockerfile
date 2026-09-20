@@ -13,6 +13,9 @@ ENV VITE_CHECKOUT_URL=${VITE_CHECKOUT_URL}
 RUN pnpm build
 
 FROM nginx:1.27-alpine
+LABEL org.opencontainers.image.source="https://github.com/Bucha11/axor-control-plane" \
+      org.opencontainers.image.licenses="Apache-2.0" \
+      org.opencontainers.image.description="Axor frontend: the SPA, and the nginx origin that fronts the backend and proxy."
 COPY frontend/nginx.conf /etc/nginx/conf.d/default.conf
 COPY --from=build /app/frontend/dist /usr/share/nginx/html
 # The /axor location includes this file; it must exist even when no proxy token

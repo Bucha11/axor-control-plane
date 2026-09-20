@@ -324,5 +324,7 @@ Full-stack E2E re-run (proxy --backend-url + backend + scripted agent): claim
 auto-uploaded 4 events + 1 EvidenceCase with no manual ingest; share receipt
 rendered then 404'd after revoke.
 
-Still requiring a token / genuinely out of scope: CI on the private ecosystem
-repos (needs AXOR_ECOSYSTEM_TOKEN), hosted deploy, A2A/Key Vault (§14).
+Out of scope here: hosted deploy, A2A/Key Vault (§14). (This list used to open
+with "still requiring a token: CI on the private ecosystem repos". The
+ecosystem repos are public and every one of their packages is on PyPI; nothing
+in this repository needs a token to build or run — see docs/RELEASING.md.)

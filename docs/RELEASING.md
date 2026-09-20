@@ -1,7 +1,8 @@
 # Releasing the platform packages
 
 `axor-proxy` and `axor-backend` publish to PyPI, and the compose images to
-GHCR, from `.github/workflows/release.yml` when you push a `vX.Y.Z` tag.
+GHCR, from `.github/workflows/release.yml` when you push a `vX.Y.Z` tag. A push
+to main publishes the images alone, as `:edge`.
 Publishing is credential-free: PyPI via **Trusted Publishing (OIDC)**, GHCR via
 the workflow's own `GITHUB_TOKEN`. No API token ever lives in the repo.
 
@@ -11,10 +12,13 @@ works on a clean machine.**
 
 ## Prerequisites (already true)
 
-- Ecosystem deps are on PyPI: `axor-core` (≥0.9.2) and `axor-eval` (≥0.1.0).
-  The two platform packages depend on them by version range (not git ref), so a
-  fresh `pip install axor-proxy` resolves everything from PyPI. Verified in the
-  clean-room check below.
+- Ecosystem deps are on PyPI: `axor-core`, `axor-eval`, `axor-probe`,
+  `axor-sentinel` and `axor-wrap`. Every package depends on them by version
+  range (not git ref), so a fresh `pip install axor-proxy` — and the Docker
+  build — resolves everything from the public index. No PAT is involved
+  anywhere: not in CI, not in the Dockerfile, not in `.env.example`. Verified
+  in the clean-room check below and enforced by
+  `test_quickstart_is_credential_free.py`.
 - Versions are in lockstep: `packages/axor-proxy/pyproject.toml`,
   `packages/axor-backend/pyproject.toml`, and the root are all `0.1.0`. The tag
   you push must match (`v0.1.0`).
@@ -80,6 +84,45 @@ leg each), publishes to PyPI via OIDC, and pushes `axor-platform` /
 `workflow_dispatch` is also enabled, so you can re-run the publish from the
 Actions tab without moving the tag (useful if GHCR succeeds but PyPI needs a
 retry).
+
+## The images (GHCR) — and the one setting that makes them usable
+
+Two images are published from the same `Release` workflow:
+
+| Image | What | Tags |
+|---|---|---|
+| `ghcr.io/bucha11/axor-platform` | the uv workspace — backend, identity, proxy | `X.Y.Z`, `latest` on a tag · `edge` on every push to main |
+| `ghcr.io/bucha11/axor-frontend` | nginx serving the built SPA (the single origin) | same |
+
+`docker-compose.yml` resolves `${AXOR_IMAGE}:${AXOR_TAG}` against these, so the
+build-free path in the README —
+
+```bash
+docker compose pull && docker compose up -d --no-build
+```
+
+— is the published image and nothing else. `edge` exists so that path works
+*between* releases: before it, a reader was pointed at a `latest` tag that no
+tag had ever created.
+
+**One-time, and easy to miss:** a package pushed by Actions starts **private**
+even from a public repository. Until it is flipped, `docker compose pull` fails
+for everyone who is not you with `denied` — the same wall this release removed
+from the build, moved to the registry. After the first successful run:
+
+> github.com/users/Bucha11/packages → `axor-platform` → Package settings →
+> Danger Zone → **Change visibility → Public**. Repeat for `axor-frontend`.
+
+Then verify as an outsider, with no GHCR login at all:
+
+```bash
+docker logout ghcr.io
+docker pull ghcr.io/bucha11/axor-platform:edge    # must succeed anonymously
+```
+
+Both images build with no credentials of any kind (CI's `quickstart` job proves
+it on every pull request), so anyone can also rebuild them from a clone instead
+of trusting the registry.
 
 ## Verify on a clean machine (the launch criterion)
 
