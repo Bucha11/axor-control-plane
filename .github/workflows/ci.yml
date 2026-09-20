@@ -44,9 +44,11 @@ jobs:
       # says the git-ref era is over — every ecosystem dependency resolves from
       # PyPI and `uv.lock` holds zero git sources. The step it replaced wrote a
       # global `insteadOf` rewrite with a PAT on every job, for dependencies
-      # that no longer exist, and its comment still named axor-core and
-      # axor-eval as git-pinned. The Dockerfile's build-time secret stays: it is
-      # already conditional on the secret being present.
+      # that no longer exist. The Dockerfile's build-time secret was left in
+      # place at the time, as a no-op "conditional on the secret being present"
+      # — except compose declared it required, so the no-op was the quickstart's
+      # first command asking a stranger for a PAT. It is gone now, and the
+      # `quickstart` job below keeps it gone.
       - name: Sync workspace
         run: uv sync --all-packages
       - name: Lint
@@ -106,6 +108,30 @@ jobs:
           path: frontend/playwright-report
           retention-days: 7
 
+  # ── Quickstart: the stranger's build, with nothing in the environment ───────
+  # The one thing a PR may never reintroduce. The ecosystem deps were private
+  # git refs once; when they moved to PyPI the Dockerfile's `github_token`
+  # BuildKit secret stayed behind, and the quickstart of a public repository
+  # went on demanding a PAT only the owner could issue. It stayed green the
+  # whole time, because the one job that built an image was handed a token.
+  #
+  # This job is handed nothing. No `secrets:` input, no token in `env:`, no
+  # registry login — if the build ever needs a credential again, it fails here,
+  # on the pull request that introduced it, rather than on a newcomer's laptop.
+  quickstart:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Build the platform image with no credentials
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          # Keeps the repeat cost of this gate low enough to run on every PR.
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
   # ── Supply chain: dependency audit + SBOM (launch-readiness §2) ──────────────
   audit:
     runs-on: ubuntu-latest
@@ -134,20 +160,22 @@ jobs:
 
   # ── Deploy gate: build the real images, bring the stack up, smoke the origin ─
   # Runs on the deploy path (push to main) and on demand — not on every PR, since
-  # a full image build (private ecosystem deps + the axor-core tree) is heavy.
+  # booting the whole stack is heavy. The part a PR must not break — that the
+  # image builds with no credentials at all — is the `quickstart` job above,
+  # which runs on every PR.
   deploy:
     runs-on: ubuntu-latest
-    needs: [python, frontend-e2e]
+    needs: [python, frontend-e2e, quickstart]
     if: github.event_name != 'pull_request'
     steps:
       - uses: actions/checkout@v4
       - name: Write .env
         run: echo "AXOR_PG_PASSWORD=ci-postgres-pass" > .env
+      # No credentials in this step's environment, on purpose: the images must
+      # build from a bare checkout exactly as they do for someone who just
+      # cloned the repository.
       - name: Build images
         run: docker compose build
-        env:
-          # BuildKit secret the Dockerfile mounts to fetch private ecosystem deps.
-          GITHUB_TOKEN: ${{ secrets.AXOR_ECOSYSTEM_TOKEN || secrets.GITHUB_TOKEN }}
       - name: Start the stack
         run: docker compose up -d
       - name: Wait for health

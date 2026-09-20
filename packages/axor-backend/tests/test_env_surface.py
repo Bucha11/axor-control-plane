@@ -98,11 +98,16 @@ def test_env_example_does_not_document_settings_nothing_reads() -> None:
 # catch — one name added here on a wrong assumption and the guard is off for it
 # forever.
 _ELSEWHERE = frozenset({
-    "AXOR_PG_PASSWORD", "GITHUB_TOKEN", "AXOR_INGEST_KEY", "AXOR_PROXY_DEMO",
+    "AXOR_PG_PASSWORD", "AXOR_INGEST_KEY", "AXOR_PROXY_DEMO",
     "AXOR_PROXY_TOKEN", "AXOR_VAULT_TOOLS", "AXOR_VAULT_ALLOW_REMOTE",
     "AXOR_NODE_SIGNING_SEED", "AXOR_CRED_SEALING_SEED",
     "AXOR_IDENTITY_SIGNING_KEY", "VITE_CHECKOUT_URL", "AXOR_TRACE_DIR",
     "AXOR_BACKEND_URL",
+    # Which images compose runs, for the build-free path. GITHUB_TOKEN used to
+    # sit in this list: a build-time credential for private git deps that had
+    # been published to PyPI releases earlier, exempted here and therefore never
+    # questioned again. See test_quickstart_is_credential_free.py.
+    "AXOR_TAG", "AXOR_IMAGE", "AXOR_FRONTEND_IMAGE",
 })
 
 

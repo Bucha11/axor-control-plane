@@ -107,21 +107,39 @@ both: either one submits the claim.
 
 ## Run it (Docker Compose)
 
-The whole stack — postgres + backend + observe-only proxy + frontend — behind a
-single origin:
+The whole stack — postgres + identity + backend + observe-only proxy + frontend
+— behind a single origin. **No GitHub account, no token, no login:**
 
 ```
-cp .env.example .env          # set AXOR_PG_PASSWORD; GITHUB_TOKEN to build private deps
-GITHUB_TOKEN=ghp_… docker compose up --build
+git clone https://github.com/Bucha11/axor-control-plane && cd axor-control-plane
+cp .env.example .env          # set AXOR_PG_PASSWORD — the only required value
+docker compose up --build
 ```
+
+Prefer not to build? The same images are published to GHCR on every release
+(`:latest`) and every push to main (`:edge`):
+
+```
+cp .env.example .env
+docker compose pull && docker compose up -d --no-build
+```
+
+`AXOR_TAG` in `.env` picks between them and defaults to `latest`. Until the
+first `vX.Y.Z` tag is cut only `:edge` exists — set `AXOR_TAG=edge`, or just
+build from the clone above, which needs nothing either way.
 
 Open **http://localhost:8080** and click **Run demo-mode** (mock tools, zero
 credentials). The frontend reverse-proxies `/v1` → backend and `/axor` → proxy,
 so the browser talks to one origin; the proxy starts in demo-mode and
 auto-uploads runs to the backend. For a real deployment set
-`AXOR_OPERATOR_KEYS` and `AXOR_ALLOW_UNSIGNED=0` (see `.env.example`); the
-`GITHUB_TOKEN` is build-only (a BuildKit secret) and never lands in an image
-layer.
+`AXOR_OPERATOR_KEYS` and `AXOR_ALLOW_UNSIGNED=0` (see `.env.example`).
+
+The build once wanted a `GITHUB_TOKEN`, back when the ecosystem deps were
+private git refs. They are published PyPI releases now — `uv.lock` holds zero
+git sources — and the token plumbing that outlived them is gone from the
+Dockerfile, compose and CI. A test keeps it gone
+(`test_quickstart_is_credential_free.py`): nothing on the path from `git clone`
+to a running stack may require an account.
 
 ## Dev (without containers)
 

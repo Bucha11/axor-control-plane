@@ -4,14 +4,29 @@ Everything code-side in docs/launch-readiness-v0.1.md is done. What remains
 needs the OWNER's accounts, money, voice, or a machine outside this repo.
 Ordered so each step unblocks the next; ~2–3 working days end to end.
 
-## 1. Unblock CI: ecosystem repo access — **RESOLVED**
+## 1. Unblock CI: ecosystem repo access — **RESOLVED, and the leftovers removed**
 
-Obsolete: `axor-core` (0.9.1) and `axor-eval` (0.1.0) are published on PyPI
-and the platform's `uv.lock` now resolves them from there — no git fetches,
-no `AXOR_ECOSYSTEM_TOKEN` needed for builds. Just re-run CI on main and
-confirm the `deploy` job is green; that flips the last ◐ in launch-readiness
-§6. (The token plumbing left in ci.yml/Dockerfile is a harmless no-op —
-remove at leisure.)
+`axor-core`, `axor-eval`, `axor-probe`, `axor-sentinel` and `axor-wrap` are
+published on PyPI and `uv.lock` resolves them from there — no git fetches, no
+`AXOR_ECOSYSTEM_TOKEN`.
+
+The note that used to sit here called the token plumbing left in
+ci.yml/Dockerfile "a harmless no-op — remove at leisure". It was not harmless.
+compose declared `github_token` as a required secret on three services and the
+README's first command was `GITHUB_TOKEN=ghp_… docker compose up --build`, so
+the published quickstart of a public, Apache-2.0 repository asked every
+stranger for a credential only you could issue — for dependencies that had been
+public for several releases. Nobody reported it because everyone who ran it
+already had the token exported.
+
+It is gone from the Dockerfile, docker-compose.yml, `.env.example`, the README
+and both workflows. `packages/axor-backend/tests/test_quickstart_is_credential_free.py`
+fails the suite if any of it comes back, and CI's `quickstart` job builds the
+image on every pull request with nothing in its environment.
+
+**Left for you (5 min, after the first `Release` run):** make the two GHCR
+packages public, or the build-free path (`docker compose pull`) fails for
+everyone but you. Steps in `docs/RELEASING.md` → "The images (GHCR)".
 
 ## 2. PyPI release (60–90 min, order matters)
 

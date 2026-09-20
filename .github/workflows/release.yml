@@ -1,17 +1,26 @@
 name: Release
 
 # Tag vX.Y.Z → build + publish the platform packages to PyPI and the compose
-# images to GHCR. Credential-free by design:
+# images to GHCR (`:X.Y.Z` + `:latest`). A push to main publishes `:edge`
+# images only, so the build-free quickstart works between releases.
+# Credential-free by design — in both directions: nothing is needed to publish,
+# and nothing is needed to build what gets published:
 # - PyPI uses Trusted Publishing (OIDC): configure this repo + workflow as a
 #   trusted publisher on pypi.org for axor-proxy and axor-backend once; no
 #   API token ever lives in the repo. Full walkthrough: docs/RELEASING.md.
-#   The ecosystem deps (axor-core, axor-eval) are already on PyPI, so the two
-#   platform packages install cleanly on a fresh machine — verified in
-#   docs/RELEASING.md's clean-room check.
+#   The ecosystem deps (axor-core, axor-eval, axor-probe, axor-sentinel,
+#   axor-wrap) are already on PyPI, so the two platform packages — and the
+#   images below — install cleanly on a fresh machine with no token at all.
+#   Verified in docs/RELEASING.md's clean-room check.
 # - GHCR uses the workflow's own GITHUB_TOKEN.
 on:
   push:
+    # Tags publish a release: PyPI wheels + `:X.Y.Z` and `:latest` images.
     tags: ["v*"]
+    # main publishes `:edge` images only — so the build-free quickstart
+    # (`docker compose pull`) has something to pull between releases, instead of
+    # pointing newcomers at a tag that does not exist yet.
+    branches: [main]
   workflow_dispatch:
 
 jobs:
@@ -22,6 +31,8 @@ jobs:
   # ("already registered for a different project name"). Each leg builds only its
   # own package into dist/ and publishes just that.
   pypi:
+    # Wheels are cut by a tag and only by a tag; a push to main publishes images.
+    if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -110,22 +121,46 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+      # A tag yields `:X.Y.Z` + `:latest`; a push to main yields `:edge`. Both
+      # are what docker-compose.yml resolves ${AXOR_TAG} against, so the
+      # build-free path in the README is never a promise of an image that was
+      # never pushed.
+      - name: Image tags
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: |
+            ghcr.io/${{ steps.repo.outputs.owner }}/axor-platform
+          tags: |
+            type=semver,pattern={{version}}
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
+            type=raw,value=edge,enable=${{ github.ref == 'refs/heads/main' }}
+      - name: Frontend image tags
+        id: meta-frontend
+        uses: docker/metadata-action@v5
+        with:
+          images: |
+            ghcr.io/${{ steps.repo.outputs.owner }}/axor-frontend
+          tags: |
+            type=semver,pattern={{version}}
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
+            type=raw,value=edge,enable=${{ github.ref == 'refs/heads/main' }}
+      # No `secrets:` input on either build. These images are what a newcomer
+      # runs instead of building, so they must be buildable by anyone — the old
+      # `github_token=` secret fetched private git deps that have been published
+      # PyPI releases for several releases now.
       - name: Push backend/proxy image
         uses: docker/build-push-action@v6
         with:
           context: .
           push: true
-          tags: |
-            ghcr.io/${{ steps.repo.outputs.owner }}/axor-platform:${{ github.ref_name }}
-            ghcr.io/${{ steps.repo.outputs.owner }}/axor-platform:latest
-          secrets: |
-            github_token=${{ secrets.AXOR_ECOSYSTEM_TOKEN || secrets.GITHUB_TOKEN }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
       - name: Push frontend image
         uses: docker/build-push-action@v6
         with:
           context: .
           file: frontend/Dockerfile
           push: true
-          tags: |
-            ghcr.io/${{ steps.repo.outputs.owner }}/axor-frontend:${{ github.ref_name }}
-            ghcr.io/${{ steps.repo.outputs.owner }}/axor-frontend:latest
+          tags: ${{ steps.meta-frontend.outputs.tags }}
+          labels: ${{ steps.meta-frontend.outputs.labels }}

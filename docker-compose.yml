@@ -1,15 +1,23 @@
-# Self-hosted deployment — the whole stack with one command:
+# Self-hosted deployment — the whole stack with one command, no credentials:
 #
-#   cp .env.example .env      # set AXOR_PG_PASSWORD (and GITHUB_TOKEN to build)
+#   cp .env.example .env      # set AXOR_PG_PASSWORD; that is the only required value
 #   docker compose up --build
+#
+# …or skip the build entirely and run the images published on every push to
+# main and every release tag:
+#
+#   docker compose pull && docker compose up -d --no-build
 #
 # Then open http://localhost:8080 — the frontend reverse-proxies the backend and
 # proxy, so the browser talks to a single origin. Postgres is the only store.
 #
-# The backend + proxy share one image (built from ./Dockerfile, the uv
-# workspace); the frontend is an nginx image serving the built SPA. The private
-# ecosystem deps (axor-core / axor-eval) are fetched at build time via the
-# github_token secret — see ./Dockerfile.
+# The backend, identity service and proxy share one image (built from
+# ./Dockerfile, the uv workspace, or pulled as ghcr.io/bucha11/axor-platform);
+# the frontend is an nginx image serving the built SPA. Nothing here takes a
+# GitHub token: the ecosystem deps are published PyPI releases. The
+# `github_token` secret this file used to declare, and pass to three services,
+# had outlived the private git refs it authorised — it bought nothing and cost
+# every outsider the quickstart.
 services:
   postgres:
     image: postgres:16-alpine
@@ -30,10 +38,10 @@ services:
       retries: 20
 
   backend:
+    image: ${AXOR_IMAGE:-ghcr.io/bucha11/axor-platform}:${AXOR_TAG:-latest}
     build:
       context: .
       dockerfile: Dockerfile
-      secrets: [github_token]
     command: ["uvicorn", "axor_backend.main:app", "--factory", "--host", "0.0.0.0", "--port", "8400"]
     environment:
       AXOR_DATABASE_URL: postgresql+asyncpg://axor:${AXOR_PG_PASSWORD}@postgres/axor
@@ -68,10 +76,10 @@ services:
       retries: 10
 
   identity:
+    image: ${AXOR_IMAGE:-ghcr.io/bucha11/axor-platform}:${AXOR_TAG:-latest}
     build:
       context: .
       dockerfile: Dockerfile
-      secrets: [github_token]
     command: ["axor-identity"]
     environment:
       AXOR_IDENTITY_HOST: 0.0.0.0
@@ -93,10 +101,10 @@ services:
       retries: 10
 
   proxy:
+    image: ${AXOR_IMAGE:-ghcr.io/bucha11/axor-platform}:${AXOR_TAG:-latest}
     build:
       context: .
       dockerfile: Dockerfile
-      secrets: [github_token]
     command: ["axor-proxy"]
     environment:
       AXOR_PROXY_HOST: 0.0.0.0
@@ -121,6 +129,7 @@ services:
       retries: 10
 
   frontend:
+    image: ${AXOR_FRONTEND_IMAGE:-ghcr.io/bucha11/axor-frontend}:${AXOR_TAG:-latest}
     build:
       context: .
       dockerfile: frontend/Dockerfile
@@ -148,10 +157,3 @@ services:
 volumes:
   pgdata: {}
   axordata: {}
-
-# Optional git token for building the private ecosystem deps, from the
-# GITHUB_TOKEN env var; an empty value builds fine in networks that already reach
-# the repos.
-secrets:
-  github_token:
-    environment: GITHUB_TOKEN
