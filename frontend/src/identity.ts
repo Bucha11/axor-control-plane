@@ -6,7 +6,7 @@
 // still pasted in Settings and keep working. The base URL is VITE_IDENTITY_URL
 // (default `/identity`, so a reverse proxy can host identity on one origin).
 
-const IDENTITY_BASE = (import.meta.env.VITE_IDENTITY_URL ?? "/identity").replace(/\/$/, "");
+export const IDENTITY_BASE = (import.meta.env.VITE_IDENTITY_URL ?? "/identity").replace(/\/$/, "");
 
 export interface Session {
   access_token: string;

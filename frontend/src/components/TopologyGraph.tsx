@@ -26,7 +26,16 @@ interface Pos {
 
 // Depth = longest delegation chain from a root (a node never seen as a
 // delegation target). Peers sit outside the enclosure on the right.
-function layout(payload: TopologyPayload): Map<string, Pos> {
+interface Layout {
+  pos: Map<string, Pos>;
+  // Canvas and enclosure grow with the widest row and the peer column, so a
+  // fifth sibling or a fourth peer is drawn, not clipped.
+  width: number;
+  height: number;
+  rowWidth: number;
+}
+
+function layout(payload: TopologyPayload): Layout {
   const selfNodes = payload.nodes.filter((n) => n.kind === "self");
   const peers = payload.nodes.filter((n) => n.kind === "peer");
   const childOf = new Map<string, string>();
@@ -50,17 +59,23 @@ function layout(payload: TopologyPayload): Map<string, Pos> {
   }
   const pos = new Map<string, Pos>();
   const maxDepth = Math.max(0, ...rows.keys());
+  const widest = Math.max(1, ...[...rows.values()].map((ids) => ids.length));
+  // ~70 units per node keeps labels from overlapping; 260 is the old minimum.
+  const rowWidth = Math.max(260, (widest + 1) * 70);
   for (const [d, ids] of rows) {
     ids.sort();
     ids.forEach((id, i) => {
       pos.set(id, {
-        x: 60 + ((i + 1) * 260) / (ids.length + 1),
+        x: 60 + ((i + 1) * rowWidth) / (ids.length + 1),
         y: 70 + (maxDepth === 0 ? 0 : (d * 220) / Math.max(1, maxDepth)),
       });
     });
   }
-  peers.forEach((p, i) => pos.set(p.node_id, { x: 400, y: 100 + i * 90 }));
-  return pos;
+  const peerX = 40 + rowWidth + 30 + 70;
+  peers.forEach((p, i) => pos.set(p.node_id, { x: peerX, y: 100 + i * 90 }));
+  const height = Math.max(340, 100 + Math.max(0, peers.length - 1) * 90 + 70);
+  const width = peers.length ? peerX + 80 : 40 + rowWidth + 30 + 150;
+  return { pos, width, height, rowWidth };
 }
 
 export default function TopologyGraph({
@@ -72,7 +87,7 @@ export default function TopologyGraph({
   selected: string | null;
   onSelect: (id: string) => void;
 }) {
-  const pos = layout(payload);
+  const { pos, width, height, rowWidth } = layout(payload);
   const hasPeers = payload.nodes.some((n) => n.kind === "peer");
   const hasReputation = payload.nodes.some(
     (n) => n.reputation?.flagged || n.reputation?.watch,
@@ -87,9 +102,9 @@ export default function TopologyGraph({
 
   return (
     <div style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 10, overflow: "hidden" }}>
-      <svg viewBox="0 0 480 340" style={{ width: "100%", display: "block" }} data-testid="topology-graph">
+      <svg viewBox={`0 0 ${width} ${height}`} style={{ width: "100%", display: "block" }} data-testid="topology-graph">
         {/* federation enclosure — the keyset boundary (spec v2 Ch.1) */}
-        <rect x="40" y="30" width="290" height="290" rx="14"
+        <rect x="40" y="30" width={rowWidth + 30} height={height - 50} rx="14"
           fill="rgba(127,168,204,0.03)" stroke={C.steel} strokeWidth="1" strokeDasharray="2 4" />
         <text x="52" y="50" fill={C.steel} fontSize="9" fontFamily={MONO} opacity="0.7">
           FEDERATION · your keyset

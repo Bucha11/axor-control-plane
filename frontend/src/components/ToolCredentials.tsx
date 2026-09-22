@@ -53,13 +53,17 @@ export default function ToolCredentials() {
   const credsToken = useApp((s) => s.vaultCredsToken);
   const setCredsToken = useApp((s) => s.setVaultCredsToken);
 
-  const health = useQuery({ queryKey: ["vault-creds"], queryFn: api.vaultCredsHealth });
-  const sealing = useQuery({ queryKey: ["vault-sealing"], queryFn: api.vaultSealingKey });
-  const audit = useQuery({ queryKey: ["vault-creds-audit"], queryFn: () => api.vaultCredsAudit() });
+  // Every read is gated by the creds token, so it is part of each key: typing
+  // it refetches instead of leaving the 403 from before on screen.
+  const health = useQuery({ queryKey: ["vault-creds", credsToken], queryFn: api.vaultCredsHealth });
+  const sealing = useQuery({ queryKey: ["vault-sealing", credsToken], queryFn: api.vaultSealingKey });
+  const audit = useQuery({
+    queryKey: ["vault-creds-audit", credsToken], queryFn: () => api.vaultCredsAudit(),
+  });
   // Which nodes sign their dispenses. Registering one was possible and seeing
   // what was registered was not, which makes "is this node signing?" a question
   // the panel could not answer about the deployment it is showing.
-  const nodeKeys = useQuery({ queryKey: ["vault-node-keys"], queryFn: api.vaultNodeKeys });
+  const nodeKeys = useQuery({ queryKey: ["vault-node-keys", credsToken], queryFn: api.vaultNodeKeys });
 
   const [open, setOpen] = useState(false);
   const [draft, setDraft] = useState({
@@ -182,7 +186,12 @@ export default function ToolCredentials() {
         />
       </div>
 
-      {enrolled.length === 0 ? (
+      {health.isError ? (
+        <div style={{ fontFamily: MONO, fontSize: 11, color: C.red }}>
+          cannot read credentials: {(health.error as Error).message}
+          {!credsToken && " — set the vault creds-token"}
+        </div>
+      ) : enrolled.length === 0 ? (
         <div style={{ fontFamily: MONO, fontSize: 11, color: C.dim }}>no credentials enrolled</div>
       ) : (
         enrolled.map((e) => (

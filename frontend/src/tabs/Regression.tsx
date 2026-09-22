@@ -535,6 +535,7 @@ export default function Regression({ initialConfig }: { initialConfig?: string }
                               navigate(`replay/${r.run_id}`, {
                                 seq: r.escaped_denials[0]?.seq
                                   ?? r.new_denial?.seq ?? r.first_divergence ?? undefined,
+                                node: r.escaped_denials[0]?.node_id,
                               })
                             }
                             style={btn({ color: C.steel, fontSize: 11, padding: "5px 10px" })}

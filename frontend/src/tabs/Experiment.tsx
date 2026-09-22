@@ -254,7 +254,7 @@ export default function Experiment({ runId, autostart }: { runId?: string; autos
               </label>
               {showDelta && <ScenarioDelta c={caught} />}
               <EvidenceCase runId={focusRun.run_id} caseIndex={caseIndex} c={caught}
-                replayStep={caught.anchor?.seq} />
+                replayStep={caught.anchor?.seq} replayNode={caught.anchor?.node_id} />
               {caught.anchor && (
                 <TwoTreeContainment runId={focusRun.run_id} anchor={caught.anchor} />
               )}

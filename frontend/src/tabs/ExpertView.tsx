@@ -6,6 +6,7 @@ import { useState, useEffect, useRef } from "react";
 import type { LucideIcon } from "lucide-react";
 import { Play, Pause, Square, RotateCcw, Syringe, Shield, Activity, GitBranch, Lock, CircleDot, Gauge, FlaskConical } from "lucide-react";
 import { C, MONO } from "../theme";
+import { navigate } from "../router";
 import Coach from "../components/Coach";
 
 // The mockup palette has two colors the shared theme doesn't carry.
@@ -143,7 +144,7 @@ function ExpertEval() {
           </div>
         </Panel>
         {/* EvidenceCase */}
-        <Panel tag="§8 · EVIDENCECASE" title="ev_042 — the receipt" right={<Btn icon={Play} label="open in replay" onClick={() => {}} />}>
+        <Panel tag="§8 · EVIDENCECASE" title="ev_042 — the receipt" right={<Btn icon={Play} label="open in replay" onClick={() => navigate("replay")} />}>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 1, background: C.line }}>
             <div className="p-3" style={{ background: C.panel }}>
               <div style={{ fontSize: 10, fontFamily: MONO, color: C.mut, marginBottom: 6 }}>OBSERVED REALITY</div>
@@ -246,11 +247,21 @@ function ExpertControl() {
   const [injectOpen, setInjectOpen] = useState(false);
   const [reason, setReason] = useState("");
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  // The latest desired state: a second click before the node "applies" the
+  // first must carry both patches, not just its own.
+  const desiredRef = useRef(desired);
+  // Lowered caps per node ("used/cap" in the reference data).
+  const [caps, setCaps] = useState<Record<string, number>>({});
+  const [lastCmd, setLastCmd] = useState<string | null>(null);
+  const [attested, setAttested] = useState(false);
 
-  const command = (patch: Partial<Pick<CmdState, "paused" | "stopped">>) => {
-    setDesired((d) => ({ ...d, ...patch, version: d.version + 1 }));
+  const command = (patch: Partial<Pick<CmdState, "paused" | "stopped">>, label?: string) => {
+    const next = { ...desiredRef.current, ...patch, version: desiredRef.current.version + 1 };
+    desiredRef.current = next;
+    setDesired(next);
+    if (label) setLastCmd(`v${next.version} · ${label}`);
     clearTimeout(timer.current);
-    timer.current = setTimeout(() => setReported((r) => ({ ...r, ...patch, version: desired.version + 1 })), 1400);
+    timer.current = setTimeout(() => setReported(desiredRef.current), 1400);
   };
   useEffect(() => () => clearTimeout(timer.current), []);
   const node = NODES.find((n) => n.id === sel) ?? NODES[0];
@@ -284,7 +295,7 @@ function ExpertControl() {
 
       <div className="flex flex-col gap-3">
         <Panel tag="§12.2 · NODE" title={node.name.trim()}
-          right={<div className="flex gap-2"><Chip label="heat" value={node.heat.toFixed(2)} color={node.heat > 0.7 ? C.red : C.text} /><Chip label="budget" value={node.budget} /></div>}>
+          right={<div className="flex gap-2"><Chip label="heat" value={node.heat.toFixed(2)} color={node.heat > 0.7 ? C.red : C.text} /><Chip label="budget" value={caps[node.id] != null ? `${node.budget.split("/")[0]}/${caps[node.id]}` : node.budget} /></div>}>
           <div className="p-3 flex flex-col gap-3">
             {/* desired vs reported — the signature */}
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
@@ -305,11 +316,18 @@ function ExpertControl() {
             <div className="flex flex-wrap gap-2">
               <Btn icon={desired.paused ? Play : Pause} label={desired.paused ? "resume" : "pause"} onClick={() => command({ paused: !desired.paused })} disabled={desired.stopped} active={desired.paused} />
               <Btn icon={Square} label="stop" danger onClick={() => command({ stopped: true, paused: false })} disabled={desired.stopped} />
-              <Btn icon={RotateCcw} label="replan" onClick={() => command({})} disabled={desired.stopped} />
+              <Btn icon={RotateCcw} label="replan" onClick={() => command({}, "replan requested")} disabled={desired.stopped} />
               <Btn icon={Syringe} label="inject next turn" onClick={() => setInjectOpen(!injectOpen)} disabled={!testBench || desired.stopped} />
-              <Btn icon={Gauge} label="lower cap" onClick={() => command({})} />
-              <Btn icon={Shield} label="attest branch" onClick={() => setInjectOpen(false)} />
+              <Btn icon={Gauge} label="lower cap" disabled={desired.stopped} onClick={() => {
+                const [used, total] = node.budget.split("/").map(Number);
+                // Never below what is already spent: a cap under usage is a stop.
+                const next = Math.max(used, Math.floor((caps[node.id] ?? total) / 2));
+                setCaps({ ...caps, [node.id]: next });
+                command({}, `budget cap → ${next}`);
+              }} />
+              <Btn icon={Shield} label="attest branch" active={attested} onClick={() => { setInjectOpen(false); setAttested(!attested); }} />
             </div>
+            {lastCmd && <div style={{ fontFamily: MONO, fontSize: 10, color: C.mut }}>last command: {lastCmd}</div>}
             {desired.stopped && <div style={{ fontFamily: MONO, fontSize: 10, color: C.red }}>stopped is absorbing — later pause/inject writes are noop_absorbed</div>}
             {!testBench && <div style={{ fontFamily: MONO, fontSize: 10, color: C.mut }}>injection not rendered on production-flagged connections (§12.3)</div>}
             {injectOpen && testBench && !desired.stopped && (
@@ -318,7 +336,7 @@ function ExpertControl() {
                 <input value={reason} onChange={(e) => setReason(e.target.value)} placeholder="reason (required) — e.g. probing recovery behavior"
                   style={{ background: C.bg, border: `1px solid ${C.line}`, borderRadius: 3, color: C.text, fontFamily: MONO, fontSize: 11, padding: "6px 8px", outline: "none" }} />
                 <div className="flex" style={{ justifyContent: "flex-end" }}>
-                  <Btn icon={Syringe} label="send inj_a1f4" disabled={!reason.trim()} onClick={() => { setInjectOpen(false); setReason(""); command({}); }} />
+                  <Btn icon={Syringe} label="send inj_a1f4" disabled={!reason.trim()} onClick={() => { setInjectOpen(false); setReason(""); command({}, `inject inj_a1f4 — ${reason.trim()}`); }} />
                 </div>
               </div>
             )}
@@ -326,7 +344,7 @@ function ExpertControl() {
         </Panel>
         <Panel tag="§8.1.1 · ATTESTATION" title="Branch coverage → level recompute">
           <div className="p-3 flex flex-col gap-1.5">
-            {([["f_301 external-read burst", true], ["f_302 export denial ×3", true], ["f_305 canary echo", false]] as Array<[string, boolean]>).map(([f, cov]) => (
+            {([["f_301 external-read burst", true], ["f_302 export denial ×3", true], ["f_305 canary echo", attested]] as Array<[string, boolean]>).map(([f, cov]) => (
               <div key={f} className="flex items-center justify-between">
                 <span style={{ fontFamily: MONO, fontSize: 11, color: cov ? C.dim : C.text, textDecoration: cov ? "line-through" : "none" }}>{f}</span>
                 <span style={{ fontFamily: MONO, fontSize: 10, color: cov ? C.green : C.amber }}>{cov ? "attested · op_dmitrii" : "uncovered"}</span>
@@ -334,7 +352,7 @@ function ExpertControl() {
             ))}
             <div className="mt-1 pt-2" style={{ paddingTop: 8, borderTop: `1px solid ${C.line}` }}>
               <span style={{ fontFamily: MONO, fontSize: 11, color: C.mut }}>level = max(severity(uncovered)) = </span>
-              <span style={{ fontFamily: MONO, fontSize: 11, color: C.amber, fontWeight: 700 }}>RESTRICTED</span>
+              <span style={{ fontFamily: MONO, fontSize: 11, color: attested ? YELLOW : C.amber, fontWeight: 700 }}>{attested ? "CAUTIOUS" : "RESTRICTED"}</span>
             </div>
           </div>
         </Panel>
@@ -390,7 +408,7 @@ function ExpertReplay() {
           <div className="flex gap-2">
             <Btn icon={Square} label="remove bash capability" active={cfNoBash} onClick={() => { setCfNoBash(!cfNoBash); setCfTaint(false); }} />
             <Btn icon={Syringe} label="inject taint @ step 4" active={cfTaint} onClick={() => { setCfTaint(!cfTaint); setCfNoBash(false); }} />
-            <Btn icon={Gauge} label="config v2" onClick={() => {}} />
+            <Btn icon={Gauge} label="config v2" onClick={() => navigate("regression")} />
           </div>
           {divergence === null ? (
             <span style={{ fontFamily: MONO, fontSize: 11, color: C.mut }}>edit the world above — gates, taint flow and Sentinel heat re-evaluate deterministically over the recorded trace</span>

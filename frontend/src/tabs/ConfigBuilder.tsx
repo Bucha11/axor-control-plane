@@ -98,7 +98,9 @@ function ArgEditor({ sink, update }: { sink: Sink; update: (p: Partial<Sink>) =>
   const [valDrafts, setValDrafts] = useState<Record<string, string>>({}); // argName -> current input
 
   const addArg = () => {
-    if (!newArg.trim()) return;
+    // Names key the allowlist: a duplicate would render twice and collapse to
+    // one entry in the emitted config.
+    if (!newArg.trim() || sink.args.some((a) => a.arg === newArg.trim())) return;
     update({ args: [...sink.args, { arg: newArg.trim(), set: [] }] });
     setNewArg(""); setAddingArg(false);
   };
@@ -266,6 +268,10 @@ export default function ConfigBuilder() {
   const patch = (i: number, p: Partial<Sink>) => setSinks(sinks.map((s, j) => (j === i ? { ...s, ...p } : s)));
   const unclassified = sinks.filter((s) => s.type === "?").length;
   const fromCode = sinks.some((s) => s.src);
+  // The files the scanner actually read (tool sources are "path:line").
+  const scannedFiles = Array.from(new Set(
+    wrapTools.map((t) => t.source.replace(/:\d+$/, "")).filter(Boolean),
+  ));
 
   const config = {
     version: "axor-config/1",
@@ -505,7 +511,8 @@ export default function ConfigBuilder() {
               </select>
               <input autoFocus placeholder="tool name ⏎" value={draft.name} onChange={(e) => setDraft({ ...draft, name: e.target.value })}
                 onKeyDown={(e) => {
-                  if (e.key === "Enter" && draft.name.trim()) {
+                  if (e.key === "Enter" && draft.name.trim()
+                      && !sinks.some((x) => x.name === draft.name.trim())) {
                     setSinks([...sinks, { name: draft.name.trim(), type: draft.type, critical: false, args: [] }]);
                     setDraft({ name: "", type: "READ" });
                     setAdding(false);
@@ -638,12 +645,17 @@ export default function ConfigBuilder() {
         </div>
       </div>
       {fromCode && (
-        <Fold label="wrapped package — your code untouched, two files added" openDefault>
+        <Fold label="your agent — code untouched, config and manifests added beside it" openDefault>
           <div style={{ background: C.panel2, border: `1px solid ${C.line}`, borderRadius: 6, padding: 12, fontFamily: MONO, fontSize: 11.5, lineHeight: 1.8 }}>
-            <div style={{ color: C.dim }}>my_agent/</div>
-            <div style={{ color: C.dim, paddingLeft: 16 }}>agent.py · tools.py · db.py <span style={{ fontSize: 10 }}>— unchanged</span></div>
-            <div style={{ color: C.green, paddingLeft: 16 }}>+ axor_wrapper.py</div>
-            <div style={{ color: C.green, paddingLeft: 16 }}>+ axor.config.json</div>
+            <div style={{ color: C.dim }}>your agent/</div>
+            <div style={{ color: C.dim, paddingLeft: 16 }}>
+              {scannedFiles.join(" · ") || "scanned sources"} <span style={{ fontSize: 10 }}>— unchanged</span>
+            </div>
+            <div style={{ color: C.green, paddingLeft: 16 }}>+ axor.config.json <span style={{ color: C.dim, fontSize: 10 }}>(download config)</span></div>
+            <div style={{ color: C.green, paddingLeft: 16 }}>+ manifests.json <span style={{ color: C.dim, fontSize: 10 }}>(download tool manifests)</span></div>
+            <div style={{ color: C.dim, paddingLeft: 16, fontSize: 10.5 }}>
+              wrap the tools at startup with axor_wrap.runtime.wrap_callables — see Get started → adapter
+            </div>
           </div>
         </Fold>
       )}
@@ -651,9 +663,9 @@ export default function ConfigBuilder() {
         <pre style={{ background: C.panel2, border: `1px solid ${C.line}`, borderRadius: 6, padding: 12, fontFamily: MONO, fontSize: 11, color: C.mut, overflow: "auto", margin: 0 }}>{JSON.stringify(config, null, 2)}</pre>
       </Fold>
       <div className="flex items-center gap-3 mt-5 flex-wrap">
-        <Tooltip content="Downloads axor.config.json — drop it next to your agent and run it governed. The same file drives Replay counterfactuals and Regression.">
+        <Tooltip content="Downloads axor.config.json — drop it next to your agent and run it governed. Replay counterfactuals and Regression read its sinks, trusted sets and budget; criticality and peers are enforced on the node only.">
           <button onClick={download} style={btn({ color: C.text, borderColor: C.steel, padding: "9px 18px", fontSize: 12.5 })}>
-            <Download size={14} /> {fromCode ? "Download wrapped package" : "Download config + scaffold"}
+            <Download size={14} /> Download config (axor.config.json)
           </button>
         </Tooltip>
         <Tooltip content="Downloads manifests.json — tool-manifest/v1 per classified tool plus the compiled governance YAML, built by the backend wrap engine.">

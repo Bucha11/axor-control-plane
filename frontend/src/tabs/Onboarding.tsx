@@ -21,6 +21,12 @@ const TOOLS: Tool[] = [
   { name: "run_query", url: "https://db.internal.example/query" },
 ];
 
+// What `axor-proxy --demo` registers: preflight answers for these out of the box.
+const MOCK_TOOLS: Tool[] = [
+  { name: "web_search", url: `${(import.meta.env.VITE_PROXY_PUBLIC_URL ?? "http://127.0.0.1:8401").replace(/\/$/, "")}/mock/web_search` },
+  { name: "mcp", url: `${(import.meta.env.VITE_PROXY_PUBLIC_URL ?? "http://127.0.0.1:8401").replace(/\/$/, "")}/mock/mcp` },
+];
+
 type RowState = "idle" | "testing" | "ok" | "fail" | "unregistered";
 
 // Where an agent reaches the proxy's tool routes (/t/{tool}/). The UI's own
@@ -243,7 +249,14 @@ export default function Onboarding() {
                 </button>
               </Tooltip>
               <span style={{ fontFamily: MONO, fontSize: 11, color: C.dim }}>
-                loads a sample set · or paste your MCP config above (http + stdio both work) · or add endpoints by hand · or use our mock tools (zero creds)
+                loads a sample set · or paste your MCP config above (http + stdio both work) · or add endpoints by hand · or{" "}
+                <span
+                  role="button"
+                  onClick={() => setTools(MOCK_TOOLS)}
+                  style={{ color: C.steel, cursor: "pointer" }}
+                >
+                  use our mock tools (zero creds)
+                </span>
               </span>
               <div className="w-full">{addRow}</div>
             </div>

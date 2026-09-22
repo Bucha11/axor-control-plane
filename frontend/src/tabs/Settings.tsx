@@ -37,6 +37,68 @@ const INPUT_STYLE = {
 /** Sign in with the shared axor-identity service. On success the access token
  * becomes the bearer (renewed transparently on expiry via api.af); operators
  * who prefer a static token can still paste one below. */
+// The signed-in human's organization: which orgs they belong to (from the
+// identity service's /v1/me, which also proves the session is still live) and,
+// for an admin, adding an existing user to the active org.
+function OrgMembers() {
+  const me = useQuery({ queryKey: ["identity-me"], queryFn: api.identityMe });
+  const [email, setEmail] = useState("");
+  const [role, setRole] = useState("member");
+  const add = useMutation({
+    mutationFn: () => api.addOrgMember(me.data!.active_org, email.trim(), role),
+    onSuccess: () => setEmail(""),
+  });
+  if (me.isPending) return null;
+  if (me.isError) {
+    return (
+      <div className="mb-3" style={{ fontFamily: MONO, fontSize: 11, color: C.red }}>
+        cannot read your organization: {(me.error as Error).message}
+      </div>
+    );
+  }
+  const d = me.data;
+  const active = d.memberships.find((m) => m.org_id === d.active_org);
+  const isAdmin = d.role === "admin" || d.role === "owner";
+  return (
+    <div className="mb-3" style={{ fontFamily: MONO, fontSize: 11, color: C.mut, display: "flex", flexDirection: "column", gap: 6 }}>
+      <div>
+        org <span style={{ color: C.text }}>{active?.name ?? d.active_org}</span> · role{" "}
+        <span style={{ color: C.text }}>{d.role}</span>
+        {active && <> · tier {active.tier}</>}
+        {d.memberships.length > 1 && (
+          <span style={{ color: C.dim }}>
+            {" "}· also in {d.memberships.filter((m) => m.org_id !== d.active_org).map((m) => m.name).join(", ")}
+            {" "}(sign in with that org id to switch)
+          </span>
+        )}
+      </div>
+      {isAdmin && (
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            if (email.trim() && !add.isPending) add.mutate();
+          }}
+          className="flex items-center gap-2"
+        >
+          <input type="email" value={email} placeholder="add member by email (must have signed up)"
+            onChange={(e) => setEmail(e.target.value)} aria-label="member email"
+            style={{ ...INPUT_STYLE, flex: 1 }} />
+          <select value={role} onChange={(e) => setRole(e.target.value)} aria-label="member role"
+            style={{ ...INPUT_STYLE, width: 100 }}>
+            {["admin", "member", "viewer"].map((r) => <option key={r} value={r}>{r}</option>)}
+          </select>
+          <button type="submit" disabled={!email.trim() || add.isPending}
+            style={btn({ color: C.text, borderColor: C.steel, fontSize: 11, padding: "4px 10px" })}>
+            {add.isPending ? "adding…" : "add"}
+          </button>
+        </form>
+      )}
+      {add.isSuccess && <span style={{ color: C.green }}>added {add.data.user_id} as {add.data.role}</span>}
+      {add.isError && <span style={{ color: C.red }}>{(add.error as Error).message}</span>}
+    </div>
+  );
+}
+
 function IdentityLogin() {
   const identityEmail = useApp((s) => s.identityEmail);
   const setSession = useApp((s) => s.setSession);
@@ -52,6 +114,7 @@ function IdentityLogin() {
 
   if (identityEmail) {
     return (
+      <>
       <div className="flex items-center gap-2 mb-3" style={{ fontFamily: MONO, fontSize: 11.5 }}>
         <span style={{ color: C.green }}>● signed in as {identityEmail}</span>
         <button
@@ -65,6 +128,8 @@ function IdentityLogin() {
           log out
         </button>
       </div>
+      <OrgMembers />
+      </>
     );
   }
 
@@ -274,7 +339,7 @@ export default function Settings() {
           <>
             <div style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim, marginBottom: 8 }}>
               local token or an API key — sent as the bearer on every request
-              (SSE + export carry it as a query param).
+              (the live stream and export links carry it as a query param).
             </div>
             <div className="flex items-center gap-2 mb-2">
               <input
@@ -329,10 +394,30 @@ export default function Settings() {
                   <div key={k.key_id} className="flex items-center gap-2 py-1">
                     <span style={{ fontFamily: MONO, fontSize: 11, color: C.text }}>{k.key_id}</span>
                     <span style={{ fontFamily: MONO, fontSize: 10.5, color: C.mut }}>{k.scopes.join(",")}</span>
-                    <span style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim, flex: 1 }}>{k.label}</span>
-                    <Trash2 size={12} color={C.dim} style={{ cursor: "pointer" }} onClick={() => revokeKey.mutate(k.key_id)} />
+                    <span style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim, flex: 1 }}>
+                      {k.label}{k.node_id ? ` · bound to ${k.node_id}` : ""}
+                    </span>
+                    <button
+                      aria-label={`revoke ${k.key_id}`}
+                      disabled={revokeKey.isPending}
+                      onClick={() => {
+                        // Irreversible, and whatever holds the key stops working.
+                        if (window.confirm(`Revoke ${k.key_id}? Anything using it loses access.`)) {
+                          revokeKey.mutate(k.key_id);
+                        }
+                      }}
+                      style={{ background: "none", border: "none", padding: 0, cursor: "pointer" }}>
+                      <Trash2 size={12} color={C.dim} />
+                    </button>
                   </div>
                 ))}
+                {(mintKey.isError || revokeKey.isError) && (
+                  <div className="mb-2" style={{ fontFamily: MONO, fontSize: 11, color: C.red }}>
+                    {mintKey.isError
+                      ? `mint failed: ${(mintKey.error as Error).message}`
+                      : `revoke failed: ${(revokeKey.error as Error).message}`}
+                  </div>
+                )}
                 {(keysAudit.data ?? []).length > 0 && (
                   <div className="mt-3" data-testid="key-lifecycle-audit">
                     <div style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim, letterSpacing: "0.08em", marginBottom: 6 }}>
@@ -384,7 +469,7 @@ export default function Settings() {
         </div>
         <input
           value={url}
-          onChange={(e) => setUrl(e.target.value)}
+          onChange={(e) => { setUrl(e.target.value); subscribe.reset(); }}
           placeholder="https://hooks.example/… (JSON POST)"
           className="w-full mb-3"
           style={{ background: C.bg, border: `1px solid ${C.line}`, borderRadius: 5, color: C.text, fontFamily: MONO, fontSize: 12, padding: "7px 9px", outline: "none" }}
@@ -458,6 +543,11 @@ export default function Settings() {
                 </button>
               </div>
             ))}
+            {unsubscribe.isError && (
+              <div className="mt-2" style={{ fontFamily: MONO, fontSize: 11, color: C.red }}>
+                unsubscribe failed: {(unsubscribe.error as Error).message}
+              </div>
+            )}
           </>
         )}
 
