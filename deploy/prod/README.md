@@ -4,10 +4,10 @@ The cheapest setup that is still a real deployment. It costs about €5–7 a mo
 one small x86 VPS, two free static landing pages, and one domain.
 
 ```
-example.com          → Control Plane landing   (GitHub Pages, this repo's site/)
-lab.example.com      → Axor Lab landing        (GitHub Pages, axor-lab's site/)
-app.example.com      → Caddy → frontend  (CP SPA; /v1 backend, /axor proxy, /identity)
-app.lab.example.com  → Caddy → lab-edge  (Lab app + API; /identity)
+landing-plane.useaxor.net  → Control Plane landing  (GitHub Pages, this repo's site/)
+landing-lab.useaxor.net    → Axor Lab landing       (GitHub Pages, axor-lab's site/)
+plane.useaxor.net          → Caddy → frontend  (CP SPA; /v1 backend, /axor proxy, /identity)
+lab.useaxor.net            → Caddy → lab-edge  (Lab app + API; /identity)
 ```
 
 Everything behind Caddy runs from `docker-compose.yml` in this directory:
@@ -45,10 +45,18 @@ created in either app works in the other.
    the provider's firewall.
    Do not rely on ufw alone: Docker writes its own iptables rules and bypasses
    it. This compose file publishes only Caddy's ports.
-2. **DNS.** Create A records for `app.` and `app.lab.` pointing at the server.
-   If you use Cloudflare, keep both **DNS-only (grey cloud)**. Its proxy cuts
-   idle connections after about 100 s, which kills SSE streams. Caddy handles
-   TLS itself.
+2. **DNS.** Create the records below.
+
+   | Name | Type | Value | Cloudflare proxy |
+   |---|---|---|---|
+   | `plane` | A | VPS IP | **DNS-only (grey)** |
+   | `lab` | A | VPS IP | **DNS-only (grey)** |
+   | `landing-plane` | CNAME | `bucha11.github.io` | either |
+   | `landing-lab` | CNAME | `bucha11.github.io` | either |
+
+   The app hosts must stay DNS-only: Cloudflare's proxy cuts idle
+   connections after about 100 s, which kills SSE streams. Caddy handles TLS
+   itself. The landings are static, so proxying them is fine.
 3. **Checkout and secrets.**
    ```sh
    sudo git clone https://github.com/Bucha11/axor-control-plane /opt/axor
@@ -61,12 +69,21 @@ created in either app works in the other.
    ```
 4. **Start.** Run `docker compose pull && docker compose up -d`. Then check
    `docker compose ps`: every service should be `healthy`.
-5. **Ingest key.** Open `https://app.example.com` and paste `AXOR_API_TOKEN` in
+5. **Ingest key.** Open `https://plane.useaxor.net` and paste `AXOR_API_TOKEN` in
    Settings → auth. Mint an `ingest` API key, set `AXOR_INGEST_KEY` in `.env`,
    and restart the proxy with `docker compose up -d proxy`.
 6. **Landings.** In both repos, go to Settings → Pages → Source = "GitHub
-   Actions", then set the custom domain (`example.com` / `lab.example.com`).
-   The `pages.yml` workflow deploys `site/` on every push to `main`.
+   Actions", then set the custom domain: `landing-plane.useaxor.net` in this
+   repo and `landing-lab.useaxor.net` in axor-lab. Turn on **Enforce HTTPS**
+   once the certificate is issued. Each repo is its own Pages site, and
+   GitHub routes by host name, so two subdomains CNAMEd to the same
+   `bucha11.github.io` do not overwrite each other. No `CNAME` file is needed:
+   an Actions deployment reads the domain from the settings.
+   `pages.yml` deploys `site/` on every push to `main` that touches it. For the
+   first deploy, run it once by hand (Actions → Pages → Run workflow).
+   Also verify `useaxor.net` under your account's Settings → Pages → Verified
+   domains (a TXT record). Without it, another repository could claim a
+   subdomain that is CNAMEd to GitHub but has no site attached.
 7. **Backups.** See below. Set them up now, not after the first incident.
 
 ### GHCR package visibility
