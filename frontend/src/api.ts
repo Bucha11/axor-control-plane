@@ -1,5 +1,5 @@
 import { canonicalize } from "./jcs";
-import { refresh } from "./identity";
+import { IDENTITY_BASE, refresh } from "./identity";
 import { useApp } from "./store";
 
 // Backend client. Vite dev-proxies /v1 -> backend :8400 and /axor -> proxy :8401.
@@ -392,7 +392,7 @@ export interface LicenseInfo {
   self_hosted_runner: boolean;
   expires_at: string;
   features: string[];
-  live_nodes?: number;
+  peak_nodes?: number;
   over_ceiling?: boolean;
   // True on every 200 — verified against the pinned key and stored. Kept
   // because "verified" and "active" being the same thing is worth asserting.
@@ -489,18 +489,38 @@ async function af(path: string, init: RequestInit = {}, retried = false): Promis
   const headers = new Headers(init.headers);
   if (token) headers.set("Authorization", `Bearer ${token}`);
   const resp = await fetch(path, { ...init, headers });
-  if (resp.status === 401 && !retried) {
-    const state = useApp.getState();
-    if (state.refreshToken) {
-      const next = await refresh(state.refreshToken);
-      if (next) {
-        state.setSession(next.access_token, next.refresh_token, next.user.email);
-        return af(path, init, true);
-      }
-      state.clearSession();
-    }
+  if (resp.status === 401 && !retried && (await refreshSession(token))) {
+    return af(path, init, true);
   }
   return resp;
+}
+
+// One refresh at a time. The refresh token is single-use (identity rotates it),
+// so N requests that 401 together must share one exchange — otherwise the first
+// wins, the rest are rejected, and their failure clears the winner's session.
+let refreshing: Promise<boolean> | null = null;
+
+async function refreshSession(staleToken: string | null): Promise<boolean> {
+  const state = useApp.getState();
+  // Another request already refreshed while this one was in flight.
+  if (staleToken && apiToken() && apiToken() !== staleToken) return true;
+  if (!state.refreshToken) return false;
+  if (!refreshing) {
+    const presented = state.refreshToken;
+    refreshing = refresh(presented)
+      .then((next) => {
+        if (next) {
+          useApp.getState().setSession(next.access_token, next.refresh_token, next.user.email);
+          return true;
+        }
+        useApp.getState().clearSession();
+        return false;
+      })
+      .finally(() => {
+        refreshing = null;
+      });
+  }
+  return refreshing;
 }
 
 // Append the token as a query param for URLs the browser opens directly (SSE
@@ -612,6 +632,19 @@ function afCreds(path: string, init: RequestInit = {}): Promise<Response> {
   });
 }
 
+// The signing custody's own token, on every /v1/vault/signing route — reads
+// included: the backend gates listing keys and the sign audit like signing.
+function afSigning(path: string, init: RequestInit = {}): Promise<Response> {
+  const token = useApp.getState().vaultSigningToken;
+  return af(path, {
+    ...init,
+    headers: {
+      ...(init.headers as Record<string, string> | undefined),
+      ...(token ? { "X-Vault-Signing-Token": token } : {}),
+    },
+  });
+}
+
 // Seal a credential to the deployment's sealing key, in the operator's browser.
 // libsodium's own sealed box (X25519 + XSalsa20-Poly1305), byte-identical to
 // what the node opens with pynacl — no primitive is reimplemented here, and the
@@ -633,12 +666,11 @@ async function sealSecret(publicKeyHex: string, secret: string): Promise<string>
 async function vaultSign(payloadObj: unknown): Promise<string> {
   const { signingKeyId, vaultSigningToken } = useApp.getState();
   const payload_b64 = b64utf8(canonicalize(payloadObj));
-  const r = await fetch("/v1/vault/signing/sign", {
+  const r = await af("/v1/vault/signing/sign", {
     method: "POST",
     headers: {
       "content-type": "application/json",
       "X-Vault-Signing-Token": vaultSigningToken,
-      ...(apiToken() ? { Authorization: `Bearer ${apiToken()}` } : {}),
     },
     body: JSON.stringify({ operator: "op_ui", key_id: signingKeyId, payload_b64 }),
   });
@@ -653,14 +685,31 @@ function signingArmed(): boolean {
   return Boolean(useApp.getState().signingKeyId);
 }
 
+export interface IdentityMe {
+  user: { user_id: string; email: string };
+  active_org: string;
+  role: string;
+  memberships: { org_id: string; role: string; name: string; tier: string }[];
+}
+
 export const api = {
+  // ── identity (signed-in humans) — through af(), so an expired access token
+  // refreshes like any other request ─────────────────────────────────────────
+  identityMe: () => af(`${IDENTITY_BASE}/v1/me`).then((r) => j<IdentityMe>(r)),
+  addOrgMember: (orgId: string, email: string, role: string) =>
+    af(`${IDENTITY_BASE}/v1/orgs/${encodeURIComponent(orgId)}/members`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ email, role }),
+    }).then((r) => j<{ user_id: string; org_id: string; role: string }>(r)),
+
   listRuns: () => af("/v1/runs").then((r) => j<RunSummary[]>(r)),
   runEvents: (runId: string) =>
-    af(`/v1/runs/${runId}/events`).then((r) => j<KernelEvent[]>(r)),
+    af(`/v1/runs/${encodeURIComponent(runId)}/events`).then((r) => j<KernelEvent[]>(r)),
   scrubber: (runId: string) =>
-    af(`/v1/replay/${runId}`).then((r) => j<ScrubberPayload>(r)),
+    af(`/v1/replay/${encodeURIComponent(runId)}`).then((r) => j<ScrubberPayload>(r)),
   counterfactual: (runId: string, config: Record<string, unknown>) =>
-    af(`/v1/replay/${runId}`, {
+    af(`/v1/replay/${encodeURIComponent(runId)}`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ config }),
@@ -674,15 +723,15 @@ export const api = {
   // stays local; the plane never enters the decision path, ui-spec 12.0) and
   // posts the snapshot out-dial; this reads what it posted.
   reputation: (nodeId: string) =>
-    af(`/v1/plane/${nodeId}/reputation`).then((r) =>
+    af(`/v1/plane/${encodeURIComponent(nodeId)}/reputation`).then((r) =>
       j<{ reputation: ReputationSnapshot | null }>(r)),
 
   subgraph: (runId: string, anchor: CaseAnchor) =>
-    af(`/v1/runs/${runId}/subgraph?anchor_node=${encodeURIComponent(anchor.node_id)}&anchor_seq=${anchor.seq}`)
+    af(`/v1/runs/${encodeURIComponent(runId)}/subgraph?anchor_node=${encodeURIComponent(anchor.node_id)}&anchor_seq=${anchor.seq}`)
       .then((r) => j<SubgraphPayload>(r)),
 
   containment: (runId: string, anchor: CaseAnchor) =>
-    af(`/v1/runs/${runId}/containment?anchor_node=${encodeURIComponent(anchor.node_id)}&anchor_seq=${anchor.seq}`)
+    af(`/v1/runs/${encodeURIComponent(runId)}/containment?anchor_node=${encodeURIComponent(anchor.node_id)}&anchor_seq=${anchor.seq}`)
       .then((r) => j<ContainmentReport>(r)),
 
   // `refs` narrows the ablation to the values you want ranked. A case with more
@@ -692,7 +741,7 @@ export const api = {
     runId: string, anchor: CaseAnchor, config: Record<string, unknown>,
     refs?: string[],
   ) =>
-    af(`/v1/runs/${runId}/influence`, {
+    af(`/v1/runs/${encodeURIComponent(runId)}/influence`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
@@ -778,26 +827,22 @@ export const api = {
     afCreds(`/v1/vault/creds/audit?limit=${limit}`).then((r) => j<DispenseRow[]>(r)),
 
   vaultSigningKeys: () =>
-    af("/v1/vault/signing/keys").then((r) =>
+    afSigning("/v1/vault/signing/keys").then((r) =>
       j<{ key_id: string; public_key_hex: string; operators: string[]; created_ts: string }[]>(r)),
 
   // Put a new operator signing key under vault custody. The private half stays
   // in the vault; the response carries only the public half (pinned in adapter
   // config, never trusted from here). Needs the signing-token when gated.
   createSigningKey: (keyId: string, operators: string[]) =>
-    fetch("/v1/vault/signing/keys", {
+    afSigning("/v1/vault/signing/keys", {
       method: "POST",
-      headers: {
-        "content-type": "application/json",
-        "X-Vault-Signing-Token": useApp.getState().vaultSigningToken,
-        ...(apiToken() ? { Authorization: `Bearer ${apiToken()}` } : {}),
-      },
+      headers: { "content-type": "application/json" },
       body: JSON.stringify({ key_id: keyId, operators }),
     }).then((r) => j<{ key_id: string; public_key_hex: string; operators: string[] }>(r)),
 
   // Newest first; see `vaultCredsAudit` for `limit` and `before_id`.
   vaultSigningAudit: (limit = 5) =>
-    af(`/v1/vault/signing/audit?limit=${limit}`).then((r) =>
+    afSigning(`/v1/vault/signing/audit?limit=${limit}`).then((r) =>
       j<{ audit_id: number; operator: string; key_id: string;
           payload_sha256: string; granted: boolean; ts: string }[]>(r)),
 
@@ -820,7 +865,7 @@ export const api = {
     const sig = signingArmed()
       ? await vaultSign({ node_id: nodeId, version, body: state, timestamp })
       : "";
-    const r = await af(`/v1/plane/${nodeId}/command`, {
+    const r = await af(`/v1/plane/${encodeURIComponent(nodeId)}/command`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ version, state, operator: "op_ui", timestamp, sig }),
@@ -828,7 +873,7 @@ export const api = {
     return j<{ node_id: string; version: number; state: Record<string, unknown> }>(r);
   },
   pin: (runId: string, side: "must_block" | "must_pass", label: string) =>
-    af(`/v1/pins/${runId}`, {
+    af(`/v1/pins/${encodeURIComponent(runId)}`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ side, label }),
@@ -876,7 +921,7 @@ export const api = {
       body: JSON.stringify({ scenario, faults, node_id: nodeId }),
     }).then((r) => j<StartRunResult>(r)),
   simulate: (runId: string, body: Record<string, unknown> = {}) =>
-    af(`/axor/runs/${runId}/simulate`, {
+    af(`/axor/runs/${encodeURIComponent(runId)}/simulate`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(body),
@@ -901,7 +946,7 @@ export const api = {
 
   // ── Axor Lab cross-links (CP → Lab incident export, Lab → CP deploy) ──────
   labPackage: async (runId: string): Promise<LabPackageResult> => {
-    const r = await af(`/v1/runs/${runId}/lab-package`);
+    const r = await af(`/v1/runs/${encodeURIComponent(runId)}/lab-package`);
     if (r.status === 422) {
       const body = (await r.json()) as { detail?: { reasons?: string[] } };
       return { ok: false, reasons: body.detail?.reasons ?? ["run is not convertible"] };
@@ -936,13 +981,21 @@ export const api = {
 
   // ── EvidenceCase share / export (spec 8.3) ─────────────────────────────────
   shareCase: (runId: string, caseIndex: number) =>
-    af(`/v1/runs/${runId}/cases/${caseIndex}/share`, { method: "POST" }).then(
+    af(`/v1/runs/${encodeURIComponent(runId)}/cases/${caseIndex}/share`, { method: "POST" }).then(
       (r) => j<{ token: string; url: string }>(r),
     ),
   revokeShare: (token: string) =>
-    af(`/v1/share/${token}`, { method: "DELETE" }).then((r) => j<{ revoked: string }>(r)),
+    af(`/v1/share/${encodeURIComponent(token)}`, { method: "DELETE" }).then((r) => j<{ revoked: string }>(r)),
+  // Fetch the export with header auth (so an expired token refreshes like any
+  // other request) and hand back a local object URL to open.
+  exportBlobUrl: async (runId: string, caseIndex: number, format: "html" | "pdf" = "html") => {
+    const r = await af(
+      `/v1/runs/${encodeURIComponent(runId)}/cases/${caseIndex}/export?format=${format}`);
+    if (!r.ok) throw new Error(`export failed (${r.status})`);
+    return URL.createObjectURL(await r.blob());
+  },
   exportUrl: (runId: string, caseIndex: number, format: "html" | "pdf" = "html") =>
-    withToken(`/v1/runs/${runId}/cases/${caseIndex}/export?format=${format}`),
+    withToken(`/v1/runs/${encodeURIComponent(runId)}/cases/${caseIndex}/export?format=${format}`),
 
   // ── notifications (spec 16) ────────────────────────────────────────────────
   subscribeNotifications: (
@@ -1039,7 +1092,7 @@ export const api = {
     const sig = signingArmed()
       ? await vaultSign({ node_id: nodeId, version: 0, body: fact, timestamp })
       : "";
-    const r = await af(`/v1/plane/${nodeId}/facts`, {
+    const r = await af(`/v1/plane/${encodeURIComponent(nodeId)}/facts`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ fact, operator: "op_ui", timestamp, sig }),
@@ -1066,7 +1119,7 @@ export const api = {
           timestamp,
         })
       : "";
-    const r = await af(`/v1/plane/${nodeId}/cascade-stop`, {
+    const r = await af(`/v1/plane/${encodeURIComponent(nodeId)}/cascade-stop`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ version, operator: "op_ui", timestamp, sig }),
@@ -1078,13 +1131,13 @@ export const api = {
   // is null until a node has posted one — "no check yet", which is not the same
   // as a healthy agent. This is drift, never an Eval metric (ui-spec 8.2).
   probeReport: (nodeId: string) =>
-    af(`/v1/plane/${nodeId}/probe-report`).then((r) =>
+    af(`/v1/plane/${encodeURIComponent(nodeId)}/probe-report`).then((r) =>
       j<{ latest: ProbeHealth | null; history: ProbeCheck[];
           drift_case: DriftCase | null }>(r)),
 
   // What the localizer proposed, what is in flight, and how past heals ended.
   repair: (nodeId: string) =>
-    af(`/v1/plane/${nodeId}/repair`).then((r) => j<RepairState>(r)),
+    af(`/v1/plane/${encodeURIComponent(nodeId)}/repair`).then((r) => j<RepairState>(r)),
 
   // Self-heal, in the two steps it actually is.
   //
@@ -1103,7 +1156,7 @@ export const api = {
   selfHeal: async (
     nodeId: string, reason: string, includeEscalated = false,
   ) => {
-    const shaped = await af(`/v1/plane/${nodeId}/repair/excision-request`, {
+    const shaped = await af(`/v1/plane/${encodeURIComponent(nodeId)}/repair/excision-request`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ reason, include_escalated: includeEscalated }),
@@ -1157,7 +1210,8 @@ export const api = {
     ),
   listKeys: () =>
     af("/v1/keys").then((r) =>
-      j<{ key_id: string; scopes: string[]; label: string; created_ts: string }[]>(r),
+      j<{ key_id: string; scopes: string[]; label: string; created_ts: string;
+          node_id?: string | null }[]>(r),
     ),
   // `nodeId` binds the key to ONE governed node: the plane then refuses it for
   // any other, so a compromised node cannot forge its neighbour's heartbeat,
@@ -1171,7 +1225,7 @@ export const api = {
       j<{ key_id: string; secret: string; scopes: string[]; node_id: string | null }>(r),
     ),
   revokeKey: (keyId: string) =>
-    af(`/v1/keys/${keyId}`, { method: "DELETE" }).then((r) => j<{ revoked: string }>(r)),
+    af(`/v1/keys/${encodeURIComponent(keyId)}`, { method: "DELETE" }).then((r) => j<{ revoked: string }>(r)),
   // Every mint and revoke, newest first. `listKeys` answers "what exists now",
   // which a revoke erases; this answers "what was issued", which it does not.
   keysAudit: (limit = 8) =>
@@ -1198,13 +1252,38 @@ export function streamRun(
   runId: string,
   onEvent: (event: KernelEvent) => void,
 ): () => void {
-  const source = new EventSource(withToken(`/v1/runs/${runId}/stream`));
-  source.addEventListener("event", (e) => {
-    try {
-      onEvent(JSON.parse((e as MessageEvent).data) as KernelEvent);
-    } catch {
-      /* ignore malformed frame */
-    }
-  });
-  return () => source.close();
+  // The token rides in the URL, so it is frozen when the stream opens. When
+  // the server refuses a reconnect (EventSource then CLOSES for good — a 401
+  // after the access token expired), refresh the session and reopen with the
+  // new token, a bounded number of times.
+  let source: EventSource | null = null;
+  let closed = false;
+  let reopens = 0;
+  const open = (): void => {
+    const token = apiToken();
+    const es = new EventSource(withToken(`/v1/runs/${encodeURIComponent(runId)}/stream`));
+    source = es;
+    es.addEventListener("open", () => {
+      reopens = 0;
+    });
+    es.addEventListener("event", (e) => {
+      try {
+        onEvent(JSON.parse((e as MessageEvent).data) as KernelEvent);
+      } catch {
+        /* ignore malformed frame */
+      }
+    });
+    es.addEventListener("error", () => {
+      if (closed || es.readyState !== EventSource.CLOSED || reopens >= 3) return;
+      reopens += 1;
+      void refreshSession(token).then(() => {
+        if (!closed) open();
+      });
+    });
+  };
+  open();
+  return () => {
+    closed = true;
+    source?.close();
+  };
 }

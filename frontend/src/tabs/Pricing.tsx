@@ -146,7 +146,7 @@ function ctaHref(tier: Tier): string {
   if (CHECKOUT_URL && tier.kind === "paid") return CHECKOUT_URL;
   const subject = encodeURIComponent(`Axor ${tier.name} — get started`);
   const body = encodeURIComponent(
-    "Org:\nModule (Private Lab / Control Plane / both):\nHosted or self-hosted:\nWhat you want to run:\nAnything else:",
+    "Org:\nGoverned nodes (roughly):\nHosted or self-hosted:\nWhat you want to run:\nAnything else:",
   );
   return `mailto:sales@axor.dev?subject=${subject}&body=${body}`;
 }

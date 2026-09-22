@@ -22,7 +22,7 @@
 //     localizer, never from this panel; fragments it ESCALATED (they carry real
 //     task content, so cutting them has collateral) need a second, explicit
 //     confirmation, and axor-probe refuses the request without one.
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { RefreshCw, HeartPulse, Check, Circle, MinusCircle } from "lucide-react";
 import { api, type HealAttempt, type ProbeFamily, type ProbeHealth } from "../api";
@@ -30,6 +30,7 @@ import { C, MONO } from "../theme";
 import Coach from "../components/Coach";
 import Tooltip from "../components/Tooltip";
 
+// The node shown until one is picked (the demo battery posts for it).
 const HEALTH_NODE = "banking-assistant";
 
 type Phase = "idle" | "reason" | "healing" | "awaiting" ;
@@ -54,19 +55,25 @@ function clock(iso: string): string {
 
 export default function Health() {
   const qc = useQueryClient();
+  const [node, setNode] = useState(HEALTH_NODE);
+  const nodes = useQuery({ queryKey: ["nodes"], queryFn: api.nodes });
+  const nodeIds = Array.from(new Set([node, ...(nodes.data ?? []).map((n) => n.node_id)]));
   const [phase, setPhase] = useState<Phase>("idle");
   const [reason, setReason] = useState("");
   const [healError, setHealError] = useState<string | null>(null);
   const [confirmCollateral, setConfirmCollateral] = useState(false);
+  // The newest heal id before this one was requested: only a LATER attempt's
+  // re-probe ends the wait (the stale list still holds the previous outcome).
+  const [awaitAfterId, setAwaitAfterId] = useState(-1);
 
   const report = useQuery({
-    queryKey: ["probe-report", HEALTH_NODE],
-    queryFn: () => api.probeReport(HEALTH_NODE),
+    queryKey: ["probe-report", node],
+    queryFn: () => api.probeReport(node),
   });
   // What the node's localizer proposed, and how past cuts ended.
   const repair = useQuery({
-    queryKey: ["repair", HEALTH_NODE],
-    queryFn: () => api.repair(HEALTH_NODE),
+    queryKey: ["repair", node],
+    queryFn: () => api.repair(node),
   });
 
   // The heal is the excision itself: axor-probe shapes the cut from the node's
@@ -76,12 +83,13 @@ export default function Health() {
   // there is something real to wait on.
   const heal = useMutation({
     mutationFn: (why: string) =>
-      api.selfHeal(HEALTH_NODE, why, confirmCollateral),
+      api.selfHeal(node, why, confirmCollateral),
     onSuccess: () => {
       setHealError(null);
+      setAwaitAfterId(repair.data?.history[0]?.id ?? -1);
       setPhase("awaiting");
-      void qc.invalidateQueries({ queryKey: ["probe-report", HEALTH_NODE] });
-      void qc.invalidateQueries({ queryKey: ["repair", HEALTH_NODE] });
+      void qc.invalidateQueries({ queryKey: ["probe-report", node] });
+      void qc.invalidateQueries({ queryKey: ["repair", node] });
     },
     onError: (err: Error) => {
       setHealError(err.message);
@@ -112,6 +120,36 @@ export default function Health() {
   const lastHeal: HealAttempt | null = heals[0] ?? null;
   const fams = latest?.families ?? [];
   const drifting = fams.some((f) => f.state === "escaped");
+  // One reason form for the whole battery — the cut is one proposal, not one
+  // per family — anchored under the first drifting family.
+  const firstEscaped = fams.find((f) => f.state === "escaped")?.family ?? null;
+
+  // The awaited re-probe arrived (or the drift is gone): the panel can offer
+  // the next heal instead of waiting forever.
+  useEffect(() => {
+    if (phase !== "awaiting") return;
+    const verified = lastHeal !== null && lastHeal.id > awaitAfterId
+      && lastHeal.reprobe_verdict !== null;
+    if (verified || !drifting) setPhase("idle");
+  }, [phase, drifting, lastHeal, awaitAfterId]);
+
+  const pickNode = (id: string): void => {
+    setNode(id);
+    setPhase("idle");
+    setReason("");
+    setHealError(null);
+    setConfirmCollateral(false);
+  };
+
+  const picker = (
+    <div className="flex items-center gap-2 mb-3" style={{ fontFamily: MONO, fontSize: 11, color: C.mut }}>
+      node
+      <select value={node} onChange={(e) => pickNode(e.target.value)} aria-label="health node"
+        style={{ background: C.bg, border: `1px solid ${C.line}`, borderRadius: 4, color: C.text, fontFamily: MONO, fontSize: 11, padding: "4px 8px", outline: "none" }}>
+        {nodeIds.map((id) => <option key={id} value={id}>{id}</option>)}
+      </select>
+    </div>
+  );
 
   if (report.isLoading) {
     return <div style={{ fontFamily: MONO, fontSize: 11, color: C.dim }}>loading…</div>;
@@ -128,7 +166,13 @@ export default function Health() {
         not an Eval score and is never blended into one.
       </Coach>
 
-      {latest === null ? (
+      {picker}
+
+      {report.isError ? (
+        <div style={{ fontFamily: MONO, fontSize: 11, color: C.red }}>
+          cannot read the health check: {(report.error as Error).message}
+        </div>
+      ) : latest === null ? (
         <div style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 8, padding: 20 }}>
           <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 8 }}>No health check yet.</div>
           <div style={{ fontFamily: MONO, fontSize: 11, color: C.mut, lineHeight: 1.7 }}>
@@ -136,7 +180,7 @@ export default function Health() {
             evidence, not a clean bill — the panel will not colour it green.
             <br /><br />
             Batteries run node-side and are posted out-dial to{" "}
-            <span style={{ color: C.text }}>POST /v1/plane/{HEALTH_NODE}/probe-report</span>.
+            <span style={{ color: C.text }}>POST /v1/plane/{node}/probe-report</span>.
             The plane never reaches into your runtime to invoke your agent.
           </div>
         </div>
@@ -174,7 +218,7 @@ export default function Health() {
                     did not run leaves nothing to excise, and offering a button
                     anyway is how a surface ends up promising an action it cannot
                     perform. */}
-                {f.state === "escaped" && phase === "idle" && (
+                {f.family === firstEscaped && phase === "idle" && (
                   <div className="px-4 pb-3 flex items-center gap-3" style={{ paddingLeft: 40 }}>
                     <span style={{ fontFamily: MONO, fontSize: 11, color: C.mut }}>
                       {f.escapes} of {f.probes} probes escaped the baseline regime.
@@ -195,7 +239,7 @@ export default function Health() {
                   </div>
                 )}
 
-                {f.state === "escaped" && phase === "reason" && (
+                {f.family === firstEscaped && phase === "reason" && (
                   <div className="px-4 pb-3 flex flex-col gap-2" style={{ paddingLeft: 40 }}>
                     <span style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim }}>
                       signed plane command · operator op_ui · cuts{" "}
@@ -230,6 +274,11 @@ export default function Health() {
                           </button>
                         );
                       })()}
+                      <button onClick={() => { setPhase("idle"); setHealError(null); }}
+                        disabled={heal.isPending}
+                        style={{ background: "none", border: `1px solid ${C.line}`, borderRadius: 4, color: C.mut, fontFamily: MONO, fontSize: 11, padding: "5px 12px", cursor: "pointer" }}>
+                        cancel
+                      </button>
                     </div>
                     {healError && (
                       <span style={{ fontFamily: MONO, fontSize: 10.5, color: C.red }}>{healError}</span>

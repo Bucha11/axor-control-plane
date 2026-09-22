@@ -95,7 +95,9 @@ function ScheduleAndHistory({ parseConfig }: { parseConfig: () => Record<string,
   const [hours, setHours] = useState("24");
   const save = useMutation({
     mutationFn: (enabled: boolean) => {
-      const config = parseConfig();
+      // Turning the schedule off must not depend on the editor holding a valid
+      // config; the stored one is inert once disabled.
+      const config = enabled ? parseConfig() : {};
       if (config === null) throw new Error("config above must be valid JSON");
       return api.putRegressionSchedule(enabled, Number(hours) || 24, config);
     },
@@ -314,6 +316,8 @@ export default function Regression({ initialConfig }: { initialConfig?: string }
 
   const regression = useMutation({
     mutationFn: (config: Record<string, unknown>) => api.regression(config),
+    // Every run is recorded server-side, so the history list is now stale.
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ["regression-history"] }),
   });
 
   // The North-star: how many caught EvidenceCases the operator committed to
@@ -529,8 +533,9 @@ export default function Regression({ initialConfig }: { initialConfig?: string }
                           <button
                             onClick={() =>
                               navigate(`replay/${r.run_id}`, {
-                                cursor: r.escaped_denials[0]?.seq
-                                  ?? r.new_denial?.seq ?? r.first_divergence ?? 0,
+                                seq: r.escaped_denials[0]?.seq
+                                  ?? r.new_denial?.seq ?? r.first_divergence ?? undefined,
+                                node: r.escaped_denials[0]?.node_id,
                               })
                             }
                             style={btn({ color: C.steel, fontSize: 11, padding: "5px 10px" })}

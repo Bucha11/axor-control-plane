@@ -39,6 +39,18 @@ function ReputationCard({ nodeId }: { nodeId: string }) {
   });
   const snapshot = rep.data?.reputation ?? null;
 
+  // A failed read is not "no sentinel": say which it is.
+  if (rep.isError) {
+    return (
+      <div style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 8,
+                    padding: "10px 14px", marginTop: 8, fontFamily: MONO, fontSize: 11,
+                    color: C.red, lineHeight: 1.7 }}>
+        cannot read reputation for {nodeId}: {(rep.error as Error).message}
+      </div>
+    );
+  }
+  if (rep.isPending) return null;
+
   // No sentinel reporting for this node. Said plainly and NOT drawn as clean:
   // "nobody watches this node across sessions" and "somebody watches and found
   // nothing" are opposite facts.
@@ -129,7 +141,7 @@ function SpawnGoverned({ switchToAdapter }: { switchToAdapter?: boolean }) {
       await qc.invalidateQueries({ queryKey: ["nodes"] });
       await qc.invalidateQueries({ queryKey: ["topology"] });
     },
-    onError: (e: Error) => setErr(e.message),
+    onError: (e: Error) => setErr(`${e.message} — is the proxy running with a backend URL?`),
   });
   const seedTree = useMutation({
     mutationFn: () => api.seedTreeRun(),
@@ -147,8 +159,9 @@ function SpawnGoverned({ switchToAdapter }: { switchToAdapter?: boolean }) {
       setErr(null);
       if (switchToAdapter) connect("adapter");
       await qc.invalidateQueries({ queryKey: ["nodes"] });
+      await qc.invalidateQueries({ queryKey: ["topology"] });
     },
-    onError: (e: Error) => setErr(e.message),
+    onError: (e: Error) => setErr(`${e.message} — is the proxy running with a backend URL?`),
   });
   return (
     <div className="mt-3" data-tour="spawn">
@@ -185,7 +198,7 @@ function SpawnGoverned({ switchToAdapter }: { switchToAdapter?: boolean }) {
       </Tooltip>
       {err && (
         <div style={{ fontFamily: MONO, fontSize: 11, color: C.red, marginTop: 8 }}>
-          {err} — is the proxy running with a backend URL?
+          {err}
         </div>
       )}
       {seedTree.isSuccess && (
@@ -276,6 +289,8 @@ function ControlBody({ focusNode, testBench }: { focusNode?: string; testBench: 
     onSuccess: () => {
       setCmdError(null);
       void qc.invalidateQueries({ queryKey: ["nodes"] });
+      // The subtree it stopped is drawn on the topology, not only the list.
+      void qc.invalidateQueries({ queryKey: ["topology"] });
     },
     onError: (err: Error) => setCmdError(err.message),
   });
@@ -310,6 +325,32 @@ function ControlBody({ focusNode, testBench }: { focusNode?: string; testBench: 
             />
           </div>
         )}
+        {(() => {
+          // A traced node that does not report: say what it is and why it has
+          // no controls, instead of a click that visibly does nothing.
+          const picked = traced.find((n) => n.node_id === sel);
+          if (!picked) return null;
+          const edges = topo.data?.edges ?? [];
+          const out = edges.filter((e) => e.from === picked.node_id);
+          const denied = out.reduce((n, e) => n + e.denied, 0);
+          return (
+            <div className="mt-3" data-testid="traced-node">
+              <div style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 8,
+                            padding: "10px 14px", fontFamily: MONO, fontSize: 11, color: C.mut, lineHeight: 1.7 }}>
+                <span style={{ color: C.text }}>{picked.node_id}</span>
+                {" · "}{picked.kind === "peer" ? "foreign peer — opaque, not ours to steer" : "traced, not reporting"}
+                {" · "}{out.length} outgoing edge{out.length === 1 ? "" : "s"}
+                {denied > 0 && <span style={{ color: C.red }}> · {denied} denied</span>}
+                {picked.kind === "self" && (
+                  <div style={{ color: C.dim }}>
+                    pause / stop need the node to heartbeat to the plane — connect its adapter to operate it.
+                  </div>
+                )}
+              </div>
+              {picked.kind === "self" && <ReputationCard nodeId={picked.node_id} />}
+            </div>
+          );
+        })()}
       </div>
     );
   }
@@ -523,13 +564,16 @@ function ControlBody({ focusNode, testBench }: { focusNode?: string; testBench: 
                 <button
                   onClick={() => {
                     if (!node) return;
+                    cascade.reset();
                     cascade.mutate({
                       nodeId: node.node_id,
                       version: (node.desired?.version ?? 0) + 1,
                     });
                   }}
-                  disabled={cascade.isPending}
-                  style={btn({ color: C.mut, fontSize: 11, padding: "6px 10px" })}
+                  // Shares the desired version with every other command: one in
+                  // flight at a time, or the second races into a 409.
+                  disabled={stopped || cascade.isPending || command.isPending}
+                  style={btn({ color: stopped ? C.dim : C.mut, fontSize: 11, padding: "6px 10px", opacity: stopped ? 0.6 : 1 })}
                 >
                   <Square size={12} /> Cascade stop
                 </button>
@@ -580,6 +624,14 @@ function ControlBody({ focusNode, testBench }: { focusNode?: string; testBench: 
           {cmdError && (
             <div className="mt-3" style={{ fontFamily: MONO, fontSize: 11, color: C.red }}>
               {cmdError}
+            </div>
+          )}
+          {cascade.isSuccess && cascade.variables?.nodeId === node?.node_id && (
+            <div className="mt-3" style={{ fontFamily: MONO, fontSize: 11, color: C.mut }}>
+              cascade stop · {cascade.data.count} node{cascade.data.count === 1 ? "" : "s"} stopped
+              {cascade.data.mode === "root_command"
+                ? " — commanded the root; it stops its own subtree"
+                : `: ${cascade.data.stopped.join(", ")}`}
             </div>
           )}
         </div>

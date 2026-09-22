@@ -49,12 +49,15 @@ export default function EvidenceCase({
   caseIndex,
   c,
   replayStep,
+  replayNode,
 }: {
   runId: string;
   caseIndex: number;
   c: EvidenceCaseDto;
   // the trace step this case points at (for "Replay this moment")
   replayStep?: number;
+  // the node that step belongs to (seqs restart per node in a multi-node run)
+  replayNode?: string;
 }) {
   const [shareUrl, setShareUrl] = useState<string | null>(null);
   // The token behind that link. The panel called the permalink "revocable" and
@@ -80,6 +83,26 @@ export default function EvidenceCase({
     },
   });
 
+  // The href carries the token as it was at render time; a click fetches the
+  // receipt with a fresh one instead. The tab opens synchronously so popup
+  // blockers treat it as the user's click.
+  const [exportError, setExportError] = useState<string | null>(null);
+  const openExport = (e: React.MouseEvent, format: "html" | "pdf"): void => {
+    e.preventDefault();
+    setExportError(null);
+    const tab = window.open("", "_blank");
+    api.exportBlobUrl(runId, caseIndex, format).then(
+      (url) => {
+        if (tab) tab.location.href = url;
+        else window.location.href = url;
+      },
+      (err: Error) => {
+        tab?.close();
+        setExportError(err.message);
+      },
+    );
+  };
+
   const revoked = useMutation({
     mutationFn: (token: string) => api.revokeShare(token),
   });
@@ -87,6 +110,8 @@ export default function EvidenceCase({
   const share = useMutation({
     mutationFn: () => api.shareCase(runId, caseIndex),
     onSuccess: (r) => {
+      // A fresh token: the previous revoke says nothing about this link.
+      revoked.reset();
       const absolute = `${window.location.origin}${r.url}`;
       setShareUrl(absolute);
       setShareToken(r.token);
@@ -122,7 +147,7 @@ export default function EvidenceCase({
         <div className="flex gap-2 items-center">
           <Tooltip content="Jump to the exact step in Replay where this discrepancy happened — scrub around it, fork a counterfactual.">
             <button
-              onClick={() => navigate(`replay/${runId}`, { cursor: replayStep })}
+              onClick={() => navigate(`replay/${runId}`, { seq: replayStep, node: replayNode })}
               style={action(C.steel)}
             >
               <Play size={11} /> Replay this moment
@@ -134,12 +159,16 @@ export default function EvidenceCase({
             </button>
           </Tooltip>
           <Tooltip content="A self-contained HTML receipt — observations, labels and verdicts only, never raw request/response bodies.">
-            <a href={api.exportUrl(runId, caseIndex)} target="_blank" rel="noreferrer" style={{ ...action(C.mut), textDecoration: "none" }}>
+            <a href={api.exportUrl(runId, caseIndex)} target="_blank" rel="noreferrer"
+              onClick={(e) => openExport(e, "html")}
+              style={{ ...action(C.mut), textDecoration: "none" }}>
               <ExternalLink size={11} /> Export
             </a>
           </Tooltip>
           <Tooltip content="The same receipt as a single-page PDF — for tickets, audits, and people who print things.">
-            <a href={api.exportUrl(runId, caseIndex, "pdf")} target="_blank" rel="noreferrer" style={{ ...action(C.mut), textDecoration: "none" }}>
+            <a href={api.exportUrl(runId, caseIndex, "pdf")} target="_blank" rel="noreferrer"
+              onClick={(e) => openExport(e, "pdf")}
+              style={{ ...action(C.mut), textDecoration: "none" }}>
               <ExternalLink size={11} /> PDF
             </a>
           </Tooltip>
@@ -187,6 +216,18 @@ export default function EvidenceCase({
       {/* Multi-agent case (spec v2 Ch.3): the causal subgraph derives on open.
           Renders nothing for size-1 — the receipt above IS the v0.13 case. */}
       {c.anchor && <CausalSubgraph runId={runId} anchor={c.anchor} />}
+      {exportError && (
+        <div className="px-4 py-2" style={{ borderTop: `1px solid ${C.line}`, fontFamily: MONO, fontSize: 10.5, color: C.red }}>
+          {exportError}
+        </div>
+      )}
+      {(share.isError || revoked.isError) && (
+        <div className="px-4 py-2" style={{ borderTop: `1px solid ${C.line}`, fontFamily: MONO, fontSize: 10.5, color: C.red }}>
+          {share.isError
+            ? `share failed: ${(share.error as Error).message}`
+            : `revoke failed: ${(revoked.error as Error).message}`}
+        </div>
+      )}
       {shareUrl && (
         <div className="px-4 py-2 flex items-center gap-2" style={{ borderTop: `1px solid ${C.line}` }}>
           <span style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim }}>

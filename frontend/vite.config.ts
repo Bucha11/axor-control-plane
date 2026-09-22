@@ -25,6 +25,11 @@ export default defineConfig({
           ? { Authorization: `Bearer ${process.env.AXOR_PROXY_TOKEN}` }
           : undefined,
       },
+      // Same as nginx: strip the /identity prefix so it reaches /v1/* there.
+      "/identity": {
+        target: "http://127.0.0.1:8402",
+        rewrite: (path) => path.replace(/^\/identity/, ""),
+      },
     },
   },
 });

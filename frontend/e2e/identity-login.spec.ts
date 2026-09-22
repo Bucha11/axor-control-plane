@@ -71,4 +71,48 @@ test.describe("identity login (Settings)", () => {
     await expect(page.getByLabel("email")).toBeVisible();
     await expect(page.getByRole("button", { name: "log in", exact: true })).toBeVisible();
   });
+
+  test("an admin sees the org and can add a member", async ({ page }) => {
+    await page.route("**/identity/v1/login", jsonRoute(200, SESSION));
+    await page.route("**/identity/v1/me", jsonRoute(200, {
+      user: SESSION.user,
+      active_org: "org_1",
+      role: "owner",
+      memberships: [{ org_id: "org_1", role: "owner", name: "Acme", tier: "community" }],
+    }));
+    let added: unknown = null;
+    await page.route("**/identity/v1/orgs/org_1/members", async (route) => {
+      added = route.request().postDataJSON();
+      await route.fulfill({
+        status: 201, contentType: "application/json",
+        body: JSON.stringify({ user_id: "usr_2", org_id: "org_1", role: "viewer" }),
+      });
+    });
+    await goHash(page, "settings");
+    await page.getByLabel("email", { exact: true }).fill("ada@acme.io");
+    await page.getByLabel("password").fill("correct horse");
+    await page.getByRole("button", { name: "log in", exact: true }).click();
+    await expect(page.getByText("org Acme")).toBeVisible();
+    await page.getByLabel("member email").fill("bob@acme.io");
+    await page.getByLabel("member role").selectOption("viewer");
+    await page.getByRole("button", { name: "add", exact: true }).click();
+    await expect(page.getByText("added usr_2 as viewer")).toBeVisible();
+    expect(added).toEqual({ email: "bob@acme.io", role: "viewer" });
+  });
+
+  test("logging out revokes the refresh token server-side", async ({ page }) => {
+    await page.route("**/identity/v1/login", jsonRoute(200, SESSION));
+    await page.route("**/identity/v1/me", jsonRoute(200, {
+      user: SESSION.user, active_org: "org_1", role: "member", memberships: [],
+    }));
+    await goHash(page, "settings");
+    await page.getByLabel("email", { exact: true }).fill("ada@acme.io");
+    await page.getByLabel("password").fill("correct horse");
+    await page.getByRole("button", { name: "log in", exact: true }).click();
+    await expect(page.getByRole("button", { name: "log out" })).toBeVisible();
+    const revoked = page.waitForRequest("**/identity/v1/logout");
+    await page.route("**/identity/v1/logout", (r) => r.fulfill({ status: 204 }));
+    await page.getByRole("button", { name: "log out" }).click();
+    expect((await revoked).postDataJSON()).toEqual({ refresh_token: "ref-token" });
+  });
 });

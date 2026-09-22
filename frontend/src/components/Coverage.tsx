@@ -97,8 +97,8 @@ export default function Coverage({ nodeId, refetchMs }: {
     if (reason && reason.trim()) attest.mutate({ fact, reason: reason.trim() });
   };
 
-  if (cov.isPending || !cov.data) return null;
-  const { facts, level, reported_level: reported } = cov.data;
+  // Before the data guard: a failed first fetch has no data, and hiding the
+  // panel then reads as "nothing to cover".
   if (cov.isError) {
     return (
       <div style={{ fontFamily: MONO, fontSize: 11, color: C.red, marginTop: 10 }}>
@@ -106,6 +106,8 @@ export default function Coverage({ nodeId, refetchMs }: {
       </div>
     );
   }
+  if (cov.isPending || !cov.data) return null;
+  const { facts, level, reported_level: reported } = cov.data;
   if (facts.length === 0) {
     return (
       <div style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim, marginTop: 10 }}>

@@ -3,7 +3,7 @@
 // reachable by a deep link so EvidenceCases, replay moments and share permalinks
 // are addressable. Quiet-until-wrong holds: three primary tabs, everything else
 // behind "more", and adapter-only surfaces greyed with the honest upsell.
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { Circle, GraduationCap, Lock, Settings as SettingsIcon } from "lucide-react";
 import { C, MONO } from "./theme";
 import { navigate, useRoute } from "./router";
@@ -28,6 +28,7 @@ import Pricing from "./tabs/Pricing";
 // adapter connection unlocks it. Everything else lives behind "more".
 const PRIMARY = ["eval", "replay", "regression"] as const;
 const MORE = ["get started", "config builder", "health", "expert", "pricing", "settings"] as const;
+const KNOWN = ["home", "control", ...PRIMARY, ...MORE] as const;
 
 function NavLink({ id, active }: { id: string; active: boolean }) {
   return (
@@ -119,7 +120,7 @@ export default function App() {
       {key === "home" && <Home />}
       {key === "eval" && <Experiment runId={runIdParam} autostart={route.query.auto === "1"} />}
       {key === "control" && <ControlTab focusNode={runIdParam} />}
-      {key === "replay" && <ReplayTab runId={runIdParam} cursor={route.query.cursor} />}
+      {key === "replay" && <ReplayTab runId={runIdParam} cursor={route.query.cursor} seq={route.query.seq} node={route.query.node} />}
       {key === "get started" && <Onboarding />}
       {key === "config builder" && <ConfigBuilder />}
       {key === "health" && <Health />}
@@ -127,6 +128,12 @@ export default function App() {
       {key === "expert" && <ExpertView />}
       {key === "pricing" && <Pricing />}
       {key === "settings" && <Settings />}
+      {!(KNOWN as readonly string[]).includes(key) && (
+        <div style={{ maxWidth: 640, margin: "0 auto", fontFamily: MONO, fontSize: 12.5, color: C.mut }}>
+          No page at <span style={{ color: C.text }}>#/{route.segments.join("/")}</span>.{" "}
+          <span style={{ color: C.steel, cursor: "pointer" }} onClick={() => navigate("home")}>Go home →</span>
+        </div>
+      )}
       <Tour />
     </div>
   );
@@ -134,9 +141,20 @@ export default function App() {
 
 function MoreMenu({ activeKey }: { activeKey: string }) {
   const inMore = (MORE as readonly string[]).includes(activeKey);
+  const ref = useRef<HTMLDetailsElement>(null);
+  // A <details> only closes on its own summary; close it on any outside click.
+  useEffect(() => {
+    const onDown = (e: MouseEvent): void => {
+      if (ref.current?.open && !ref.current.contains(e.target as Node)) {
+        ref.current.removeAttribute("open");
+      }
+    };
+    document.addEventListener("mousedown", onDown);
+    return () => document.removeEventListener("mousedown", onDown);
+  }, []);
   return (
     <div style={{ position: "relative" }} className="group">
-      <details>
+      <details ref={ref}>
         <summary
           style={{
             listStyle: "none", cursor: "pointer", color: inMore ? C.text : C.dim,

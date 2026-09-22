@@ -21,7 +21,18 @@ const TOOLS: Tool[] = [
   { name: "run_query", url: "https://db.internal.example/query" },
 ];
 
-type RowState = "idle" | "testing" | "ok" | "fail";
+// What `axor-proxy --demo` registers: preflight answers for these out of the box.
+const MOCK_TOOLS: Tool[] = [
+  { name: "web_search", url: `${(import.meta.env.VITE_PROXY_PUBLIC_URL ?? "http://127.0.0.1:8401").replace(/\/$/, "")}/mock/web_search` },
+  { name: "mcp", url: `${(import.meta.env.VITE_PROXY_PUBLIC_URL ?? "http://127.0.0.1:8401").replace(/\/$/, "")}/mock/mcp` },
+];
+
+type RowState = "idle" | "testing" | "ok" | "fail" | "unregistered";
+
+// Where an agent reaches the proxy's tool routes (/t/{tool}/). The UI's own
+// origin only fronts /axor and /v1, so this is the proxy's address, not ours.
+const PROXY_PUBLIC_URL = (import.meta.env.VITE_PROXY_PUBLIC_URL ?? "http://127.0.0.1:8401")
+  .replace(/\/$/, "");
 
 // Parse either a full client config ({"mcpServers": {name: {url | command}}})
 // — the shape Claude Desktop / Cursor use — or a bare server URL, or a bare
@@ -143,13 +154,18 @@ export default function Onboarding() {
 
   const rowState = (name: string): RowState => {
     if (preflight.isPending) return "testing";
-    const entry = preflight.data?.tools[name];
-    if (!entry) return "idle";
+    if (!preflight.data) return "idle";
+    // Preflight only pings tools the proxy was started with (tools.json or MCP
+    // discovery); a tool declared only here has no route through it.
+    const entry = preflight.data.tools[name];
+    if (!entry) return "unregistered";
     return entry.ok ? "ok" : "fail";
   };
   const result = preflight.data;
-  const allGreen =
-    tools.length > 0 && !!result && tools.every((t) => result.tools[t.name]?.ok);
+  // Tools the proxy does not know are flagged, not blocking: the experiment
+  // runs against the proxy's own tools either way.
+  const known = result ? tools.filter((t) => result.tools[t.name]) : [];
+  const allGreen = known.length > 0 && known.every((t) => result!.tools[t.name].ok);
 
   const StepDot = ({ n, label }: { n: number; label: string }) => (
     <div className="flex items-center gap-2">
@@ -233,7 +249,14 @@ export default function Onboarding() {
                 </button>
               </Tooltip>
               <span style={{ fontFamily: MONO, fontSize: 11, color: C.dim }}>
-                loads a sample set · or paste your MCP config above (http + stdio both work) · or add endpoints by hand · or use our mock tools (zero creds)
+                loads a sample set · or paste your MCP config above (http + stdio both work) · or add endpoints by hand · or{" "}
+                <span
+                  role="button"
+                  onClick={() => setTools(MOCK_TOOLS)}
+                  style={{ color: C.steel, cursor: "pointer" }}
+                >
+                  use our mock tools (zero creds)
+                </span>
               </span>
               <div className="w-full">{addRow}</div>
             </div>
@@ -272,7 +295,7 @@ export default function Onboarding() {
           <div style={{ fontFamily: MONO, fontSize: 11.5, color: C.mut, marginBottom: 20 }}>Replace each base URL in your agent config. Nothing else changes.</div>
           <div style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 8 }}>
             {tools.map((t, i) => {
-              const proxied = `http://127.0.0.1:8401/t/${t.name}/`;
+              const proxied = `${PROXY_PUBLIC_URL}/t/${t.name}/`;
               return (
                 <div key={t.name} className="flex items-center gap-3 px-4 py-3" style={{ borderTop: i ? `1px solid ${C.line}` : "none" }}>
                   <span style={{ fontFamily: MONO, fontSize: 12, color: C.mut, width: 130 }}>{t.name}</span>
@@ -318,10 +341,17 @@ export default function Onboarding() {
                       ? <RefreshCw size={12} color={C.steel} className="animate-spin" />
                       : <Circle size={9} fill={st === "ok" ? C.green : st === "fail" ? C.red : C.dim} color={st === "ok" ? C.green : st === "fail" ? C.red : C.dim} />}
                     <span style={{ fontFamily: MONO, fontSize: 13, color: C.text, flex: 1 }}>{t.name}</span>
-                    <span style={{ fontFamily: MONO, fontSize: 11, color: st === "ok" ? C.green : st === "fail" ? C.red : C.dim }}>
-                      {st === "ok" ? "reachable · auth passes" : st === "fail" ? failLabel : st === "testing" ? "pinging…" : "untested"}
+                    <span style={{ fontFamily: MONO, fontSize: 11, color: st === "ok" ? C.green : st === "fail" ? C.red : st === "unregistered" ? C.amber : C.dim }}>
+                      {st === "ok" ? "reachable · auth passes" : st === "fail" ? failLabel : st === "testing" ? "pinging…" : st === "unregistered" ? "not registered on the proxy" : "untested"}
                     </span>
                   </div>
+                  {st === "unregistered" && (
+                    <div className="flex items-center gap-3 mt-2" style={{ paddingLeft: 21 }}>
+                      <span style={{ fontFamily: MONO, fontSize: 11, color: C.mut }}>
+                        The proxy has no route for {t.name}. Add it under "tools" in the proxy's tools.json ({`"${t.name}": "${t.url}"`}), restart with --config tools.json, then re-test.
+                      </span>
+                    </div>
+                  )}
                   {st === "fail" && (
                     <div className="flex items-center gap-3 mt-2" style={{ paddingLeft: 21 }}>
                       <span style={{ fontFamily: MONO, fontSize: 11, color: C.mut }}>
@@ -333,6 +363,11 @@ export default function Onboarding() {
               );
             })}
           </div>
+          {result && known.length === 0 && (
+            <div style={{ fontFamily: MONO, fontSize: 11.5, color: C.amber, marginTop: 10 }}>
+              none of these tools is registered on the proxy — start it with --config tools.json (or --demo for the mock tools)
+            </div>
+          )}
           {preflight.isError && (
             <div style={{ fontFamily: MONO, fontSize: 11.5, color: C.red, marginTop: 10 }}>
               proxy unreachable at /axor — start it: uvx axor-proxy --demo
@@ -391,7 +426,7 @@ export default function Onboarding() {
                 </Tooltip>
                 {mintNodeKey.isError && (
                   <span style={{ fontFamily: MONO, fontSize: 11, color: C.red }}>
-                    needs an admin credential — paste the operator token in Settings first
+                    {(mintNodeKey.error as Error).message} — minting needs an admin credential (operator token in Settings)
                   </span>
                 )}
               </div>

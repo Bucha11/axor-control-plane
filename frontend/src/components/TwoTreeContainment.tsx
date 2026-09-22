@@ -19,7 +19,8 @@ function useChain(runId: string, anchor: CaseAnchor) {
     queryKey: ["containment", runId, anchor.node_id, anchor.seq],
     queryFn: () => api.containment(runId, anchor),
   });
-  return { sub: sub.data, cont: cont.data };
+  const error = (sub.error ?? cont.error) as Error | null;
+  return { sub: sub.data, cont: cont.data, error };
 }
 
 export default function TwoTreeContainment({
@@ -29,7 +30,7 @@ export default function TwoTreeContainment({
   runId: string;
   anchor: CaseAnchor;
 }) {
-  const { sub, cont } = useChain(runId, anchor);
+  const { sub, cont, error } = useChain(runId, anchor);
   const [step, setStep] = useState(-1); // -1 idle; then 0..chain steps; last = verdict
   const [playing, setPlaying] = useState(false);
 
@@ -55,9 +56,19 @@ export default function TwoTreeContainment({
     return () => clearTimeout(t);
   }, [playing, step, steps]);
 
+  if (error) {
+    return (
+      <div className="mt-4" style={{ fontFamily: MONO, fontSize: 11, color: C.red }}>
+        two-tree containment unavailable: {error.message}
+      </div>
+    );
+  }
   if (!sub || !cont || sub.nodes.length <= 1) return null;
 
   const verdict = step >= steps - 1;
+  // What the governed run actually did — every consequence that reached the
+  // boundary was denied — not what the product hopes it did.
+  const govHeld = cont.reached > 0 && cont.held === cont.reached;
   const captions = [
     `fault injected at the leaf: ${chain[0] ?? "origin"}`,
     ...chain.slice(0, -1).map((id, i) => `the fabrication (tainted) travels ${id} → ${chain[i + 1]}…`),
@@ -65,8 +76,8 @@ export default function TwoTreeContainment({
   ];
 
   const Tree = ({ governed }: { governed: boolean }) => {
-    const contained = verdict && governed;
-    const escapedV = verdict && !governed;
+    const contained = verdict && governed && govHeld;
+    const escapedV = verdict && !contained;
     const Y = (i: number) => 40 + i * 70;
     return (
       <div style={{ flex: 1, background: C.panel2, border: `1px solid ${governed ? (contained ? C.green : C.line) : escapedV ? C.red : C.line}`, borderRadius: 10, overflow: "hidden" }}>
@@ -78,8 +89,8 @@ export default function TwoTreeContainment({
             </span>
           </div>
           {verdict && (
-            <span style={{ fontFamily: MONO, fontSize: 10, fontWeight: 700, color: governed ? C.green : C.red }}>
-              {governed ? "CONTAINED" : "FABRICATION ESCAPED"}
+            <span style={{ fontFamily: MONO, fontSize: 10, fontWeight: 700, color: contained ? C.green : C.red }}>
+              {contained ? "CONTAINED" : "FABRICATION ESCAPED"}
             </span>
           )}
         </div>
@@ -106,7 +117,7 @@ export default function TwoTreeContainment({
           {chain.map((id, i) => {
             const touched = step >= i;
             let ring: string = C.line;
-            if (touched) ring = governed && i === chain.length - 1 && verdict ? C.green : governed ? C.amber : C.red;
+            if (touched) ring = contained && i === chain.length - 1 ? C.green : governed ? C.amber : C.red;
             return (
               <g key={id}>
                 <circle cx="70" cy={Y(i)} r="15" fill={C.panel2} stroke={ring} strokeWidth="1.5"
@@ -137,10 +148,18 @@ export default function TwoTreeContainment({
             <Play size={13} /> Run the recording
           </button>
         ) : verdict ? (
-          <span style={{ fontFamily: MONO, fontSize: 11.5, color: C.text }}>
-            Same fabrication in both. Left: it reached the export. Right:{" "}
-            <span style={{ color: C.green }}>denied at the boundary</span> — the agent failed honestly instead of lying.
-          </span>
+          govHeld ? (
+            <span style={{ fontFamily: MONO, fontSize: 11.5, color: C.text }}>
+              Same fabrication in both. Left: it reached the export. Right:{" "}
+              <span style={{ color: C.green }}>denied at the boundary</span> — the agent failed honestly instead of lying.
+            </span>
+          ) : (
+            <span style={{ fontFamily: MONO, fontSize: 11.5, color: C.text }}>
+              Same fabrication in both —{" "}
+              <span style={{ color: C.red }}>governance did not contain it</span>:{" "}
+              {cont.held} of {cont.reached} consequences were denied, the rest reached the boundary.
+            </span>
+          )
         ) : (
           <span style={{ fontFamily: MONO, fontSize: 11.5, color: C.mut }}>
             {captions[Math.max(0, Math.min(step, captions.length - 1))]}
