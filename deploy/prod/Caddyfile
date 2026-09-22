@@ -1,0 +1,30 @@
+# The only public entry point. Caddy obtains and renews Let's Encrypt
+# certificates on its own. It needs ports 80 and 443 open and each host's DNS A
+# record pointing at this server.
+#
+# No `encode` here: compressing an SSE response can hold events in the encoder
+# buffer, and both apps stream live runs over SSE. Caddy flushes
+# text/event-stream responses immediately without it.
+{
+	email {$ACME_EMAIL}
+}
+
+(common) {
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		-Server
+	}
+}
+
+# Control Plane: the frontend nginx serves the SPA and proxies /v1, /axor and
+# /identity itself.
+{$CP_HOST} {
+	import common
+	reverse_proxy frontend:8080
+}
+
+# Axor Lab: lab-edge rate-limits and proxies to the Lab and /identity.
+{$LAB_HOST} {
+	import common
+	reverse_proxy lab-edge:8080
+}
