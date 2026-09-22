@@ -6,7 +6,7 @@ import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Check, Copy, Loader2, Trash2 } from "lucide-react";
 import { api } from "../api";
-import { IdentityError, login, signup } from "../identity";
+import { IdentityError, login, logout, signup } from "../identity";
 import { MODE_LABEL, useApp } from "../store";
 import { C, MONO, btn } from "../theme";
 import Coach from "../components/Coach";
@@ -41,6 +41,7 @@ function IdentityLogin() {
   const identityEmail = useApp((s) => s.identityEmail);
   const setSession = useApp((s) => s.setSession);
   const clearSession = useApp((s) => s.clearSession);
+  const qc = useQueryClient();
   const [mode, setMode] = useState<"login" | "signup">("login");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -53,7 +54,14 @@ function IdentityLogin() {
     return (
       <div className="flex items-center gap-2 mb-3" style={{ fontFamily: MONO, fontSize: 11.5 }}>
         <span style={{ color: C.green }}>● signed in as {identityEmail}</span>
-        <button onClick={clearSession} style={btn({ color: C.mut, fontSize: 10.5, padding: "3px 10px" })}>
+        <button
+          onClick={() => {
+            void logout(useApp.getState().refreshToken);
+            clearSession();
+            // Drop what this session could read so it does not linger on screen.
+            qc.clear();
+          }}
+          style={btn({ color: C.mut, fontSize: 10.5, padding: "3px 10px" })}>
           log out
         </button>
       </div>
@@ -70,6 +78,8 @@ function IdentityLogin() {
           : await login(email, password, orgId || undefined);
       setSession(session.access_token, session.refresh_token, session.user.email);
       setPassword("");
+      // Queries that 401'd before sign-in stay failed otherwise.
+      void qc.invalidateQueries();
     } catch (err) {
       setError(err instanceof IdentityError ? err.message : "login failed");
     } finally {
@@ -565,7 +575,7 @@ export default function Settings() {
             </div>
             {license.data.over_ceiling && (
               <div className="mt-1" style={{ fontFamily: MONO, fontSize: 11, color: C.amber }}>
-                {license.data.live_nodes} live nodes exceed the licensed ceiling of{" "}
+                {license.data.peak_nodes} peak nodes exceed the licensed ceiling of{" "}
                 {license.data.governed_node_ceiling} — a warning, never a block (safety never
                 checks a license). Contact us to raise the ceiling.
               </div>
@@ -584,8 +594,15 @@ export default function Settings() {
 // federation". The separation is backend-enforced (separate credentials);
 // the UI mirrors it structurally.
 function FederationVault() {
-  const keys = useQuery({ queryKey: ["vault-keys"], queryFn: api.vaultSigningKeys });
-  const audit = useQuery({ queryKey: ["vault-audit"], queryFn: () => api.vaultSigningAudit() });
+  // Both reads are gated by the signing-token, so it is part of the key:
+  // typing the token refetches instead of leaving a stale 403 on screen.
+  const vaultSigningToken = useApp((s) => s.vaultSigningToken);
+  const keys = useQuery({
+    queryKey: ["vault-keys", vaultSigningToken], queryFn: api.vaultSigningKeys,
+  });
+  const audit = useQuery({
+    queryKey: ["vault-audit", vaultSigningToken], queryFn: () => api.vaultSigningAudit(),
+  });
   const qc = useQueryClient();
 
   // Signed command posture (protocol §6). The token authorizes sign requests;
@@ -593,7 +610,6 @@ function FederationVault() {
   // command path (api.command / api.appendFact) can sign without prompting.
   const signingKeyId = useApp((s) => s.signingKeyId);
   const setSigningKeyId = useApp((s) => s.setSigningKeyId);
-  const vaultSigningToken = useApp((s) => s.vaultSigningToken);
   const setVaultSigningToken = useApp((s) => s.setVaultSigningToken);
   const [newKeyId, setNewKeyId] = useState("");
   const [newKeyOps, setNewKeyOps] = useState("op_ui");
@@ -624,7 +640,12 @@ function FederationVault() {
           sign request is an audited operator action. pubkeys stay pinned in
           adapter config, never fetched from here.
         </div>
-        {(keys.data ?? []).length === 0 ? (
+        {keys.isError ? (
+          <div style={{ fontFamily: MONO, fontSize: 11, color: C.red }}>
+            cannot list signing keys: {(keys.error as Error).message}
+            {!vaultSigningToken && " — set the vault signing-token below"}
+          </div>
+        ) : (keys.data ?? []).length === 0 ? (
           <div style={{ fontFamily: MONO, fontSize: 11, color: C.dim }}>no keys under custody</div>
         ) : (
           (keys.data ?? []).map((k) => (

@@ -87,6 +87,8 @@ export default function EvidenceCase({
   const share = useMutation({
     mutationFn: () => api.shareCase(runId, caseIndex),
     onSuccess: (r) => {
+      // A fresh token: the previous revoke says nothing about this link.
+      revoked.reset();
       const absolute = `${window.location.origin}${r.url}`;
       setShareUrl(absolute);
       setShareToken(r.token);
@@ -122,7 +124,7 @@ export default function EvidenceCase({
         <div className="flex gap-2 items-center">
           <Tooltip content="Jump to the exact step in Replay where this discrepancy happened — scrub around it, fork a counterfactual.">
             <button
-              onClick={() => navigate(`replay/${runId}`, { cursor: replayStep })}
+              onClick={() => navigate(`replay/${runId}`, { seq: replayStep })}
               style={action(C.steel)}
             >
               <Play size={11} /> Replay this moment
@@ -187,6 +189,13 @@ export default function EvidenceCase({
       {/* Multi-agent case (spec v2 Ch.3): the causal subgraph derives on open.
           Renders nothing for size-1 — the receipt above IS the v0.13 case. */}
       {c.anchor && <CausalSubgraph runId={runId} anchor={c.anchor} />}
+      {(share.isError || revoked.isError) && (
+        <div className="px-4 py-2" style={{ borderTop: `1px solid ${C.line}`, fontFamily: MONO, fontSize: 10.5, color: C.red }}>
+          {share.isError
+            ? `share failed: ${(share.error as Error).message}`
+            : `revoke failed: ${(revoked.error as Error).message}`}
+        </div>
+      )}
       {shareUrl && (
         <div className="px-4 py-2 flex items-center gap-2" style={{ borderTop: `1px solid ${C.line}` }}>
           <span style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim }}>

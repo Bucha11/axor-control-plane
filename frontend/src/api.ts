@@ -392,7 +392,7 @@ export interface LicenseInfo {
   self_hosted_runner: boolean;
   expires_at: string;
   features: string[];
-  live_nodes?: number;
+  peak_nodes?: number;
   over_ceiling?: boolean;
   // True on every 200 — verified against the pinned key and stored. Kept
   // because "verified" and "active" being the same thing is worth asserting.
@@ -489,18 +489,38 @@ async function af(path: string, init: RequestInit = {}, retried = false): Promis
   const headers = new Headers(init.headers);
   if (token) headers.set("Authorization", `Bearer ${token}`);
   const resp = await fetch(path, { ...init, headers });
-  if (resp.status === 401 && !retried) {
-    const state = useApp.getState();
-    if (state.refreshToken) {
-      const next = await refresh(state.refreshToken);
-      if (next) {
-        state.setSession(next.access_token, next.refresh_token, next.user.email);
-        return af(path, init, true);
-      }
-      state.clearSession();
-    }
+  if (resp.status === 401 && !retried && (await refreshSession(token))) {
+    return af(path, init, true);
   }
   return resp;
+}
+
+// One refresh at a time. The refresh token is single-use (identity rotates it),
+// so N requests that 401 together must share one exchange — otherwise the first
+// wins, the rest are rejected, and their failure clears the winner's session.
+let refreshing: Promise<boolean> | null = null;
+
+async function refreshSession(staleToken: string | null): Promise<boolean> {
+  const state = useApp.getState();
+  // Another request already refreshed while this one was in flight.
+  if (staleToken && apiToken() && apiToken() !== staleToken) return true;
+  if (!state.refreshToken) return false;
+  if (!refreshing) {
+    const presented = state.refreshToken;
+    refreshing = refresh(presented)
+      .then((next) => {
+        if (next) {
+          useApp.getState().setSession(next.access_token, next.refresh_token, next.user.email);
+          return true;
+        }
+        useApp.getState().clearSession();
+        return false;
+      })
+      .finally(() => {
+        refreshing = null;
+      });
+  }
+  return refreshing;
 }
 
 // Append the token as a query param for URLs the browser opens directly (SSE
@@ -612,6 +632,19 @@ function afCreds(path: string, init: RequestInit = {}): Promise<Response> {
   });
 }
 
+// The signing custody's own token, on every /v1/vault/signing route — reads
+// included: the backend gates listing keys and the sign audit like signing.
+function afSigning(path: string, init: RequestInit = {}): Promise<Response> {
+  const token = useApp.getState().vaultSigningToken;
+  return af(path, {
+    ...init,
+    headers: {
+      ...(init.headers as Record<string, string> | undefined),
+      ...(token ? { "X-Vault-Signing-Token": token } : {}),
+    },
+  });
+}
+
 // Seal a credential to the deployment's sealing key, in the operator's browser.
 // libsodium's own sealed box (X25519 + XSalsa20-Poly1305), byte-identical to
 // what the node opens with pynacl — no primitive is reimplemented here, and the
@@ -633,12 +666,11 @@ async function sealSecret(publicKeyHex: string, secret: string): Promise<string>
 async function vaultSign(payloadObj: unknown): Promise<string> {
   const { signingKeyId, vaultSigningToken } = useApp.getState();
   const payload_b64 = b64utf8(canonicalize(payloadObj));
-  const r = await fetch("/v1/vault/signing/sign", {
+  const r = await af("/v1/vault/signing/sign", {
     method: "POST",
     headers: {
       "content-type": "application/json",
       "X-Vault-Signing-Token": vaultSigningToken,
-      ...(apiToken() ? { Authorization: `Bearer ${apiToken()}` } : {}),
     },
     body: JSON.stringify({ operator: "op_ui", key_id: signingKeyId, payload_b64 }),
   });
@@ -778,26 +810,22 @@ export const api = {
     afCreds(`/v1/vault/creds/audit?limit=${limit}`).then((r) => j<DispenseRow[]>(r)),
 
   vaultSigningKeys: () =>
-    af("/v1/vault/signing/keys").then((r) =>
+    afSigning("/v1/vault/signing/keys").then((r) =>
       j<{ key_id: string; public_key_hex: string; operators: string[]; created_ts: string }[]>(r)),
 
   // Put a new operator signing key under vault custody. The private half stays
   // in the vault; the response carries only the public half (pinned in adapter
   // config, never trusted from here). Needs the signing-token when gated.
   createSigningKey: (keyId: string, operators: string[]) =>
-    fetch("/v1/vault/signing/keys", {
+    afSigning("/v1/vault/signing/keys", {
       method: "POST",
-      headers: {
-        "content-type": "application/json",
-        "X-Vault-Signing-Token": useApp.getState().vaultSigningToken,
-        ...(apiToken() ? { Authorization: `Bearer ${apiToken()}` } : {}),
-      },
+      headers: { "content-type": "application/json" },
       body: JSON.stringify({ key_id: keyId, operators }),
     }).then((r) => j<{ key_id: string; public_key_hex: string; operators: string[] }>(r)),
 
   // Newest first; see `vaultCredsAudit` for `limit` and `before_id`.
   vaultSigningAudit: (limit = 5) =>
-    af(`/v1/vault/signing/audit?limit=${limit}`).then((r) =>
+    afSigning(`/v1/vault/signing/audit?limit=${limit}`).then((r) =>
       j<{ audit_id: number; operator: string; key_id: string;
           payload_sha256: string; granted: boolean; ts: string }[]>(r)),
 

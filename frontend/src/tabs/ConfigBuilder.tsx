@@ -8,6 +8,7 @@
 import { useRef, useState } from "react";
 import { Plus, ChevronDown, ChevronRight, Download, Check, X, ArrowRight, Upload, FileCode, Terminal, AlertTriangle } from "lucide-react";
 import { api, WrapTool } from "../api";
+import { navigate } from "../router";
 import { C, MONO, btn } from "../theme";
 import Coach from "../components/Coach";
 import Tooltip from "../components/Tooltip";
@@ -662,7 +663,7 @@ export default function ConfigBuilder() {
         </Tooltip>
         {emitted && (
           <span style={{ fontFamily: MONO, fontSize: 12, color: C.green, display: "flex", alignItems: "center", gap: 6 }}>
-            <Check size={13} /> saved · <span style={{ color: C.steel, cursor: "pointer" }}>run first governed experiment →</span>
+            <Check size={13} /> saved · <span style={{ color: C.steel, cursor: "pointer" }} onClick={() => navigate("eval")}>run first governed experiment →</span>
           </span>
         )}
         {manifestsSaved && !wrapMissing && !manifestsErr && (

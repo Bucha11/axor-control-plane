@@ -119,7 +119,7 @@ export default function App() {
       {key === "home" && <Home />}
       {key === "eval" && <Experiment runId={runIdParam} autostart={route.query.auto === "1"} />}
       {key === "control" && <ControlTab focusNode={runIdParam} />}
-      {key === "replay" && <ReplayTab runId={runIdParam} cursor={route.query.cursor} />}
+      {key === "replay" && <ReplayTab runId={runIdParam} cursor={route.query.cursor} seq={route.query.seq} />}
       {key === "get started" && <Onboarding />}
       {key === "config builder" && <ConfigBuilder />}
       {key === "health" && <Health />}

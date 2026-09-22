@@ -36,10 +36,21 @@ async function post<T>(path: string, body: unknown): Promise<T> {
     throw new IdentityError(0, "cannot reach the identity service");
   }
   const text = await resp.text();
-  const payload = text ? JSON.parse(text) : {};
+  let payload: any = {};
+  try {
+    payload = text ? JSON.parse(text) : {};
+  } catch {
+    // An HTML page here means nothing is proxying the identity service.
+    throw new IdentityError(resp.status, "cannot reach the identity service");
+  }
   if (!resp.ok) {
+    // FastAPI validation errors carry a list of {loc, msg}; show the messages.
     const detail =
-      typeof payload?.detail === "string" ? payload.detail : `login failed (${resp.status})`;
+      typeof payload?.detail === "string"
+        ? payload.detail
+        : Array.isArray(payload?.detail) && payload.detail.length
+          ? payload.detail.map((d: { msg?: string }) => d?.msg ?? "invalid input").join("; ")
+          : `login failed (${resp.status})`;
     throw new IdentityError(resp.status, detail);
   }
   return payload as T;
@@ -62,5 +73,16 @@ export async function refresh(refreshToken: string): Promise<Session | null> {
     return await post<Session>("/v1/refresh", { refresh_token: refreshToken });
   } catch {
     return null;
+  }
+}
+
+/** Revoke the refresh token server-side. Best effort: the local session is
+ * cleared either way, but without this the token stays usable until expiry. */
+export async function logout(refreshToken: string): Promise<void> {
+  if (!refreshToken) return;
+  try {
+    await post<unknown>("/v1/logout", { refresh_token: refreshToken });
+  } catch {
+    /* already revoked or unreachable — nothing more to do */
   }
 }

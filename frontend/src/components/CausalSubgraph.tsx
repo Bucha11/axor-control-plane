@@ -63,6 +63,13 @@ export default function CausalSubgraph({
     enabled: openRank,
   });
 
+  if (sub.isError) {
+    return (
+      <div className="px-4 py-2" style={{ borderTop: `1px solid ${C.line}`, fontFamily: MONO, fontSize: 11, color: C.red }}>
+        causal subgraph unavailable: {(sub.error as Error).message}
+      </div>
+    );
+  }
   if (!sub.data || sub.data.nodes.length <= 1) return null; // size-1 → receipt only
 
   const s = sub.data;

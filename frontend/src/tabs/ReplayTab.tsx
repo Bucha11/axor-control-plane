@@ -1,7 +1,7 @@
 // Replay: a timeline you can question (main-tabs mockup, ReplayTab).
 // Wired to /v1/replay/{run_id}; counterfactuals re-evaluate gates over the
 // recorded trace — no model call, fully deterministic.
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, ScrubberPayload, ScrubberStep } from "../api";
 import { navigate } from "../router";
@@ -61,7 +61,12 @@ function taintRef(s: ScrubberStep | undefined): string | null {
   return null;
 }
 
-export default function ReplayTab({ runId: runIdProp, cursor: cursorProp }: { runId?: string; cursor?: string }) {
+// `cursor` is a position in the step list; `seq` is a kernel event seq (what
+// evidence anchors and regression rows name) and is resolved to its step once
+// the trace loads.
+export default function ReplayTab({ runId: runIdProp, cursor: cursorProp, seq: seqProp }: {
+  runId?: string; cursor?: string; seq?: string;
+}) {
   const runs = useQuery({ queryKey: ["runs"], queryFn: api.listRuns });
   const [pickedRun, setPickedRun] = useState<string | null>(runIdProp ?? null);
   const runId = pickedRun ?? runIdProp ?? runs.data?.[0]?.run_id ?? null;
@@ -95,17 +100,32 @@ export default function ReplayTab({ runId: runIdProp, cursor: cursorProp }: { ru
   // Pin the run under inspection to either corpus side. must_block auto-pins on
   // evidence upload, but a legitimate flow that PASSED has no evidence — this is
   // the only way to add the must_pass side the corpus needs to be two-sided.
+  const qc = useQueryClient();
   const [pinned, setPinned] = useState<string | null>(null);
   const pin = useMutation({
     mutationFn: (side: "must_block" | "must_pass") =>
       api.pin(runId!, side, "manual"),
-    onSuccess: (_r, side) => setPinned(side),
+    onSuccess: (_r, side) => {
+      setPinned(side);
+      void qc.invalidateQueries({ queryKey: ["pins"] });
+    },
   });
 
   const base: ScrubberPayload | undefined = scrubber.data;
   const active: ScrubberPayload | undefined =
     cf && counterfactual.data ? counterfactual.data : base;
   const steps = active?.steps ?? [];
+
+  // Land a `seq` deep link on the step that carries it, once per link.
+  const seqLanded = useRef<string | null>(null);
+  useEffect(() => {
+    if (!seqProp || !runId || !scrubber.data) return;
+    const key = `${runId}:${seqProp}`;
+    if (seqLanded.current === key) return;
+    const i = scrubber.data.steps.findIndex((s) => s.seq === Number(seqProp));
+    if (i >= 0) setCursor(i);
+    seqLanded.current = key;
+  }, [seqProp, runId, scrubber.data]);
   const firstDiv = active?.first_divergence ?? null;
   // A counterfactual can only DIVERGE from something that was recorded. A
   // proxy-depth trace records no gate verdicts (it observes; it does not gate),
@@ -217,6 +237,11 @@ export default function ReplayTab({ runId: runIdProp, cursor: cursorProp }: { ru
             {pinned === side ? "✓ " : ""}{side.replace("_", "-")}
           </button>
         ))}
+        {pin.isError && (
+          <span style={{ fontFamily: MONO, fontSize: 10.5, color: C.red }}>
+            pin failed: {(pin.error as Error).message}
+          </span>
+        )}
         {pinned && (
           <span style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim }}>
             pinned → <span style={{ color: C.steel, cursor: "pointer" }} onClick={() => navigate("regression")}>run regression →</span>

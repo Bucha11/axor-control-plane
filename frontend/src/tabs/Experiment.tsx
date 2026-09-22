@@ -58,15 +58,38 @@ export default function Experiment({ runId, autostart }: { runId?: string; autos
   const [faultMode, setFaultMode] = useState("silent_fail");
   const [showDelta, setShowDelta] = useState(true);
   const [liveEvents, setLiveEvents] = useState<KernelEvent[]>([]);
-  const [activeRun, setActiveRun] = useState<string | null>(runId ?? null);
+  // The run armed in THIS view (a deep-linked `runId` is only looked up).
+  const [activeRun, setActiveRun] = useState<string | null>(null);
   const unsub = useRef<(() => void) | null>(null);
+  const [simulateNote, setSimulateNote] = useState<string | null>(null);
 
   // A specific run requested by deep link, or the latest one with a deviation.
-  const runs = useQuery({ queryKey: ["runs"], queryFn: api.listRuns });
-  const focusRun: RunSummary | undefined =
-    runs.data?.find((r) => r.run_id === (activeRun ?? runId ?? lastRunId)) ??
-    runs.data?.find((r) => r.evidence.some((c) => c.deviation)) ??
-    runs.data?.[0];
+  // While a run just armed here has not reached the backend yet (the proxy
+  // uploads the trace when the agent claims), poll for it.
+  const runs = useQuery({
+    queryKey: ["runs"],
+    queryFn: api.listRuns,
+    refetchInterval: (q) =>
+      activeRun && !simulateNote && !simulate.isError
+        && !q.state.data?.some((r) => r.run_id === activeRun)
+        ? 2000 : false,
+  });
+  const wanted = activeRun ?? runId ?? lastRunId;
+  // A run armed in this view is never stood in for by an older one: until it
+  // lands, there is no receipt — not someone else's.
+  const focusRun: RunSummary | undefined = activeRun
+    ? runs.data?.find((r) => r.run_id === activeRun)
+    : runs.data?.find((r) => r.run_id === wanted) ??
+      runs.data?.find((r) => r.evidence.some((c) => c.deviation)) ??
+      runs.data?.[0];
+
+  // The run landed: the live stream has nothing more to say.
+  useEffect(() => {
+    if (focusRun && focusRun.run_id === activeRun) {
+      unsub.current?.();
+      unsub.current = null;
+    }
+  }, [focusRun, activeRun]);
 
   useEffect(() => {
     return () => unsub.current?.();
@@ -81,6 +104,7 @@ export default function Experiment({ runId, autostart }: { runId?: string; autos
     onSuccess: (r: StartRunResult) => {
       setActiveRun(r.run_id);
       setLiveEvents([]);
+      setSimulateNote(null);
       if (mode === "demo") {
         void simulate.mutate(r.run_id);
       } else {
@@ -95,7 +119,12 @@ export default function Experiment({ runId, autostart }: { runId?: string; autos
 
   const simulate = useMutation({
     mutationFn: (id: string) => api.simulate(id),
-    onSuccess: (_res, id) => {
+    onSuccess: (res, id) => {
+      setSimulateNote(res.upload?.uploaded
+        ? null
+        : res.upload
+          ? `the proxy could not upload the run to the control plane (${(res.upload as { detail?: string }).detail ?? "upload failed"})`
+          : "the proxy ran the scenario but did not upload it — start it with --backend-url so the receipt reaches the control plane");
       setLastRun(id);
       void qc.invalidateQueries({ queryKey: ["runs"] });
     },
@@ -170,13 +199,23 @@ export default function Experiment({ runId, autostart }: { runId?: string; autos
         </Tooltip>
         {start.isError && (
           <div className="mt-2" style={{ fontFamily: MONO, fontSize: 11, color: C.red }}>
-            {(start.error as Error).message} — is the proxy running? (uvx axor-proxy --demo)
+            {(start.error as Error).message} — is the proxy running? (uvx axor-proxy --demo --backend-url …)
+          </div>
+        )}
+        {simulate.isError && (
+          <div className="mt-2" style={{ fontFamily: MONO, fontSize: 11, color: C.red }}>
+            the scripted agent failed: {(simulate.error as Error).message}
+          </div>
+        )}
+        {simulateNote && (
+          <div className="mt-2" style={{ fontFamily: MONO, fontSize: 11, color: C.amber }}>
+            {simulateNote}
           </div>
         )}
       </div>
 
       {/* Live audit stream (connected-agent path) */}
-      {mode !== "demo" && activeRun && liveEvents.length > 0 && !caught && (
+      {mode !== "demo" && activeRun && !focusRun && (
         <div className="p-4 mb-4" style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 8 }}>
           <div style={{ fontFamily: MONO, fontSize: 11, color: C.mut, marginBottom: 8 }}>
             live · point your agent at the proxy — waiting for events…
@@ -214,7 +253,8 @@ export default function Experiment({ runId, autostart }: { runId?: string; autos
                 governed vs ungoverned (scenario delta)
               </label>
               {showDelta && <ScenarioDelta c={caught} />}
-              <EvidenceCase runId={focusRun.run_id} caseIndex={caseIndex} c={caught} />
+              <EvidenceCase runId={focusRun.run_id} caseIndex={caseIndex} c={caught}
+                replayStep={caught.anchor?.seq} />
               {caught.anchor && (
                 <TwoTreeContainment runId={focusRun.run_id} anchor={caught.anchor} />
               )}
