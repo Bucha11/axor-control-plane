@@ -38,6 +38,11 @@ from axor_backend.signing import jcs_canonical
 _TIER_ORDER = {"community": 0, "team": 1, "security": 2, "enterprise": 3}
 TIERS = ("community", "team", "security", "enterprise")
 
+
+def tier_rank(tier: str) -> int:
+    """A tier's position on the ladder; -1 for a name the ladder does not know."""
+    return _TIER_ORDER.get(tier, -1)
+
 # The governed-node allowance each rung is SOLD with (Pricing.tsx). The ceiling
 # is still a number inside each license — a rung can be sold with the fleet it
 # was negotiated for — but the standard sale should not be retyped, and a Team

@@ -290,6 +290,8 @@ class Principal:
     role: str | None = None
     user_id: str | None = None
     email: str | None = None
+    # the plan tier the identity token carried (kind == "user" only)
+    tier: str | None = None
     # A key minted FOR ONE NODE carries its node_id, and the plane refuses to
     # let it speak for any other (see `may_speak_for`). Command signing protects
     # the downstream direction; this is the upstream half — without it any

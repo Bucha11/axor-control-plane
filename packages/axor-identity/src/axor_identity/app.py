@@ -9,13 +9,17 @@ from __future__ import annotations
 
 import contextlib
 import datetime
+import json
 import os
 import secrets
 from collections.abc import AsyncIterator
+from urllib.parse import urlsplit
 
-from fastapi import Depends, FastAPI, Header, HTTPException
+from fastapi import Depends, FastAPI, Header, HTTPException, Request
+from fastapi.responses import HTMLResponse, Response
 from pydantic import BaseModel, EmailStr, Field
 
+from axor_identity import billing as bill
 from axor_identity.keys import SigningKey, load_signing_key
 from axor_identity.passwords import hash_password, needs_rehash, verify_password
 from axor_identity.storage import Store, init_db, make_engine
@@ -70,10 +74,24 @@ class MemberBody(BaseModel):
     role: str
 
 
+class CheckoutBody(BaseModel):
+    tier: str
+    # where the payer lands afterwards: a page of the app that started the
+    # checkout, on one of AXOR_IDENTITY_PUBLIC_ORIGINS
+    return_url: str
+
+
+class TierBody(BaseModel):
+    tier: str
+
+
 def create_app(database_url: str | None = None, *,
                signing_key: SigningKey | None = None,
                access_ttl: int | None = None,
-               refresh_ttl: int | None = None) -> FastAPI:
+               refresh_ttl: int | None = None,
+               billing: bill.BillingConfig | None = None,
+               paddle: bill.PaddleAPI | None = None,
+               admin_token: str | None = None) -> FastAPI:
     url = (database_url or os.environ.get("AXOR_IDENTITY_DATABASE_URL")
            or "sqlite+aiosqlite:///./identity.db")
     signing_key = signing_key or load_signing_key()
@@ -81,6 +99,13 @@ def create_app(database_url: str | None = None, *,
         os.environ.get("AXOR_IDENTITY_ACCESS_TTL", "900"))
     refresh_ttl = refresh_ttl if refresh_ttl is not None else int(
         os.environ.get("AXOR_IDENTITY_REFRESH_TTL", "1209600"))
+    billing = billing if billing is not None else bill.load_config()
+    if billing is not None and paddle is None:
+        paddle = bill.PaddleClient(billing)
+    # the path the apps' reverse proxies mount this service under
+    public_path = os.environ.get("AXOR_IDENTITY_PUBLIC_PATH", "/identity").rstrip("/")
+    admin_token = admin_token if admin_token is not None else os.environ.get(
+        "AXOR_IDENTITY_ADMIN_TOKEN", "")
 
     @contextlib.asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -201,6 +226,179 @@ def create_app(database_url: str | None = None, *,
             raise HTTPException(409, "already a member")
         await store.add_membership(target["user_id"], org_id, body.role, _now_iso())
         return {"user_id": target["user_id"], "org_id": org_id, "role": body.role}
+
+    # ── billing (see axor_identity.billing) ───────────────────────────────────
+    def _billing() -> bill.BillingConfig:
+        if billing is None:
+            raise HTTPException(501, "billing is not configured")
+        return billing
+
+    def _billing_admin(caller: Claims) -> None:
+        if not role_at_least(caller.role, "admin"):
+            raise HTTPException(403, "owner or admin of this organization required")
+
+    @app.get("/v1/billing/config")
+    async def billing_config() -> dict:
+        if billing is None:
+            return {"enabled": False}
+        return {"enabled": True, "environment": billing.environment,
+                "client_token": billing.client_token,
+                "tiers": [t for t in bill.TIERS if t in billing.prices]}
+
+    @app.get("/v1/billing/pay", response_class=HTMLResponse)
+    async def billing_pay() -> HTMLResponse:
+        return HTMLResponse(bill.PAY_PAGE, headers={
+            "Cache-Control": "no-store", "Referrer-Policy": "no-referrer"})
+
+    @app.get("/v1/billing/pay.js")
+    async def billing_pay_js() -> Response:
+        return Response(bill.PAY_SCRIPT, media_type="text/javascript",
+                        headers={"Cache-Control": "no-store"})
+
+    @app.get("/v1/billing/checkouts/{transaction_id}")
+    async def billing_checkout_return(transaction_id: str) -> dict:
+        record = await store.get_checkout(transaction_id)
+        if record is None:
+            raise HTTPException(404, "unknown checkout")
+        return {"return_url": record["return_url"], "tier": record["tier"]}
+
+    @app.post("/v1/billing/checkout", status_code=201)
+    async def billing_checkout(body: CheckoutBody,
+                               caller: Claims = Depends(_caller)) -> dict:
+        config = _billing()
+        _billing_admin(caller)
+        price_id = config.prices.get(body.tier)
+        if price_id is None:
+            raise HTTPException(422, f"tier must be one of {sorted(config.prices)}")
+        if not config.allowed_return(body.return_url):
+            raise HTTPException(422, "return_url must be on one of this "
+                                "deployment's app origins")
+        current = await store.get_subscription(caller.org)
+        if current and current["status"] in bill.ENTITLED_STATUSES:
+            raise HTTPException(409, "this organization already has a "
+                                "subscription — change plan in the billing portal")
+        parts = urlsplit(body.return_url)
+        pay_url = f"{parts.scheme}://{parts.netloc}{public_path}/v1/billing/pay"
+        try:
+            txn = await paddle.create_transaction(  # type: ignore[union-attr]
+                price_id=price_id, org_id=caller.org,
+                customer_id=current["customer_id"] if current else None,
+                checkout_url=pay_url)
+        except bill.BillingError as exc:
+            bill.log.error("checkout failed for %s: %s", caller.org, exc)
+            raise HTTPException(502, "the payment provider is unavailable") from exc
+        await store.store_checkout(txn, caller.org, body.tier, body.return_url,
+                                   _now_iso())
+        return {"transaction_id": txn, "checkout_url": f"{pay_url}?_ptxn={txn}"}
+
+    @app.get("/v1/billing/subscription")
+    async def billing_subscription(caller: Claims = Depends(_caller)) -> dict:
+        org = await store.get_org(caller.org)
+        if org is None:
+            raise HTTPException(404, "organization not found")
+        sub = await store.get_subscription(caller.org)
+        return {
+            "enabled": billing is not None,
+            "org_id": caller.org,
+            "tier": org["tier"],
+            # the tier in the caller's token: behind `tier` until its refresh
+            "token_tier": caller.tier,
+            "subscription": None if sub is None else {
+                "status": sub["status"], "tier": sub["tier"],
+                "current_period_end": sub["current_period_end"],
+                "scheduled_change": sub["scheduled_change"]},
+            # checkout and the portal are owner/admin actions
+            "is_admin": role_at_least(caller.role, "admin"),
+            "can_manage": bool(sub and sub["customer_id"])
+                          and role_at_least(caller.role, "admin"),
+        }
+
+    @app.post("/v1/billing/portal")
+    async def billing_portal(caller: Claims = Depends(_caller)) -> dict:
+        _billing()
+        _billing_admin(caller)
+        sub = await store.get_subscription(caller.org)
+        if sub is None or not sub["customer_id"]:
+            raise HTTPException(404, "this organization has no subscription")
+        try:
+            url = await paddle.portal_url(  # type: ignore[union-attr]
+                customer_id=sub["customer_id"],
+                subscription_id=sub["subscription_id"])
+        except bill.BillingError as exc:
+            bill.log.error("portal failed for %s: %s", caller.org, exc)
+            raise HTTPException(502, "the payment provider is unavailable") from exc
+        return {"url": url}
+
+    @app.post("/v1/billing/webhook")
+    async def billing_webhook(request: Request) -> dict:
+        config = _billing()
+        raw = await request.body()
+        if not bill.verify_signature(request.headers.get("Paddle-Signature"),
+                                     raw, config.webhook_secret):
+            raise HTTPException(401, "invalid signature")
+        try:
+            event = json.loads(raw)
+            event_id = str(event["event_id"])
+            event_type = str(event["event_type"])
+        except (ValueError, KeyError, TypeError) as exc:
+            raise HTTPException(400, "malformed event") from exc
+        if not await store.record_event(event_id, event_type, _now_iso()):
+            return {"ok": True, "duplicate": True}
+        try:
+            return await _apply_event(config, event, event_type)
+        except Exception:
+            # let the provider's retry run it again instead of being deduped
+            await store.forget_event(event_id)
+            raise
+
+    async def _apply_event(config: bill.BillingConfig, event: dict,
+                           event_type: str) -> dict:
+        update = bill.parse_event(event)
+        if update is None:
+            return {"ok": True, "ignored": event_type}
+        org_id = None
+        if update.org_id and await store.get_org(update.org_id):
+            org_id = update.org_id
+        if org_id is None and update.subscription_id:
+            org_id = await store.org_for_subscription(update.subscription_id)
+        if org_id is None and update.customer_id:
+            org_id = await store.org_for_customer(update.customer_id)
+        if org_id is None:
+            bill.log.warning("billing event %s names no known org", event_type)
+            return {"ok": True, "ignored": "unknown org"}
+        tier = bill.tier_for(update, config)
+        if tier is None:
+            bill.log.error("billing event %s for %s has price %r, which "
+                           "AXOR_IDENTITY_PADDLE_PRICES does not sell",
+                           event_type, org_id, update.price_id)
+            return {"ok": True, "ignored": "unknown price"}
+        values = {"customer_id": update.customer_id,
+                  "subscription_id": update.subscription_id,
+                  "price_id": update.price_id, "tier": config.tier_of_price[
+                      update.price_id or ""], "status": update.status,
+                  "current_period_end": update.current_period_end,
+                  "scheduled_change": update.scheduled_change}
+        if not event_type.startswith("subscription."):
+            # a payment event knows nothing about the billing period or a
+            # scheduled change: keep what the subscription events recorded
+            values = {k: v for k, v in values.items() if v is not None}
+        applied = await store.apply_subscription(
+            org_id, tier=tier, values=values,
+            event_at=bill.event_time(event.get("occurred_at")), ts=_now_iso())
+        return {"ok": True, "org_id": org_id, "tier": tier, "applied": applied}
+
+    @app.post("/v1/admin/orgs/{org_id}/tier")
+    async def admin_set_tier(org_id: str, body: TierBody,
+                             authorization: str | None = Header(default=None)) -> dict:
+        """Operator grant — how a contracted (enterprise) org gets its tier."""
+        presented = (authorization or "").removeprefix("Bearer ").strip()
+        if not admin_token or not secrets.compare_digest(presented, admin_token):
+            raise HTTPException(401, "operator token required")
+        if body.tier not in bill.TIERS:
+            raise HTTPException(422, f"tier must be one of {list(bill.TIERS)}")
+        if not await store.set_org_tier(org_id, body.tier):
+            raise HTTPException(404, "organization not found")
+        return {"org_id": org_id, "tier": body.tier}
 
     # ── keys / health ─────────────────────────────────────────────────────────
     @app.get("/.well-known/jwks.json")

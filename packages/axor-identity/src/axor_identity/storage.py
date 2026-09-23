@@ -67,6 +67,48 @@ refresh_tokens = Table(
 )
 
 
+# ── billing (Paddle) ──────────────────────────────────────────────────────────
+# One subscription per org. The org's `tier` above stays the single entitlement
+# every service reads (it rides in the access token); these rows are how the
+# billing webhook decides what that tier should be, and where the customer and
+# subscription ids a portal session needs are kept.
+billing_subscriptions = Table(
+    "billing_subscriptions", metadata,
+    Column("org_id", String(64), primary_key=True),
+    Column("customer_id", String(64), nullable=True, index=True),
+    Column("subscription_id", String(64), nullable=True, unique=True),
+    Column("price_id", String(64), nullable=True),
+    Column("tier", String(32), nullable=False),     # what the price buys
+    Column("status", String(24), nullable=False),   # provider status, verbatim
+    Column("current_period_end", String(40), nullable=True),
+    Column("scheduled_change", String(40), nullable=True),  # e.g. "cancel"
+    # the provider's occurred_at of the last event applied: a late, older
+    # delivery must not roll a newer state back
+    Column("last_event_at", String(40), nullable=False),
+    Column("updated_ts", String(40), nullable=False),
+)
+
+# Every webhook event id ever applied: a redelivery is acknowledged, not re-run.
+billing_events = Table(
+    "billing_events", metadata,
+    Column("event_id", String(64), primary_key=True),
+    Column("event_type", String(64), nullable=False),
+    Column("received_ts", String(40), nullable=False),
+)
+
+# A checkout this service opened: which org it is for and where the payer goes
+# back to. The pay page resolves its return URL from here by transaction id, so
+# the URL never rides in a query string the provider might rewrite.
+billing_checkouts = Table(
+    "billing_checkouts", metadata,
+    Column("transaction_id", String(64), primary_key=True),
+    Column("org_id", String(64), nullable=False, index=True),
+    Column("tier", String(32), nullable=False),
+    Column("return_url", String(2000), nullable=False),
+    Column("created_ts", String(40), nullable=False),
+)
+
+
 def make_engine(url: str) -> AsyncEngine:
     return create_async_engine(url)
 
@@ -124,6 +166,78 @@ class Store:
             result = await conn.execute(
                 update(orgs).where(orgs.c.org_id == org_id).values(tier=tier))
         return bool(result.rowcount)
+
+    # ── billing ───────────────────────────────────────────────────────────────
+    async def get_subscription(self, org_id: str) -> dict[str, Any] | None:
+        async with self.engine.connect() as conn:
+            row = (await conn.execute(select(billing_subscriptions).where(
+                billing_subscriptions.c.org_id == org_id))).first()
+        return dict(row._mapping) if row else None
+
+    async def org_for_subscription(self, subscription_id: str) -> str | None:
+        async with self.engine.connect() as conn:
+            row = (await conn.execute(select(billing_subscriptions.c.org_id).where(
+                billing_subscriptions.c.subscription_id == subscription_id))).first()
+        return row.org_id if row else None
+
+    async def org_for_customer(self, customer_id: str) -> str | None:
+        async with self.engine.connect() as conn:
+            row = (await conn.execute(select(billing_subscriptions.c.org_id).where(
+                billing_subscriptions.c.customer_id == customer_id))).first()
+        return row.org_id if row else None
+
+    async def apply_subscription(self, org_id: str, *, tier: str,
+                                 values: dict[str, Any], event_at: str,
+                                 ts: str) -> bool:
+        """Upsert the org's subscription row and set the org's tier, in ONE
+        transaction — unless a newer event was already applied, in which case
+        nothing changes and False is returned."""
+        async with self.engine.begin() as conn:
+            row = (await conn.execute(select(billing_subscriptions).where(
+                billing_subscriptions.c.org_id == org_id))).first()
+            if row is not None and row.last_event_at > event_at:
+                return False
+            fields = {**values, "last_event_at": event_at, "updated_ts": ts}
+            if row is None:
+                await conn.execute(insert(billing_subscriptions).values(
+                    org_id=org_id, **fields))
+            else:
+                await conn.execute(update(billing_subscriptions).where(
+                    billing_subscriptions.c.org_id == org_id).values(**fields))
+            await conn.execute(update(orgs).where(orgs.c.org_id == org_id)
+                               .values(tier=tier))
+        return True
+
+    async def record_event(self, event_id: str, event_type: str, ts: str) -> bool:
+        """True the first time an event id is seen, False on a redelivery."""
+        async with self.engine.begin() as conn:
+            seen = (await conn.execute(select(billing_events.c.event_id).where(
+                billing_events.c.event_id == event_id))).first()
+            if seen is not None:
+                return False
+            await conn.execute(insert(billing_events).values(
+                event_id=event_id, event_type=event_type, received_ts=ts))
+        return True
+
+    async def forget_event(self, event_id: str) -> None:
+        """Undo record_event when handling failed, so the provider's retry is
+        processed instead of being acknowledged as a duplicate."""
+        async with self.engine.begin() as conn:
+            await conn.execute(billing_events.delete().where(
+                billing_events.c.event_id == event_id))
+
+    async def store_checkout(self, transaction_id: str, org_id: str, tier: str,
+                             return_url: str, ts: str) -> None:
+        async with self.engine.begin() as conn:
+            await conn.execute(insert(billing_checkouts).values(
+                transaction_id=transaction_id, org_id=org_id, tier=tier,
+                return_url=return_url, created_ts=ts))
+
+    async def get_checkout(self, transaction_id: str) -> dict[str, Any] | None:
+        async with self.engine.connect() as conn:
+            row = (await conn.execute(select(billing_checkouts).where(
+                billing_checkouts.c.transaction_id == transaction_id))).first()
+        return dict(row._mapping) if row else None
 
     # ── users ─────────────────────────────────────────────────────────────────
     async def create_user(self, user_id: str, email: str, password_hash: str,

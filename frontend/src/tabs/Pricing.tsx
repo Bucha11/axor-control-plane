@@ -7,8 +7,14 @@
 // decided nothing. Static, no backend. Safety and hobby-scale privacy are free
 // forever; you pay for hosted collaboration, the security workflow, and the
 // size of the governed fleet.
+import { useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { C, MONO } from "../theme";
 import Coach from "../components/Coach";
+import { api } from "../api";
+import { billingError, rememberPlan, startCheckout } from "../billing";
+import { navigate } from "../router";
+import { useApp } from "../store";
 
 // A feature is either shipping today or on the roadmap. We mark the difference
 // explicitly rather than listing aspirational capabilities as if they exist — a
@@ -24,6 +30,8 @@ type Kind = "free" | "paid" | "contract";
 
 interface Tier {
   name: string;
+  // the plan id a checkout buys (axor-identity tier); only on self-serve rungs
+  id?: string;
   price: string; // the "price shape", not an invoice
   priceNote?: string;
   module: string; // which module(s) this tier is
@@ -66,6 +74,7 @@ const TIERS: Tier[] = [
   },
   {
     name: "Team Workspace",
+    id: "team",
     price: "$299 / mo",
     priceNote: "card · hosted or self-hosted · 10 governed nodes included",
     module: "Private Lab + Control Plane",
@@ -91,6 +100,7 @@ const TIERS: Tier[] = [
   },
   {
     name: "Security Workspace",
+    id: "security",
     price: "$1,500 / mo",
     priceNote: "card · the security unit · 50 governed nodes included",
     module: "Private Lab + Control Plane",
@@ -157,7 +167,34 @@ function ctaLabel(tier: Tier): string {
   return `Get ${tier.name}`;
 }
 
+// On the hosted service a paid rung is bought in place: signed in, the button
+// opens checkout; signed out, it remembers the plan and sends the visitor to
+// sign in, and the checkout opens right after. Elsewhere it stays a link.
+function useBuy(): { buy: ((tier: Tier) => void) | null; busy: string | null; error: string | null } {
+  const config = useQuery({ queryKey: ["billing-config"], queryFn: api.billingConfig, retry: false });
+  const signedIn = Boolean(useApp((s) => s.identityEmail));
+  const [busy, setBusy] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  if (!config.data?.enabled) return { buy: null, busy, error };
+  const buy = (tier: Tier): void => {
+    if (!tier.id) return;
+    if (!signedIn) {
+      rememberPlan(tier.id);
+      navigate("settings");
+      return;
+    }
+    setBusy(tier.id);
+    setError(null);
+    startCheckout(tier.id).catch((err) => {
+      setError(billingError(err));
+      setBusy(null);
+    });
+  };
+  return { buy, busy, error };
+}
+
 export default function Pricing() {
+  const { buy, busy, error } = useBuy();
   return (
     <div style={{ maxWidth: 1040, margin: "0 auto" }}>
       <Coach id="pricing" title="Pricing — one ladder">
@@ -187,6 +224,9 @@ export default function Pricing() {
         the rung is the governed fleet, not the feature matrix.
       </div>
 
+      {error && (
+        <div style={{ fontFamily: MONO, fontSize: 11, color: C.red, marginBottom: 12 }}>{error}</div>
+      )}
       <div className="flex gap-4" style={{ flexWrap: "wrap" }}>
         {TIERS.map((t) => {
           const meta = KIND_META[t.kind];
@@ -276,25 +316,47 @@ export default function Pricing() {
               >
                 {t.note}
               </div>
-              <a
-                href={ctaHref(t)}
-                target={t.kind === "free" ? "_blank" : undefined}
-                rel="noreferrer"
-                style={{
-                  marginTop: 10,
-                  textAlign: "center",
-                  textDecoration: "none",
-                  border: `1px solid ${t.highlight ? C.steel : C.line}`,
-                  borderRadius: 6,
-                  padding: "8px 12px",
-                  fontFamily: MONO,
-                  fontSize: 11.5,
-                  fontWeight: 700,
-                  color: meta.color,
-                }}
-              >
-                {ctaLabel(t)}
-              </a>
+              {buy && t.id ? (
+                <button
+                  type="button"
+                  disabled={busy !== null}
+                  onClick={() => buy(t)}
+                  style={{
+                    marginTop: 10,
+                    background: "transparent",
+                    cursor: "pointer",
+                    border: `1px solid ${t.highlight ? C.steel : C.line}`,
+                    borderRadius: 6,
+                    padding: "8px 12px",
+                    fontFamily: MONO,
+                    fontSize: 11.5,
+                    fontWeight: 700,
+                    color: meta.color,
+                  }}
+                >
+                  {busy === t.id ? "opening checkout…" : ctaLabel(t)}
+                </button>
+              ) : (
+                <a
+                  href={ctaHref(t)}
+                  target={t.kind === "free" ? "_blank" : undefined}
+                  rel="noreferrer"
+                  style={{
+                    marginTop: 10,
+                    textAlign: "center",
+                    textDecoration: "none",
+                    border: `1px solid ${t.highlight ? C.steel : C.line}`,
+                    borderRadius: 6,
+                    padding: "8px 12px",
+                    fontFamily: MONO,
+                    fontSize: 11.5,
+                    fontWeight: 700,
+                    color: meta.color,
+                  }}
+                >
+                  {ctaLabel(t)}
+                </a>
+              )}
             </div>
           );
         })}

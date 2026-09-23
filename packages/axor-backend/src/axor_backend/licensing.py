@@ -44,7 +44,8 @@ from typing import Any
 from fastapi import HTTPException
 
 from axor_backend.clock import today
-from axor_backend.tenancy import PUBLIC_ORG, set_current_org
+from axor_backend.ee.license import tier_rank
+from axor_backend.tenancy import PUBLIC_ORG, current_tier, set_current_org
 
 log = logging.getLogger("axor.backend")
 
@@ -164,6 +165,19 @@ def require_ee(
     license", so a customer whose renewal slipped read that they had never
     bought one.
     """
+    # The hosted service: the org's subscription tier, carried in the identity
+    # login, entitles exactly as a license of that tier would (config
+    # `tier_entitles`; never on a self-hosted install).
+    tier = current_tier()
+    if getattr(state.config, "tier_entitles", False) and tier is not None:
+        if tier_rank(tier) >= tier_rank(min_tier):
+            return
+        if stored_license(state, org) is None:
+            raise HTTPException(
+                402,
+                f"{what} needs the {min_tier} plan or higher; this organization "
+                f"is on '{tier}'. Upgrade under Settings → Billing.",
+            )
     lic = stored_license(state, org)
     if lic is None:
         raise HTTPException(

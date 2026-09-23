@@ -85,6 +85,9 @@ services:
       AXOR_VAULT_CREDS_TOKEN: ${AXOR_VAULT_CREDS_TOKEN:-}
       AXOR_VAULT_SIGNING_TOKEN: ${AXOR_VAULT_SIGNING_TOKEN:-}
       AXOR_IDENTITY_JWKS_URL: http://identity:8402/.well-known/jwks.json
+      # This is the vendor's hosted service: an org's plan tier, set by billing
+      # in identity and carried in its login, entitles paid features.
+      AXOR_TIER_ENTITLES: "1"
       AXOR_LOG_JSON: ${AXOR_LOG_JSON:-1}
       SENTRY_DSN: ${SENTRY_DSN:-}
     depends_on:
@@ -110,6 +113,16 @@ services:
       # every user out on each restart and strands the backend's and Lab's
       # cached JWKS.
       AXOR_IDENTITY_SIGNING_KEY: ${AXOR_IDENTITY_SIGNING_KEY:?set AXOR_IDENTITY_SIGNING_KEY in .env}
+      # Operator grants (contracted Enterprise): POST /v1/admin/orgs/{id}/tier
+      AXOR_IDENTITY_ADMIN_TOKEN: ${AXOR_IDENTITY_ADMIN_TOKEN:-}
+      # Billing (Paddle). Off until all four PADDLE values are set; see README.
+      AXOR_IDENTITY_PADDLE_ENVIRONMENT: ${PADDLE_ENVIRONMENT:-sandbox}
+      AXOR_IDENTITY_PADDLE_API_KEY: ${PADDLE_API_KEY:-}
+      AXOR_IDENTITY_PADDLE_CLIENT_TOKEN: ${PADDLE_CLIENT_TOKEN:-}
+      AXOR_IDENTITY_PADDLE_WEBHOOK_SECRET: ${PADDLE_WEBHOOK_SECRET:-}
+      AXOR_IDENTITY_PADDLE_PRICES: ${PADDLE_PRICES:-}
+      # Checkout may only return a payer to the two apps.
+      AXOR_IDENTITY_PUBLIC_ORIGINS: https://${CP_HOST},https://${LAB_HOST}
     depends_on:
       postgres: {condition: service_healthy}
     healthcheck:

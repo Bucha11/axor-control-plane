@@ -500,6 +500,13 @@ async function af(path: string, init: RequestInit = {}, retried = false): Promis
 // wins, the rest are rejected, and their failure clears the winner's session.
 let refreshing: Promise<boolean> | null = null;
 
+/** Renew the identity session now, even though the token has not expired — so
+ * a plan change made by billing reaches the next request without waiting out
+ * the access token's lifetime. */
+export function forceRefresh(): Promise<boolean> {
+  return refreshSession(null);
+}
+
 async function refreshSession(staleToken: string | null): Promise<boolean> {
   const state = useApp.getState();
   // Another request already refreshed while this one was in flight.
@@ -692,7 +699,40 @@ export interface IdentityMe {
   memberships: { org_id: string; role: string; name: string; tier: string }[];
 }
 
+export interface BillingConfig {
+  enabled: boolean;
+  environment?: string;
+  tiers?: string[];
+}
+
+export interface BillingStatus {
+  enabled: boolean;
+  org_id: string;
+  tier: string;
+  token_tier: string;
+  subscription: {
+    status: string;
+    tier: string;
+    current_period_end: string | null;
+    scheduled_change: string | null;
+  } | null;
+  is_admin: boolean;
+  can_manage: boolean;
+}
+
 export const api = {
+  // ── billing (axor-identity; one plan for the Control Plane and the Lab) ──
+  billingConfig: () => fetch(`${IDENTITY_BASE}/v1/billing/config`).then((r) => j<BillingConfig>(r)),
+  billingStatus: () => af(`${IDENTITY_BASE}/v1/billing/subscription`).then((r) => j<BillingStatus>(r)),
+  billingCheckout: (tier: string, returnUrl: string) =>
+    af(`${IDENTITY_BASE}/v1/billing/checkout`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ tier, return_url: returnUrl }),
+    }).then((r) => j<{ transaction_id: string; checkout_url: string }>(r)),
+  billingPortal: () =>
+    af(`${IDENTITY_BASE}/v1/billing/portal`, { method: "POST" }).then((r) => j<{ url: string }>(r)),
+
   // ── identity (signed-in humans) — through af(), so an expired access token
   // refreshes like any other request ─────────────────────────────────────────
   identityMe: () => af(`${IDENTITY_BASE}/v1/me`).then((r) => j<IdentityMe>(r)),

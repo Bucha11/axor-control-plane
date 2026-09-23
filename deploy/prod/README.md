@@ -85,6 +85,51 @@ created in either app works in the other.
    subdomain that is CNAMEd to GitHub but has no site attached.
 7. **Backups.** See below. Set them up now, not after the first incident.
 
+### Billing (Paddle)
+
+One plan covers both products. Billing lives in `identity`, which sets the
+org's tier. That tier rides in every login token, so the Control Plane
+(`AXOR_TIER_ENTITLES=1`) and the Lab both open paid features from it. Users buy
+from Settings → Plan & billing in the CP, or from Workspace in the Lab. The
+landing pages' "get Team" links go to `…/?plan=team`, and checkout opens right
+after sign-up.
+
+Setup, in the Paddle dashboard. Do it in **sandbox** first
+(sandbox-vendors.paddle.com) with `PADDLE_ENVIRONMENT=sandbox`:
+
+1. **Catalog → Products:** create *Team Workspace* ($299/month) and
+   *Security Workspace* ($1,500/month) as monthly prices. Copy both `pri_…`
+   ids into `PADDLE_PRICES={"team":"pri_…","security":"pri_…"}`.
+2. **Checkout → Website approval:** add `plane.useaxor.net` and
+   `lab.useaxor.net`.
+3. **Checkout → Checkout settings → Default payment link:**
+   `https://plane.useaxor.net/identity/v1/billing/pay`. Each checkout also
+   names its own app's page, so this default is only a fallback.
+4. **Developer tools → Authentication:** create a server API key
+   (`PADDLE_API_KEY`) and a client-side token (`PADDLE_CLIENT_TOKEN`).
+5. **Developer tools → Notifications:** add the destination
+   `https://plane.useaxor.net/identity/v1/billing/webhook`. Subscribe it to
+   `subscription.*` and `transaction.completed`. Copy its secret key into
+   `PADDLE_WEBHOOK_SECRET`.
+6. Run `docker compose up -d identity backend`. Then buy Team with a Paddle
+   test card and check that Settings → Plan & billing shows it in both apps.
+
+Going live means a production Paddle account, the same steps in the live
+dashboard, and `PADDLE_ENVIRONMENT=production`. Paddle also reviews the
+business before live payouts. That review expects terms, privacy and refund
+pages on the site.
+
+Semantics:
+- `active`, `trialing` and `past_due` keep the plan. During `past_due` Paddle is
+  still retrying the card.
+- `paused` or `canceled` returns the org to Community.
+- A cancellation scheduled for the end of the period keeps the plan until the
+  period ends.
+- Plan changes, card updates and cancellation happen in Paddle's customer
+  portal ("manage billing").
+- Enterprise is contracted and is granted with `AXOR_IDENTITY_ADMIN_TOKEN`
+  (see `.env.example`).
+
 ### GHCR package visibility
 
 The CP images (`axor-platform`, `axor-frontend`) are public. The Lab image

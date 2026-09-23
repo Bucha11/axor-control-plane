@@ -33,7 +33,7 @@ from axor_backend.auth import (
     policy_path,
     required_scope,
 )
-from axor_backend.tenancy import set_current_org
+from axor_backend.tenancy import set_current_org, set_current_tier
 
 log = logging.getLogger("axor.backend.auth")
 
@@ -128,6 +128,7 @@ async def resolve_principal(request: Request) -> Principal | None:
             role=claims.role,
             user_id=claims.user_id,
             email=claims.email,
+            tier=claims.tier,
         )
     return None
 
@@ -178,4 +179,5 @@ async def auth_middleware(request: Request, call_next: Callable) -> Response:
     # Scope every store query in this request to the principal's org (the public
     # tenant for master/keyless/open deployments) — see tenancy.py.
     set_current_org(principal.org)
+    set_current_tier(principal.tier)
     return await call_next(request)

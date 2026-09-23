@@ -30,6 +30,19 @@ def current_org_id() -> str:
     return _current_org.get()
 
 
+# The plan tier an identity login carried, for the same request. None for every
+# other credential (master token, API keys, open posture): those prove no plan.
+_current_tier: ContextVar[str | None] = ContextVar("axor_current_tier", default=None)
+
+
+def set_current_tier(tier: str | None) -> None:
+    _current_tier.set(tier)
+
+
+def current_tier() -> str | None:
+    return _current_tier.get()
+
+
 # Topic separator: a unit separator cannot appear in an org id or a node id, so
 # a namespaced topic can never be spelled by an id that merely contains ":".
 _TOPIC_SEP = "\x1f"

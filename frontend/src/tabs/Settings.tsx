@@ -12,6 +12,7 @@ import { C, MONO, btn } from "../theme";
 import Coach from "../components/Coach";
 import ToolCredentials from "../components/ToolCredentials";
 import UsageAndBilling from "../components/UsageAndBilling";
+import BillingPanel from "../components/BillingPanel";
 import { useStartTour } from "../components/Tour";
 
 // Every trigger the backend emits. A trigger that fires and cannot be
@@ -194,6 +195,9 @@ function IdentityLogin() {
 }
 
 export default function Settings() {
+  // the hosted service only; a self-hosted deployment licenses instead
+  const billingOn = useQuery({ queryKey: ["billing-config"], queryFn: api.billingConfig, retry: false })
+    .data?.enabled;
   const { mode, testBench } = useApp((s) => s.connection);
   const setTestBench = useApp((s) => s.setTestBench);
   const disconnect = useApp((s) => s.disconnect);
@@ -446,6 +450,12 @@ export default function Settings() {
       </Section>
 
       {/* Connection */}
+      {billingOn && (
+        <Section title="PLAN & BILLING">
+          <BillingPanel />
+        </Section>
+      )}
+
       <Section title="CONNECTION">
         <div style={{ fontFamily: MONO, fontSize: 12, color: C.text, marginBottom: 8 }}>
           {MODE_LABEL[mode]}

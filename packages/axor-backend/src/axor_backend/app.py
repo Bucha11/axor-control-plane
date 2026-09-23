@@ -77,6 +77,7 @@ def create_app(
     org: str | None = None,
     license_renewal_url: str | None = None,
     usage_reporting: bool | None = None,
+    tier_entitles: bool | None = None,
 ) -> FastAPI:
     """Build a backend. Arguments win over the environment; see `AppConfig`."""
     config = AppConfig.resolve(
@@ -93,6 +94,7 @@ def create_app(
         org=org,
         license_renewal_url=license_renewal_url,
         usage_reporting=usage_reporting,
+        tier_entitles=tier_entitles,
     )
     setup_observability()
 

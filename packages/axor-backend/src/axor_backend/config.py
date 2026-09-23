@@ -80,6 +80,12 @@ class AppConfig:
     # reporting is the deployment volunteering something about the customer, and
     # a customer who wanted the first has not thereby agreed to the second.
     usage_reporting: bool = False
+    # Whether an identity login's `tier` claim entitles paid features, the way a
+    # license does. ON only for the vendor's own hosted service, where the
+    # identity service is the vendor's and billing sets the tier. OFF by default
+    # and on every self-hosted install: there the operator holds the identity
+    # signing key, so a tier claim proves only what the operator wrote.
+    tier_entitles: bool = False
     # ── egress ───────────────────────────────────────────────────────────────
     webhook_block_private: bool = False
 
@@ -112,6 +118,7 @@ class AppConfig:
         org: str | None = None,
         license_renewal_url: str | None = None,
         usage_reporting: bool | None = None,
+        tier_entitles: bool | None = None,
     ) -> AppConfig:
         """Argument, else environment, else default — field by field."""
         if operator_keys is None:
@@ -177,6 +184,11 @@ class AppConfig:
             # dialing its own collector on the compose network is the normal
             # case. Either way the metadata-service range is refused
             # (notifications.check_webhook_url).
+            tier_entitles=(
+                tier_entitles
+                if tier_entitles is not None
+                else env.flag("AXOR_TIER_ENTITLES")
+            ),
             webhook_block_private=(
                 identity_jwks is not None or env.flag("AXOR_WEBHOOK_BLOCK_PRIVATE")
             ),

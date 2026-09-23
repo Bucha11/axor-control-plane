@@ -4,6 +4,8 @@
 // are addressable. Quiet-until-wrong holds: three primary tabs, everything else
 // behind "more", and adapter-only surfaces greyed with the honest upsell.
 import { useEffect, useRef } from "react";
+import { useQueryClient } from "@tanstack/react-query";
+import { consumeBillingParams } from "./billing";
 import { Circle, GraduationCap, Lock, Settings as SettingsIcon } from "lucide-react";
 import { C, MONO } from "./theme";
 import { navigate, useRoute } from "./router";
@@ -85,6 +87,18 @@ export default function App() {
   const route = useRoute();
   const { mode } = useApp((s) => s.connection);
   const key = routeKey(route.segments);
+  const queryClient = useQueryClient();
+
+  // Back from checkout (?billing=) or arriving from a landing page's ?plan=
+  // link: both are finished in Settings, where the plan lives.
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (!params.has("billing") && !params.has("plan")) return;
+    void consumeBillingParams().then((result) => {
+      void queryClient.invalidateQueries();
+      navigate("settings", result && result !== "plan" ? { billing: result } : undefined);
+    });
+  }, []);
 
   // First visit with no connection lands on Home (the funnel entry).
   useEffect(() => {
