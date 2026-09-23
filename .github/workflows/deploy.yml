@@ -1,0 +1,67 @@
+name: Deploy
+
+# Rolls the production stack (deploy/prod) forward on the server over SSH:
+# pull this repo, pull the images, recreate what changed. Manual on purpose —
+# a deploy is a decision, not a side effect of a merge.
+#
+# One-time setup (Settings → Secrets and variables → Actions):
+#   DEPLOY_HOST     server hostname or IP
+#   DEPLOY_USER     SSH user that can run docker (e.g. `deploy`, in the docker group)
+#   DEPLOY_SSH_KEY  private key for that user (ed25519, no passphrase)
+#   DEPLOY_KNOWN_HOSTS  output of `ssh-keyscan -t ed25519 <host>` — pins the host key
+# The server keeps its checkout at /opt/axor and its secrets in
+# /opt/axor/deploy/prod/.env (never in this repo).
+on:
+  workflow_dispatch:
+    inputs:
+      axor_tag:
+        description: "Control Plane image tag (empty = keep .env value)"
+        required: false
+      lab_tag:
+        description: "Lab image tag (empty = keep .env value)"
+        required: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-prod
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: Configure SSH
+        env:
+          KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$KEY" > ~/.ssh/id_deploy && chmod 600 ~/.ssh/id_deploy
+          printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
+      - name: Pull and restart
+        env:
+          HOST: ${{ secrets.DEPLOY_HOST }}
+          USER: ${{ secrets.DEPLOY_USER }}
+          AXOR_TAG_IN: ${{ inputs.axor_tag }}
+          LAB_TAG_IN: ${{ inputs.lab_tag }}
+        run: |
+          # The tags are spliced into a remote shell command: allow only what
+          # an image tag can contain.
+          for t in "$AXOR_TAG_IN" "$LAB_TAG_IN"; do
+            case "$t" in *[!A-Za-z0-9._-]*) echo "invalid tag: $t"; exit 1;; esac
+          done
+          ssh -i ~/.ssh/id_deploy "$USER@$HOST" \
+            "AXOR_TAG_IN='$AXOR_TAG_IN' LAB_TAG_IN='$LAB_TAG_IN' sh -eu" <<'EOF'
+          cd /opt/axor
+          git pull --ff-only
+          cd deploy/prod
+          [ -n "$AXOR_TAG_IN" ] && sed -i "s/^AXOR_TAG=.*/AXOR_TAG=$AXOR_TAG_IN/" .env
+          [ -n "$LAB_TAG_IN" ] && sed -i "s/^LAB_TAG=.*/LAB_TAG=$LAB_TAG_IN/" .env
+          docker compose pull
+          docker compose up -d --remove-orphans
+          docker image prune -f
+          docker compose ps
+          EOF

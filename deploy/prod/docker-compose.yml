@@ -1,0 +1,213 @@
+# Production stack on ONE small VPS: Control Plane + Axor Lab behind Caddy.
+#
+#   cd deploy/prod
+#   cp .env.example .env        # fill every value marked REQUIRED
+#   docker compose pull && docker compose up -d
+#
+# What is different from the root docker-compose.yml (the local quickstart):
+#
+#   - Nothing but Caddy publishes a port. Docker writes its own iptables rules,
+#     so a published port is reachable from the internet even behind ufw; the
+#     quickstart publishes 8400/8401/8402/8080, which on a VPS would expose the
+#     proxy's control surface. Here services only `expose` on the internal
+#     network and Caddy (80/443) is the single way in.
+#   - The secure posture is the default: API token, proxy token, identity
+#     signing key and Lab control token are required, and unsigned plane
+#     commands are refused unless you opt back in.
+#   - One Postgres serves all three apps, each in its own database (axor,
+#     axor_identity, axor_lab), so a single dump backs up everything.
+#   - One axor-identity serves both products: the Lab verifies the same access
+#     tokens against the same JWKS, so a user has one login.
+#   - Images are pulled from GHCR, never built on the server.
+#
+# See README.md in this directory for the full runbook (DNS, first boot,
+# backups, upgrades).
+
+x-logging: &logging
+  # The default json-file driver never rotates; on a 40 GB disk that is an
+  # outage with a delay. Cap each container at 3 × 10 MB.
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"   # HTTP/3
+    environment:
+      CP_HOST: ${CP_HOST:?set CP_HOST in .env}
+      LAB_HOST: ${LAB_HOST:?set LAB_HOST in .env}
+      ACME_EMAIL: ${ACME_EMAIL:?set ACME_EMAIL in .env}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data        # issued certificates — keep across restarts
+      - caddy_config:/config
+    depends_on: [frontend, lab-edge]
+    logging: *logging
+
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: axor
+      POSTGRES_USER: axor
+      POSTGRES_PASSWORD: ${AXOR_PG_PASSWORD:?set AXOR_PG_PASSWORD in .env}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      # First init only (empty volume): the identity and Lab databases.
+      - ../initdb/10-identity-db.sql:/docker-entrypoint-initdb.d/10-identity-db.sql:ro
+      - ./initdb/20-lab-db.sql:/docker-entrypoint-initdb.d/20-lab-db.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U axor -d axor"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    logging: *logging
+
+  # ── Control Plane ──────────────────────────────────────────────────────────
+  backend:
+    image: ${AXOR_IMAGE:-ghcr.io/bucha11/axor-platform}:${AXOR_TAG:-latest}
+    restart: unless-stopped
+    command: ["uvicorn", "axor_backend.main:app", "--factory", "--host", "0.0.0.0", "--port", "8400"]
+    expose: ["8400"]
+    environment:
+      AXOR_DATABASE_URL: postgresql+asyncpg://axor:${AXOR_PG_PASSWORD}@postgres/axor
+      AXOR_API_TOKEN: ${AXOR_API_TOKEN:?set AXOR_API_TOKEN in .env}
+      AXOR_ALLOW_UNSIGNED: ${AXOR_ALLOW_UNSIGNED:-0}
+      AXOR_OPERATOR_KEYS: ${AXOR_OPERATOR_KEYS:-{}}
+      AXOR_VENDOR_PUBKEY: ${AXOR_VENDOR_PUBKEY:-}
+      AXOR_ORG: ${AXOR_ORG:-}
+      AXOR_VAULT_CREDS_TOKEN: ${AXOR_VAULT_CREDS_TOKEN:-}
+      AXOR_VAULT_SIGNING_TOKEN: ${AXOR_VAULT_SIGNING_TOKEN:-}
+      AXOR_IDENTITY_JWKS_URL: http://identity:8402/.well-known/jwks.json
+      AXOR_LOG_JSON: ${AXOR_LOG_JSON:-1}
+      SENTRY_DSN: ${SENTRY_DSN:-}
+    depends_on:
+      postgres: {condition: service_healthy}
+      identity: {condition: service_healthy}
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8400/v1/healthz').status==200 else 1)\""]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    logging: *logging
+
+  identity:
+    image: ${AXOR_IMAGE:-ghcr.io/bucha11/axor-platform}:${AXOR_TAG:-latest}
+    restart: unless-stopped
+    command: ["axor-identity"]
+    expose: ["8402"]
+    environment:
+      AXOR_IDENTITY_HOST: 0.0.0.0
+      AXOR_IDENTITY_PORT: "8402"
+      AXOR_IDENTITY_DATABASE_URL: postgresql+asyncpg://axor:${AXOR_PG_PASSWORD}@postgres/axor_identity
+      # Required here: an empty key means a throwaway one per boot, which logs
+      # every user out on each restart and strands the backend's and Lab's
+      # cached JWKS.
+      AXOR_IDENTITY_SIGNING_KEY: ${AXOR_IDENTITY_SIGNING_KEY:?set AXOR_IDENTITY_SIGNING_KEY in .env}
+    depends_on:
+      postgres: {condition: service_healthy}
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8402/v1/healthz').status==200 else 1)\""]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    logging: *logging
+
+  proxy:
+    image: ${AXOR_IMAGE:-ghcr.io/bucha11/axor-platform}:${AXOR_TAG:-latest}
+    restart: unless-stopped
+    command: ["axor-proxy"]
+    expose: ["8401"]
+    environment:
+      AXOR_PROXY_HOST: 0.0.0.0
+      AXOR_PROXY_PORT: "8401"
+      AXOR_PROXY_DEMO: ${AXOR_PROXY_DEMO:-1}
+      AXOR_PROXY_TOKEN: ${AXOR_PROXY_TOKEN:?set AXOR_PROXY_TOKEN in .env}
+      AXOR_TRACE_DIR: /data/traces
+      AXOR_BACKEND_URL: http://backend:8400
+      # Minted in the UI (Settings → API keys) after the first boot; until then
+      # the proxy cannot upload runs to the (token-gated) backend.
+      AXOR_INGEST_KEY: ${AXOR_INGEST_KEY:-}
+    volumes: ["axordata:/data"]
+    depends_on:
+      backend: {condition: service_healthy}
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8401/axor/healthz').status==200 else 1)\""]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    logging: *logging
+
+  frontend:
+    image: ${AXOR_FRONTEND_IMAGE:-ghcr.io/bucha11/axor-frontend}:${AXOR_TAG:-latest}
+    restart: unless-stopped
+    expose: ["8080"]
+    environment:
+      # nginx attaches this on the /axor hop; the browser never sees it.
+      AXOR_PROXY_TOKEN: ${AXOR_PROXY_TOKEN}
+    depends_on:
+      backend: {condition: service_healthy}
+      identity: {condition: service_healthy}
+      proxy: {condition: service_started}
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/ >/dev/null || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    logging: *logging
+
+  # ── Axor Lab ───────────────────────────────────────────────────────────────
+  # Single process holding live run state in memory: never scale to 2 replicas.
+  lab:
+    image: ${LAB_IMAGE:-ghcr.io/bucha11/axor-lab}:${LAB_TAG:-edge}
+    restart: unless-stopped
+    expose: ["8871"]
+    environment:
+      AXOR_LAB_CONTROL_TOKEN: ${AXOR_LAB_CONTROL_TOKEN:?set AXOR_LAB_CONTROL_TOKEN in .env}
+      AXOR_LAB_ADMIN_TOKEN: ${AXOR_LAB_ADMIN_TOKEN:-}
+      AXOR_LAB_DATABASE_URL: postgresql://axor:${AXOR_PG_PASSWORD}@postgres/axor_lab
+      AXOR_LAB_DATA_DIR: /data
+      AXOR_LAB_PLANS_FILE: ${AXOR_LAB_PLANS_FILE:-/app/docs/pricing/axor-plans.json}
+      # The Control Plane's identity service: one login for both products.
+      AXOR_LAB_IDENTITY_JWKS_URL: http://identity:8402/.well-known/jwks.json
+      AXOR_LAB_IDENTITY_ISSUER: axor-identity
+      AXOR_LAB_BILLING_WEBHOOK_SECRET: ${AXOR_LAB_BILLING_WEBHOOK_SECRET:-}
+      # Anonymous trial workspaces. Off until the lab-edge rate limits have
+      # seen real traffic.
+      AXOR_LAB_GUEST_SESSIONS: ${AXOR_LAB_GUEST_SESSIONS:-}
+    volumes: ["labdata:/data"]
+    depends_on:
+      postgres: {condition: service_healthy}
+      identity: {condition: service_healthy}
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8871/').status==200 else 1)\""]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+    logging: *logging
+
+  # The Lab app does no rate limiting and does not serve /identity; this nginx
+  # does both (Caddy has no built-in rate limiter).
+  lab-edge:
+    image: nginx:1.27-alpine
+    restart: unless-stopped
+    expose: ["8080"]
+    volumes:
+      - ./lab-nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      lab: {condition: service_healthy}
+      identity: {condition: service_healthy}
+    logging: *logging
+
+volumes:
+  pgdata: {}
+  axordata: {}
+  labdata: {}
+  caddy_data: {}
+  caddy_config: {}

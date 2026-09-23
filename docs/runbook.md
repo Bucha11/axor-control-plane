@@ -1,5 +1,9 @@
 # Runbook — backup, restore, upgrade (self-hosted compose)
 
+> Running Control Plane + Axor Lab on a public VPS? `deploy/prod/README.md`
+> is the production stack (Caddy/TLS, shared Postgres and identity, backups,
+> upgrades). This page covers the local quickstart compose.
+
 ## Backup (two things, both cheap)
 1. **Postgres** (system of record): `docker compose exec postgres pg_dump -U axor axor | gzip > axor-$(date +%F).sql.gz`
 2. **Proxy traces** (portable artifacts): the `axordata` volume →
