@@ -27,6 +27,7 @@ from axor_probe.integration import plane as probe_plane
 from axor_sentinel.sentinel.snapshot import (
     SnapshotRejected,
     snapshot_from_payload,
+    snapshot_payload,
 )
 from fastapi import APIRouter, Header, HTTPException, Request
 from sse_starlette.sse import EventSourceResponse
@@ -818,8 +819,15 @@ async def post_reputation(node_id: str, body: dict, request: Request) -> dict:
     except SnapshotRejected as exc:
         raise HTTPException(400, f"reputation snapshot: {exc}") from exc
 
+    # Store the snapshot as the library READ it, not the bytes that arrived:
+    # the parser canonicalises what a sender may spell differently (a JSON
+    # round-trip's `1` for `1.0`, a level's case), and everything downstream —
+    # the topology counts, the heat alert, the UI — compares against the
+    # canonical form. Stored raw, a snapshot the parser accepted could still
+    # render as "0 flagged".
     stored = await ctx.store.put_reputation(
-        node_id, snapshot.version, snapshot.generated_at, body, now(),
+        node_id, snapshot.version, snapshot.generated_at,
+        snapshot_payload(snapshot), now(),
     )
     if not stored:
         held = await ctx.store.reputation(node_id)

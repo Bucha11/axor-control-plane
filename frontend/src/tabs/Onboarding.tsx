@@ -449,7 +449,10 @@ node = PlaneConnector(
     ingest_key="${nodeKey ?? "<mint a key above>"}",
 ).connect()
 node.gate(toolset)          # pause/stop from Control now holds real tool calls
-await node.run()            # heartbeat + desired-state subscription`}
+await node.run()            # heartbeat + desired-state subscription
+
+# optional — cross-session reputation (axor-sentinel >= 0.4.2) on Control:
+# cycle = SentinelCycle(neo4j, snapshot_dir, publish=node.reputation_publisher())`}
               </pre>
               <div className="px-4 py-3" style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim, lineHeight: 1.6, borderTop: `1px solid ${C.line}` }}>
                 this is the posture half: pause / stop / budget reach the node and hold its tool calls.
