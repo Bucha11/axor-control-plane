@@ -57,18 +57,17 @@ created in either app works in the other.
    The app hosts must stay DNS-only: Cloudflare's proxy cuts idle
    connections after about 100 s, which kills SSE streams. Caddy handles TLS
    itself. The landings are static, so proxying them is fine.
-3. **Checkout and secrets.**
+3. **Checkout and start.** `bootstrap.sh` generates every secret into `.env`
+   (chmod 600, never overwritten on a re-run), pulls the images and starts
+   the stack:
    ```sh
    sudo git clone https://github.com/Bucha11/axor-control-plane /opt/axor
    cd /opt/axor/deploy/prod
-   cp .env.example .env && chmod 600 .env
-   # fill every REQUIRED value; secrets: openssl rand -hex 24
-   docker compose run --rm --no-deps identity \
-     python -c "from axor_identity.keys import generate_pem; print(generate_pem())"
-   # → paste into AXOR_IDENTITY_SIGNING_KEY="…"
+   ./bootstrap.sh you@example.com     # Let's Encrypt e-mail
    ```
-4. **Start.** Run `docker compose pull && docker compose up -d`. Then check
-   `docker compose ps`: every service should be `healthy`.
+   To fill `.env` by hand instead, copy `.env.example` and follow its comments.
+4. **Check.** `docker compose ps` should show every service `healthy`.
+   Certificates are issued on the first request to each host.
 5. **Ingest key.** Open `https://plane.useaxor.net` and paste `AXOR_API_TOKEN` in
    Settings → auth. Mint an `ingest` API key, set `AXOR_INGEST_KEY` in `.env`,
    and restart the proxy with `docker compose up -d proxy`.
