@@ -26,6 +26,7 @@ with ``replay: match``, or it does not leave at all.
 from __future__ import annotations
 
 import hashlib
+import inspect
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -57,6 +58,16 @@ LABEL_SENSITIVE = "sensitive"
 # tool_call destinations the kernel treats as an export consequence
 # (replay_api.containment_report) — the only recorded signal of egress-ness.
 _EGRESS_DESTINATIONS = frozenset({"external_domain", "workspace_share"})
+# Integrity sinks (axor-core `integrity_sinks`): a state-changing call whose driving
+# args the attacker must not choose — gated on integrity only, never the floor.
+# The recompute below passes the role only to a taint_gate that accepts it.
+_GATE_TAKES_INTEGRITY_SINKS = "integrity_sinks" in inspect.signature(taint_gate).parameters
+# Whether Lab's tool-manifest/v1 compilation (axor-wrap `compile_manifests`,
+# axor-lab's canonical governor config) turns a WRITE tool with driving_args into
+# an integrity sink. It does not yet — only EXPORT/EXEC become roles — so a
+# recorded DENY on an integrity sink would replay in Lab as an ALLOW. Such a run
+# is refused until the compilation carries the role; flip this with it.
+_LAB_COMPILES_INTEGRITY_SINKS = False
 _EGRESS_CLASSES = frozenset({"EXPORT", "EXEC"})
 # the single coarse result field the synthesized manifests declare untrusted —
 # CP records field-level provenance as roots on the whole value ref.
@@ -106,6 +117,8 @@ class _Call:
     arg_refs: dict[str, str]
     verdict: str
     egress: bool
+    # operator-declared integrity sink (recorded roles.integrity_sink)
+    integrity: bool = False
     # the driving args the producing kernel DECLARED for this sink, when it
     # recorded them; empty for a proxy-depth trace that carries no declaration.
     declared_driving: list[str] = field(default_factory=list)
@@ -151,6 +164,7 @@ class _Tool:
     tool: str
     arg_types: dict[str, str] = field(default_factory=dict)
     egress: bool = False
+    integrity: bool = False
     driving_args: set[str] = field(default_factory=set)
     untrusted_source: bool = False
     sensitive_source: bool = False
@@ -379,6 +393,7 @@ def _scan(
                 # declared roles, so the structural signal still stands in.
                 egress=bool(roles.get("egress_sink"))
                 or str(normalized.get("destination_kind", "")) in _EGRESS_DESTINATIONS,
+                integrity=bool(roles.get("integrity_sink")),
                 declared_driving=declared,
                 normalized=dict(normalized),
                 driving_root=payload.get("driving_root"),
@@ -445,6 +460,9 @@ def _tool_table(calls: list[_Call], values: dict[str, _Value]) -> dict[str, _Too
             t.arg_types.setdefault(str(name), _json_type(value))
         for name in call.arg_refs:
             t.arg_types.setdefault(str(name), "string")
+        if call.integrity:
+            t.integrity = True
+            t.driving_args.update(call.declared_driving or call.arg_refs.keys())
         if call.egress:
             t.egress = True
             # Prefer what the kernel DECLARED it gated on. Falling back to "every
@@ -514,8 +532,10 @@ def _origin_sources(
 
 
 def _manifest(t: _Tool) -> dict[str, Any]:
+    # An integrity sink changes state without exporting: WRITE, with the driving
+    # args whose provenance the gate checks (tool-manifest/v1 `effect.driving_args`).
     effect: dict[str, Any] = {
-        "default_class": "EXPORT" if t.egress else "READ",
+        "default_class": "EXPORT" if t.egress else "WRITE" if t.integrity else "READ",
         "driving_args": sorted(t.driving_args),
     }
     manifest: dict[str, Any] = {
@@ -527,7 +547,7 @@ def _manifest(t: _Tool) -> dict[str, Any]:
             "required": [],
         },
         "effect": effect,
-        "side_effecting": t.egress,
+        "side_effecting": t.egress or t.integrity,
     }
     if t.has_result:
         manifest["result_schema"] = {
@@ -688,6 +708,13 @@ def _decide_all(
         tool = tools.get(call.tool)
         if tool is None:  # unreachable: every call registers its tool
             continue
+        if tool.integrity and not _GATE_TAKES_INTEGRITY_SINKS:
+            reasons.append(
+                f"{call.tool!r} at {call.node}:{call.seq} was recorded as an integrity "
+                "sink, and the installed axor-core's taint_gate has no integrity_sinks "
+                "— its verdict cannot be re-decided; upgrade axor-core"
+            )
+            continue
         try:
             decision = _kernel_decide(call, tool, values)
         except IncompleteRecord as exc:
@@ -699,6 +726,18 @@ def _decide_all(
             )
             continue
         recorded = "ALLOW" if call.verdict == "pass" else "DENY"
+        if (
+            tool.integrity and not tool.egress and recorded == "DENY"
+            and not _LAB_COMPILES_INTEGRITY_SINKS
+        ):
+            reasons.append(
+                f"recorded DENY on integrity sink {call.tool!r} at {call.node}:{call.seq} "
+                "cannot replay in Lab: tool-manifest/v1 compilation (axor-wrap "
+                "compile_manifests / axor-lab canonical config) turns only EXPORT/EXEC "
+                "tools into governor roles, so a WRITE integrity sink would be ungated "
+                "and the DENY would replay as an ALLOW"
+            )
+            continue
         if decision["verdict"] != recorded:
             reasons.append(
                 f"recorded verdict {recorded} for {call.tool!r} at "
@@ -772,6 +811,12 @@ def _kernel_decide(
         # declared half — which is the half that knows a deployment's vocabulary
         # (`send_email` normalises to `none`).
         egress_sinks=frozenset({call.tool}) if tool.egress else frozenset(),
+        # The operator's declaration that this call's driving value must not be
+        # attacker-chosen (a password, an address) — integrity only, no floor.
+        **(
+            {"integrity_sinks": frozenset({call.tool}) if tool.integrity else frozenset()}
+            if _GATE_TAKES_INTEGRITY_SINKS else {}
+        ),
     )
     decision: dict[str, Any] = {
         "verdict": "ALLOW" if denial is None else "DENY",

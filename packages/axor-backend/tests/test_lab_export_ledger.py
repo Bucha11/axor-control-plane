@@ -131,3 +131,70 @@ def test_an_egress_sink_without_a_driving_arg_is_refused_in_the_reason_list() ->
     reasons = " ".join(exc.value.reasons)
     assert "driving argument" in reasons
     assert "internal:" not in reasons, "the batch must catch this, not the synthesis"
+
+
+# ── integrity sinks (axor-core `integrity_sinks`) ─────────────────────────────
+
+def _integrity_run(verdict: str) -> list[dict]:
+    """A run that read an injection, then called an operator-declared integrity
+    sink (a password update) — plus an egress call, so the run has a scenario sink."""
+    return _events(
+        _ev(0, "tool_call", "pass", tool="read_file", args={}, arg_refs={},
+            normalized=_norm(), driving_root={"sources": [], "sensitive": False},
+            floor_active=False),
+        _ev(1, "tool_result", None, tool="read_file", value_ref="v_file",
+            root={"sources": ["web"], "sensitive": False}),
+        _ev(2, "tool_call", verdict, tool="update_password", args={"password": "x"},
+            arg_refs={}, driving_args=["password"], normalized=_norm(),
+            arg_provenance={"password": {"sources": ["web"], "sensitive": False}},
+            driving_root={"sources": ["web"] if verdict == "deny" else [],
+                          "sensitive": False},
+            floor_active=False, roles={"integrity_sink": True}),
+        _ev(3, "tool_call", "deny", tool="send_money", args={"recipient": "x"},
+            arg_refs={"recipient": "v_file"}, driving_args=["recipient"],
+            normalized=_norm(destination_kind="external_domain"),
+            driving_root={"sources": ["web"], "sensitive": False},
+            floor_active=False, roles={"egress_sink": True}),
+    )
+
+
+def test_an_integrity_sink_verdict_is_re_decided_with_the_role() -> None:
+    """The recompute must pass the recorded role to the kernel's taint_gate: an
+    integrity sink is none of egress / outside-workspace write / exec, so without
+    the role the recorded DENY re-decides as an ALLOW and the run is refused for a
+    mismatch the converter manufactured."""
+    from axor_backend import lab_export
+    from axor_backend.lab_export import LabExportError, build_incident_package
+
+    assert lab_export._GATE_TAKES_INTEGRITY_SINKS, "needs an axor-core with integrity_sinks"
+    with pytest.raises(LabExportError) as exc:
+        build_incident_package(_integrity_run("deny"), {"run_id": "r", "scenario": "s"})
+    reasons = " ".join(exc.value.reasons)
+    assert "would not reproduce" not in reasons, "the kernel's own gate agrees with the record"
+    # ... and the refusal that remains is the honest one: Lab cannot replay it yet
+    assert "integrity sink 'update_password'" in reasons
+    assert "EXPORT/EXEC" in reasons
+
+
+def test_an_allowed_integrity_sink_call_exports_as_a_write_tool() -> None:
+    """A PASS on an integrity sink replays as a PASS in Lab too, so the run exports;
+    its manifest states the role the schema can carry: WRITE with driving args."""
+    from axor_backend.lab_export import build_incident_package
+
+    pkg = build_incident_package(_integrity_run("pass"), {"run_id": "r", "scenario": "s"})
+    manifest = next(m for m in pkg["manifests"] if m["id"] == "update_password")
+    assert manifest["effect"] == {"default_class": "WRITE", "driving_args": ["password"]}
+    assert manifest["side_effecting"] is True
+
+
+def test_the_lab_compilation_flag_lifts_the_refusal(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Once Lab's manifest compilation carries the role, the same run exports."""
+    from axor_backend import lab_export
+
+    monkeypatch.setattr(lab_export, "_LAB_COMPILES_INTEGRITY_SINKS", True)
+    pkg = lab_export.build_incident_package(_integrity_run("deny"),
+                                            {"run_id": "r", "scenario": "s"})
+    decision = next(e["decision"] for e in pkg["trace"]["events"]
+                    if e.get("type") == "gate_decision" and e.get("tool") == "update_password")
+    assert decision["verdict"] == "DENY"
+    assert decision["driving_value_id"] == "m_n_2_password"
