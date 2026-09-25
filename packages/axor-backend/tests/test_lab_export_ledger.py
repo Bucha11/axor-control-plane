@@ -158,27 +158,25 @@ def _integrity_run(verdict: str) -> list[dict]:
     )
 
 
-def test_an_integrity_sink_verdict_is_re_decided_with_the_role() -> None:
+def test_an_integrity_sink_deny_is_re_decided_with_the_role_and_exports() -> None:
     """The recompute must pass the recorded role to the kernel's taint_gate: an
     integrity sink is none of egress / outside-workspace write / exec, so without
     the role the recorded DENY re-decides as an ALLOW and the run is refused for a
-    mismatch the converter manufactured."""
+    mismatch the converter manufactured. With it, the DENY reproduces and the run
+    exports — Lab's manifest compilation turns the WRITE into an integrity sink."""
     from axor_backend import lab_export
-    from axor_backend.lab_export import LabExportError, build_incident_package
 
     assert lab_export._GATE_TAKES_INTEGRITY_SINKS, "needs an axor-core with integrity_sinks"
-    with pytest.raises(LabExportError) as exc:
-        build_incident_package(_integrity_run("deny"), {"run_id": "r", "scenario": "s"})
-    reasons = " ".join(exc.value.reasons)
-    assert "would not reproduce" not in reasons, "the kernel's own gate agrees with the record"
-    # ... and the refusal that remains is the honest one: Lab cannot replay it yet
-    assert "integrity sink 'update_password'" in reasons
-    assert "EXPORT/EXEC" in reasons
+    pkg = lab_export.build_incident_package(_integrity_run("deny"),
+                                            {"run_id": "r", "scenario": "s"})
+    decision = next(e["decision"] for e in pkg["trace"]["events"]
+                    if e.get("type") == "gate_decision" and e.get("tool") == "update_password")
+    assert decision["verdict"] == "DENY"
+    assert decision["driving_value_id"] == "m_n_2_password"
 
 
 def test_an_allowed_integrity_sink_call_exports_as_a_write_tool() -> None:
-    """A PASS on an integrity sink replays as a PASS in Lab too, so the run exports;
-    its manifest states the role the schema can carry: WRITE with driving args."""
+    """The manifest states the role the schema can carry: WRITE with driving args."""
     from axor_backend.lab_export import build_incident_package
 
     pkg = build_incident_package(_integrity_run("pass"), {"run_id": "r", "scenario": "s"})
@@ -187,14 +185,16 @@ def test_an_allowed_integrity_sink_call_exports_as_a_write_tool() -> None:
     assert manifest["side_effecting"] is True
 
 
-def test_the_lab_compilation_flag_lifts_the_refusal(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Once Lab's manifest compilation carries the role, the same run exports."""
+def test_without_the_lab_compilation_a_deny_is_refused(monkeypatch: pytest.MonkeyPatch) -> None:
+    """For a Lab whose compilation does not carry the role, the DENY would replay
+    as an ALLOW — the export refuses it, naming why."""
     from axor_backend import lab_export
+    from axor_backend.lab_export import LabExportError
 
-    monkeypatch.setattr(lab_export, "_LAB_COMPILES_INTEGRITY_SINKS", True)
-    pkg = lab_export.build_incident_package(_integrity_run("deny"),
-                                            {"run_id": "r", "scenario": "s"})
-    decision = next(e["decision"] for e in pkg["trace"]["events"]
-                    if e.get("type") == "gate_decision" and e.get("tool") == "update_password")
-    assert decision["verdict"] == "DENY"
-    assert decision["driving_value_id"] == "m_n_2_password"
+    monkeypatch.setattr(lab_export, "_LAB_COMPILES_INTEGRITY_SINKS", False)
+    with pytest.raises(LabExportError) as exc:
+        lab_export.build_incident_package(_integrity_run("deny"),
+                                          {"run_id": "r", "scenario": "s"})
+    reasons = " ".join(exc.value.reasons)
+    assert "integrity sink 'update_password'" in reasons
+    assert "would not reproduce" not in reasons

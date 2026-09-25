@@ -64,10 +64,12 @@ _EGRESS_DESTINATIONS = frozenset({"external_domain", "workspace_share"})
 _GATE_TAKES_INTEGRITY_SINKS = "integrity_sinks" in inspect.signature(taint_gate).parameters
 # Whether Lab's tool-manifest/v1 compilation (axor-wrap `compile_manifests`,
 # axor-lab's canonical governor config) turns a WRITE tool with driving_args into
-# an integrity sink. It does not yet — only EXPORT/EXEC become roles — so a
-# recorded DENY on an integrity sink would replay in Lab as an ALLOW. Such a run
-# is refused until the compilation carries the role; flip this with it.
-_LAB_COMPILES_INTEGRITY_SINKS = False
+# an integrity sink. Both do (the same rule, parity-tested in axor-lab), so the
+# WRITE manifest below replays a recorded integrity-sink DENY as a DENY. With it
+# off, such a run is refused: an older compilation ungates the WRITE and the DENY
+# would replay as an ALLOW. A Lab that predates the rule refuses the import on
+# its own replay check, so exporting is fail-closed either way.
+_LAB_COMPILES_INTEGRITY_SINKS = True
 _EGRESS_CLASSES = frozenset({"EXPORT", "EXEC"})
 # the single coarse result field the synthesized manifests declare untrusted —
 # CP records field-level provenance as roots on the whole value ref.
