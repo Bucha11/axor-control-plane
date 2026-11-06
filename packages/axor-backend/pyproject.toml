@@ -15,7 +15,15 @@ dependencies = [
   # taint-floor vectors: the incident export decides with the kernel's own gate
   # now, and reads the recorded event through the kernel's own decoder. Neither
   # is mirrored here — a copy of a decoder is how a copy of a decision starts.
-  "axor-core>=0.11,<0.12",
+  #
+  # Moved 0.11 -> 0.12 whole, not widened: one minor line, so an environment
+  # cannot resolve a kernel this backend's integration jobs never ran against.
+  # 783 tests pass against an installed 0.12.0. The 6 failures in
+  # test_lab_import_frozen are the frozen Lab export declaring
+  # `kernel: axor-core@0.11.0` — the CP refusing to claim reproduction under a
+  # different build, which is the mechanism working. Regenerate that fixture
+  # from an axor-lab checkout on 0.12.0.
+  "axor-core>=0.12,<0.13",
   # 0.2 is the first release carrying `audit.from_trace` — the one derivation of
   # an EvidenceCase from a recorded trace. The audit used to run only inside the
   # proxy, from its own in-memory run state, so a run that arrived here any
