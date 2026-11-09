@@ -145,7 +145,9 @@ the proxy token, the identity signing key and the Lab control token. Also:
 
 - Leave `AXOR_ALLOW_UNSIGNED=0` (the default here) unless the instance is
   deliberately a demo. With it off, set `AXOR_OPERATOR_KEYS`.
-- Leave `AXOR_LAB_GUEST_SESSIONS` empty until you have watched `lab-edge`'s
-  rate limits under real traffic.
+- `AXOR_LAB_GUEST_SESSIONS=1` (the default) lets a visitor use Lab before
+  signing up: the web app starts a 30-minute guest workspace on its own.
+  Bounded by `lab-edge` (6/min per IP) and a ceiling of 200 live guests. Set
+  `0` and Lab opens on a login instead.
 - `.env` must be `chmod 600`. Never commit it (it is gitignored).
 - `SECURITY.md` in the repo root has the full hardening list.

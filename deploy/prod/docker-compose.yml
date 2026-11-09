@@ -180,9 +180,11 @@ services:
       AXOR_LAB_IDENTITY_JWKS_URL: http://identity:8402/.well-known/jwks.json
       AXOR_LAB_IDENTITY_ISSUER: axor-identity
       AXOR_LAB_BILLING_WEBHOOK_SECRET: ${AXOR_LAB_BILLING_WEBHOOK_SECRET:-}
-      # Anonymous trial workspaces. Off until the lab-edge rate limits have
-      # seen real traffic.
-      AXOR_LAB_GUEST_SESSIONS: ${AXOR_LAB_GUEST_SESSIONS:-}
+      # Anonymous trial workspaces, ON: the web app starts one for a visitor
+      # so a public Lab opens on the product, not on a login wall. Bounded by
+      # lab-edge (6/min per IP, burst 3), a server ceiling of 200 live guests,
+      # and a 30-minute lifetime. Set to 0 to require an account to look.
+      AXOR_LAB_GUEST_SESSIONS: ${AXOR_LAB_GUEST_SESSIONS:-1}
     volumes: ["labdata:/data"]
     depends_on:
       postgres: {condition: service_healthy}
