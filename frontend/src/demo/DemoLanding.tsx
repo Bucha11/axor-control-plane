@@ -1,6 +1,6 @@
 // Standalone demo landing (demo-landing mockup): a recorded trace replayed
 // deterministically on an SVG stage — no live model, same outcome every time.
-import { useState, useEffect } from "react";
+import React, { useState, useEffect } from "react";
 import { Play, RotateCcw, ArrowRight, Shield } from "lucide-react";
 import { C, MONO } from "../theme";
 
@@ -19,34 +19,44 @@ const N = {
 type NodeId = keyof typeof N;
 const path = (a: NodeId, b: NodeId) => `M ${N[a].x} ${N[a].y} L ${N[b].x} ${N[b].y}`;
 
+// ── The single-agent story: the product's whole loop on one recording ────────
+// One recorded run, replayed deterministically — no live model, same outcome
+// every time. It used to end at "export DENIED at the sink", which is the LAST
+// rung (live governance, adapter depth) and skipped what the product is for:
+// catching the discrepancy, explaining it, and turning it into a test. Now it
+// walks the loop in order, and the cards it leaves behind ARE the summary.
+type Phase = "catch" | "explain" | "prevent" | "govern";
+const PHASES: { id: Phase; label: string }[] = [
+  { id: "catch", label: "catch" },
+  { id: "explain", label: "explain" },
+  { id: "prevent", label: "prevent" },
+  { id: "govern", label: "govern" },
+];
+
 interface Step {
   dur: number;
+  phase: Phase;
   cap: string;
   pulse?: [NodeId, NodeId];
   color?: string;
-  taintEmail?: boolean;
-  searchFail?: boolean;
-  claim?: boolean;
-  exporting?: boolean;
-  blocked?: boolean;
-  receipt?: boolean;
+  mark?: "taint" | "fail" | "claim" | "evidence" | "explain" | "prevent" | "blocked" | "done";
 }
-type Flag = "taintEmail" | "searchFail" | "claim" | "blocked" | "receipt";
 
-// script: recorded trace replayed on the graph — no live model, ever
 const SCRIPT: Step[] = [
-  { dur: 1400, pulse: ["user", "agent"], color: C.steel, cap: "task: “summarize this week and post to slack”" },
-  { dur: 1400, pulse: ["agent", "email"], color: C.steel, cap: "agent reads the inbox…" },
-  { dur: 1400, pulse: ["email", "agent"], color: C.amber, taintEmail: true, cap: "…external content comes back — the value is now tainted" },
-  { dur: 1500, pulse: ["agent", "search"], color: C.steel, cap: "agent calls web_search…" },
-  { dur: 1600, searchFail: true, cap: "web_search → ToolError(timeout). Zero bytes returned." },
-  { dur: 2400, claim: true, cap: "the agent doesn’t mention it:" },
-  { dur: 1700, pulse: ["agent", "slack"], color: C.red, exporting: true, cap: "…and tries to post the fabrication, tainted value included" },
-  { dur: 2200, blocked: true, cap: "the gate denies at the sink: tainted value in an export projection" },
-  { dur: 99999, receipt: true, cap: "" },
+  { dur: 1400, phase: "catch", pulse: ["user", "agent"], color: C.steel, cap: "task: “summarize this week and post it to slack”" },
+  { dur: 1200, phase: "catch", pulse: ["agent", "email"], color: C.steel, cap: "the agent reads the inbox…" },
+  { dur: 1200, phase: "catch", pulse: ["email", "agent"], color: C.amber, mark: "taint", cap: "…external content comes back — tainted" },
+  { dur: 1200, phase: "catch", pulse: ["agent", "search"], color: C.steel, cap: "it looks up this week’s rates…" },
+  { dur: 1600, phase: "catch", mark: "fail", cap: "we break the tool on purpose: web_search times out, 0 bytes" },
+  { dur: 1900, phase: "catch", mark: "claim", cap: "the agent answers anyway — with a number it never got" },
+  { dur: 2300, phase: "catch", mark: "evidence", cap: "tool said nothing, agent said 0.25% → an EvidenceCase" },
+  { dur: 2600, phase: "explain", mark: "explain", cap: "replayed step by step: the 0.25% has no source" },
+  { dur: 2600, phase: "prevent", mark: "prevent", cap: "pinned as must-block; config v2 replayed against it: blocked" },
+  { dur: 1500, phase: "govern", pulse: ["agent", "slack"], color: C.red, cap: "live, the agent tries to post it…" },
+  { dur: 1900, phase: "govern", mark: "blocked", cap: "…and the export is denied at the sink" },
+  { dur: 99999, phase: "govern", mark: "done", cap: "" },
 ];
-
-const IDLE: Step = { dur: 0, cap: "" };
+const IDLE: Step = { dur: 0, phase: "catch", cap: "" };
 
 // ── Two-tree containment hero (spec v2 decision v2-18; mockups/v2) ────────────
 // One recorded fault, replayed over both topologies — deterministic, no live
@@ -203,10 +213,12 @@ function TwoTreeSecond() {
   );
 }
 
-/** The recorded run on its stage, then the receipt. Shared by the standalone
- * demo page and the Home accordion, so the two can never tell different stories.
- * `autoplay` starts it at once — the Home card is opened by someone who just
- * asked to watch it. `onTry` is where the receipt's call to action goes. */
+/** The recorded run on its stage, walking catch → explain → prevent → govern,
+ * with a card per step of the loop left behind as it goes. Shared by the
+ * standalone demo page and the Home accordion, so the two can never tell
+ * different stories. `autoplay` starts it at once — the Home card is opened by
+ * someone who just asked to watch it. `onTry` is where the final call to
+ * action goes. */
 export function DemoStage({ autoplay = false, onTry }: { autoplay?: boolean; onTry: () => void }) {
   const [playing, setPlaying] = useState(autoplay);
   const [step, setStep] = useState(-1);
@@ -217,13 +229,18 @@ export function DemoStage({ autoplay = false, onTry }: { autoplay?: boolean; onT
     return () => clearTimeout(t);
   }, [playing, step]);
 
-  const done = (k: Flag) => step >= 0 && SCRIPT.slice(0, step + 1).some((s) => s[k]);
+  const reached = (m: NonNullable<Step["mark"]>) =>
+    step >= 0 && SCRIPT.slice(0, step + 1).some((s) => s.mark === m);
   const cur = step >= 0 ? SCRIPT[step] : IDLE;
-  const tainted = done("taintEmail");
-  const failed = done("searchFail");
-  const claimed = done("claim");
-  const blocked = done("blocked");
-  const receipt = done("receipt");
+  const phaseIdx = step >= 0 ? PHASES.findIndex((p) => p.id === cur.phase) : -1;
+  const done = reached("done");
+  const tainted = reached("taint");
+  const failed = reached("fail");
+  const claimed = reached("claim");
+  const caught = reached("evidence");
+  const explained = reached("explain");
+  const prevented = reached("prevent");
+  const blocked = reached("blocked");
 
   const Node = ({ id, danger, warn }: { id: NodeId; danger?: boolean; warn?: boolean }) => {
     const n = N[id];
@@ -237,31 +254,61 @@ export function DemoStage({ autoplay = false, onTry }: { autoplay?: boolean; onT
     );
   };
 
+  const card = (accent: string): React.CSSProperties => ({
+    animation: "fadeUp .45s ease both", background: C.panel, border: `1px solid ${C.line}`,
+    borderLeft: `3px solid ${accent}`, borderRadius: 8, padding: "12px 14px",
+  });
+  const label: React.CSSProperties = { fontFamily: MONO, fontSize: 9.5, color: C.dim, letterSpacing: "0.1em", marginBottom: 6 };
+
   return (
     <>
       <style>{`
         @keyframes fadeUp { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
         @keyframes blink { 0%,100% { opacity: 1; } 50% { opacity: 0.25; } }
       `}</style>
+
+      {/* where in the loop we are */}
+      <div className="flex flex-wrap" style={{ gap: 6, marginBottom: 10 }} aria-label="demo progress">
+        {PHASES.map((p, i) => {
+          const on = i === phaseIdx && !done;
+          const past = done || (phaseIdx > i);
+          return (
+            <span key={p.id} style={{
+              fontFamily: MONO, fontSize: 10.5, letterSpacing: "0.08em", padding: "3px 10px", borderRadius: 20,
+              border: `1px solid ${on ? C.steel : past ? C.green : C.line}`,
+              color: on ? C.steel : past ? C.green : C.dim,
+              background: on ? "rgba(127,168,204,0.10)" : "none",
+            }}>
+              {past ? "✓ " : ""}{p.label}
+            </span>
+          );
+        })}
+      </div>
+
       {/* the stage */}
       <div style={{ background: STAGE_BG, border: `1px solid ${C.line}`, borderRadius: 10, position: "relative", overflow: "hidden" }}>
         <svg viewBox="0 0 660 300" style={{ width: "100%", display: "block" }}>
-          {/* static edges */}
           {([["user", "agent"], ["agent", "email"], ["agent", "search"], ["agent", "slack"]] as [NodeId, NodeId][]).map(([a, b]) => (
             <path key={a + b} d={path(a, b)} stroke={C.line} strokeWidth="1" fill="none" />
           ))}
-          {/* export edge turns red once blocked */}
+
+          {/* explain: the edge the number should have come from carried nothing */}
+          {explained && !blocked && (
+            <g style={{ animation: "fadeUp .4s ease both" }}>
+              <path d={path("search", "agent")} stroke={C.red} strokeWidth="1.5" strokeDasharray="4 4" fill="none" />
+              <text x="430" y="142" textAnchor="middle" fill={C.red} fontSize="10.5" fontFamily={MONO}>∅ 0 bytes</text>
+            </g>
+          )}
+
           {blocked && <path d={path("agent", "slack")} stroke={C.red} strokeWidth="1.5" strokeDasharray="5 4" fill="none" />}
 
-          {/* travelling pulse (keyed remount restarts SMIL per step) */}
-          {playing && cur.pulse && !receipt && (
+          {playing && cur.pulse && !done && (
             <circle key={step} r="5" fill={cur.color ?? C.steel} style={{ filter: `drop-shadow(0 0 5px ${cur.color ?? C.steel})` }}>
               <animateMotion dur={`${cur.dur / 1000}s`} fill="freeze" path={path(cur.pulse[0], cur.pulse[1])} />
             </circle>
           )}
 
-          {/* gate shield on the export edge */}
-          {(blocked || receipt) && (
+          {blocked && (
             <g style={{ animation: "fadeUp .4s ease both" }}>
               <circle cx="440" cy="198" r="15" fill={C.panel} stroke={C.red} strokeWidth="1.5" />
               <text x="440" y="203" textAnchor="middle" fontSize="13">🛡</text>
@@ -270,22 +317,20 @@ export function DemoStage({ autoplay = false, onTry }: { autoplay?: boolean; onT
           )}
 
           <Node id="user" />
-          <Node id="agent" danger={claimed && !receipt} />
+          <Node id="agent" danger={claimed && !blocked} />
           <Node id="email" warn={tainted} />
-          <Node id="search" danger={failed && step < 7} />
+          <Node id="search" danger={failed} />
           <Node id="slack" />
 
-          {/* tool failure tag */}
-          {failed && !receipt && (
+          {failed && (
             <text x={N.search.x} y={N.search.y - 32} textAnchor="middle" fill={C.red} fontSize="10.5" fontFamily={MONO}
-              style={step === 4 ? { animation: "blink 1s ease 2" } : {}}>ToolError(timeout)</text>
+              style={cur.mark === "fail" ? { animation: "blink 1s ease 2" } : {}}>timeout · 0 bytes</text>
           )}
-          {tainted && !receipt && (
+          {tainted && (
             <text x={N.email.x} y={N.email.y - 32} textAnchor="middle" fill={C.amber} fontSize="10.5" fontFamily={MONO}>tainted</text>
           )}
 
-          {/* the claim bubble */}
-          {claimed && !receipt && (
+          {claimed && !explained && (
             <g style={{ animation: "fadeUp .4s ease both" }}>
               <rect x="180" y="55" width="240" height="40" rx="6" fill={C.panel} stroke={C.red} strokeWidth="1" />
               <text x="300" y="72" textAnchor="middle" fill={C.text} fontSize="10.5" fontFamily={MONO}>“Based on the search results,</text>
@@ -295,52 +340,90 @@ export function DemoStage({ autoplay = false, onTry }: { autoplay?: boolean; onT
         </svg>
 
         {/* caption bar */}
-        <div style={{ borderTop: `1px solid ${C.line}`, padding: "10px 16px", minHeight: 40, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+        <div style={{ borderTop: `1px solid ${C.line}`, padding: "10px 16px", minHeight: 40, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
           {!playing ? (
             <button onClick={() => { setPlaying(true); setStep(-1); }}
               style={{ display: "flex", alignItems: "center", gap: 8, background: C.steel, border: "none", borderRadius: 5, color: C.bg, fontFamily: MONO, fontSize: 12.5, fontWeight: 700, padding: "8px 18px", cursor: "pointer" }}>
               <Play size={14} /> Run the recording
             </button>
           ) : (
-            <span key={step} style={{ fontFamily: MONO, fontSize: 12, color: cur.blocked ? C.red : C.mut, animation: "fadeUp .3s ease both" }}>
-              {cur.cap}
+            <span key={step} style={{ fontFamily: MONO, fontSize: 12, color: cur.mark === "blocked" || cur.mark === "evidence" ? C.red : C.mut, animation: "fadeUp .3s ease both" }}>
+              {done ? "that is the loop: catch it, explain it, prevent it, govern it." : cur.cap}
             </span>
           )}
           {playing && (
-            <button onClick={() => setStep(-1)} style={{ background: "none", border: "none", color: C.dim, cursor: "pointer" }}>
+            <button onClick={() => setStep(-1)} aria-label="replay the recording" style={{ background: "none", border: "none", color: C.dim, cursor: "pointer", flexShrink: 0 }}>
               <RotateCcw size={14} />
             </button>
           )}
         </div>
       </div>
 
-      {/* the receipt */}
-      {receipt && (
-        <div style={{ animation: "fadeUp .5s ease both", marginTop: 16, background: C.panel, border: `1px solid ${C.line}`, borderRadius: 10, overflow: "hidden" }}>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr" }}>
-            <div style={{ padding: 16, borderRight: `1px solid ${C.line}` }}>
-              <div style={{ fontFamily: MONO, fontSize: 9.5, color: C.dim, letterSpacing: "0.1em", marginBottom: 6 }}>WHAT HAPPENED</div>
-              <div style={{ fontFamily: MONO, fontSize: 12.5, color: C.red }}>web_search → ToolError(timeout)</div>
+      {/* what each step of the loop produced — they stay, so the end is a summary */}
+      <div className="flex flex-col" style={{ gap: 8, marginTop: 12 }}>
+        {caught && (
+          <div style={card(C.red)} data-testid="demo-catch">
+            <div style={label}>① CATCH · EVIDENCECASE</div>
+            <div style={{ display: "grid", gridTemplateColumns: "minmax(0,1fr) auto minmax(0,1fr)", gap: 10, alignItems: "center" }}>
+              <div>
+                <div style={{ ...label, marginBottom: 3 }}>THE TOOL RETURNED</div>
+                <div style={{ fontFamily: MONO, fontSize: 12, color: C.red }}>web_search · 0 bytes</div>
+              </div>
+              <div style={{ fontFamily: MONO, fontSize: 18, color: C.red }}>≠</div>
+              <div>
+                <div style={{ ...label, marginBottom: 3 }}>THE AGENT SAID</div>
+                <div style={{ fontFamily: MONO, fontSize: 12, color: C.text }}>“rates rose 0.25%”</div>
+              </div>
             </div>
-            <div style={{ padding: 16 }}>
-              <div style={{ fontFamily: MONO, fontSize: 9.5, color: C.dim, letterSpacing: "0.1em", marginBottom: 6 }}>WHAT THE AGENT SAID</div>
-              <div style={{ fontFamily: MONO, fontSize: 12.5, color: C.text }}>“…rates rose 0.25%”</div>
+            <div style={{ fontFamily: MONO, fontSize: 11, color: C.red, fontWeight: 700, marginTop: 8 }}>
+              FABRICATED TOOL RESULT — a receipt, not a score
             </div>
           </div>
-          <div style={{ borderTop: `1px solid ${C.line}`, padding: "12px 16px", display: "flex", flexWrap: "wrap", gap: 10, alignItems: "center", justifyContent: "space-between", background: "rgba(229,72,77,0.05)" }}>
-            <span style={{ fontFamily: MONO, fontSize: 11.5, color: C.red, fontWeight: 700 }}>FABRICATED TOOL RESULT · export DENIED at the sink</span>
+        )}
+        {explained && (
+          <div style={card(C.steel)} data-testid="demo-explain">
+            <div style={label}>② EXPLAIN · DETERMINISTIC REPLAY</div>
+            <div style={{ fontFamily: MONO, fontSize: 11.5, color: C.mut, lineHeight: 1.7 }}>
+              step 4 <span style={{ color: C.red }}>web_search → ∅</span> · step 5 <span style={{ color: C.text }}>claim “0.25%”</span>
+              <br />the value has no source in the trace. no model call — the recording re-gates the same way every time.
+            </div>
+          </div>
+        )}
+        {prevented && (
+          <div style={card(C.green)} data-testid="demo-prevent">
+            <div style={label}>③ PREVENT · REGRESSION CORPUS</div>
+            <div style={{ fontFamily: MONO, fontSize: 11.5, color: C.mut, lineHeight: 1.7 }}>
+              pinned as <span style={{ color: C.text }}>must-block</span> · candidate config v2 replayed against it:{" "}
+              <span style={{ color: C.green, fontWeight: 700 }}>✓ blocked</span>
+              <br />a config that lets it through again fails CI before it ships.
+            </div>
+          </div>
+        )}
+        {blocked && (
+          <div style={card(C.amber)} data-testid="demo-govern">
+            <div style={label}>④ GOVERN · LIVE</div>
+            <div style={{ fontFamily: MONO, fontSize: 11.5, color: C.mut, lineHeight: 1.7 }}>
+              the agent tried to post the made-up number: <span style={{ color: C.red, fontWeight: 700 }}>export DENIED at the sink</span>
+            </div>
+          </div>
+        )}
+        {done && (
+          <div className="flex items-center justify-between flex-wrap" style={{ gap: 10, animation: "fadeUp .5s ease both", marginTop: 4 }}>
+            <span style={{ fontFamily: MONO, fontSize: 11, color: C.dim }}>
+              our agent, our broken tool. yours takes ~5 minutes, no code change.
+            </span>
             <button onClick={onTry}
               style={{ display: "flex", alignItems: "center", gap: 8, background: C.green, border: "none", borderRadius: 5, color: C.bg, fontFamily: MONO, fontSize: 12.5, fontWeight: 700, padding: "8px 16px", cursor: "pointer" }}>
-              Try it on your agent — 5 min, no code change <ArrowRight size={14} />
+              Catch one on your agent <ArrowRight size={14} />
             </button>
           </div>
-        </div>
-      )}
+        )}
+      </div>
 
-      {!receipt && (
-        <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 16, fontFamily: MONO, fontSize: 11, color: C.dim }}>
+      {!caught && (
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 12, fontFamily: MONO, fontSize: 11, color: C.dim }}>
           <Shield size={12} color={C.dim} />
-          proxy in front of your tools · auth passes through untouched · your agent, five minutes
+          a recorded run — no live model, same outcome every time
         </div>
       )}
     </>

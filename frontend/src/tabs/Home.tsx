@@ -86,7 +86,7 @@ export default function Home() {
             <span>
               <span style={{ display: "block", fontFamily: MONO, fontSize: 13, color: C.text }}>Watch the demo</span>
               <span style={{ display: "block", fontFamily: MONO, fontSize: 10.5, color: C.dim }}>
-                our agent · our faults · recorded, deterministic — ~10 seconds
+                catch · explain · prevent · govern — the whole loop in ~20 seconds
               </span>
             </span>
           </span>
