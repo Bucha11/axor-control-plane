@@ -1,8 +1,17 @@
 name: Deploy
 
 # Rolls the production stack (deploy/prod) forward on the server over SSH:
-# pull this repo, pull the images, recreate what changed. Manual on purpose —
-# a deploy is a decision, not a side effect of a merge.
+# pull this repo, pull the images, recreate what changed.
+#
+# Two ways in. Manually, with the tags to roll to — a deploy stays a decision
+# you can make on its own. And automatically after Release finishes a TAG
+# successfully, which is the only moment the images that tag names actually
+# exist on GHCR. Chaining on Release rather than on the tag push is what keeps
+# the server from pulling a version that is still building.
+#
+# The `production` environment below is the brake: give it a required reviewer
+# in Settings and the automatic run waits for a human before it touches the
+# server. Without one, a tag deploys itself.
 #
 # One-time setup (Settings → Secrets and variables → Actions):
 #   DEPLOY_HOST     server hostname or IP
@@ -20,6 +29,9 @@ on:
       lab_tag:
         description: "Lab image tag (empty = keep .env value)"
         required: false
+  workflow_run:
+    workflows: ["Release"]
+    types: [completed]
 
 permissions:
   contents: read
@@ -31,6 +43,12 @@ concurrency:
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    # A Release run on main publishes `:edge` images only and must not deploy;
+    # a failed one must not either. Only a tag that finished successfully.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       startsWith(github.event.workflow_run.head_branch, 'v'))
     environment: production
     steps:
       - name: Configure SSH
@@ -47,7 +65,16 @@ jobs:
           USER: ${{ secrets.DEPLOY_USER }}
           AXOR_TAG_IN: ${{ inputs.axor_tag }}
           LAB_TAG_IN: ${{ inputs.lab_tag }}
+          RELEASED_REF: ${{ github.event.workflow_run.head_branch }}
         run: |
+          # After a Release, roll to exactly the version that was just published.
+          # `v0.4.0` names the tag; the images and .env carry it without the v.
+          # Lab is deliberately not touched: it versions on its own schedule, and
+          # a Control Plane release says nothing about which Lab belongs beside
+          # it.
+          if [ -n "${RELEASED_REF:-}" ] && [ -z "$AXOR_TAG_IN" ]; then
+            AXOR_TAG_IN="${RELEASED_REF#v}"
+          fi
           # The tags are spliced into a remote shell command: allow only what
           # an image tag can contain.
           for t in "$AXOR_TAG_IN" "$LAB_TAG_IN"; do
