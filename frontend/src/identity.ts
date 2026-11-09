@@ -86,3 +86,18 @@ export async function logout(refreshToken: string): Promise<void> {
     /* already revoked or unreachable — nothing more to do */
   }
 }
+
+/** Whether this install still takes new accounts. A self-hosted install in
+ * `first-only` mode stops after its owner, so offering "create a workspace"
+ * there is offering a form that can only 403. Null when unknown (an older
+ * identity service without the route): the form then stays, as before. */
+export async function signupAvailable(): Promise<boolean | null> {
+  try {
+    const resp = await fetch(`${IDENTITY_BASE}/v1/signup-mode`);
+    if (!resp.ok) return null;
+    const body = (await resp.json()) as { available?: boolean };
+    return typeof body.available === "boolean" ? body.available : null;
+  } catch {
+    return null;
+  }
+}

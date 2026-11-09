@@ -18,6 +18,20 @@ test.describe("shell", () => {
     ).toBeVisible();
   });
 
+  test("the product is visible first; sign-in is one click from the header", async ({ page }) => {
+    await goHash(page, "home");
+    // No wall: the funnel is on screen before anyone has an account.
+    await expect(page.getByText("Your agent lies when its tools fail.")).toBeVisible();
+    await expect(page.getByLabel("email")).toHaveCount(0);
+    // ...and signing in is not a trip to Settings.
+    await page.getByRole("button", { name: "sign in", exact: true }).click();
+    const dialog = page.getByRole("dialog", { name: "sign in" });
+    await expect(dialog.getByLabel("email")).toBeVisible();
+    await expect(dialog.getByLabel("password")).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(dialog).toHaveCount(0);
+  });
+
   test("an unconnected visit reads as not connected", async ({ page }) => {
     await goHash(page, "home");
     await expect(page.getByText("not connected")).toBeVisible();

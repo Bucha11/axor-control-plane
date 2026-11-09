@@ -20,7 +20,7 @@ import ConfigBuilder from "./tabs/ConfigBuilder";
 import Health from "./tabs/Health";
 import Regression from "./tabs/Regression";
 import ExpertView from "./tabs/ExpertView";
-import Settings from "./tabs/Settings";
+import Settings, { IdentityLogin } from "./tabs/Settings";
 import Pricing from "./tabs/Pricing";
 
 // Primary is the loop a first-time user actually runs: catch (eval) → explain
@@ -96,11 +96,11 @@ export default function App() {
 
   return (
     <div style={{ minHeight: "100vh", background: C.bg, color: C.text, fontFamily: "Inter, system-ui, sans-serif", padding: "28px 20px" }}>
-      <div className="flex items-center justify-between mb-8" style={{ maxWidth: 640, margin: "0 auto 36px" }}>
+      <div className="flex items-center justify-between mb-8" style={{ maxWidth: 920, margin: "0 auto 36px", gap: 16 }}>
         <div className="flex items-center gap-6">
           <button
             onClick={() => navigate("home")}
-            style={{ background: "none", border: "none", cursor: "pointer", fontFamily: MONO, fontSize: 14, fontWeight: 700, color: C.text, padding: 0 }}
+            style={{ background: "none", border: "none", cursor: "pointer", fontFamily: MONO, fontSize: 14, fontWeight: 700, color: C.text, padding: 0, whiteSpace: "nowrap" }}
           >
             AXOR<span style={{ color: C.steel }}> CONTROL PLANE</span>
           </button>
@@ -116,6 +116,7 @@ export default function App() {
           <LearnToggle />
           <VersionBadge />
           <ConnectionBadge />
+          <AccountButton />
         </div>
       </div>
 
@@ -160,7 +161,7 @@ function MoreMenu({ activeKey }: { activeKey: string }) {
         <summary
           style={{
             listStyle: "none", cursor: "pointer", color: inMore ? C.text : C.dim,
-            fontSize: 13, fontFamily: MONO,
+            fontSize: 13, fontFamily: MONO, whiteSpace: "nowrap",
           }}
         >
           more…
@@ -265,7 +266,59 @@ function ConnectionBadge() {
       style={{ display: "flex", alignItems: "center", gap: 6, background: "none", border: `1px solid ${C.line}`, borderRadius: 20, padding: "4px 10px", cursor: "pointer" }}
     >
       <Circle size={7} fill={color} color={color} />
-      <span style={{ fontFamily: MONO, fontSize: 10.5, color: C.mut }}>{MODE_LABEL[mode]}</span>
+      <span style={{ fontFamily: MONO, fontSize: 10.5, color: C.mut, whiteSpace: "nowrap" }}>{MODE_LABEL[mode]}</span>
     </button>
+  );
+}
+
+/** Sign in from anywhere, in one click — not a wall in front of the product
+ * and not a form buried in Settings. Anyone can look around first; the moment
+ * they want their own data, the button is in the corner of every screen. */
+function AccountButton() {
+  const email = useApp((s) => s.identityEmail);
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const close = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    const esc = (e: KeyboardEvent) => e.key === "Escape" && setOpen(false);
+    document.addEventListener("mousedown", close);
+    document.addEventListener("keydown", esc);
+    return () => {
+      document.removeEventListener("mousedown", close);
+      document.removeEventListener("keydown", esc);
+    };
+  }, [open]);
+  return (
+    <div ref={ref} style={{ position: "relative" }}>
+      <button
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+        style={{
+          background: "none", cursor: "pointer", borderRadius: 20, padding: "4px 12px",
+          fontFamily: MONO, fontSize: 10.5,
+          border: `1px solid ${email ? C.line : C.steel}`,
+          color: email ? C.mut : C.steel,
+          maxWidth: 180, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+        }}
+      >
+        {email || "sign in"}
+      </button>
+      {open && (
+        <div
+          role="dialog"
+          aria-label={email ? "account" : "sign in"}
+          style={{
+            position: "absolute", right: 0, top: "calc(100% + 8px)", zIndex: 50, width: 300,
+            background: C.bg, border: `1px solid ${C.line}`, borderRadius: 8, padding: 14,
+            boxShadow: "0 8px 24px rgba(0,0,0,0.35)",
+          }}
+        >
+          <IdentityLogin onDone={() => setOpen(false)} />
+        </div>
+      )}
+    </div>
   );
 }

@@ -2,11 +2,11 @@
 // 16) plus connection and license. Notifications emit-and-route (webhook), with
 // the dead-letter log surfaced honestly; a notification system that fails
 // silently is worse than none.
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Check, Copy, Loader2, Trash2 } from "lucide-react";
 import { api } from "../api";
-import { IdentityError, login, logout, signup } from "../identity";
+import { IdentityError, login, logout, signup, signupAvailable } from "../identity";
 import { MODE_LABEL, useApp } from "../store";
 import { C, MONO, btn } from "../theme";
 import Coach from "../components/Coach";
@@ -99,7 +99,7 @@ function OrgMembers() {
   );
 }
 
-function IdentityLogin() {
+export function IdentityLogin({ onDone }: { onDone?: () => void } = {}) {
   const identityEmail = useApp((s) => s.identityEmail);
   const setSession = useApp((s) => s.setSession);
   const clearSession = useApp((s) => s.clearSession);
@@ -111,6 +111,10 @@ function IdentityLogin() {
   const [orgId, setOrgId] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [canSignup, setCanSignup] = useState<boolean | null>(null);
+  useEffect(() => {
+    void signupAvailable().then(setCanSignup);
+  }, []);
 
   if (identityEmail) {
     return (
@@ -123,6 +127,7 @@ function IdentityLogin() {
             clearSession();
             // Drop what this session could read so it does not linger on screen.
             qc.clear();
+            onDone?.();
           }}
           style={btn({ color: C.mut, fontSize: 10.5, padding: "3px 10px" })}>
           log out
@@ -145,6 +150,7 @@ function IdentityLogin() {
       setPassword("");
       // Queries that 401'd before sign-in stay failed otherwise.
       void qc.invalidateQueries();
+      onDone?.();
     } catch (err) {
       setError(err instanceof IdentityError ? err.message : "login failed");
     } finally {
@@ -184,10 +190,12 @@ function IdentityLogin() {
           style={btn({ color: C.steel, borderColor: C.steel, fontSize: 11, padding: "5px 14px" })}>
           {busy ? "…" : mode === "signup" ? "create workspace" : "log in"}
         </button>
-        <button type="button" onClick={() => { setError(null); setMode(mode === "signup" ? "login" : "signup"); }}
-          style={btn({ color: C.dim, fontSize: 10.5, padding: "5px 10px" })}>
-          {mode === "signup" ? "have an account? log in" : "new? create a workspace"}
-        </button>
+        {(canSignup !== false || mode === "signup") && (
+          <button type="button" onClick={() => { setError(null); setMode(mode === "signup" ? "login" : "signup"); }}
+            style={btn({ color: C.dim, fontSize: 10.5, padding: "5px 10px" })}>
+            {mode === "signup" ? "have an account? log in" : "new? create a workspace"}
+          </button>
+        )}
       </div>
     </form>
   );
