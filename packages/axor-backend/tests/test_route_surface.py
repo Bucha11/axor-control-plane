@@ -30,6 +30,9 @@ EXPECTED: dict[tuple[str, str], str] = {
     ("GET", "/v1/healthz"): "OPEN",
     ("GET", "/v1/auth/status"): "OPEN",
     ("GET", "/v1/share/{token}"): "OPEN",
+    # Not OPEN, deliberately: /v1/healthz above stays mute, and the version
+    # belongs to callers who are already inside.
+    ("GET", "/v1/version"): "read",
     # ── run ingest & read ────────────────────────────────────────────────────
     ("POST", "/v1/ingest/{run_id}"): "ingest",
     ("POST", "/v1/runs/{run_id}/evidence"): "ingest",

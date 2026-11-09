@@ -3,8 +3,9 @@
 // reachable by a deep link so EvidenceCases, replay moments and share permalinks
 // are addressable. Quiet-until-wrong holds: three primary tabs, everything else
 // behind "more", and adapter-only surfaces greyed with the honest upsell.
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Circle, GraduationCap, Lock, Settings as SettingsIcon } from "lucide-react";
+import { api } from "./api";
 import { C, MONO } from "./theme";
 import { navigate, useRoute } from "./router";
 import { ConnectionMode, MODE_LABEL, isAdapter, isConnected, useApp } from "./store";
@@ -113,6 +114,7 @@ export default function App() {
         </div>
         <div className="flex items-center gap-3">
           <LearnToggle />
+          <VersionBadge />
           <ConnectionBadge />
         </div>
       </div>
@@ -212,6 +214,44 @@ function LearnToggle() {
         <GraduationCap size={12} /> learn
       </button>
     </Tooltip>
+  );
+}
+
+// The deployed version, where an operator can see it without going looking.
+// Quiet by design: it renders nothing until the backend answers, and nothing at
+// all if the call fails — a header that shouts "unknown" on every blip would be
+// noise about the one thing that is almost never wrong. The kernel is the one
+// shown, because that is the version deciding what this deployment DOES; the
+// rest of the stack is in the tooltip.
+function VersionBadge() {
+  const [versions, setVersions] = useState<Record<string, string | null> | null>(null);
+  useEffect(() => {
+    let alive = true;
+    api
+      .version()
+      .then((v) => {
+        if (alive) setVersions(v.versions);
+      })
+      .catch(() => {
+        /* not signed in yet, or a backend older than this route: say nothing */
+      });
+    return () => {
+      alive = false;
+    };
+  }, []);
+  const kernel = versions?.["axor-core"];
+  if (!kernel) return null;
+  const detail = Object.entries(versions ?? {})
+    .filter(([, v]) => v)
+    .map(([name, v]) => `${name} ${v}`)
+    .join("\n");
+  return (
+    <span
+      title={detail}
+      style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim, border: `1px solid ${C.line}`, borderRadius: 20, padding: "4px 10px" }}
+    >
+      kernel {kernel}
+    </span>
   );
 }
 

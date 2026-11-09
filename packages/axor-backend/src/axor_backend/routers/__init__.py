@@ -29,6 +29,7 @@ from axor_backend.routers import (
     runs,
     share_api,
     vault,
+    version,
 )
 
 ALL_ROUTERS: tuple[APIRouter, ...] = (
@@ -46,6 +47,7 @@ ALL_ROUTERS: tuple[APIRouter, ...] = (
     license_api.router,
     keys.router,
     health.router,
+    version.router,
 )
 
 __all__ = ["ALL_ROUTERS"]

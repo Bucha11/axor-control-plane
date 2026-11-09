@@ -703,6 +703,12 @@ export const api = {
       body: JSON.stringify({ email, role }),
     }).then((r) => j<{ user_id: string; org_id: string; role: string }>(r)),
 
+  // What is actually deployed. Read from the installed distributions by the
+  // backend, so it describes the process answering — not the tag someone meant
+  // to roll. Authenticated: /v1/healthz stays mute on purpose.
+  version: () =>
+    af("/v1/version").then((r) => j<{ versions: Record<string, string | null> }>(r)),
+
   listRuns: () => af("/v1/runs").then((r) => j<RunSummary[]>(r)),
   runEvents: (runId: string) =>
     af(`/v1/runs/${encodeURIComponent(runId)}/events`).then((r) => j<KernelEvent[]>(r)),
