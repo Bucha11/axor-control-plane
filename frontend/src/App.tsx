@@ -116,6 +116,9 @@ export default function App() {
 
   const head = route.segments[0] ?? "home";
   const runIdParam = route.segments[1];
+  // Someone who has not tried anything yet sees no menu on Home: five tabs of
+  // product vocabulary is what made a first visit read as "close and leave".
+  const firstVisit = key === "home" && !isConnected(mode);
 
   return (
     <div style={{ minHeight: "100vh", background: C.bg, color: C.text, fontFamily: "Inter, system-ui, sans-serif", padding: "28px 20px" }}>
@@ -128,18 +131,22 @@ export default function App() {
           >
             AXOR<span className="hide-narrow" style={{ color: C.steel }}> CONTROL PLANE</span>
           </button>
-          <nav className="app-nav">
+          {!firstVisit && <nav className="app-nav">
             {LOOP.map((l) => (
               <NavLink key={l.key} id={l.key} label={l.label} hint={l.hint} active={key === l.key} />
             ))}
             <ControlNavLink active={key === "govern"} mode={mode} />
-          </nav>
+          </nav>}
         </div>
         <div className="app-header-right">
-          <LearnToggle />
-          <span className="hide-narrow hide-medium"><VersionBadge /></span>
-          <ConnectionBadge />
-          <SettingsButton active={key === "settings"} />
+          {!firstVisit && (
+            <>
+              <LearnToggle />
+              <span className="hide-narrow hide-medium"><VersionBadge /></span>
+              <ConnectionBadge />
+              <SettingsButton active={key === "settings"} />
+            </>
+          )}
           <AccountButton />
         </div>
       </div>

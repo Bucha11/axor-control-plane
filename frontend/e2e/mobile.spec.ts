@@ -34,6 +34,7 @@ test.describe("on a phone", () => {
   }
 
   test("the nav and the account controls are both on screen", async ({ page }) => {
+    await setConnection(page, { mode: "demo" });
     await page.route("**/v1/auth/status", (route) =>
       route.fulfill({
         status: 200,
@@ -47,6 +48,14 @@ test.describe("on a phone", () => {
     }
     await expect(page.getByRole("button", { name: "sign in", exact: true })).toBeInViewport();
     await expect(page.getByRole("button", { name: "Govern", exact: true })).toBeInViewport();
+  });
+
+  test("a first visit shows both ways in without scrolling", async ({ page }) => {
+    await goHash(page, "home");
+    for (const name of [/Try it on our demo agent/, /Test my own agent/]) {
+      const box = await page.getByRole("button", { name }).boundingBox();
+      expect(box!.y + box!.height).toBeLessThanOrEqual(844);
+    }
   });
 
   test("a connected, signed-out phone still fits (demo badge + sign in)", async ({ page }) => {

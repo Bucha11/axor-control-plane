@@ -16,7 +16,88 @@ const LADDER: { mode: ConnectionMode; blurb: string }[] = [
   { mode: "adapter", blurb: "wrap in Invokable · full governance + Control" },
 ];
 
+/** The first thing someone sees, knowing nothing about Axor. No menu, no
+ * terms: one sentence of what goes wrong, the recording showing it happen, and
+ * two ways to try it. The app's vocabulary (evidence, catch, explain…) waits
+ * until there is something in it to name. */
+function FirstVisit() {
+  const connect = useApp((s) => s.connect);
+  const startTour = useStartTour();
+  return (
+    <div style={{ maxWidth: 640, margin: "0 auto" }} data-testid="first-visit">
+      <h1 style={{ fontSize: "clamp(22px, 6vw, 28px)", fontWeight: 700, lineHeight: 1.25, margin: "0 0 10px" }}>
+        Your AI agent makes things up when its tools break.
+        <br />
+        <span style={{ color: C.steel }}>Axor catches it.</span>
+      </h1>
+      <div style={{ fontSize: 14.5, color: C.mut, lineHeight: 1.6, marginBottom: 20 }}>
+        A search times out, an API returns nothing — and the agent answers anyway, with
+        something it invented.
+      </div>
+
+      {/* the two ways in come BEFORE the recording: on a phone the recording
+          alone fills the first screen, and the buttons fell below the fold */}
+      <div className="flex flex-col" style={{ gap: 10, marginBottom: 26 }}>
+        <button
+          onClick={() => {
+            connect("demo");
+            navigate("catch", { auto: "1" });
+          }}
+          style={{ ...bigCta(C.green, true) }}
+        >
+          <span>
+            <span style={{ display: "block", fontWeight: 700 }}>Try it on our demo agent</span>
+            <span style={{ display: "block", fontSize: 12, opacity: 0.85, marginTop: 2 }}>
+              one click · nothing to install · no account
+            </span>
+          </span>
+          <ArrowRight size={18} />
+        </button>
+        <button onClick={() => navigate("connect")} style={{ ...bigCta(C.steel, false) }}>
+          <span>
+            <span style={{ display: "block", fontWeight: 700 }}>Test my own agent</span>
+            <span style={{ display: "block", fontSize: 12, opacity: 0.85, marginTop: 2 }}>
+              about 5 minutes · no code change · your data stays yours
+            </span>
+          </span>
+          <ArrowRight size={18} />
+        </button>
+      </div>
+
+      <div style={{ fontFamily: MONO, fontSize: 11.5, color: C.mut, marginBottom: 10 }}>
+        watch it happen — 20 seconds:
+      </div>
+      {/* the buttons above are the call to action; the recording needs no third */}
+      <DemoStage autoplay cta={false} onTry={() => navigate("connect")} />
+
+      <div style={{ fontFamily: MONO, fontSize: 11, color: C.dim, marginTop: 18 }}>
+        open source ·{" "}
+        <button onClick={startTour} style={{ background: "none", border: "none", padding: 0, color: C.steel, cursor: "pointer", fontFamily: MONO, fontSize: 11 }}>
+          Take the tour
+        </button>{" "}
+        — 60 seconds through the whole app
+      </div>
+    </div>
+  );
+}
+
+function bigCta(color: string, filled: boolean): React.CSSProperties {
+  return {
+    display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12,
+    width: "100%", textAlign: "left", cursor: "pointer", borderRadius: 10,
+    padding: "14px 18px", fontFamily: "Inter, system-ui, sans-serif", fontSize: 15,
+    border: `1px solid ${color}`, background: filled ? color : "none",
+    color: filled ? C.bg : color,
+  };
+}
+
 export default function Home() {
+  const { mode } = useApp((s) => s.connection);
+  if (!isConnected(mode)) return <FirstVisit />;
+  return <ConnectedHome />;
+}
+
+function ConnectedHome() {
   const { mode } = useApp((s) => s.connection);
   const connect = useApp((s) => s.connect);
   const learnMode = useApp((s) => s.learnMode);

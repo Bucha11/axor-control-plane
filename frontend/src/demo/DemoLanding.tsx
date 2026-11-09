@@ -219,7 +219,7 @@ function TwoTreeSecond() {
  * different stories. `autoplay` starts it at once — the Home card is opened by
  * someone who just asked to watch it. `onTry` is where the final call to
  * action goes. */
-export function DemoStage({ autoplay = false, onTry }: { autoplay?: boolean; onTry: () => void }) {
+export function DemoStage({ autoplay = false, onTry, cta = true }: { autoplay?: boolean; onTry: () => void; cta?: boolean }) {
   const [playing, setPlaying] = useState(autoplay);
   const [step, setStep] = useState(-1);
 
@@ -407,7 +407,7 @@ export function DemoStage({ autoplay = false, onTry }: { autoplay?: boolean; onT
             </div>
           </div>
         )}
-        {done && (
+        {done && cta && (
           <div className="flex items-center justify-between flex-wrap" style={{ gap: 10, animation: "fadeUp .5s ease both", marginTop: 4 }}>
             <span style={{ fontFamily: MONO, fontSize: 11, color: C.dim }}>
               our agent, our broken tool. yours takes ~5 minutes, no code change.

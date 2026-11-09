@@ -151,6 +151,12 @@ test.describe("demo landing", () => {
 // On Home the demo is an accordion, not a link to another page: it opens in
 // place, plays on its own, and its call to action stays inside the app.
 test.describe("home demo accordion", () => {
+  // the accordion is the connected Home's; a first visit plays the recording
+  // without asking (see shell.spec)
+  test.beforeEach(async ({ page }) => {
+    await setConnection(page, { mode: "demo" });
+  });
+
   test("opens in place, plays to the receipt, and closes again", async ({ page }) => {
     await page.goto("/#/home");
     const toggle = page.getByRole("button", { name: /Watch the demo/ });
