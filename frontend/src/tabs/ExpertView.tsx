@@ -111,11 +111,11 @@ function ExpertEval() {
   const [sel, setSel] = useState(6);
   const [governed, setGoverned] = useState(true);
   return (
-    <div style={{ display: "grid", gap: 12, gridTemplateColumns: "1fr 320px" }}>
+    <div className="stack-narrow" style={{ display: "grid", gap: 12, gridTemplateColumns: "1fr 320px" }}>
       <div className="flex flex-col gap-3">
         {/* run header */}
-        <div className="flex items-center justify-between" style={{ padding: "8px 12px", background: C.panel, border: `1px solid ${C.line}`, borderRadius: 6 }}>
-          <div className="flex items-center gap-3">
+        <div className="flex items-center justify-between wrap-narrow" style={{ padding: "8px 12px", background: C.panel, border: `1px solid ${C.line}`, borderRadius: 6 }}>
+          <div className="flex items-center gap-3 flex-wrap">
             <span style={{ fontFamily: MONO, fontSize: 12, color: C.text }}>run_7c31 · Tool Deprivation @ step 5</span>
             <Chip label="agent" value="banking-assistant" />
             <button onClick={() => setGoverned(!governed)} className="flex items-center gap-1.5 px-2 py-0.5"
@@ -268,7 +268,7 @@ function ExpertControl() {
   const diverged = desired.version !== reported.version;
 
   return (
-    <div style={{ display: "grid", gap: 12, gridTemplateColumns: "300px 1fr" }}>
+    <div className="stack-narrow" style={{ display: "grid", gap: 12, gridTemplateColumns: "300px 1fr" }}>
       <Panel tag="§12.1 · TOPOLOGY" title="Live tree" right={<Activity size={12} color={C.green} />}>
         <div className="py-1">
           {NODES.map((n) => (
@@ -389,7 +389,7 @@ function ExpertReplay() {
             })}
           </div>
           <input type="range" min={0} max={EVENTS.length - 1} value={cursor} onChange={(ev) => setCursor(+ev.target.value)} className="w-full" style={{ accentColor: C.steel }} />
-          <div className="mt-3" style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 8 }}>
+          <div className="mt-3 grid-2-narrow" style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 8 }}>
             <Chip label="event" value={e.kind} />
             <Chip label="level" value={e.level} color={lvlColor(e.level)} />
             <Chip label="tainted values" value={e.taint} color={e.taint ? C.amber : C.green} />

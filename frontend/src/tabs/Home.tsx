@@ -35,12 +35,13 @@ export default function Home() {
           coach notes across the app; dismissing just marks it seen. */}
       {!learnMode && !learnSeen && (
         <div
-          className="flex items-center justify-between p-3 mb-4"
+          className="flex items-center justify-between p-3 mb-4 wrap-narrow"
           style={{ background: "rgba(127,168,204,0.06)", border: `1px solid ${C.steel}`, borderRadius: 8 }}
         >
           <div className="flex items-center gap-2" style={{ fontFamily: MONO, fontSize: 11.5, color: C.mut }}>
             <GraduationCap size={14} color={C.steel} />
-            New here? Take the 60-second tour, or turn on <span style={{ color: C.steel }}>Learn mode</span> for a note on each screen.
+            {/* one span, so the sentence flows as text instead of three flex columns */}
+            <span>New here? Take the 60-second tour, or turn on <span style={{ color: C.steel }}>Learn mode</span> for a note on each screen.</span>
           </div>
           <div className="flex items-center gap-2">
             <button onClick={startTour} style={{ background: C.steel, border: `1px solid ${C.steel}`, borderRadius: 5, color: C.bg, fontFamily: MONO, fontSize: 11, fontWeight: 700, padding: "4px 10px", cursor: "pointer", whiteSpace: "nowrap" }}>

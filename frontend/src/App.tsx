@@ -96,25 +96,26 @@ export default function App() {
 
   return (
     <div style={{ minHeight: "100vh", background: C.bg, color: C.text, fontFamily: "Inter, system-ui, sans-serif", padding: "28px 20px" }}>
-      <div className="flex items-center justify-between mb-8" style={{ maxWidth: 920, margin: "0 auto 36px", gap: 16 }}>
-        <div className="flex items-center gap-6">
+      <div className="app-header" style={{ maxWidth: 920, margin: "0 auto 36px" }}>
+        <div className="app-header-left">
           <button
+            className="app-logo"
             onClick={() => navigate("home")}
             style={{ background: "none", border: "none", cursor: "pointer", fontFamily: MONO, fontSize: 14, fontWeight: 700, color: C.text, padding: 0, whiteSpace: "nowrap" }}
           >
-            AXOR<span style={{ color: C.steel }}> CONTROL PLANE</span>
+            AXOR<span className="hide-narrow" style={{ color: C.steel }}> CONTROL PLANE</span>
           </button>
-          <div className="flex gap-4 items-center">
+          <nav className="app-nav">
             {PRIMARY.map((id) => (
               <NavLink key={id} id={id} active={key === id} />
             ))}
             <ControlNavLink active={key === "control"} mode={mode} />
             <MoreMenu activeKey={key} />
-          </div>
+          </nav>
         </div>
-        <div className="flex items-center gap-3">
+        <div className="app-header-right">
           <LearnToggle />
-          <VersionBadge />
+          <span className="hide-narrow"><VersionBadge /></span>
           <ConnectionBadge />
           <AccountButton />
         </div>
@@ -166,7 +167,7 @@ function MoreMenu({ activeKey }: { activeKey: string }) {
         >
           more…
         </summary>
-        <div style={{ position: "absolute", top: 24, left: 0, background: C.panel, border: `1px solid ${C.line}`, borderRadius: 6, zIndex: 10, minWidth: 150 }}>
+        <div className="more-menu" style={{ position: "absolute", top: 24, background: C.panel, border: `1px solid ${C.line}`, borderRadius: 6, zIndex: 10, minWidth: 150 }}>
           {MORE.map((id) => (
             <button
               key={id}
@@ -212,7 +213,7 @@ function LearnToggle() {
           color: learn ? C.steel : C.mut, fontFamily: MONO, fontSize: 10.5,
         }}
       >
-        <GraduationCap size={12} /> learn
+        <GraduationCap size={12} /> <span className="hide-narrow">learn</span>
       </button>
     </Tooltip>
   );

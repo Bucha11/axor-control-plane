@@ -492,7 +492,7 @@ export default function Settings() {
         </div>
         {/* Routing (EE): named channel + node glob — the org layer. Inputs
             stay visible but disabled without a license (honest upsell). */}
-        <div className="flex items-center gap-2 mb-3" style={{ opacity: eeActive ? 1 : 0.55 }}>
+        <div className="flex items-center gap-2 mb-3 flex-wrap" style={{ opacity: eeActive ? 1 : 0.55 }}>
           <input
             value={chanLabel}
             onChange={(e) => setChanLabel(e.target.value)}
@@ -727,7 +727,7 @@ function FederationVault() {
 
   const signedPosture = Boolean(signingKeyId);
   return (
-    <div className="flex gap-4 mb-4" data-testid="federation-vault" style={{ alignItems: "stretch" }}>
+    <div className="flex gap-4 mb-4 stack-narrow" data-testid="federation-vault" style={{ alignItems: "stretch" }}>
       <ToolCredentials />
       <div className="p-4 flex-1" style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 8 }}>
         <div style={{ fontSize: 10, fontFamily: MONO, color: C.dim, letterSpacing: "0.1em", marginBottom: 8 }}>
@@ -799,7 +799,7 @@ function FederationVault() {
                 ))}
               </select>
             </div>
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 flex-wrap">
               <input
                 value={newKeyId}
                 onChange={(e) => setNewKeyId(e.target.value)}
