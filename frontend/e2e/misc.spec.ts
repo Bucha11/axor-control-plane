@@ -147,3 +147,33 @@ test.describe("demo landing", () => {
     await expect(page.getByText("fabricated_failure")).toBeVisible();
   });
 });
+
+// On Home the demo is an accordion, not a link to another page: it opens in
+// place, plays on its own, and its call to action stays inside the app.
+test.describe("home demo accordion", () => {
+  test("opens in place, plays to the receipt, and closes again", async ({ page }) => {
+    await page.goto("/#/home");
+    const toggle = page.getByRole("button", { name: /Watch the demo/ });
+    await expect(toggle).toHaveAttribute("aria-expanded", "false");
+    await expect(page.locator("#home-demo")).toHaveCount(0);
+
+    await toggle.click();
+    await expect(toggle).toHaveAttribute("aria-expanded", "true");
+    // still on Home — nothing navigated away
+    await expect(page).toHaveURL(/#\/home$/);
+    // autoplay: no "Run the recording" click needed
+    await expect(page.getByText("FABRICATED TOOL RESULT", { exact: false })).toBeVisible({ timeout: 20_000 });
+
+    await toggle.click();
+    await expect(toggle).toHaveAttribute("aria-expanded", "false");
+    await expect(page.locator("#home-demo")).toHaveCount(0);
+  });
+
+  test("the receipt's call to action goes to get started, inside the app", async ({ page }) => {
+    await page.goto("/#/home");
+    await page.getByRole("button", { name: /Watch the demo/ }).click();
+    await page.getByRole("button", { name: /Try it on your agent/ }).click({ timeout: 20_000 });
+    await expect(page).toHaveURL(/#\/get-started$/);
+  });
+});
+

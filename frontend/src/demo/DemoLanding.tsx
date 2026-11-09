@@ -203,8 +203,12 @@ function TwoTreeSecond() {
   );
 }
 
-export default function DemoLanding() {
-  const [playing, setPlaying] = useState(false);
+/** The recorded run on its stage, then the receipt. Shared by the standalone
+ * demo page and the Home accordion, so the two can never tell different stories.
+ * `autoplay` starts it at once — the Home card is opened by someone who just
+ * asked to watch it. `onTry` is where the receipt's call to action goes. */
+export function DemoStage({ autoplay = false, onTry }: { autoplay?: boolean; onTry: () => void }) {
+  const [playing, setPlaying] = useState(autoplay);
   const [step, setStep] = useState(-1);
 
   useEffect(() => {
@@ -234,11 +238,118 @@ export default function DemoLanding() {
   };
 
   return (
-    <div style={{ minHeight: "100vh", background: PAGE_BG, color: C.text, fontFamily: "Inter, system-ui, sans-serif", display: "flex", flexDirection: "column", alignItems: "center", padding: "48px 20px" }}>
+    <>
       <style>{`
         @keyframes fadeUp { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
         @keyframes blink { 0%,100% { opacity: 1; } 50% { opacity: 0.25; } }
       `}</style>
+      {/* the stage */}
+      <div style={{ background: STAGE_BG, border: `1px solid ${C.line}`, borderRadius: 10, position: "relative", overflow: "hidden" }}>
+        <svg viewBox="0 0 660 300" style={{ width: "100%", display: "block" }}>
+          {/* static edges */}
+          {([["user", "agent"], ["agent", "email"], ["agent", "search"], ["agent", "slack"]] as [NodeId, NodeId][]).map(([a, b]) => (
+            <path key={a + b} d={path(a, b)} stroke={C.line} strokeWidth="1" fill="none" />
+          ))}
+          {/* export edge turns red once blocked */}
+          {blocked && <path d={path("agent", "slack")} stroke={C.red} strokeWidth="1.5" strokeDasharray="5 4" fill="none" />}
+
+          {/* travelling pulse (keyed remount restarts SMIL per step) */}
+          {playing && cur.pulse && !receipt && (
+            <circle key={step} r="5" fill={cur.color ?? C.steel} style={{ filter: `drop-shadow(0 0 5px ${cur.color ?? C.steel})` }}>
+              <animateMotion dur={`${cur.dur / 1000}s`} fill="freeze" path={path(cur.pulse[0], cur.pulse[1])} />
+            </circle>
+          )}
+
+          {/* gate shield on the export edge */}
+          {(blocked || receipt) && (
+            <g style={{ animation: "fadeUp .4s ease both" }}>
+              <circle cx="440" cy="198" r="15" fill={C.panel} stroke={C.red} strokeWidth="1.5" />
+              <text x="440" y="203" textAnchor="middle" fontSize="13">🛡</text>
+              <text x="440" y="232" textAnchor="middle" fill={C.red} fontSize="10" fontFamily={MONO} fontWeight="700">DENIED</text>
+            </g>
+          )}
+
+          <Node id="user" />
+          <Node id="agent" danger={claimed && !receipt} />
+          <Node id="email" warn={tainted} />
+          <Node id="search" danger={failed && step < 7} />
+          <Node id="slack" />
+
+          {/* tool failure tag */}
+          {failed && !receipt && (
+            <text x={N.search.x} y={N.search.y - 32} textAnchor="middle" fill={C.red} fontSize="10.5" fontFamily={MONO}
+              style={step === 4 ? { animation: "blink 1s ease 2" } : {}}>ToolError(timeout)</text>
+          )}
+          {tainted && !receipt && (
+            <text x={N.email.x} y={N.email.y - 32} textAnchor="middle" fill={C.amber} fontSize="10.5" fontFamily={MONO}>tainted</text>
+          )}
+
+          {/* the claim bubble */}
+          {claimed && !receipt && (
+            <g style={{ animation: "fadeUp .4s ease both" }}>
+              <rect x="180" y="55" width="240" height="40" rx="6" fill={C.panel} stroke={C.red} strokeWidth="1" />
+              <text x="300" y="72" textAnchor="middle" fill={C.text} fontSize="10.5" fontFamily={MONO}>“Based on the search results,</text>
+              <text x="300" y="86" textAnchor="middle" fill={C.text} fontSize="10.5" fontFamily={MONO}>rates rose 0.25%”</text>
+            </g>
+          )}
+        </svg>
+
+        {/* caption bar */}
+        <div style={{ borderTop: `1px solid ${C.line}`, padding: "10px 16px", minHeight: 40, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+          {!playing ? (
+            <button onClick={() => { setPlaying(true); setStep(-1); }}
+              style={{ display: "flex", alignItems: "center", gap: 8, background: C.steel, border: "none", borderRadius: 5, color: C.bg, fontFamily: MONO, fontSize: 12.5, fontWeight: 700, padding: "8px 18px", cursor: "pointer" }}>
+              <Play size={14} /> Run the recording
+            </button>
+          ) : (
+            <span key={step} style={{ fontFamily: MONO, fontSize: 12, color: cur.blocked ? C.red : C.mut, animation: "fadeUp .3s ease both" }}>
+              {cur.cap}
+            </span>
+          )}
+          {playing && (
+            <button onClick={() => setStep(-1)} style={{ background: "none", border: "none", color: C.dim, cursor: "pointer" }}>
+              <RotateCcw size={14} />
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* the receipt */}
+      {receipt && (
+        <div style={{ animation: "fadeUp .5s ease both", marginTop: 16, background: C.panel, border: `1px solid ${C.line}`, borderRadius: 10, overflow: "hidden" }}>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr" }}>
+            <div style={{ padding: 16, borderRight: `1px solid ${C.line}` }}>
+              <div style={{ fontFamily: MONO, fontSize: 9.5, color: C.dim, letterSpacing: "0.1em", marginBottom: 6 }}>WHAT HAPPENED</div>
+              <div style={{ fontFamily: MONO, fontSize: 12.5, color: C.red }}>web_search → ToolError(timeout)</div>
+            </div>
+            <div style={{ padding: 16 }}>
+              <div style={{ fontFamily: MONO, fontSize: 9.5, color: C.dim, letterSpacing: "0.1em", marginBottom: 6 }}>WHAT THE AGENT SAID</div>
+              <div style={{ fontFamily: MONO, fontSize: 12.5, color: C.text }}>“…rates rose 0.25%”</div>
+            </div>
+          </div>
+          <div style={{ borderTop: `1px solid ${C.line}`, padding: "12px 16px", display: "flex", flexWrap: "wrap", gap: 10, alignItems: "center", justifyContent: "space-between", background: "rgba(229,72,77,0.05)" }}>
+            <span style={{ fontFamily: MONO, fontSize: 11.5, color: C.red, fontWeight: 700 }}>FABRICATED TOOL RESULT · export DENIED at the sink</span>
+            <button onClick={onTry}
+              style={{ display: "flex", alignItems: "center", gap: 8, background: C.green, border: "none", borderRadius: 5, color: C.bg, fontFamily: MONO, fontSize: 12.5, fontWeight: 700, padding: "8px 16px", cursor: "pointer" }}>
+              Try it on your agent — 5 min, no code change <ArrowRight size={14} />
+            </button>
+          </div>
+        </div>
+      )}
+
+      {!receipt && (
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 16, fontFamily: MONO, fontSize: 11, color: C.dim }}>
+          <Shield size={12} color={C.dim} />
+          proxy in front of your tools · auth passes through untouched · your agent, five minutes
+        </div>
+      )}
+    </>
+  );
+}
+
+export default function DemoLanding() {
+  return (
+    <div style={{ minHeight: "100vh", background: PAGE_BG, color: C.text, fontFamily: "Inter, system-ui, sans-serif", display: "flex", flexDirection: "column", alignItems: "center", padding: "48px 20px" }}>
 
       <div style={{ maxWidth: 680, width: "100%" }}>
         <div style={{ fontFamily: MONO, fontSize: 12, color: C.steel, letterSpacing: "0.1em", marginBottom: 12 }}>AXOR CONTROL PLANE</div>
@@ -252,106 +363,7 @@ export default function DemoLanding() {
           a recorded trace, replayed deterministically — no live model, same outcome every time
         </div>
 
-        {/* the stage */}
-        <div style={{ background: STAGE_BG, border: `1px solid ${C.line}`, borderRadius: 10, position: "relative", overflow: "hidden" }}>
-          <svg viewBox="0 0 660 300" style={{ width: "100%", display: "block" }}>
-            {/* static edges */}
-            {([["user", "agent"], ["agent", "email"], ["agent", "search"], ["agent", "slack"]] as [NodeId, NodeId][]).map(([a, b]) => (
-              <path key={a + b} d={path(a, b)} stroke={C.line} strokeWidth="1" fill="none" />
-            ))}
-            {/* export edge turns red once blocked */}
-            {blocked && <path d={path("agent", "slack")} stroke={C.red} strokeWidth="1.5" strokeDasharray="5 4" fill="none" />}
-
-            {/* travelling pulse (keyed remount restarts SMIL per step) */}
-            {playing && cur.pulse && !receipt && (
-              <circle key={step} r="5" fill={cur.color ?? C.steel} style={{ filter: `drop-shadow(0 0 5px ${cur.color ?? C.steel})` }}>
-                <animateMotion dur={`${cur.dur / 1000}s`} fill="freeze" path={path(cur.pulse[0], cur.pulse[1])} />
-              </circle>
-            )}
-
-            {/* gate shield on the export edge */}
-            {(blocked || receipt) && (
-              <g style={{ animation: "fadeUp .4s ease both" }}>
-                <circle cx="440" cy="198" r="15" fill={C.panel} stroke={C.red} strokeWidth="1.5" />
-                <text x="440" y="203" textAnchor="middle" fontSize="13">🛡</text>
-                <text x="440" y="232" textAnchor="middle" fill={C.red} fontSize="10" fontFamily={MONO} fontWeight="700">DENIED</text>
-              </g>
-            )}
-
-            <Node id="user" />
-            <Node id="agent" danger={claimed && !receipt} />
-            <Node id="email" warn={tainted} />
-            <Node id="search" danger={failed && step < 7} />
-            <Node id="slack" />
-
-            {/* tool failure tag */}
-            {failed && !receipt && (
-              <text x={N.search.x} y={N.search.y - 32} textAnchor="middle" fill={C.red} fontSize="10.5" fontFamily={MONO}
-                style={step === 4 ? { animation: "blink 1s ease 2" } : {}}>ToolError(timeout)</text>
-            )}
-            {tainted && !receipt && (
-              <text x={N.email.x} y={N.email.y - 32} textAnchor="middle" fill={C.amber} fontSize="10.5" fontFamily={MONO}>tainted</text>
-            )}
-
-            {/* the claim bubble */}
-            {claimed && !receipt && (
-              <g style={{ animation: "fadeUp .4s ease both" }}>
-                <rect x="180" y="55" width="240" height="40" rx="6" fill={C.panel} stroke={C.red} strokeWidth="1" />
-                <text x="300" y="72" textAnchor="middle" fill={C.text} fontSize="10.5" fontFamily={MONO}>“Based on the search results,</text>
-                <text x="300" y="86" textAnchor="middle" fill={C.text} fontSize="10.5" fontFamily={MONO}>rates rose 0.25%”</text>
-              </g>
-            )}
-          </svg>
-
-          {/* caption bar */}
-          <div style={{ borderTop: `1px solid ${C.line}`, padding: "10px 16px", minHeight: 40, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-            {!playing ? (
-              <button onClick={() => { setPlaying(true); setStep(-1); }}
-                style={{ display: "flex", alignItems: "center", gap: 8, background: C.steel, border: "none", borderRadius: 5, color: C.bg, fontFamily: MONO, fontSize: 12.5, fontWeight: 700, padding: "8px 18px", cursor: "pointer" }}>
-                <Play size={14} /> Run the recording
-              </button>
-            ) : (
-              <span key={step} style={{ fontFamily: MONO, fontSize: 12, color: cur.blocked ? C.red : C.mut, animation: "fadeUp .3s ease both" }}>
-                {cur.cap}
-              </span>
-            )}
-            {playing && (
-              <button onClick={() => setStep(-1)} style={{ background: "none", border: "none", color: C.dim, cursor: "pointer" }}>
-                <RotateCcw size={14} />
-              </button>
-            )}
-          </div>
-        </div>
-
-        {/* the receipt */}
-        {receipt && (
-          <div style={{ animation: "fadeUp .5s ease both", marginTop: 16, background: C.panel, border: `1px solid ${C.line}`, borderRadius: 10, overflow: "hidden" }}>
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr" }}>
-              <div style={{ padding: 16, borderRight: `1px solid ${C.line}` }}>
-                <div style={{ fontFamily: MONO, fontSize: 9.5, color: C.dim, letterSpacing: "0.1em", marginBottom: 6 }}>WHAT HAPPENED</div>
-                <div style={{ fontFamily: MONO, fontSize: 12.5, color: C.red }}>web_search → ToolError(timeout)</div>
-              </div>
-              <div style={{ padding: 16 }}>
-                <div style={{ fontFamily: MONO, fontSize: 9.5, color: C.dim, letterSpacing: "0.1em", marginBottom: 6 }}>WHAT THE AGENT SAID</div>
-                <div style={{ fontFamily: MONO, fontSize: 12.5, color: C.text }}>“…rates rose 0.25%”</div>
-              </div>
-            </div>
-            <div style={{ borderTop: `1px solid ${C.line}`, padding: "12px 16px", display: "flex", alignItems: "center", justifyContent: "space-between", background: "rgba(229,72,77,0.05)" }}>
-              <span style={{ fontFamily: MONO, fontSize: 11.5, color: C.red, fontWeight: 700 }}>FABRICATED TOOL RESULT · export DENIED at the sink</span>
-              <button onClick={() => { window.location.href = "/"; }}
-                style={{ display: "flex", alignItems: "center", gap: 8, background: C.green, border: "none", borderRadius: 5, color: C.bg, fontFamily: MONO, fontSize: 12.5, fontWeight: 700, padding: "8px 16px", cursor: "pointer" }}>
-                Try it on your agent — 5 min, no code change <ArrowRight size={14} />
-              </button>
-            </div>
-          </div>
-        )}
-
-        {!receipt && (
-          <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 16, fontFamily: MONO, fontSize: 11, color: C.dim }}>
-            <Shield size={12} color={C.dim} />
-            proxy in front of your tools · auth passes through untouched · your agent, five minutes
-          </div>
-        )}
+        <DemoStage onTry={() => { window.location.href = "/"; }} />
 
         {/* SECOND SCREEN: the multi-agent two-tree containment story */}
         <div style={{ marginTop: 48 }}>

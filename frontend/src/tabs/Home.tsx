@@ -1,12 +1,14 @@
 // Home — the funnel entry (spec section 3). Two intents, kept separate: "what
 // does this even do?" (the Demo, a standalone recorded showcase) and "how does
 // MY agent behave?" (Get Started). Depth opens on demand; nothing is pushed.
-import { ArrowRight, GraduationCap, Play, X, Zap } from "lucide-react";
+import { useState } from "react";
+import { ArrowRight, ChevronDown, GraduationCap, Play, X, Zap } from "lucide-react";
 import { C, MONO } from "../theme";
 import { navigate } from "../router";
 import { ConnectionMode, MODE_LABEL, isConnected, useApp } from "../store";
 import Tooltip from "../components/Tooltip";
 import { useStartTour } from "../components/Tour";
+import { DemoStage } from "../demo/DemoLanding";
 
 const LADDER: { mode: ConnectionMode; blurb: string }[] = [
   { mode: "demo", blurb: "our mock broken tools · zero creds · one click" },
@@ -21,6 +23,9 @@ export default function Home() {
   const learnSeen = useApp((s) => s.learnSeen);
   const setLearnMode = useApp((s) => s.setLearnMode);
   const markLearnSeen = useApp((s) => s.markLearnSeen);
+  // the demo opens in place: it is ten seconds long, and leaving the page for
+  // it lost the reader at the one moment they were curious
+  const [demoOpen, setDemoOpen] = useState(false);
   const startTour = useStartTour();
 
   return (
@@ -65,22 +70,37 @@ export default function Home() {
         the EvidenceCase is the artifact — a reproducible caught discrepancy, not a score
       </div>
 
-      {/* Demo — a showcase, not an onboarding step (spec section 4) */}
-      <div
-        onClick={() => (window.location.href = "/demo.html")}
-        className="flex items-center justify-between p-4"
-        style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 10, cursor: "pointer", marginBottom: 12 }}
-      >
-        <div className="flex items-center gap-3">
-          <Play size={16} color={C.steel} />
-          <div>
-            <div style={{ fontFamily: MONO, fontSize: 13, color: C.text }}>Watch the demo</div>
-            <div style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim }}>
-              our agent · our faults · recorded, deterministic — ~10 seconds
-            </div>
+      {/* Demo — a showcase, not an onboarding step (spec section 4). An
+          accordion: it opens here and starts playing, instead of leaving for
+          a separate page. */}
+      <div style={{ background: C.panel, border: `1px solid ${demoOpen ? C.steel : C.line}`, borderRadius: 10, marginBottom: 12, overflow: "hidden" }}>
+        <button
+          onClick={() => setDemoOpen((v) => !v)}
+          aria-expanded={demoOpen}
+          aria-controls="home-demo"
+          className="flex items-center justify-between p-4"
+          style={{ width: "100%", background: "none", border: "none", cursor: "pointer", textAlign: "left", color: C.text, gap: 12 }}
+        >
+          <span className="flex items-center gap-3">
+            <Play size={16} color={C.steel} />
+            <span>
+              <span style={{ display: "block", fontFamily: MONO, fontSize: 13, color: C.text }}>Watch the demo</span>
+              <span style={{ display: "block", fontFamily: MONO, fontSize: 10.5, color: C.dim }}>
+                our agent · our faults · recorded, deterministic — ~10 seconds
+              </span>
+            </span>
+          </span>
+          <ChevronDown
+            size={16}
+            color={C.mut}
+            style={{ flexShrink: 0, transition: "transform .2s", transform: demoOpen ? "rotate(180deg)" : "none" }}
+          />
+        </button>
+        {demoOpen && (
+          <div id="home-demo" style={{ padding: "0 16px 16px" }}>
+            <DemoStage autoplay onTry={() => navigate("get-started")} />
           </div>
-        </div>
-        <ArrowRight size={15} color={C.mut} />
+        )}
       </div>
 
       {/* Get Started — reached on intent */}
