@@ -186,34 +186,43 @@ jobs:
           cat > ci-override.yml <<'OVR'
           services:
             backend:  {build: {context: ../..}}
-            identity: {build: {context: ../..}}
+            identity: {build: {context: ../..}, image: axor-ci-identity}
             proxy:    {build: {context: ../..}}
             frontend:
               build: {context: ../.., dockerfile: frontend/Dockerfile}
               ports: ["8080:8080"]
             caddy: {profiles: ["never"]}
           OVR
-          docker compose -f docker-compose.yml -f ci-override.yml config >/dev/null
 
-      - name: Build
-        run: docker compose -f docker-compose.yml -f ci-override.yml build
-
-      # Exactly what bootstrap.sh writes, including generating the signing key
-      # with the image itself — the step most likely to rot if the module moves.
-      - name: Write .env the way bootstrap.sh does
+      # .env has to exist before ANY compose command: the compose file declares
+      # its required values as ${VAR:?...}, so even `config` fails without it.
+      # The signing key is seeded with a placeholder and replaced below with one
+      # the image generates — that call is bootstrap.sh's, and it cannot run
+      # before the image exists.
+      - name: Seed .env so compose can interpolate
         run: |
           set -eu
-          IMG=$(docker compose -f docker-compose.yml -f ci-override.yml images -q identity | head -1)
-          PEM=$(docker run --rm --entrypoint python "$IMG" \
-            -c "from axor_identity.keys import generate_pem; print(generate_pem())")
           sed \
             -e "s|^CP_HOST=.*|CP_HOST=localhost|" \
             -e "s|^ACME_EMAIL=.*|ACME_EMAIL=ci@example.com|" \
             -e "s|^AXOR_PG_PASSWORD=.*|AXOR_PG_PASSWORD=$(openssl rand -hex 24)|" \
             -e "s|^AXOR_API_TOKEN=.*|AXOR_API_TOKEN=$(openssl rand -hex 24)|" \
             -e "s|^AXOR_PROXY_TOKEN=.*|AXOR_PROXY_TOKEN=$(openssl rand -hex 24)|" \
-            -e "/^AXOR_IDENTITY_SIGNING_KEY=/d" \
+            -e "s|^AXOR_IDENTITY_SIGNING_KEY=.*|AXOR_IDENTITY_SIGNING_KEY=seed|" \
             .env.example > .env
+          docker compose -f docker-compose.yml -f ci-override.yml config >/dev/null
+
+      - name: Build
+        run: docker compose -f docker-compose.yml -f ci-override.yml build
+
+      # The step most likely to rot if that module moves, so it runs the real
+      # call against the real image rather than a local import.
+      - name: Signing key, generated with the image as bootstrap.sh does
+        run: |
+          set -eu
+          PEM=$(docker run --rm --entrypoint python axor-ci-identity \
+            -c "from axor_identity.keys import generate_pem; print(generate_pem())")
+          sed -i "/^AXOR_IDENTITY_SIGNING_KEY=/d" .env
           printf 'AXOR_IDENTITY_SIGNING_KEY="%s"\n' "$PEM" >> .env
           # An empty AXOR_API_TOKEN silently turns auth off. On a public
           # hostname that is the one failure this file must never ship with.
@@ -270,11 +279,11 @@ jobs:
 
       - name: Dump logs on failure
         if: failure()
-        run: docker compose -f docker-compose.yml -f ci-override.yml logs --no-color --tail=200
+        run: docker compose -f docker-compose.yml -f ci-override.yml logs --no-color --tail=200 || true
 
       - name: Tear down
         if: always()
-        run: docker compose -f docker-compose.yml -f ci-override.yml down -v
+        run: docker compose -f docker-compose.yml -f ci-override.yml down -v || true
 
   deploy:
     runs-on: ubuntu-latest
