@@ -17,6 +17,7 @@ from sqlalchemy import (
     String,
     Table,
     UniqueConstraint,
+    func,
     insert,
     select,
     update,
@@ -132,6 +133,20 @@ class Store:
             await conn.execute(insert(users).values(
                 user_id=user_id, email=email, password_hash=password_hash,
                 created_ts=ts))
+
+    async def count_users(self) -> int:
+        """How many users exist at all — the whole table, not one org's.
+
+        `AXOR_IDENTITY_SIGNUP=first-only` is answered with this: the first signup
+        on a fresh install is the operator claiming it, and every later one is a
+        stranger. Counting rather than reading a flag means the decision survives
+        a restart, a redeploy and a restored dump, because it is derived from the
+        data instead of stored beside it.
+        """
+        async with self.engine.connect() as conn:
+            row = (await conn.execute(
+                select(func.count()).select_from(users))).first()
+        return int(row[0]) if row else 0
 
     async def get_user_by_email(self, email: str) -> dict[str, Any] | None:
         async with self.engine.connect() as conn:

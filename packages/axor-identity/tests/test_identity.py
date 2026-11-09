@@ -189,3 +189,89 @@ def test_verifier_rejects_a_token_signed_by_a_different_key() -> None:
                           role="owner", tier="community", ttl=900)
     with pytest.raises(IdentityError):
         verify_access_token(forged, ours.jwks())
+
+
+# ── signup modes (AXOR_IDENTITY_SIGNUP) ───────────────────────────────────────
+# A self-hosted install is single-tenant: one company runs it for itself. An open
+# /v1/signup on a public hostname lets anyone passing by create an org on their
+# server, so the mode has to be a real setting rather than an edge rule a
+# deployment may or may not carry.
+
+
+def _app_with_signup(tmp_path: pathlib.Path, signing_key: SigningKey, mode: str):  # noqa: ANN202
+    return create_app(f"sqlite+aiosqlite:///{tmp_path}/id-{mode}.db",
+                      signing_key=signing_key, signup=mode)
+
+
+async def test_open_is_the_default_and_lets_anyone_sign_up(
+        tmp_path: pathlib.Path, signing_key: SigningKey) -> None:
+    """Unset behaves exactly as before the setting existed."""
+    app = create_app(f"sqlite+aiosqlite:///{tmp_path}/id-default.db",
+                     signing_key=signing_key)
+    async with app.router.lifespan_context(app), _client(app) as c:
+        assert (await _signup(c, "first@example.com"))["org"]["role"] == "owner"
+        r = await c.post("/v1/signup", json={"email": "second@example.com",
+                                             "password": PW, "org_name": "Other"})
+        assert r.status_code == 201
+
+
+async def test_closed_refuses_every_signup(
+        tmp_path: pathlib.Path, signing_key: SigningKey) -> None:
+    app = _app_with_signup(tmp_path, signing_key, "closed")
+    async with app.router.lifespan_context(app), _client(app) as c:
+        r = await c.post("/v1/signup", json={"email": "anyone@example.com",
+                                             "password": PW, "org_name": "Acme"})
+        assert r.status_code == 403
+
+
+async def test_first_only_admits_one_account_then_shuts(
+        tmp_path: pathlib.Path, signing_key: SigningKey) -> None:
+    """The operator claims the install; the next stranger is refused."""
+    app = _app_with_signup(tmp_path, signing_key, "first-only")
+    async with app.router.lifespan_context(app), _client(app) as c:
+        assert (await _signup(c, "owner@example.com"))["org"]["role"] == "owner"
+        r = await c.post("/v1/signup", json={"email": "stranger@example.com",
+                                             "password": PW, "org_name": "Theirs"})
+        assert r.status_code == 403
+
+
+async def test_closing_signup_does_not_close_the_install(
+        tmp_path: pathlib.Path, signing_key: SigningKey) -> None:
+    """Login and adding colleagues keep working — that is the whole point: the
+    install is shut to strangers, not to the company running it."""
+    app = _app_with_signup(tmp_path, signing_key, "first-only")
+    async with app.router.lifespan_context(app), _client(app) as c:
+        owner = await _signup(c, "owner@example.com")
+        org = owner["org"]["org_id"]
+        head = {"Authorization": f"Bearer {owner['access_token']}"}
+
+        # login still works
+        r = await c.post("/v1/login", json={"email": "owner@example.com",
+                                            "password": PW})
+        assert r.status_code == 200
+
+        # a colleague who has no account cannot be added — signup is shut, so an
+        # install in this mode grows by invitation only, and the 404 says so.
+        r = await c.post(f"/v1/orgs/{org}/members",
+                         json={"email": "colleague@example.com", "role": "member"},
+                         headers=head)
+        assert r.status_code == 404
+
+
+async def test_signup_mode_is_published_so_a_client_can_hide_the_form(
+        tmp_path: pathlib.Path, signing_key: SigningKey) -> None:
+    app = _app_with_signup(tmp_path, signing_key, "first-only")
+    async with app.router.lifespan_context(app), _client(app) as c:
+        before = (await c.get("/v1/signup-mode")).json()
+        assert before == {"mode": "first-only", "available": True}
+        await _signup(c, "owner@example.com")
+        after = (await c.get("/v1/signup-mode")).json()
+        assert after == {"mode": "first-only", "available": False}
+
+
+async def test_an_unknown_mode_fails_at_construction(
+        tmp_path: pathlib.Path, signing_key: SigningKey) -> None:
+    """A typo in a security setting must not degrade to 'open' in silence."""
+    with pytest.raises(ValueError, match="AXOR_IDENTITY_SIGNUP"):
+        create_app(f"sqlite+aiosqlite:///{tmp_path}/id-bad.db",
+                   signing_key=signing_key, signup="disabled")

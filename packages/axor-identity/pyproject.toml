@@ -1,6 +1,6 @@
 [project]
 name = "axor-identity"
-version = "0.1.0"
+version = "0.2.0"
 description = "Shared login/identity service: users, orgs, memberships; issues EdDSA-signed session tokens the Lab and control-plane verify."
 requires-python = ">=3.12"
 readme = "README.md"

@@ -1,0 +1,171 @@
+# Self-hosted Axor Control Plane — one company, one host, one command.
+#
+#   ./bootstrap.sh axor.example.com you@example.com
+#
+# Derived from deploy/prod by dropping Axor Lab: that is a separate product with
+# its own repository and its own compose, and a company self-hosting the Control
+# Plane should not have to delete half a stack to get there.
+#
+# Six services. Caddy is the only one with published ports; it obtains and
+# renews Let's Encrypt certificates on its own.
+x-logging: &id001
+  driver: json-file
+  options:
+    max-size: 10m
+    max-file: '3'
+services:
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+    - 80:80
+    - 443:443
+    - 443:443/udp
+    environment:
+      CP_HOST: ${CP_HOST:?set CP_HOST in .env}
+      ACME_EMAIL: ${ACME_EMAIL:?set ACME_EMAIL in .env}
+    volumes:
+    - ./Caddyfile:/etc/caddy/Caddyfile:ro
+    - caddy_data:/data
+    - caddy_config:/config
+    depends_on:
+    - frontend
+    logging: *id001
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: axor
+      POSTGRES_USER: axor
+      POSTGRES_PASSWORD: ${AXOR_PG_PASSWORD:?set AXOR_PG_PASSWORD in .env}
+    volumes:
+    - pgdata:/var/lib/postgresql/data
+    - ../initdb/10-identity-db.sql:/docker-entrypoint-initdb.d/10-identity-db.sql:ro
+    healthcheck:
+      test:
+      - CMD-SHELL
+      - pg_isready -U axor -d axor
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    logging: *id001
+  backend:
+    image: ${AXOR_IMAGE:-ghcr.io/bucha11/axor-platform}:${AXOR_TAG:-latest}
+    restart: unless-stopped
+    command:
+    - uvicorn
+    - axor_backend.main:app
+    - --factory
+    - --host
+    - 0.0.0.0
+    - --port
+    - '8400'
+    expose:
+    - '8400'
+    environment:
+      AXOR_DATABASE_URL: postgresql+asyncpg://axor:${AXOR_PG_PASSWORD}@postgres/axor
+      AXOR_API_TOKEN: ${AXOR_API_TOKEN:?set AXOR_API_TOKEN in .env}
+      AXOR_ALLOW_UNSIGNED: ${AXOR_ALLOW_UNSIGNED:-0}
+      AXOR_OPERATOR_KEYS: ${AXOR_OPERATOR_KEYS:-{}}
+      AXOR_VENDOR_PUBKEY: ${AXOR_VENDOR_PUBKEY:-}
+      AXOR_ORG: ${AXOR_ORG:-}
+      AXOR_VAULT_CREDS_TOKEN: ${AXOR_VAULT_CREDS_TOKEN:-}
+      AXOR_VAULT_SIGNING_TOKEN: ${AXOR_VAULT_SIGNING_TOKEN:-}
+      AXOR_IDENTITY_JWKS_URL: http://identity:8402/.well-known/jwks.json
+      AXOR_LOG_JSON: ${AXOR_LOG_JSON:-1}
+      SENTRY_DSN: ${SENTRY_DSN:-}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      identity:
+        condition: service_healthy
+    healthcheck:
+      test:
+      - CMD-SHELL
+      - python -c "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8400/v1/healthz').status==200
+        else 1)"
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    logging: *id001
+  identity:
+    image: ${AXOR_IMAGE:-ghcr.io/bucha11/axor-platform}:${AXOR_TAG:-latest}
+    restart: unless-stopped
+    command:
+    - axor-identity
+    expose:
+    - '8402'
+    environment:
+      AXOR_IDENTITY_HOST: 0.0.0.0
+      AXOR_IDENTITY_PORT: '8402'
+      AXOR_IDENTITY_DATABASE_URL: postgresql+asyncpg://axor:${AXOR_PG_PASSWORD}@postgres/axor_identity
+      AXOR_IDENTITY_SIGNING_KEY: ${AXOR_IDENTITY_SIGNING_KEY:?set AXOR_IDENTITY_SIGNING_KEY in .env}
+      AXOR_IDENTITY_SIGNUP: ${AXOR_IDENTITY_SIGNUP:-open}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test:
+      - CMD-SHELL
+      - python -c "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8402/v1/healthz').status==200
+        else 1)"
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    logging: *id001
+  proxy:
+    image: ${AXOR_IMAGE:-ghcr.io/bucha11/axor-platform}:${AXOR_TAG:-latest}
+    restart: unless-stopped
+    command:
+    - axor-proxy
+    expose:
+    - '8401'
+    environment:
+      AXOR_PROXY_HOST: 0.0.0.0
+      AXOR_PROXY_PORT: '8401'
+      AXOR_PROXY_DEMO: ${AXOR_PROXY_DEMO:-1}
+      AXOR_PROXY_TOKEN: ${AXOR_PROXY_TOKEN:?set AXOR_PROXY_TOKEN in .env}
+      AXOR_TRACE_DIR: /data/traces
+      AXOR_BACKEND_URL: http://backend:8400
+      AXOR_INGEST_KEY: ${AXOR_INGEST_KEY:-}
+    volumes:
+    - axordata:/data
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test:
+      - CMD-SHELL
+      - python -c "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8401/axor/healthz').status==200
+        else 1)"
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    logging: *id001
+  frontend:
+    image: ${AXOR_FRONTEND_IMAGE:-ghcr.io/bucha11/axor-frontend}:${AXOR_TAG:-latest}
+    restart: unless-stopped
+    expose:
+    - '8080'
+    environment:
+      AXOR_PROXY_TOKEN: ${AXOR_PROXY_TOKEN}
+    depends_on:
+      backend:
+        condition: service_healthy
+      identity:
+        condition: service_healthy
+      proxy:
+        condition: service_started
+    healthcheck:
+      test:
+      - CMD-SHELL
+      - wget -qO- http://localhost:8080/ >/dev/null || exit 1
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    logging: *id001
+volumes:
+  pgdata: {}
+  axordata: {}
+  caddy_data: {}
+  caddy_config: {}

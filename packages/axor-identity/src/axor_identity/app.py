@@ -26,6 +26,21 @@ from axor_identity.verify import Claims, IdentityError, verify_access_token
 ROLES = ("viewer", "member", "admin", "owner")
 _ASSIGNABLE = frozenset({"admin", "member", "viewer"})  # owner is the org creator
 
+# Who may create an account. A self-hosted install is single-tenant: one company
+# runs it for itself, and an open /v1/signup on a public hostname lets anyone
+# passing by create an org on their server. Hosted deployments want the opposite.
+#
+# - open        anyone may sign up. The hosted default, and what every
+#               deployment did before this setting existed.
+# - first-only  the first account on an empty install succeeds; every later one
+#               is refused. The operator claims the install, then it is shut.
+# - closed      no signup at all. Accounts are added by an org admin through
+#               POST /v1/orgs/{org_id}/members, which needs an existing one.
+#
+# Closing signup is NOT closing the install: login, refresh and membership are
+# untouched, so the admin keeps adding colleagues by e-mail.
+SIGNUP_MODES = ("open", "first-only", "closed")
+
 
 def _rank(role: str) -> int:
     return ROLES.index(role) if role in ROLES else -1
@@ -73,7 +88,8 @@ class MemberBody(BaseModel):
 def create_app(database_url: str | None = None, *,
                signing_key: SigningKey | None = None,
                access_ttl: int | None = None,
-               refresh_ttl: int | None = None) -> FastAPI:
+               refresh_ttl: int | None = None,
+               signup: str | None = None) -> FastAPI:
     url = (database_url or os.environ.get("AXOR_IDENTITY_DATABASE_URL")
            or "sqlite+aiosqlite:///./identity.db")
     signing_key = signing_key or load_signing_key()
@@ -81,6 +97,14 @@ def create_app(database_url: str | None = None, *,
         os.environ.get("AXOR_IDENTITY_ACCESS_TTL", "900"))
     refresh_ttl = refresh_ttl if refresh_ttl is not None else int(
         os.environ.get("AXOR_IDENTITY_REFRESH_TTL", "1209600"))
+    signup_mode = (signup or os.environ.get("AXOR_IDENTITY_SIGNUP") or "open").strip()
+    if signup_mode not in SIGNUP_MODES:
+        # Fail loudly at construction. A typo here is a security setting that
+        # silently did nothing, and the operator would only learn of it from a
+        # stranger's account appearing on their install.
+        raise ValueError(
+            f"AXOR_IDENTITY_SIGNUP must be one of {list(SIGNUP_MODES)}, "
+            f"got {signup_mode!r}")
 
     @contextlib.asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -124,6 +148,13 @@ def create_app(database_url: str | None = None, *,
     # ── auth ──────────────────────────────────────────────────────────────────
     @app.post("/v1/signup", status_code=201)
     async def signup(body: SignupBody) -> dict:
+        # The gate runs before the e-mail is even looked at, so a refused signup
+        # cannot be used to probe which addresses are registered.
+        if signup_mode == "closed":
+            raise HTTPException(403, "signup is closed on this installation")
+        if signup_mode == "first-only" and await store.count_users():
+            raise HTTPException(
+                403, "signup is closed: this installation already has an account")
         email = _norm_email(body.email)
         if await store.get_user_by_email(email):
             raise HTTPException(409, "email already registered")
@@ -206,6 +237,15 @@ def create_app(database_url: str | None = None, *,
     @app.get("/.well-known/jwks.json")
     async def jwks_doc() -> dict:
         return jwks
+
+    @app.get("/v1/signup-mode")
+    async def signup_mode_doc() -> dict:
+        """Whether this installation accepts new accounts, so a client can hide
+        the form instead of offering one that answers 403. `first-only` reports
+        whether the one account has already been taken."""
+        available = signup_mode == "open" or (
+            signup_mode == "first-only" and not await store.count_users())
+        return {"mode": signup_mode, "available": available}
 
     @app.get("/v1/healthz")
     async def healthz() -> dict:

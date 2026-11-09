@@ -163,6 +163,119 @@ jobs:
   # booting the whole stack is heavy. The part a PR must not break — that the
   # image builds with no credentials at all — is the `quickstart` job above,
   # which runs on every PR.
+  # The self-hosted install the README promises, actually installed. Without
+  # this the instructions are a claim: deploy/self-hosted is a second compose
+  # that no job ran, so the first person to follow it would be the one who finds
+  # out it drifted from the images, the env names or the identity flag.
+  #
+  # Caddy is the one thing swapped out: ACME needs a public hostname, which a
+  # runner has not got. The frontend is published directly instead, which is the
+  # same origin the SPA and /identity are served on behind Caddy in production.
+  self-hosted:
+    runs-on: ubuntu-latest
+    needs: [python]
+    if: github.event_name != 'pull_request'
+    defaults:
+      run:
+        working-directory: deploy/self-hosted
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Override — build from this checkout, no Caddy, frontend published
+        run: |
+          cat > ci-override.yml <<'OVR'
+          services:
+            backend:  {build: {context: ../..}}
+            identity: {build: {context: ../..}}
+            proxy:    {build: {context: ../..}}
+            frontend:
+              build: {context: ../.., dockerfile: frontend/Dockerfile}
+              ports: ["8080:8080"]
+            caddy: {profiles: ["never"]}
+          OVR
+          docker compose -f docker-compose.yml -f ci-override.yml config >/dev/null
+
+      - name: Build
+        run: docker compose -f docker-compose.yml -f ci-override.yml build
+
+      # Exactly what bootstrap.sh writes, including generating the signing key
+      # with the image itself — the step most likely to rot if the module moves.
+      - name: Write .env the way bootstrap.sh does
+        run: |
+          set -eu
+          IMG=$(docker compose -f docker-compose.yml -f ci-override.yml images -q identity | head -1)
+          PEM=$(docker run --rm --entrypoint python "$IMG" \
+            -c "from axor_identity.keys import generate_pem; print(generate_pem())")
+          sed \
+            -e "s|^CP_HOST=.*|CP_HOST=localhost|" \
+            -e "s|^ACME_EMAIL=.*|ACME_EMAIL=ci@example.com|" \
+            -e "s|^AXOR_PG_PASSWORD=.*|AXOR_PG_PASSWORD=$(openssl rand -hex 24)|" \
+            -e "s|^AXOR_API_TOKEN=.*|AXOR_API_TOKEN=$(openssl rand -hex 24)|" \
+            -e "s|^AXOR_PROXY_TOKEN=.*|AXOR_PROXY_TOKEN=$(openssl rand -hex 24)|" \
+            -e "/^AXOR_IDENTITY_SIGNING_KEY=/d" \
+            .env.example > .env
+          printf 'AXOR_IDENTITY_SIGNING_KEY="%s"\n' "$PEM" >> .env
+          # An empty AXOR_API_TOKEN silently turns auth off. On a public
+          # hostname that is the one failure this file must never ship with.
+          for v in CP_HOST AXOR_PG_PASSWORD AXOR_API_TOKEN AXOR_PROXY_TOKEN \
+                   AXOR_IDENTITY_SIGNING_KEY; do
+            grep -qE "^$v=.+" .env || { echo "$v is empty in .env"; exit 1; }
+          done
+          grep -qE '^AXOR_IDENTITY_SIGNUP=first-only$' .env
+
+      - name: Start it
+        run: docker compose -f docker-compose.yml -f ci-override.yml up -d
+
+      - name: Wait for health
+        run: |
+          set -e
+          for i in $(seq 1 90); do
+            curl -fsS http://localhost:8080/ >/dev/null 2>&1 && { echo up; break; }
+            [ "$i" = "90" ] && { echo TIMEOUT; exit 1; }
+            sleep 2
+          done
+
+      - name: The single-tenant promise holds
+        run: |
+          set -e
+          curl -fsS http://localhost:8080/ | grep -qi "<!doctype html"
+
+          # identity is reachable at /identity on the same origin, and says
+          # whether it is still accepting an account.
+          mode=$(curl -fsS http://localhost:8080/identity/v1/signup-mode)
+          echo "$mode" | grep -q '"mode":"first-only"'
+          echo "$mode" | grep -q '"available":true'
+
+          # The first account claims the install...
+          curl -fsS -X POST http://localhost:8080/identity/v1/signup \
+            -H 'Content-Type: application/json' \
+            -d '{"email":"owner@example.com","password":"correct horse battery","org_name":"Acme"}' \
+            | grep -q '"role":"owner"'
+
+          # ...and the next stranger is refused. That is the whole point: a
+          # public hostname that is not a public sign-up page.
+          code=$(curl -s -o /dev/null -w '%{http_code}' -X POST \
+            http://localhost:8080/identity/v1/signup \
+            -H 'Content-Type: application/json' \
+            -d '{"email":"stranger@example.com","password":"correct horse battery","org_name":"Theirs"}')
+          [ "$code" = "403" ] || { echo "second signup returned $code, expected 403"; exit 1; }
+
+          # Closing signup did not close the install: the owner still logs in.
+          curl -fsS -X POST http://localhost:8080/identity/v1/login \
+            -H 'Content-Type: application/json' \
+            -d '{"email":"owner@example.com","password":"correct horse battery"}' \
+            | grep -q access_token
+
+          echo "self-hosted smoke OK"
+
+      - name: Dump logs on failure
+        if: failure()
+        run: docker compose -f docker-compose.yml -f ci-override.yml logs --no-color --tail=200
+
+      - name: Tear down
+        if: always()
+        run: docker compose -f docker-compose.yml -f ci-override.yml down -v
+
   deploy:
     runs-on: ubuntu-latest
     needs: [python, frontend-e2e, quickstart]

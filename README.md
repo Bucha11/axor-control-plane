@@ -116,6 +116,11 @@ cp .env.example .env          # set AXOR_PG_PASSWORD — the only required value
 docker compose up --build
 ```
 
+Running it for your company, on your own domain? That is one command and two
+settings — see [`deploy/self-hosted/`](deploy/self-hosted/README.md). Signup
+defaults to `first-only` there: the first account claims the install and
+everyone after it is refused, so a public hostname is not a public sign-up page.
+
 Prefer not to build? The same images are published to GHCR on every release
 (`:latest`) and every push to main (`:edge`):
 

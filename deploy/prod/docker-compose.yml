@@ -110,6 +110,8 @@ services:
       # every user out on each restart and strands the backend's and Lab's
       # cached JWKS.
       AXOR_IDENTITY_SIGNING_KEY: ${AXOR_IDENTITY_SIGNING_KEY:?set AXOR_IDENTITY_SIGNING_KEY in .env}
+      # open | first-only | closed. See SIGNUP_MODES in axor_identity.app.
+      AXOR_IDENTITY_SIGNUP: ${AXOR_IDENTITY_SIGNUP:-open}
     depends_on:
       postgres: {condition: service_healthy}
     healthcheck:

@@ -77,6 +77,7 @@
     <a href="#compare">vs others</a>
     <a href="#multiagent">multi-agent</a>
     <a href="#proof">proof</a>
+    <a href="#deploy">deploy</a>
     <a href="#pricing">pricing</a>
     <a href="#faq">faq</a>
     <a href="https://github.com/Bucha11/axor-control-plane">github</a>
@@ -139,6 +140,30 @@
 <b>cp</b> .env.example .env   <b>&&</b>   <b>docker compose</b> up --build
 <b>open</b> http://localhost:8080   →   Run demo-mode (mock tools, zero credentials)</div>
   <div class="under-cta mono">MCP-native: paste the mcpServers config you already have — tools discovered, proxied, done.</div>
+</div></section>
+
+<!-- ── DEPLOY: the three ways to run it, and what each costs you ────────── -->
+<section id="deploy"><div class="wrap">
+  <h2>Run it three ways. All three are the same product.</h2>
+  <p class="h2sub">No feature is held back for the hosted one. The difference is
+  <b style="color:var(--text)">who operates it</b> and <b style="color:var(--text)">who may sign up</b>.</p>
+  <div class="grid">
+    <div class="card"><span class="tag mono">LOCAL</span><h3>Try it on your laptop.</h3>
+      <p>One command, no account, no tokens, no TLS. Auth is off because nothing is exposed — open the page and click <span class="mono">Run demo-mode</span>.</p>
+      <span class="outcome mono">→ zero credentials, two minutes</span></div>
+    <div class="card hl"><span class="tag mono">SELF-HOSTED</span><h3>Your server, your company, your domain.</h3>
+      <p>One command and two settings: the hostname, and who may register. Signup defaults to <span class="mono">first-only</span> — the first account claims the install, everyone after it is refused. Your runs never leave your machine.</p>
+      <span class="outcome mono">→ a public hostname that is not a public sign-up</span></div>
+    <div class="card"><span class="tag mono">HOSTED</span><h3>We run it.</h3>
+      <p>Same images, same kernel, operated by us — for teams that would rather not own a Postgres and a certificate renewal.</p>
+      <span class="outcome mono">→ nothing to operate</span></div>
+  </div>
+  <div class="quick mono" id="selfhost"><b># self-hosted, on your own domain</b>
+  <b>git clone</b> https://github.com/Bucha11/axor-control-plane /opt/axor
+  <b>cd</b> /opt/axor/deploy/self-hosted
+  <b>./bootstrap.sh</b> axor.yourcompany.com you@yourcompany.com</div>
+  <div class="under-cta mono">generates every secret, pulls the released images, starts six services, prints your operator token. needs an A record and ports 80/443 — nothing else.</div>
+  <p class="under-cta mono" style="margin-top:12px">the people who use it never touch a token: they register and log in. the master token is yours, used once, to mint the proxy's upload key.</p>
 </div></section>
 
 <!-- ── DEPTH LADDER: what each rung honestly gives you ────────────────────── -->

@@ -90,6 +90,8 @@ services:
       # goes stale. Generate one:
       #   python -c "from axor_identity.keys import generate_pem; print(generate_pem())"
       AXOR_IDENTITY_SIGNING_KEY: ${AXOR_IDENTITY_SIGNING_KEY:-}
+      # open | first-only | closed. See SIGNUP_MODES in axor_identity.app.
+      AXOR_IDENTITY_SIGNUP: ${AXOR_IDENTITY_SIGNUP:-open}
     ports: ["8402:8402"]
     depends_on:
       postgres:
