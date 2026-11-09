@@ -41,7 +41,7 @@ test.describe("replay", () => {
   test("a run can be pinned into the regression corpus", async ({ page }) => {
     await goHash(page, `replay/${SEEDED.block}`);
     await page.getByRole("button", { name: "must-pass" }).click();
-    await expect(page.getByText("test it in Prevent →")).toBeVisible();
+    await expect(page.getByText("check it in Safe to ship? →")).toBeVisible();
     await expect(page.getByRole("button", { name: /✓ must-pass/ })).toBeVisible();
   });
 });

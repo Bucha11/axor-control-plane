@@ -217,7 +217,7 @@ function ConnectedHome() {
               <Tooltip
                 content={rung.mode === "proxy"
                   ? "Put the proxy in front of YOUR tools (observe-only, ~5 min, no code change) to run the catch loop on your own agent."
-                  : "Wrap your agent as an axor-core Invokable for full governance — this unlocks Govern."}
+                  : "Wrap your agent as an axor-core Invokable for full governance — this unlocks Live agents."}
                 side="bottom"
               >
                 <button onClick={() => navigate("connect")} style={cta(C.steel)}>

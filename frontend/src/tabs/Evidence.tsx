@@ -42,10 +42,10 @@ export default function Evidence() {
 
   return (
     <div style={{ maxWidth: 640, margin: "0 auto" }}>
-      <h1 style={{ fontSize: 22, fontWeight: 700, margin: "0 0 6px" }}>Evidence</h1>
+      <h1 style={{ fontSize: 22, fontWeight: 700, margin: "0 0 6px" }}>Caught lies</h1>
       <div style={{ fontFamily: MONO, fontSize: 11.5, color: C.dim, marginBottom: 22, lineHeight: 1.6 }}>
-        every caught discrepancy — what the tool really returned vs what the agent claimed.
-        each one replays deterministically and can be pinned as a regression test.
+        every time an agent claimed something its tools never gave it — what the tool
+        really returned, next to what the agent said. replay any one to see how it happened.
       </div>
 
       {runs.isPending && (

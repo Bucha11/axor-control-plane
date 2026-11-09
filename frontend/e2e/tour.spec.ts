@@ -23,15 +23,15 @@ test.describe("tour", () => {
     await expect(page).toHaveURL(/#\/catch/);
 
     await next.click();
-    await expect(dialog.getByText("Explain — question any run")).toBeVisible();
+    await expect(dialog.getByText("Replay — question any run")).toBeVisible();
     await expect(page).toHaveURL(/#\/explain/);
 
     await next.click();
-    await expect(dialog.getByText("Govern — operate live agents")).toBeVisible();
+    await expect(dialog.getByText("Live agents — operate them live")).toBeVisible();
     await expect(page).toHaveURL(/#\/govern/);
 
     await next.click();
-    await expect(dialog.getByText(/safe to ship\?/)).toBeVisible();
+    await expect(dialog.getByText(/safe to ship\?/i).first()).toBeVisible();
     await expect(page).toHaveURL(/#\/prevent/);
 
     await next.click();

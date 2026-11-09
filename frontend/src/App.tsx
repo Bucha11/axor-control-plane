@@ -2,12 +2,13 @@
 // surface is reachable by a deep link so EvidenceCases, replay moments and share
 // permalinks are addressable.
 //
-// The nav IS the product's loop, in the words the product uses for it:
-//   Evidence — what was caught (the artifact everything else exists for)
-//   Catch    — break a tool, catch the lie
-//   Explain  — replay a run, fork counterfactuals
-//   Prevent  — pin cases into a corpus, CI the config
-//   Govern   — live governed agents and their health (adapter depth)
+// The nav IS the product's loop, in words a first-time visitor already has:
+//   Caught lies    (#/evidence) — every EvidenceCase caught so far
+//   Test an agent  (#/catch)    — break a tool, see whether it makes things up
+//   Replay         (#/explain)  — step through a run, fork what-ifs
+//   Safe to ship?  (#/prevent)  — a config change against the caught cases
+//   Live agents    (#/govern)   — running governed agents and their health
+// Route names stay as they were; only what the reader sees changed.
 // It used to read eval · replay · regression · control · more…, which named
 // the machinery instead of the job, and hid the first step (get started) and a
 // static mock (expert) behind the same "more".
@@ -32,10 +33,10 @@ import Settings, { IdentityLogin } from "./tabs/Settings";
 import Pricing from "./tabs/Pricing";
 
 const LOOP = [
-  { key: "evidence", label: "Evidence", hint: "Every caught discrepancy: what the tool really returned vs what the agent claimed." },
-  { key: "catch", label: "Catch", hint: "Break one of the agent's tools on purpose and catch it fabricating." },
-  { key: "explain", label: "Explain", hint: "Replay any run step by step and fork what-ifs — no model call." },
-  { key: "prevent", label: "Prevent", hint: "Pin caught cases into a corpus and test a config change against them." },
+  { key: "evidence", label: "Caught lies", hint: "Every time an agent claimed something its tools never gave it." },
+  { key: "catch", label: "Test an agent", hint: "Break one of the agent's tools on purpose and see whether it makes something up." },
+  { key: "explain", label: "Replay", hint: "Step through any run and see exactly where the made-up answer came from." },
+  { key: "prevent", label: "Safe to ship?", hint: "Check a config change against every lie you've caught, before it ships." },
 ] as const;
 
 /** Old route heads keep working — they are in shared links and bookmarks. */
@@ -87,12 +88,12 @@ function ControlNavLink({ active, mode }: { active: boolean; mode: ConnectionMod
       }}
     >
       {!unlocked && <Lock size={11} />}
-      Govern
+      Live agents
     </button>
   );
   if (unlocked) return link;
   return (
-    <Tooltip content="Live topology + per-node interventions — unlocks at adapter depth (wrap your agent as an axor-core Invokable)." side="bottom">
+    <Tooltip content="Watch and stop running agents live — pause, budget-cap, stop a whole tree. Unlocks once your agent is wrapped with axor-core." side="bottom">
       {link}
     </Tooltip>
   );
@@ -122,14 +123,14 @@ export default function App() {
 
   return (
     <div style={{ minHeight: "100vh", background: C.bg, color: C.text, fontFamily: "Inter, system-ui, sans-serif", padding: "28px 20px" }}>
-      <div className="app-header" style={{ maxWidth: 1080, margin: "0 auto 36px" }}>
+      <div className="app-header" style={{ maxWidth: 1200, margin: "0 auto 36px" }}>
         <div className="app-header-left">
           <button
             className="app-logo"
             onClick={() => navigate("home")}
             style={{ background: "none", border: "none", cursor: "pointer", fontFamily: MONO, fontSize: 14, fontWeight: 700, color: C.text, padding: 0, whiteSpace: "nowrap" }}
           >
-            AXOR<span className="hide-narrow" style={{ color: C.steel }}> CONTROL PLANE</span>
+            AXOR<span className="hide-narrow hide-medium" style={{ color: C.steel }}> CONTROL PLANE</span>
           </button>
           {!firstVisit && <nav className="app-nav">
             {LOOP.map((l) => (

@@ -37,13 +37,13 @@ html, body { margin: 0; background: #12161A; }  /* C.bg: no white beyond the app
 .app-nav { display: flex; align-items: center; gap: 16px; flex-wrap: nowrap; white-space: nowrap; }
 .more-menu { left: 0; }
 
-/* between a phone and a wide screen the version badge is the first thing to go,
-   so the nav stays on one line */
-@media (max-width: 1100px) { .hide-medium { display: none; } }
+/* between a phone and a wide screen the version badge and the long wordmark go
+   first, so the nav stays on one line */
+@media (max-width: 1400px) { .hide-medium { display: none; } }
 
 /* below this the nav and the account controls no longer fit one line:
    row 1 logo + account controls, row 2 the nav, full width */
-@media (max-width: 1000px) {
+@media (max-width: 1100px) {
   .app-header {
     display: grid; grid-template-columns: 1fr auto; row-gap: 14px; column-gap: 12px;
   }

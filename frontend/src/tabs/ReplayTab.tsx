@@ -169,7 +169,7 @@ export default function ReplayTab({ runId: runIdProp, cursor: cursorProp, seq: s
       <div style={{ maxWidth: 640, margin: "0 auto" }}>
         <div data-tour="replay-picker">
           <div style={{ fontFamily: MONO, fontSize: 12.5, color: C.mut, marginBottom: 12 }}>
-            No runs yet. Catch one first, on the Catch tab —
+            No runs yet. Catch one first, on Test an agent —
           </div>
           <SeedButton label="or load an example adapter run →" />
         </div>
@@ -261,7 +261,7 @@ export default function ReplayTab({ runId: runIdProp, cursor: cursorProp, seq: s
         )}
         {pinned && (
           <span style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim }}>
-            pinned → <span style={{ color: C.steel, cursor: "pointer" }} onClick={() => navigate("prevent")}>test it in Prevent →</span>
+            pinned → <span style={{ color: C.steel, cursor: "pointer" }} onClick={() => navigate("prevent")}>check it in Safe to ship? →</span>
           </span>
         )}
       </div>

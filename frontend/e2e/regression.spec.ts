@@ -55,7 +55,7 @@ test.describe("regression", () => {
     await page.getByRole("button", { name: /load example corpus/ }).click();
     await page.getByRole("button", { name: /Run regression/ }).click();
 
-    await expect(page.getByText(/Safe to ship/)).toHaveCount(0);
+    await expect(page.getByText(/Safe to ship:/)).toHaveCount(0);
     await expect(page.getByText(/2 demo pins, none of your own/)).toBeVisible();
     await expect(page.getByText(/Pin one of your own runs/)).toBeVisible();
   });
@@ -77,7 +77,7 @@ test.describe("regression", () => {
     await page.getByRole("button", { name: /Run regression/ }).click();
     await expect(page.getByText(/changes governed behavior/)).toBeVisible();
     await expect(page.getByText("REGRESSED").first()).toBeVisible();
-    await expect(page.getByText(/Safe to ship/)).toHaveCount(0);
+    await expect(page.getByText(/Safe to ship:/)).toHaveCount(0);
   });
 
   test("a config that lets the pinned exfil through escapes, and the row names it", async ({ page }) => {
@@ -105,7 +105,7 @@ test.describe("regression", () => {
     await page.getByRole("button", { name: /Run regression/ }).click();
 
     await expect(page.getByText("ESCAPED", { exact: true })).toBeVisible();
-    await expect(page.getByText(/Safe to ship/)).toHaveCount(0);
+    await expect(page.getByText(/Safe to ship:/)).toHaveCount(0);
     // Counts only for the escape itself: the corpus is shared with whatever
     // other specs in this run have pinned, so "how many held" is not this
     // test's to assert.
@@ -147,7 +147,7 @@ test.describe("regression", () => {
     // Not "Safe to ship", and not "No pinned traces" either — something IS
     // pinned, and telling the operator to go run an experiment would send them
     // after a problem they do not have.
-    await expect(page.getByText(/Safe to ship/)).toHaveCount(0);
+    await expect(page.getByText(/Safe to ship:/)).toHaveCount(0);
     await expect(page.getByText(/No pinned traces/)).toHaveCount(0);
     await expect(page.getByText(/1 unreadable pin/).first()).toBeVisible();
     // The pin, and the reason — "1 skipped" alone leaves no next move.

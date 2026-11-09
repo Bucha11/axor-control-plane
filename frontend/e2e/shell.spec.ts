@@ -14,7 +14,7 @@ test.describe("shell", () => {
     await expect(page.getByRole("button", { name: /Try it on our demo agent/ })).toBeVisible();
     await expect(page.getByRole("button", { name: /Test my own agent/ })).toBeVisible();
     // none of the product's vocabulary before there is something in it
-    for (const label of ["Evidence", "Catch", "Explain", "Prevent", "Govern"]) {
+    for (const label of ["Caught lies", "Test an agent", "Replay", "Safe to ship?", "Live agents"]) {
       await expect(page.getByRole("button", { name: label, exact: true })).toHaveCount(0);
     }
     await expect(page.getByRole("button", { name: "settings" })).toHaveCount(0);
@@ -24,7 +24,7 @@ test.describe("shell", () => {
     await goHash(page, "home");
     await page.getByRole("button", { name: /Try it on our demo agent/ }).click();
     await expect(page).toHaveURL(/#\/catch\?auto=1/);
-    await expect(page.getByRole("button", { name: "Evidence", exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Caught lies", exact: true })).toBeVisible();
   });
 
   test("the product is visible first; sign-in is one click from the header", async ({ page }) => {
@@ -69,12 +69,12 @@ test.describe("shell", () => {
     await expect(page.getByText(/What tools does your agent use\?/)).toBeVisible();
   });
 
-  test("primary nav is the product's loop: evidence, catch, explain, prevent, govern", async ({ page }) => {
+  test("primary nav is the product's loop, in plain words", async ({ page }) => {
     await setConnection(page, { mode: "demo" });
     await goHash(page, "home");
     for (const [label, route] of [
-      ["Evidence", "evidence"], ["Catch", "catch"], ["Explain", "explain"],
-      ["Prevent", "prevent"], ["Govern", "govern"],
+      ["Caught lies", "evidence"], ["Test an agent", "catch"], ["Replay", "explain"],
+      ["Safe to ship?", "prevent"], ["Live agents", "govern"],
     ]) {
       await page.getByRole("button", { name: label, exact: true }).click();
       await expect(page).toHaveURL(new RegExp(`#/${route}$`));
@@ -86,8 +86,8 @@ test.describe("shell", () => {
   test("old links still land: eval, replay, regression, control, health, get-started", async ({ page }) => {
     await setConnection(page, { mode: "adapter" });
     const cases: [string, string][] = [
-      ["eval", "Catch"], ["replay", "Explain"], ["regression", "Prevent"],
-      ["control", "Govern"], ["health", "Govern"], ["get-started", "Evidence"],
+      ["eval", "Test an agent"], ["replay", "Replay"], ["regression", "Safe to ship?"],
+      ["control", "Live agents"], ["health", "Live agents"], ["get-started", ""],
     ];
     for (const [hash, active] of cases) {
       await goHash(page, hash);

@@ -4,13 +4,13 @@ import { expect, test } from "@playwright/test";
 import { goHash, setConnection } from "./helpers";
 
 test.describe("evidence", () => {
-  test("a case caught in Catch is listed, and opens in Explain", async ({ page }) => {
+  test("a case caught by Test an agent is listed, and opens in Replay", async ({ page }) => {
     await setConnection(page, { mode: "demo" });
     await goHash(page, "catch");
     await page.getByRole("button", { name: /Run experiment/ }).click();
     await expect(page.getByText("fabricated a tool result").first()).toBeVisible({ timeout: 20_000 });
 
-    await page.getByRole("button", { name: "Evidence", exact: true }).click();
+    await page.getByRole("button", { name: "Caught lies", exact: true }).click();
     const row = page.getByTestId("evidence-row").first();
     await expect(row).toBeVisible();
     await expect(row).toContainText(/fabricated/i);
@@ -24,7 +24,7 @@ test.describe("evidence", () => {
     await setConnection(page, { mode: "demo" });
     await page.goto("/");
     await expect(page).toHaveURL(/#\/evidence$/);
-    await expect(page.getByRole("heading", { name: "Evidence" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Caught lies" })).toBeVisible();
   });
 
   test("an empty inventory says how to catch the first one", async ({ page }) => {

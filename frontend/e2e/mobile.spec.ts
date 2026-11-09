@@ -43,11 +43,11 @@ test.describe("on a phone", () => {
       }),
     );
     await goHash(page, "home");
-    for (const id of ["Evidence", "Catch", "Explain", "Prevent"]) {
+    for (const id of ["Caught lies", "Test an agent", "Replay", "Safe to ship?"]) {
       await expect(page.getByRole("button", { name: id, exact: true })).toBeInViewport();
     }
     await expect(page.getByRole("button", { name: "sign in", exact: true })).toBeInViewport();
-    await expect(page.getByRole("button", { name: "Govern", exact: true })).toBeInViewport();
+    await expect(page.getByRole("button", { name: "Live agents", exact: true })).toBeInViewport();
   });
 
   test("a first visit shows both ways in without scrolling", async ({ page }) => {
@@ -77,7 +77,7 @@ test.describe("on a phone", () => {
 // It used to switch at 760px, and from ~760 to ~1000 the nav ran into the
 // account controls.
 test.describe("header at every width", () => {
-  for (const width of [800, 900, 1000, 1024, 1280]) {
+  for (const width of [800, 900, 1000, 1024, 1101, 1280, 1400, 1440]) {
     test(`nav and account controls do not overlap at ${width}px`, async ({ page }) => {
       await setConnection(page, { mode: "demo" });
       await page.route("**/v1/auth/status", (route) =>

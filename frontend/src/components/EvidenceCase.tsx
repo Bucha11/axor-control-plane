@@ -145,7 +145,7 @@ export default function EvidenceCase({
           confidence {c.confidence}
         </span>
         <div className="flex gap-2 items-center">
-          <Tooltip content="Jump to the exact step in Explain where this discrepancy happened — scrub around it, fork a counterfactual.">
+          <Tooltip content="Jump to the exact step in Replay where this discrepancy happened — scrub around it, fork a counterfactual.">
             <button
               onClick={() => navigate(`explain/${runId}`, { seq: replayStep, node: replayNode })}
               style={action(C.steel)}
