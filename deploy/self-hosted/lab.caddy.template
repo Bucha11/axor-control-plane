@@ -1,0 +1,9 @@
+# Axor Lab on its own hostname. Copied to sites/lab.caddy by
+# `bootstrap.sh --with-lab`; lab-edge rate-limits and serves /identity there.
+{$LAB_HOST} {
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		-Server
+	}
+	reverse_proxy lab-edge:8080
+}

@@ -17,3 +17,7 @@
 	}
 	reverse_proxy frontend:8080
 }
+
+# Optional sites. bootstrap.sh --with-lab writes sites/lab.caddy; with no file
+# there this glob matches nothing and Caddy carries on.
+import /etc/caddy/sites/*.caddy

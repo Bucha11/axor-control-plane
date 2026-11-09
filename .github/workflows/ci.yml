@@ -191,6 +191,7 @@ jobs:
             frontend:
               build: {context: ../.., dockerfile: frontend/Dockerfile}
               ports: ["8080:8080"]
+            lab-edge: {ports: ["8081:8080"]}
             caddy: {profiles: ["never"]}
           OVR
 
@@ -209,6 +210,9 @@ jobs:
             -e "s|^AXOR_API_TOKEN=.*|AXOR_API_TOKEN=$(openssl rand -hex 24)|" \
             -e "s|^AXOR_PROXY_TOKEN=.*|AXOR_PROXY_TOKEN=$(openssl rand -hex 24)|" \
             -e "s|^AXOR_IDENTITY_SIGNING_KEY=.*|AXOR_IDENTITY_SIGNING_KEY=seed|" \
+            -e "s|^COMPOSE_PROFILES=.*|COMPOSE_PROFILES=lab|" \
+            -e "s|^LAB_HOST=.*|LAB_HOST=lab.localhost|" \
+            -e "s|^AXOR_LAB_CONTROL_TOKEN=.*|AXOR_LAB_CONTROL_TOKEN=$(openssl rand -hex 24)|" \
             .env.example > .env
           docker compose -f docker-compose.yml -f ci-override.yml config >/dev/null
 
@@ -232,6 +236,23 @@ jobs:
           done
           grep -qE '^AXOR_IDENTITY_SIGNUP=first-only$' .env
 
+      # Caddy is off in this job (no certificates on a runner), so its config is
+      # checked on its own: with no optional site, and with Lab's. The import is
+      # a glob precisely so the first case is not an error.
+      - name: Caddyfile validates with and without Lab
+        run: |
+          set -eu
+          check() {
+            docker run --rm -e CP_HOST=cp.example.com -e LAB_HOST=lab.example.com \
+              -e ACME_EMAIL=ci@example.com \
+              -v "$PWD/Caddyfile:/etc/caddy/Caddyfile:ro" -v "$1:/etc/caddy/sites:ro" \
+              caddy:2-alpine caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
+          }
+          mkdir -p /tmp/sites-empty /tmp/sites-lab
+          cp lab.caddy.template /tmp/sites-lab/lab.caddy
+          check /tmp/sites-empty
+          check /tmp/sites-lab
+
       - name: Start it
         run: docker compose -f docker-compose.yml -f ci-override.yml up -d
 
@@ -241,6 +262,11 @@ jobs:
           for i in $(seq 1 90); do
             curl -fsS http://localhost:8080/ >/dev/null 2>&1 && { echo up; break; }
             [ "$i" = "90" ] && { echo TIMEOUT; exit 1; }
+            sleep 2
+          done
+          for i in $(seq 1 90); do
+            curl -fsS http://localhost:8081/auth/status >/dev/null 2>&1 && { echo lab up; break; }
+            [ "$i" = "90" ] && { echo LAB TIMEOUT; exit 1; }
             sleep 2
           done
 
@@ -276,6 +302,30 @@ jobs:
             | grep -q access_token
 
           echo "self-hosted smoke OK"
+
+      - name: Lab signs in with the same account, and is private
+        run: |
+          set -e
+          st=$(curl -fsS http://localhost:8081/auth/status)
+          echo "$st"
+          echo "$st" | grep -q '"auth_required": true'
+          echo "$st" | grep -q '"identity": true'
+          # a company install offers no anonymous guests
+          echo "$st" | grep -q '"guest": false'
+          code=$(curl -s -o /dev/null -w '%{http_code}' -X POST http://localhost:8081/guest-session)
+          [ "$code" = "404" ] || { echo "guest-session returned $code, expected 404"; exit 1; }
+
+          # nobody gets in anonymously...
+          code=$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8081/home)
+          [ "$code" = "401" ] || { echo "anonymous /home returned $code, expected 401"; exit 1; }
+
+          # ...and the Control Plane owner does, through Lab's own /identity
+          TOK=$(curl -fsS -X POST http://localhost:8081/identity/v1/login \
+            -H 'Content-Type: application/json' \
+            -d '{"email":"owner@example.com","password":"correct horse battery"}' \
+            | python3 -c 'import sys,json;print(json.load(sys.stdin)["access_token"])')
+          curl -fsS http://localhost:8081/home -H "Authorization: Bearer $TOK" >/dev/null
+          echo "Lab: one account for both products, no guests"
 
       - name: Dump logs on failure
         if: failure()

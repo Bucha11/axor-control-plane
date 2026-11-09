@@ -2,12 +2,14 @@
 #
 #   ./bootstrap.sh axor.example.com you@example.com
 #
-# Derived from deploy/prod by dropping Axor Lab: that is a separate product with
-# its own repository and its own compose, and a company self-hosting the Control
-# Plane should not have to delete half a stack to get there.
-#
 # Six services. Caddy is the only one with published ports; it obtains and
 # renews Let's Encrypt certificates on its own.
+#
+# Axor Lab is optional: `./bootstrap.sh <host> <email> --with-lab` turns on the
+# `lab` profile (two more services, `lab` and `lab-edge`) on its own hostname.
+# It signs people in through THIS stack's identity service, so the same account
+# works in both products, and it offers no anonymous guests — a company install
+# is private.
 x-logging: &id001
   driver: json-file
   options:
@@ -24,8 +26,11 @@ services:
     environment:
       CP_HOST: ${CP_HOST:?set CP_HOST in .env}
       ACME_EMAIL: ${ACME_EMAIL:?set ACME_EMAIL in .env}
+      LAB_HOST: ${LAB_HOST:-}
     volumes:
     - ./Caddyfile:/etc/caddy/Caddyfile:ro
+    # extra sites: bootstrap.sh writes sites/lab.caddy when Lab is enabled
+    - ./sites:/etc/caddy/sites:ro
     - caddy_data:/data
     - caddy_config:/config
     depends_on:
@@ -41,6 +46,9 @@ services:
     volumes:
     - pgdata:/var/lib/postgresql/data
     - ../initdb/10-identity-db.sql:/docker-entrypoint-initdb.d/10-identity-db.sql:ro
+    # Lab's database. Runs only on a fresh volume; bootstrap.sh creates it on an
+    # existing one when Lab is enabled later.
+    - ../prod/initdb/20-lab-db.sql:/docker-entrypoint-initdb.d/20-lab-db.sql:ro
     healthcheck:
       test:
       - CMD-SHELL
@@ -164,8 +172,49 @@ services:
       timeout: 5s
       retries: 10
     logging: *id001
+  # ── Axor Lab (profile `lab`) ──────────────────────────────────────────────
+  # One process holds live run state in memory: never scale to 2 replicas.
+  lab:
+    profiles: ["lab"]
+    image: ${LAB_IMAGE:-ghcr.io/bucha11/axor-lab}:${LAB_TAG:-edge}
+    restart: unless-stopped
+    expose: ["8871"]
+    environment:
+      # gates every screen endpoint; people never see it — they sign in with
+      # their Control Plane account through the identity service below
+      AXOR_LAB_CONTROL_TOKEN: ${AXOR_LAB_CONTROL_TOKEN:?set AXOR_LAB_CONTROL_TOKEN in .env (bootstrap.sh --with-lab)}
+      AXOR_LAB_DATABASE_URL: postgresql://axor:${AXOR_PG_PASSWORD}@postgres/axor_lab
+      AXOR_LAB_DATA_DIR: /data
+      AXOR_LAB_IDENTITY_JWKS_URL: http://identity:8402/.well-known/jwks.json
+      AXOR_LAB_IDENTITY_ISSUER: axor-identity
+      # a company install is private: no anonymous trial workspaces
+      AXOR_LAB_GUEST_SESSIONS: ${AXOR_LAB_GUEST_SESSIONS:-0}
+    volumes: ["labdata:/data"]
+    depends_on:
+      postgres: {condition: service_healthy}
+      identity: {condition: service_healthy}
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8871/').status==200 else 1)\""]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+    logging: *id001
+  # rate limits Lab and serves /identity on Lab's hostname — the same edge the
+  # hosted deployment runs (deploy/prod/lab-nginx.conf)
+  lab-edge:
+    profiles: ["lab"]
+    image: nginx:1.27-alpine
+    restart: unless-stopped
+    expose: ["8080"]
+    volumes:
+    - ../prod/lab-nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      lab: {condition: service_healthy}
+      identity: {condition: service_healthy}
+    logging: *id001
 volumes:
   pgdata: {}
+  labdata: {}
   axordata: {}
   caddy_data: {}
   caddy_config: {}

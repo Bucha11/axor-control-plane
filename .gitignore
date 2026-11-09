@@ -9,3 +9,6 @@ axor-traces/
 
 # stray SQLite files from a test run against a real app instance
 *.db
+
+# self-hosted: the Lab site bootstrap.sh writes (from lab.caddy.template)
+deploy/self-hosted/sites/*.caddy

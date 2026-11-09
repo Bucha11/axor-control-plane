@@ -1,19 +1,29 @@
 # Self-hosted Axor Control Plane
 
-One company, one host, one command. The Control Plane only — Axor Lab is a
-separate product in [its own repository](https://github.com/Bucha11/axor-lab)
-with its own compose.
+One company, one host, one command.
 
 ```sh
 curl -fsSL https://get.docker.com | sh
 git clone https://github.com/Bucha11/axor-control-plane /opt/axor
 cd /opt/axor/deploy/self-hosted
-./bootstrap.sh axor.example.com you@example.com
+./bootstrap.sh axor.example.com you@example.com              # Control Plane
+./bootstrap.sh axor.example.com you@example.com --with-lab   # … and Axor Lab
 ```
 
 That is the whole install. The script generates every secret into `.env`
-(`chmod 600`, never overwritten on a re-run), pulls the released images, starts
-six services and prints your operator token.
+(`chmod 600`, never overwritten on a re-run), pulls the images, starts the
+stack and prints your operator token.
+
+## With Axor Lab
+
+`--with-lab` adds Lab on `lab.<your hostname>` (or pass the hostname after the
+flag). It needs its own DNS `A` record to the same server. Lab signs people in
+through this install's identity service, so **the same account works in both**:
+register once on the Control Plane, log in to Lab with it. Lab offers no
+anonymous guests here — a company install is private.
+
+Adding Lab later is the same command on the existing install: it fills in only
+Lab's settings, creates its database, and leaves every other secret alone.
 
 ## Before you run it
 

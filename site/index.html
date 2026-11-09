@@ -149,10 +149,10 @@
   <b style="color:var(--text)">who operates it</b> and <b style="color:var(--text)">who may sign up</b>.</p>
   <div class="grid">
     <div class="card"><span class="tag mono">LOCAL</span><h3>Try it on your laptop.</h3>
-      <p>One command, no account, no tokens, no TLS. Auth is off because nothing is exposed — open the page and click <span class="mono">Run demo-mode</span>.</p>
+      <p>One command, no account, no tokens, no TLS. Auth is off because nothing is exposed — open the page and click <span class="mono">Run demo-mode</span>. Lab is <span class="mono">pip install axor-lab &amp;&amp; axor-lab serve</span>, and keeps your work between runs.</p>
       <span class="outcome mono">→ zero credentials, two minutes</span></div>
     <div class="card hl"><span class="tag mono">SELF-HOSTED</span><h3>Your server, your company, your domain.</h3>
-      <p>One command and two settings: the hostname, and who may register. Signup defaults to <span class="mono">first-only</span> — the first account claims the install, everyone after it is refused. Your runs never leave your machine.</p>
+      <p>One command and two settings: the hostname, and who may register. Signup defaults to <span class="mono">first-only</span> — the first account claims the install, everyone after it is refused. Add <span class="mono">--with-lab</span> and Lab runs beside it on the same accounts. Your runs never leave your machine.</p>
       <span class="outcome mono">→ a public hostname that is not a public sign-up</span></div>
     <div class="card"><span class="tag mono">HOSTED</span><h3>We run it.</h3>
       <p>Same images, same kernel, operated by us — for teams that would rather not own a Postgres and a certificate renewal.</p>
@@ -161,8 +161,8 @@
   <div class="quick mono" id="selfhost"><b># self-hosted, on your own domain</b>
   <b>git clone</b> https://github.com/Bucha11/axor-control-plane /opt/axor
   <b>cd</b> /opt/axor/deploy/self-hosted
-  <b>./bootstrap.sh</b> axor.yourcompany.com you@yourcompany.com</div>
-  <div class="under-cta mono">generates every secret, pulls the released images, starts six services, prints your operator token. needs an A record and ports 80/443 — nothing else.</div>
+  <b>./bootstrap.sh</b> axor.yourcompany.com you@yourcompany.com <span style="opacity:.6">[--with-lab]</span></div>
+  <div class="under-cta mono">generates every secret, pulls the released images, starts the stack, prints your operator token. needs an A record (one more for lab.) and ports 80/443 — nothing else.</div>
   <p class="under-cta mono" style="margin-top:12px">the people who use it never touch a token: they register and log in. the master token is yours, used once, to mint the proxy's upload key.</p>
 </div></section>
 

@@ -4,6 +4,11 @@
 # .env is never overwritten.
 #
 #   ./bootstrap.sh axor.example.com you@example.com
+#   ./bootstrap.sh axor.example.com you@example.com --with-lab [lab.example.com]
+#
+# --with-lab adds Axor Lab on its own hostname (default lab.<hostname>), signed
+# into with the same accounts. Re-running with it on an existing install adds
+# Lab without touching anything already generated.
 #
 # Signup mode defaults to first-only — the first account claims the install.
 # Override with SIGNUP=closed ./bootstrap.sh …
@@ -12,9 +17,18 @@ cd "$(dirname "$0")"
 
 HOST=${1:-}
 EMAIL=${2:-}
+WITH_LAB=""
+LAB_HOST_ARG=""
+if [ "${3:-}" = "--with-lab" ]; then
+    WITH_LAB=1
+    LAB_HOST_ARG=${4:-lab.$HOST}
+elif [ -n "${3:-}" ]; then
+    echo "unknown option: $3 (did you mean --with-lab?)" >&2
+    exit 2
+fi
 if [ -z "$HOST" ] || [ -z "$EMAIL" ]; then
-    echo "usage: $0 <hostname> <acme-email>" >&2
-    echo "   e.g. $0 axor.example.com ops@example.com" >&2
+    echo "usage: $0 <hostname> <acme-email> [--with-lab [lab-hostname]]" >&2
+    echo "   e.g. $0 axor.example.com ops@example.com --with-lab" >&2
     exit 2
 fi
 
@@ -50,7 +64,41 @@ else
     echo "wrote .env (chmod 600)"
 fi
 
+if [ -n "$WITH_LAB" ]; then
+    # Only fill what is empty, so a re-run never rotates a token in use.
+    setvar() {  # setvar NAME VALUE — set NAME in .env if it is empty or absent
+        if grep -qE "^$1=.+" .env; then return 0; fi
+        if grep -qE "^$1=" .env; then
+            sed -i "s|^$1=.*|$1=$2|" .env
+        else
+            printf '%s=%s\n' "$1" "$2" >> .env
+        fi
+    }
+    setvar COMPOSE_PROFILES lab
+    setvar LAB_HOST "$LAB_HOST_ARG"
+    setvar AXOR_LAB_CONTROL_TOKEN "$(openssl rand -hex 24)"
+    setvar LAB_TAG edge
+    mkdir -p sites
+    cp lab.caddy.template sites/lab.caddy
+    echo "Lab enabled on $(grep -E '^LAB_HOST=' .env | cut -d= -f2-)"
+fi
+
 docker compose pull
+
+if grep -qE '^COMPOSE_PROFILES=.*lab' .env; then
+    # postgres creates Lab's database only on a fresh volume; an install that
+    # turns Lab on later needs it created here, once.
+    docker compose up -d postgres
+    i=0
+    until docker compose exec -T postgres pg_isready -U axor -d axor >/dev/null 2>&1; do
+        i=$((i + 1)); [ "$i" -gt 60 ] && { echo "postgres did not become ready" >&2; exit 1; }
+        sleep 1
+    done
+    docker compose exec -T postgres psql -U axor -d axor -tAc \
+        "SELECT 1 FROM pg_database WHERE datname='axor_lab'" | grep -q 1 \
+        || docker compose exec -T postgres psql -U axor -d axor -c "CREATE DATABASE axor_lab"
+fi
+
 docker compose up -d
 docker compose ps
 
@@ -70,3 +118,10 @@ Operator master token (also in $(pwd)/.env — keep that file private):
 It is NOT how people log in; it is yours, for Settings -> auth, to mint the
 proxy's ingest key.
 TXT
+if [ -n "${LAB_HOST:-}" ] && [ "${COMPOSE_PROFILES:-}" = "lab" ]; then
+    cat <<TXT
+
+Axor Lab:  https://$LAB_HOST   (needs its own DNS A record to this server)
+Sign in with the same account as the Control Plane.
+TXT
+fi
