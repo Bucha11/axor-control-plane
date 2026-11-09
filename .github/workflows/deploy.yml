@@ -32,6 +32,12 @@ on:
   workflow_run:
     workflows: ["Release"]
     types: [completed]
+    # Only a Release that ran for a TAG. Release also runs on every push to
+    # main (it publishes `:edge` images); without this filter each of those
+    # started a Deploy that the guard below then skipped — a grey run on
+    # every commit that reads like a failure. For a tag push, head_branch is
+    # the tag name, so this matches `v0.4.0` and never `main`.
+    branches: ["v*"]
 
 permissions:
   contents: read
