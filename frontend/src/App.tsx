@@ -13,11 +13,11 @@
 // the machinery instead of the job, and hid the first step (get started) and a
 // static mock (expert) behind the same "more".
 import { useEffect, useRef, useState } from "react";
-import { Circle, GraduationCap, Lock, Plug, Settings as SettingsIcon } from "lucide-react";
+import { Circle, GraduationCap, Plug, Settings as SettingsIcon } from "lucide-react";
 import { api } from "./api";
 import { C, MONO } from "./theme";
 import { navigate, useRoute } from "./router";
-import { ConnectionMode, MODE_LABEL, isAdapter, isConnected, useApp } from "./store";
+import { ConnectionMode, MODE_LABEL, isConnected, useApp } from "./store";
 import Tooltip from "./components/Tooltip";
 import Tour from "./components/Tour";
 import Home from "./tabs/Home";
@@ -28,6 +28,7 @@ import ReplayTab from "./tabs/ReplayTab";
 import Onboarding from "./tabs/Onboarding";
 import ConfigBuilder from "./tabs/ConfigBuilder";
 import Health from "./tabs/Health";
+import Sentinel from "./tabs/Sentinel";
 import Regression from "./tabs/Regression";
 import Settings, { IdentityLogin } from "./tabs/Settings";
 import Pricing from "./tabs/Pricing";
@@ -46,6 +47,7 @@ const ALIAS: Record<string, string> = {
   regression: "prevent",
   control: "govern",
   health: "govern",
+  sentinel: "govern",
   "get-started": "connect",
   "config-builder": "connect",
 };
@@ -69,33 +71,15 @@ function NavLink({ id, label, hint, active }: { id: string; label: string; hint:
   );
 }
 
-// Govern is adapter-only by construction (the proxy has no handle on internal
-// topology). Kept in the primary row so the destination reads as "next rung",
-// but greyed with a lock + tooltip until adapter; clicking still lands on the
-// tab's own upsell rather than pretending it's ready.
-function ControlNavLink({ active, mode }: { active: boolean; mode: ConnectionMode }) {
-  const unlocked = isAdapter(mode);
-  const link = (
-    <button
-      onClick={() => navigate("govern")}
-      aria-current={active ? "page" : undefined}
-      style={{
-        display: "flex", alignItems: "center", gap: 4,
-        background: "none", border: "none", padding: "2px 0", cursor: "pointer",
-        color: active ? C.text : unlocked ? C.dim : C.line,
-        fontSize: 13, fontFamily: MONO,
-        borderBottom: `2px solid ${active ? C.steel : "transparent"}`,
-      }}
-    >
-      {!unlocked && <Lock size={11} />}
-      Live agents
-    </button>
-  );
-  if (unlocked) return link;
+// Live agents used to be greyed and locked until an adapter connected — and
+// with nothing behind the lock, governance was the one part of the product a
+// visitor could not see at all. It is open now: without an adapter it shows
+// an example fleet (sentinel, probe and all) and says plainly that live control
+// of YOUR agents needs the adapter.
+function ControlNavLink({ active }: { active: boolean; mode: ConnectionMode }) {
   return (
-    <Tooltip content="Watch and stop running agents live — pause, budget-cap, stop a whole tree. Unlocks once your agent is wrapped with axor-core." side="bottom">
-      {link}
-    </Tooltip>
+    <NavLink id="govern" label="Live agents" active={active}
+      hint="Running agents as a graph: what sentinel sees across sessions, what probe says about their health, and pause / stop / repair." />
   );
 }
 
@@ -160,10 +144,10 @@ export default function App() {
       {key === "govern" && (
         <>
           <SubNav
-            items={[["govern", "live nodes"], ["health", "health"]]}
-            active={head === "health" ? "health" : "govern"}
+            items={[["govern", "agents"], ["sentinel", "sentinel · across sessions"], ["health", "health & repair"]]}
+            active={head === "health" || head === "sentinel" ? head : "govern"}
           />
-          {head === "health" ? <Health /> : <ControlTab focusNode={runIdParam} />}
+          {head === "health" ? <Health /> : head === "sentinel" ? <Sentinel /> : <ControlTab focusNode={runIdParam} />}
         </>
       )}
       {key === "connect" && (

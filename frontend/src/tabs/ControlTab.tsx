@@ -6,9 +6,9 @@ import { Circle, Gauge, GitBranch, Pause, Play, Square, Syringe } from "lucide-r
 import { api, NodeInfo } from "../api";
 import Coverage from "../components/Coverage";
 import TopologyGraph, { PeerCard } from "../components/TopologyGraph";
+import { navigate } from "../router";
 import { isAdapter, useApp } from "../store";
 import { C, MONO, btn } from "../theme";
-import Locked from "../components/Locked";
 import Coach from "../components/Coach";
 import Tooltip from "../components/Tooltip";
 
@@ -215,29 +215,61 @@ function SpawnGoverned({ switchToAdapter }: { switchToAdapter?: boolean }) {
   );
 }
 
+/** One click to a fleet worth looking at: the canned tree on the map, a
+ * sentinel snapshot on one node and a probe battery with a repair proposal on
+ * another — built by those libraries, posted through the plane's own routes. */
+export function ExampleFleet({ compact = false }: { compact?: boolean }) {
+  const qc = useQueryClient();
+  const seed = useMutation({
+    mutationFn: api.seedFleet,
+    onSuccess: () => {
+      for (const key of ["nodes", "topology", "probe-report", "repair", "reputation"]) {
+        void qc.invalidateQueries({ queryKey: [key] });
+      }
+    },
+  });
+  return (
+    <div className={compact ? "" : "mt-3"}>
+      <button onClick={() => seed.mutate()} disabled={seed.isPending}
+        style={btn({ color: C.green, borderColor: C.green, fontSize: 12, padding: "7px 14px" })}>
+        {seed.isPending ? "loading…" : "Load an example fleet"}
+      </button>
+      {!compact && (
+        <span style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim, marginLeft: 10 }}>
+          4 agents · what sentinel saw across their sessions · a probe drift you can repair
+        </span>
+      )}
+      {seed.isError && (
+        <div style={{ fontFamily: MONO, fontSize: 11, color: C.red, marginTop: 6 }}>
+          {(seed.error as Error).message}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function ControlTab({ focusNode }: { focusNode?: string }) {
   const { mode, testBench } = useApp((s) => s.connection);
-
-  // Control is adapter-only by construction — the proxy has no handle on
-  // internal topology (spec section 12). Grey it with the honest upsell.
-  if (!isAdapter(mode)) {
-    return (
-      <div style={{ maxWidth: 640, margin: "0 auto" }}>
-        <h1 style={{ fontSize: 22, fontWeight: 650, margin: "0 0 4px" }}>Operate the governed topology.</h1>
-        <div style={{ fontFamily: MONO, fontSize: 11.5, color: C.mut, marginBottom: 20 }}>
-          a live topology map, per-node interventions, cascade stop — the strongest upsell in the product.
+  // Live control of YOUR agents needs the adapter — the proxy has no handle on
+  // internal topology (spec section 12). That used to be a locked page with
+  // nothing behind it; now the page is open, says so up front, and has an
+  // example fleet to operate.
+  return (
+    <>
+      {!isAdapter(mode) && (
+        <div style={{ maxWidth: 640, margin: "0 auto 16px", fontFamily: MONO, fontSize: 11, color: C.mut,
+                      lineHeight: 1.6, border: `1px solid ${C.line}`, borderRadius: 8, padding: "10px 12px" }}>
+          live control of <span style={{ color: C.text }}>your</span> agents needs the adapter
+          (wrap the agent with axor-core — <span style={{ color: C.steel, cursor: "pointer" }}
+            onClick={() => navigate("connect")}>connect →</span>). until then, everything here
+          works on an example fleet:
+          <ExampleFleet />
+          <SpawnGoverned switchToAdapter />
         </div>
-        <Locked need="adapter" title="live topology of your governed agents" >
-          <div />
-        </Locked>
-        <div style={{ fontFamily: MONO, fontSize: 11, color: C.mut, marginTop: 16 }}>
-          try it now — spawn a real governed node (axor-core) and watch it appear here live:
-        </div>
-        <SpawnGoverned switchToAdapter />
-      </div>
-    );
-  }
-  return <ControlBody focusNode={focusNode} testBench={testBench} />;
+      )}
+      <ControlBody focusNode={focusNode} testBench={testBench} />
+    </>
+  );
 }
 
 function ControlBody({ focusNode, testBench }: { focusNode?: string; testBench: boolean }) {
@@ -312,9 +344,10 @@ function ControlBody({ focusNode, testBench }: { focusNode?: string; testBench: 
             ? <>No node is reporting to the plane yet, so there is nothing to pause
                 or stop — but {traced.length} node{traced.length === 1 ? "" : "s"} have
                 traced here, and the shape they describe is below.</>
-            : <>No governed nodes connected yet. Point your axor-core adapter at the
-                plane — or spawn a real governed demo node right now:</>}
+            : <>No governed agents connected yet. Load an example fleet to see
+                what this looks like, or point your axor-core adapter at the plane:</>}
         </div>
+        <ExampleFleet />
         <SpawnGoverned />
         {topo.data && traced.length > 0 && (
           <div className="mt-4">

@@ -65,7 +65,7 @@ function FirstVisit() {
       </div>
 
       <div style={{ fontFamily: MONO, fontSize: 11.5, color: C.mut, marginBottom: 10 }}>
-        watch it happen — 20 seconds:
+        watch it happen — 25 seconds:
       </div>
       {/* the buttons above are the call to action; the recording needs no third */}
       <DemoStage autoplay cta={false} onTry={() => navigate("connect")} />
@@ -167,7 +167,7 @@ function ConnectedHome() {
             <span>
               <span style={{ display: "block", fontFamily: MONO, fontSize: 13, color: C.text }}>Watch the demo</span>
               <span style={{ display: "block", fontFamily: MONO, fontSize: 10.5, color: C.dim }}>
-                catch · explain · prevent · govern — the whole loop in ~20 seconds
+                catch · explain · prevent · govern · repair — the whole loop in ~25 seconds
               </span>
             </span>
           </span>

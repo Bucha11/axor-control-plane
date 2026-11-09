@@ -26,12 +26,15 @@ import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { RefreshCw, HeartPulse, Check, Circle, MinusCircle } from "lucide-react";
 import { api, type HealAttempt, type ProbeFamily, type ProbeHealth } from "../api";
-import { C, MONO } from "../theme";
+import { C, MONO, btn } from "../theme";
 import Coach from "../components/Coach";
 import Tooltip from "../components/Tooltip";
 
 // The node shown until one is picked (the demo battery posts for it).
 const HEALTH_NODE = "banking-assistant";
+/** The example fleet's scraper (backend demo.FLEET_PROBE_NODE): it has no
+ * runtime of its own, so its re-probe is played on request. */
+export const EXAMPLE_PROBE_NODE = "tree-scraper";
 
 type Phase = "idle" | "reason" | "healing" | "awaiting" ;
 
@@ -69,6 +72,22 @@ export default function Health() {
   const report = useQuery({
     queryKey: ["probe-report", node],
     queryFn: () => api.probeReport(node),
+  });
+  // Opened on the default node with nothing to show while the example fleet IS
+  // loaded: show the node that has a check, not an empty panel.
+  const listed = (nodes.data ?? []).map((n) => n.node_id);
+  useEffect(() => {
+    if (node === HEALTH_NODE && report.isSuccess && report.data.latest === null
+        && listed.includes(EXAMPLE_PROBE_NODE)) {
+      setNode(EXAMPLE_PROBE_NODE);
+    }
+  }, [node, report.isSuccess, report.data, listed.join(",")]); // eslint-disable-line react-hooks/exhaustive-deps
+  const reprobe = useMutation({
+    mutationFn: api.fleetReprobe,
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ["probe-report", node] });
+      void qc.invalidateQueries({ queryKey: ["repair", node] });
+    },
   });
   // What the node's localizer proposed, and how past cuts ended.
   const repair = useQuery({
@@ -298,7 +317,23 @@ export default function Health() {
               {lastHeal.reprobe_verdict === null ? (
                 <>excised {lastHeal.target_refs.join(", ")} → awaiting the verifying
                   re-probe. A heal without one is not resolved, so nothing turns green
-                  here until the node posts the next check.</>
+                  here until the node posts the next check.
+                  {node === EXAMPLE_PROBE_NODE && (
+                    <span style={{ display: "block", marginTop: 8 }}>
+                      {/* a real node consumes the cut and re-probes on its own;
+                          the example node has no runtime, so it is played here */}
+                      <button
+                        onClick={() => reprobe.mutate()}
+                        disabled={reprobe.isPending}
+                        style={btn({ color: C.steel, borderColor: C.steel, fontSize: 11, padding: "5px 12px" })}
+                      >
+                        {reprobe.isPending ? "re-probing…" : "run the example node's re-probe"}
+                      </button>
+                      {reprobe.isError && (
+                        <span style={{ color: C.red, marginLeft: 8 }}>{(reprobe.error as Error).message}</span>
+                      )}
+                    </span>
+                  )}</>
               ) : lastHeal.resolved ? (
                 <>healed by {lastHeal.operator} → re-probe: OK · cut{" "}
                   {lastHeal.target_refs.join(", ")} ({lastHeal.families.join(", ") || "no family named"})</>

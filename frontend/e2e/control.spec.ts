@@ -8,11 +8,14 @@ import snapshotFixture from "./fixtures/reputation-snapshot.json" with { type: "
 import { BACKEND, goHash, seedDegradedNode, seedNode, setConnection, uniqueNode } from "./helpers";
 
 test.describe("control", () => {
-  test("greyed with an honest upsell when not on the adapter", async ({ page }) => {
+  test("without the adapter it is open, honest about it, and has something to operate", async ({ page }) => {
+    // It used to be a locked page with nothing behind it, which made
+    // governance the one part of the product a visitor could not see at all.
     await setConnection(page, { mode: "proxy" });
     await goHash(page, "control");
-    await expect(page.getByRole("heading", { name: "Operate the governed topology." })).toBeVisible();
-    await expect(page.getByText("available with the adapter")).toBeVisible();
+    await expect(page.getByText(/live control of/)).toBeVisible();
+    await expect(page.getByText(/needs the adapter/)).toBeVisible();
+    await expect(page.getByRole("button", { name: "Load an example fleet" })).toBeVisible();
     await expect(page.getByRole("button", { name: /Spawn a governed demo node/ })).toBeVisible();
   });
 

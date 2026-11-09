@@ -151,6 +151,9 @@ test.describe("demo landing", () => {
 // On Home the demo is an accordion, not a link to another page: it opens in
 // place, plays on its own, and its call to action stays inside the app.
 test.describe("home demo accordion", () => {
+  // the recording is ~25 seconds end to end
+  test.describe.configure({ timeout: 60_000 });
+
   // the accordion is the connected Home's; a first visit plays the recording
   // without asking (see shell.spec)
   test.beforeEach(async ({ page }) => {
@@ -173,6 +176,7 @@ test.describe("home demo accordion", () => {
     await expect(page.getByTestId("demo-explain")).toContainText("no source", { timeout: 10_000 });
     await expect(page.getByTestId("demo-prevent")).toContainText("must-block", { timeout: 10_000 });
     await expect(page.getByTestId("demo-govern")).toContainText("DENIED", { timeout: 10_000 });
+    await expect(page.getByTestId("demo-repair")).toContainText("healthy", { timeout: 12_000 });
 
     await toggle.click();
     await expect(toggle).toHaveAttribute("aria-expanded", "false");
@@ -182,7 +186,7 @@ test.describe("home demo accordion", () => {
   test("the receipt's call to action goes to connect, inside the app", async ({ page }) => {
     await page.goto("/#/home");
     await page.getByRole("button", { name: /Watch the demo/ }).click();
-    await page.getByRole("button", { name: /Catch one on your agent/ }).click({ timeout: 30_000 });
+    await page.getByRole("button", { name: /Catch one on your agent/ }).click({ timeout: 40_000 });
     await expect(page).toHaveURL(/#\/connect$/);
   });
 });

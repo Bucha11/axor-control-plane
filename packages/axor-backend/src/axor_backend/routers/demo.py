@@ -35,7 +35,9 @@ that, and it is confined to the ids in `demo.DEMO_RUN_IDS`.
 """
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException
+import time
+
+from fastapi import APIRouter, HTTPException, Request
 
 from axor_backend.clock import now
 from axor_backend.deps import StoreDep, SubgraphCacheDep
@@ -103,3 +105,75 @@ async def seed_tree_run(
     await _seed(store, cache, "ex_tree", demo.TREE_ORCH, "multi-agent-demo",
                 demo.TREE_EVENTS, demo.TREE_EVIDENCE)
     return {"seeded": ["ex_tree"], "config": demo.TREE_CONFIG}
+
+
+@router.post("/seed-fleet")
+async def seed_fleet(
+    request: Request, store: StoreDep, cache: SubgraphCacheDep
+) -> dict:
+    """The example fleet: the canned tree on the map, a sentinel reputation
+    snapshot on the researcher, and a probe battery with a repair proposal on
+    the scraper — what Live agents has to show, without an adapter.
+
+    The tree is the same canned run `seed-tree-run` loads. The snapshot and the
+    battery go through the plane's OWN ingest routes, so they are validated,
+    stored and broadcast exactly as a real node's would be; they are built by
+    axor-sentinel's verdict layer and axor-probe's localizer (`demo.py`).
+
+    Idempotent where it matters: a node that already holds a snapshot or a
+    battery keeps it — re-seeding must not pile a second drift report onto a
+    node whose operator has since cut the context and re-probed.
+    """
+    from axor_backend import demo, plane
+
+    await seed_tree_run(store, cache)
+    nodes = [demo.TREE_ORCH, demo.TREE_RESEARCH, demo.TREE_WRITER, demo.TREE_SCRAPER]
+    for node in nodes:
+        # a heartbeat's worth of reported state, so each node is listed and
+        # Health can pick it — the same write a real heartbeat makes
+        if await store.get_reported(node) is None:
+            await store.upsert_reported(
+                node, applied_version=0, level="NORMAL",
+                budget_remaining=None, ts=now(),
+            )
+    seeded: list[str] = ["ex_tree"]
+    if await store.reputation(demo.FLEET_SENTINEL_NODE) is None:
+        at = time.time()
+        await plane.post_reputation(
+            demo.FLEET_SENTINEL_NODE, demo.fleet_snapshot(int(at), at), request,
+        )
+        seeded.append(f"reputation:{demo.FLEET_SENTINEL_NODE}")
+    if await store.latest_probe_report(demo.FLEET_PROBE_NODE) is None:
+        await plane.post_probe_report(
+            demo.FLEET_PROBE_NODE, demo.fleet_battery(drifted=True), request,
+        )
+        seeded.append(f"probe:{demo.FLEET_PROBE_NODE}")
+    return {
+        "seeded": seeded, "nodes": nodes,
+        "sentinel_node": demo.FLEET_SENTINEL_NODE,
+        "probe_node": demo.FLEET_PROBE_NODE,
+    }
+
+
+@router.post("/fleet-reprobe", status_code=201)
+async def fleet_reprobe(request: Request, store: StoreDep) -> dict:
+    """Play the example scraper's half of a heal: take the cut it was sent,
+    then run the verifying re-probe.
+
+    A real node does both itself — its adapter consumes `pending_excision` at
+    the next intent boundary, and its own battery is the re-probe. The example
+    node has no runtime, so without this a heal on it waited forever. It does
+    only that: refused (409) unless a cut is actually pending on the example
+    scraper, so it cannot clear a drift nobody cut, and it never touches any
+    other node.
+    """
+    from axor_backend import demo, plane
+
+    node = demo.FLEET_PROBE_NODE
+    if not await store.open_heal_attempts(node):
+        raise HTTPException(
+            409,
+            f"no cut is waiting on {node}: send the excision first, then re-probe",
+        )
+    await store.clear_desired_key(node, "pending_excision")
+    return await plane.post_probe_report(node, demo.fleet_battery(drifted=False), request)

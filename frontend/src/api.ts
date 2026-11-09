@@ -860,6 +860,20 @@ export const api = {
   // what Control's "load the canned tree" button seeds; the live alternative
   // (spawnGovernedTree) runs real IntentLoops but only produces delegation
   // edges, so the lateral hop and the undeclared foreign peer come from here.
+  // The example fleet (Live agents without an adapter): the canned tree, a
+  // sentinel snapshot on the researcher and a probe battery with a repair
+  // proposal on the scraper — built by those libraries, posted through the
+  // plane's own ingest routes.
+  seedFleet: () =>
+    af("/v1/demo/seed-fleet", { method: "POST" }).then(
+      (r) => j<{ seeded: string[]; nodes: string[]; sentinel_node: string; probe_node: string }>(r),
+    ),
+  // The example scraper's half of a heal: consume the cut, run the re-probe.
+  // 409 unless a cut is actually pending on it.
+  fleetReprobe: () =>
+    af("/v1/demo/fleet-reprobe", { method: "POST" }).then(
+      (r) => j<{ stored: boolean; heals_verified: { resolved: boolean; caption: string }[] }>(r),
+    ),
   seedTreeRun: () =>
     af("/v1/demo/seed-tree-run", { method: "POST" }).then(
       (r) => j<{ seeded: string[]; config: Record<string, unknown> }>(r),

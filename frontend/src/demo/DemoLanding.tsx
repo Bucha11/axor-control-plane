@@ -25,12 +25,13 @@ const path = (a: NodeId, b: NodeId) => `M ${N[a].x} ${N[a].y} L ${N[b].x} ${N[b]
 // rung (live governance, adapter depth) and skipped what the product is for:
 // catching the discrepancy, explaining it, and turning it into a test. Now it
 // walks the loop in order, and the cards it leaves behind ARE the summary.
-type Phase = "catch" | "explain" | "prevent" | "govern";
+type Phase = "catch" | "explain" | "prevent" | "govern" | "repair";
 const PHASES: { id: Phase; label: string }[] = [
   { id: "catch", label: "catch" },
   { id: "explain", label: "explain" },
   { id: "prevent", label: "prevent" },
   { id: "govern", label: "govern" },
+  { id: "repair", label: "repair" },
 ];
 
 interface Step {
@@ -39,7 +40,7 @@ interface Step {
   cap: string;
   pulse?: [NodeId, NodeId];
   color?: string;
-  mark?: "taint" | "fail" | "claim" | "evidence" | "explain" | "prevent" | "blocked" | "done";
+  mark?: "taint" | "fail" | "claim" | "evidence" | "explain" | "prevent" | "blocked" | "drift" | "healed" | "done";
 }
 
 const SCRIPT: Step[] = [
@@ -54,7 +55,9 @@ const SCRIPT: Step[] = [
   { dur: 2600, phase: "prevent", mark: "prevent", cap: "pinned as must-block; config v2 replayed against it: blocked" },
   { dur: 1500, phase: "govern", pulse: ["agent", "slack"], color: C.red, cap: "live, the agent tries to post it…" },
   { dur: 1900, phase: "govern", mark: "blocked", cap: "…and the export is denied at the sink" },
-  { dur: 99999, phase: "govern", mark: "done", cap: "" },
+  { dur: 2500, phase: "repair", mark: "drift", cap: "probe re-checks the agent: its context still carries the poisoned web result" },
+  { dur: 2300, phase: "repair", mark: "healed", cap: "cut that one fragment, re-probe: the agent is healthy again" },
+  { dur: 99999, phase: "repair", mark: "done", cap: "" },
 ];
 const IDLE: Step = { dur: 0, phase: "catch", cap: "" };
 
@@ -241,6 +244,8 @@ export function DemoStage({ autoplay = false, onTry, cta = true }: { autoplay?: 
   const explained = reached("explain");
   const prevented = reached("prevent");
   const blocked = reached("blocked");
+  const drifted = reached("drift");
+  const healed = reached("healed");
 
   const Node = ({ id, danger, warn }: { id: NodeId; danger?: boolean; warn?: boolean }) => {
     const n = N[id];
@@ -348,7 +353,7 @@ export function DemoStage({ autoplay = false, onTry, cta = true }: { autoplay?: 
             </button>
           ) : (
             <span key={step} style={{ fontFamily: MONO, fontSize: 12, color: cur.mark === "blocked" || cur.mark === "evidence" ? C.red : C.mut, animation: "fadeUp .3s ease both" }}>
-              {done ? "that is the loop: catch it, explain it, prevent it, govern it." : cur.cap}
+              {done ? "catch it, explain it, prevent it, govern it, repair it." : cur.cap}
             </span>
           )}
           {playing && (
@@ -404,6 +409,19 @@ export function DemoStage({ autoplay = false, onTry, cta = true }: { autoplay?: 
             <div style={label}>④ GOVERN · LIVE</div>
             <div style={{ fontFamily: MONO, fontSize: 11.5, color: C.mut, lineHeight: 1.7 }}>
               the agent tried to post the made-up number: <span style={{ color: C.red, fontWeight: 700 }}>export DENIED at the sink</span>
+            </div>
+          </div>
+        )}
+        {drifted && (
+          <div style={card(healed ? C.green : C.amber)} data-testid="demo-repair">
+            <div style={label}>⑤ REPAIR · PROBE</div>
+            <div style={{ fontFamily: MONO, fontSize: 11.5, color: C.mut, lineHeight: 1.7 }}>
+              health check: <span style={{ color: C.amber }}>data_disclosure drifted</span> (2 of 4 probes)
+              · the localizer blames one fragment: <span style={{ color: C.text }}>web result #3</span>
+              <br />
+              {healed
+                ? <>cut it, with a reason, as a signed command → re-probe: <span style={{ color: C.green, fontWeight: 700 }}>✓ healthy</span></>
+                : <>it never cuts on its own — a human gives the reason…</>}
             </div>
           </div>
         )}
