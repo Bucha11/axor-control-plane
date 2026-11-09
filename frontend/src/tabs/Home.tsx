@@ -98,7 +98,7 @@ export default function Home() {
         </button>
         {demoOpen && (
           <div id="home-demo" style={{ padding: "0 16px 16px" }}>
-            <DemoStage autoplay onTry={() => navigate("get-started")} />
+            <DemoStage autoplay onTry={() => navigate("connect")} />
           </div>
         )}
       </div>
@@ -125,7 +125,7 @@ export default function Home() {
                 <button
                   onClick={() => {
                     connect("demo");
-                    navigate("eval", { auto: "1" });
+                    navigate("catch", { auto: "1" });
                   }}
                   style={cta(C.green)}
                 >
@@ -135,11 +135,11 @@ export default function Home() {
             ) : (
               <Tooltip
                 content={rung.mode === "proxy"
-                  ? "Put the proxy in front of YOUR tools (observe-only, ~5 min, no code change) to run the Eval loop on your own agent."
-                  : "Wrap your agent as an axor-core Invokable for full governance — this unlocks the Control plane."}
+                  ? "Put the proxy in front of YOUR tools (observe-only, ~5 min, no code change) to run the catch loop on your own agent."
+                  : "Wrap your agent as an axor-core Invokable for full governance — this unlocks Govern."}
                 side="bottom"
               >
-                <button onClick={() => navigate("get-started")} style={cta(C.steel)}>
+                <button onClick={() => navigate("connect")} style={cta(C.steel)}>
                   Get started <ArrowRight size={13} />
                 </button>
               </Tooltip>
@@ -151,7 +151,7 @@ export default function Home() {
       {isConnected(mode) && (
         <div className="mt-6" style={{ fontFamily: MONO, fontSize: 11, color: C.mut }}>
           connected: {MODE_LABEL[mode]} ·{" "}
-          <span style={{ color: C.steel, cursor: "pointer" }} onClick={() => navigate("eval")}>
+          <span style={{ color: C.steel, cursor: "pointer" }} onClick={() => navigate("catch")}>
             run an experiment →
           </span>
         </div>

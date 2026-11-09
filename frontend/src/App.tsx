@@ -1,10 +1,18 @@
-// The application shell. Router-driven, funnel-aware (spec section 3): the nav
-// reflects where the user is on the connection ladder, and every surface is
-// reachable by a deep link so EvidenceCases, replay moments and share permalinks
-// are addressable. Quiet-until-wrong holds: three primary tabs, everything else
-// behind "more", and adapter-only surfaces greyed with the honest upsell.
+// The application shell. Router-driven, funnel-aware (spec section 3): every
+// surface is reachable by a deep link so EvidenceCases, replay moments and share
+// permalinks are addressable.
+//
+// The nav IS the product's loop, in the words the product uses for it:
+//   Evidence — what was caught (the artifact everything else exists for)
+//   Catch    — break a tool, catch the lie
+//   Explain  — replay a run, fork counterfactuals
+//   Prevent  — pin cases into a corpus, CI the config
+//   Govern   — live governed agents and their health (adapter depth)
+// It used to read eval · replay · regression · control · more…, which named
+// the machinery instead of the job, and hid the first step (get started) and a
+// static mock (expert) behind the same "more".
 import { useEffect, useRef, useState } from "react";
-import { Circle, GraduationCap, Lock, Settings as SettingsIcon } from "lucide-react";
+import { Circle, GraduationCap, Lock, Plug, Settings as SettingsIcon } from "lucide-react";
 import { api } from "./api";
 import { C, MONO } from "./theme";
 import { navigate, useRoute } from "./router";
@@ -12,6 +20,7 @@ import { ConnectionMode, MODE_LABEL, isAdapter, isConnected, useApp } from "./st
 import Tooltip from "./components/Tooltip";
 import Tour from "./components/Tour";
 import Home from "./tabs/Home";
+import Evidence from "./tabs/Evidence";
 import Experiment from "./tabs/Experiment";
 import ControlTab from "./tabs/ControlTab";
 import ReplayTab from "./tabs/ReplayTab";
@@ -19,34 +28,47 @@ import Onboarding from "./tabs/Onboarding";
 import ConfigBuilder from "./tabs/ConfigBuilder";
 import Health from "./tabs/Health";
 import Regression from "./tabs/Regression";
-import ExpertView from "./tabs/ExpertView";
 import Settings, { IdentityLogin } from "./tabs/Settings";
 import Pricing from "./tabs/Pricing";
 
-// Primary is the loop a first-time user actually runs: catch (eval) → explain
-// (replay) → prevent (regression). Control is the fourth, adapter-only rung —
-// shown so the destination is visible, greyed with an honest upsell until an
-// adapter connection unlocks it. Everything else lives behind "more".
-const PRIMARY = ["eval", "replay", "regression"] as const;
-const MORE = ["get started", "config builder", "health", "expert", "pricing", "settings"] as const;
-const KNOWN = ["home", "control", ...PRIMARY, ...MORE] as const;
+const LOOP = [
+  { key: "evidence", label: "Evidence", hint: "Every caught discrepancy: what the tool really returned vs what the agent claimed." },
+  { key: "catch", label: "Catch", hint: "Break one of the agent's tools on purpose and catch it fabricating." },
+  { key: "explain", label: "Explain", hint: "Replay any run step by step and fork what-ifs — no model call." },
+  { key: "prevent", label: "Prevent", hint: "Pin caught cases into a corpus and test a config change against them." },
+] as const;
 
-function NavLink({ id, active }: { id: string; active: boolean }) {
+/** Old route heads keep working — they are in shared links and bookmarks. */
+const ALIAS: Record<string, string> = {
+  eval: "catch",
+  replay: "explain",
+  regression: "prevent",
+  control: "govern",
+  health: "govern",
+  "get-started": "connect",
+  "config-builder": "connect",
+};
+const KNOWN = ["home", "evidence", "catch", "explain", "prevent", "govern", "connect", "pricing", "settings"];
+
+function NavLink({ id, label, hint, active }: { id: string; label: string; hint: string; active: boolean }) {
   return (
-    <button
-      onClick={() => navigate(id === "eval" ? "eval" : id.replace(/ /g, "-"))}
-      style={{
-        background: "none", border: "none", padding: "2px 0", cursor: "pointer",
-        color: active ? C.text : C.dim, fontSize: 13, fontFamily: MONO,
-        borderBottom: `2px solid ${active ? C.steel : "transparent"}`,
-      }}
-    >
-      {id}
-    </button>
+    <Tooltip content={hint} side="bottom">
+      <button
+        onClick={() => navigate(id)}
+        aria-current={active ? "page" : undefined}
+        style={{
+          background: "none", border: "none", padding: "2px 0", cursor: "pointer",
+          color: active ? C.text : C.dim, fontSize: 13, fontFamily: MONO,
+          borderBottom: `2px solid ${active ? C.steel : "transparent"}`,
+        }}
+      >
+        {label}
+      </button>
+    </Tooltip>
   );
 }
 
-// Control is adapter-only by construction (the proxy has no handle on internal
+// Govern is adapter-only by construction (the proxy has no handle on internal
 // topology). Kept in the primary row so the destination reads as "next rung",
 // but greyed with a lock + tooltip until adapter; clicking still lands on the
 // tab's own upsell rather than pretending it's ready.
@@ -54,7 +76,8 @@ function ControlNavLink({ active, mode }: { active: boolean; mode: ConnectionMod
   const unlocked = isAdapter(mode);
   const link = (
     <button
-      onClick={() => navigate("control")}
+      onClick={() => navigate("govern")}
+      aria-current={active ? "page" : undefined}
       style={{
         display: "flex", alignItems: "center", gap: 4,
         background: "none", border: "none", padding: "2px 0", cursor: "pointer",
@@ -64,7 +87,7 @@ function ControlNavLink({ active, mode }: { active: boolean; mode: ConnectionMod
       }}
     >
       {!unlocked && <Lock size={11} />}
-      control
+      Govern
     </button>
   );
   if (unlocked) return link;
@@ -77,9 +100,7 @@ function ControlNavLink({ active, mode }: { active: boolean; mode: ConnectionMod
 
 function routeKey(segments: string[]): string {
   const head = segments[0] ?? "home";
-  if (head === "get-started") return "get started";
-  if (head === "config-builder") return "config builder";
-  return head;
+  return ALIAS[head] ?? head;
 }
 
 export default function App() {
@@ -87,16 +108,18 @@ export default function App() {
   const { mode } = useApp((s) => s.connection);
   const key = routeKey(route.segments);
 
-  // First visit with no connection lands on Home (the funnel entry).
+  // No route: a first visit lands on Home (the funnel entry); once something is
+  // connected, on Evidence — what has been caught is the thing to look at.
   useEffect(() => {
-    if (route.segments.length === 0 && !isConnected(mode)) navigate("home");
+    if (route.segments.length === 0) navigate(isConnected(mode) ? "evidence" : "home");
   }, [route.segments.length, mode]);
 
+  const head = route.segments[0] ?? "home";
   const runIdParam = route.segments[1];
 
   return (
     <div style={{ minHeight: "100vh", background: C.bg, color: C.text, fontFamily: "Inter, system-ui, sans-serif", padding: "28px 20px" }}>
-      <div className="app-header" style={{ maxWidth: 920, margin: "0 auto 36px" }}>
+      <div className="app-header" style={{ maxWidth: 1080, margin: "0 auto 36px" }}>
         <div className="app-header-left">
           <button
             className="app-logo"
@@ -106,33 +129,47 @@ export default function App() {
             AXOR<span className="hide-narrow" style={{ color: C.steel }}> CONTROL PLANE</span>
           </button>
           <nav className="app-nav">
-            {PRIMARY.map((id) => (
-              <NavLink key={id} id={id} active={key === id} />
+            {LOOP.map((l) => (
+              <NavLink key={l.key} id={l.key} label={l.label} hint={l.hint} active={key === l.key} />
             ))}
-            <ControlNavLink active={key === "control"} mode={mode} />
-            <MoreMenu activeKey={key} />
+            <ControlNavLink active={key === "govern"} mode={mode} />
           </nav>
         </div>
         <div className="app-header-right">
           <LearnToggle />
-          <span className="hide-narrow"><VersionBadge /></span>
+          <span className="hide-narrow hide-medium"><VersionBadge /></span>
           <ConnectionBadge />
+          <SettingsButton active={key === "settings"} />
           <AccountButton />
         </div>
       </div>
 
       {key === "home" && <Home />}
-      {key === "eval" && <Experiment runId={runIdParam} autostart={route.query.auto === "1"} />}
-      {key === "control" && <ControlTab focusNode={runIdParam} />}
-      {key === "replay" && <ReplayTab runId={runIdParam} cursor={route.query.cursor} seq={route.query.seq} node={route.query.node} />}
-      {key === "get started" && <Onboarding />}
-      {key === "config builder" && <ConfigBuilder />}
-      {key === "health" && <Health />}
-      {key === "regression" && <Regression />}
-      {key === "expert" && <ExpertView />}
+      {key === "evidence" && <Evidence />}
+      {key === "catch" && <Experiment runId={runIdParam} autostart={route.query.auto === "1"} />}
+      {key === "explain" && <ReplayTab runId={runIdParam} cursor={route.query.cursor} seq={route.query.seq} node={route.query.node} />}
+      {key === "prevent" && <Regression />}
+      {key === "govern" && (
+        <>
+          <SubNav
+            items={[["govern", "live nodes"], ["health", "health"]]}
+            active={head === "health" ? "health" : "govern"}
+          />
+          {head === "health" ? <Health /> : <ControlTab focusNode={runIdParam} />}
+        </>
+      )}
+      {key === "connect" && (
+        <>
+          <SubNav
+            items={[["connect", "connect an agent"], ["config-builder", "build a config"]]}
+            active={head === "config-builder" ? "config-builder" : "connect"}
+          />
+          {head === "config-builder" ? <ConfigBuilder /> : <Onboarding />}
+        </>
+      )}
       {key === "pricing" && <Pricing />}
       {key === "settings" && <Settings />}
-      {!(KNOWN as readonly string[]).includes(key) && (
+      {!KNOWN.includes(key) && (
         <div style={{ maxWidth: 640, margin: "0 auto", fontFamily: MONO, fontSize: 12.5, color: C.mut }}>
           No page at <span style={{ color: C.text }}>#/{route.segments.join("/")}</span>.{" "}
           <span style={{ color: C.steel, cursor: "pointer" }} onClick={() => navigate("home")}>Go home →</span>
@@ -143,48 +180,44 @@ export default function App() {
   );
 }
 
-function MoreMenu({ activeKey }: { activeKey: string }) {
-  const inMore = (MORE as readonly string[]).includes(activeKey);
-  const ref = useRef<HTMLDetailsElement>(null);
-  // A <details> only closes on its own summary; close it on any outside click.
-  useEffect(() => {
-    const onDown = (e: MouseEvent): void => {
-      if (ref.current?.open && !ref.current.contains(e.target as Node)) {
-        ref.current.removeAttribute("open");
-      }
-    };
-    document.addEventListener("mousedown", onDown);
-    return () => document.removeEventListener("mousedown", onDown);
-  }, []);
+/** Two views of one job, side by side (Govern: nodes | health; Connect:
+ * agent | config). Each keeps its own route, so both stay deep-linkable. */
+function SubNav({ items, active }: { items: [string, string][]; active: string }) {
   return (
-    <div style={{ position: "relative" }} className="group">
-      <details ref={ref}>
-        <summary
+    <div className="flex gap-2 flex-wrap" style={{ maxWidth: 640, margin: "-20px auto 20px" }}>
+      {items.map(([route, label]) => (
+        <button
+          key={route}
+          onClick={() => navigate(route)}
+          aria-pressed={active === route}
           style={{
-            listStyle: "none", cursor: "pointer", color: inMore ? C.text : C.dim,
-            fontSize: 13, fontFamily: MONO, whiteSpace: "nowrap",
+            background: active === route ? "rgba(127,168,204,0.12)" : "none",
+            border: `1px solid ${active === route ? C.steel : C.line}`, borderRadius: 20,
+            padding: "4px 12px", cursor: "pointer", fontFamily: MONO, fontSize: 11,
+            color: active === route ? C.steel : C.mut,
           }}
         >
-          more…
-        </summary>
-        <div className="more-menu" style={{ position: "absolute", top: 24, background: C.panel, border: `1px solid ${C.line}`, borderRadius: 6, zIndex: 10, minWidth: 150 }}>
-          {MORE.map((id) => (
-            <button
-              key={id}
-              onClick={() => {
-                navigate(id.replace(/ /g, "-"));
-                (document.activeElement as HTMLElement)?.blur();
-                document.querySelectorAll("details[open]").forEach((d) => d.removeAttribute("open"));
-              }}
-              style={{ display: "flex", alignItems: "center", gap: 6, width: "100%", textAlign: "left", background: "none", border: "none", padding: "8px 12px", cursor: "pointer", color: activeKey === id ? C.text : C.mut, fontSize: 12, fontFamily: MONO }}
-            >
-              {id === "settings" && <SettingsIcon size={12} />}
-              {id}
-            </button>
-          ))}
-        </div>
-      </details>
+          {label}
+        </button>
+      ))}
     </div>
+  );
+}
+
+function SettingsButton({ active }: { active: boolean }) {
+  return (
+    <button
+      onClick={() => navigate("settings")}
+      aria-label="settings"
+      title="settings"
+      style={{
+        display: "flex", alignItems: "center", background: "none", cursor: "pointer",
+        border: `1px solid ${active ? C.steel : C.line}`, borderRadius: 20, padding: "5px 8px",
+        color: active ? C.steel : C.mut,
+      }}
+    >
+      <SettingsIcon size={13} />
+    </button>
   );
 }
 
@@ -259,15 +292,33 @@ function VersionBadge() {
 
 function ConnectionBadge() {
   const { mode } = useApp((s) => s.connection);
-  const color = mode === "adapter" ? C.green : mode === "none" ? C.dim : C.steel;
+  if (mode === "none") {
+    // the first step, so it is a button that says what it does — not a grey
+    // status pill that happens to be clickable
+    return (
+      <button
+        onClick={() => navigate("connect")}
+        style={{
+          display: "flex", alignItems: "center", gap: 6, background: C.steel, cursor: "pointer",
+          border: `1px solid ${C.steel}`, borderRadius: 20, padding: "4px 12px",
+          color: C.bg, fontFamily: MONO, fontSize: 10.5, fontWeight: 700, whiteSpace: "nowrap",
+        }}
+      >
+        <Plug size={11} /> connect
+      </button>
+    );
+  }
+  const color = mode === "adapter" ? C.green : C.steel;
   return (
     <button
-      onClick={() => navigate("get-started")}
-      title="connection status"
-      style={{ display: "flex", alignItems: "center", gap: 6, background: "none", border: `1px solid ${C.line}`, borderRadius: 20, padding: "4px 10px", cursor: "pointer" }}
+      onClick={() => navigate("connect")}
+      title={`connection: ${MODE_LABEL[mode]}`}
+      aria-label={`connection: ${MODE_LABEL[mode]}`}
+      style={{ display: "flex", alignItems: "center", gap: 6, background: "none", border: `1px solid ${C.line}`, borderRadius: 20, padding: "6px 10px", cursor: "pointer" }}
     >
       <Circle size={7} fill={color} color={color} />
-      <span style={{ fontFamily: MONO, fontSize: 10.5, color: C.mut, whiteSpace: "nowrap" }}>{MODE_LABEL[mode]}</span>
+      {/* on a phone the dot alone: the full mode is one tap away, on Connect */}
+      <span className="hide-narrow" style={{ fontFamily: MONO, fontSize: 10.5, color: C.mut, whiteSpace: "nowrap" }}>{MODE_LABEL[mode]}</span>
     </button>
   );
 }

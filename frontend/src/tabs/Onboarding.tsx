@@ -139,7 +139,7 @@ export default function Onboarding() {
 
   const finish = (): void => {
     connect(depth, tools);
-    navigate("eval");
+    navigate("catch");
   };
 
   const addTool = () => {

@@ -46,26 +46,48 @@ test.describe("shell", () => {
     await expect(page.getByRole("button", { name: "sign in", exact: true })).toHaveCount(0);
   });
 
-  test("an unconnected visit reads as not connected", async ({ page }) => {
+  test("an unconnected visit offers to connect, as a button that says so", async ({ page }) => {
     await goHash(page, "home");
-    await expect(page.getByText("not connected")).toBeVisible();
+    await page.getByRole("button", { name: "connect", exact: true }).click();
+    await expect(page).toHaveURL(/#\/connect$/);
+    await expect(page.getByText(/What tools does your agent use\?/)).toBeVisible();
   });
 
-  test("primary nav is the loop: eval / replay / regression, with control greyed until adapter", async ({ page }) => {
+  test("primary nav is the product's loop: evidence, catch, explain, prevent, govern", async ({ page }) => {
     await goHash(page, "home");
-    for (const id of ["eval", "replay", "regression"]) {
-      await expect(page.getByRole("button", { name: id, exact: true })).toBeVisible();
+    for (const [label, route] of [
+      ["Evidence", "evidence"], ["Catch", "catch"], ["Explain", "explain"],
+      ["Prevent", "prevent"], ["Govern", "govern"],
+    ]) {
+      await page.getByRole("button", { name: label, exact: true }).click();
+      await expect(page).toHaveURL(new RegExp(`#/${route}$`));
     }
-    // Control is shown as the fourth rung but locked until an adapter connection.
-    await expect(page.getByRole("button", { name: "control", exact: true })).toBeVisible();
+    // nothing is hidden behind a "more…" any longer
+    await expect(page.getByText("more…")).toHaveCount(0);
   });
 
-  test("the more… menu reaches a secondary surface (pricing)", async ({ page }) => {
+  test("old links still land: eval, replay, regression, control, health, get-started", async ({ page }) => {
+    await setConnection(page, { mode: "adapter" });
+    const cases: [string, string][] = [
+      ["eval", "Catch"], ["replay", "Explain"], ["regression", "Prevent"],
+      ["control", "Govern"], ["health", "Govern"], ["get-started", "Evidence"],
+    ];
+    for (const [hash, active] of cases) {
+      await goHash(page, hash);
+      if (hash === "get-started") {
+        await expect(page.getByText(/What tools does your agent use\?/)).toBeVisible();
+      } else {
+        await expect(page.getByRole("button", { name: active, exact: true })).toHaveAttribute("aria-current", "page");
+      }
+    }
+  });
+
+  test("settings is one click from the header, and pricing one more", async ({ page }) => {
     await goHash(page, "home");
-    await page.getByText("more…", { exact: true }).click();
-    await page.getByRole("button", { name: "pricing", exact: true }).click();
+    await page.getByRole("button", { name: "settings" }).click();
+    await expect(page).toHaveURL(/#\/settings$/);
+    await page.getByRole("button", { name: /plans & pricing/ }).click();
     await expect(page.getByRole("heading", { name: "Pricing" })).toBeVisible();
-    await expect(page).toHaveURL(/#\/pricing/);
   });
 
   test("every surface is addressable by a deep link", async ({ page }) => {

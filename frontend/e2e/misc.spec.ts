@@ -169,11 +169,11 @@ test.describe("home demo accordion", () => {
     await expect(page.locator("#home-demo")).toHaveCount(0);
   });
 
-  test("the receipt's call to action goes to get started, inside the app", async ({ page }) => {
+  test("the receipt's call to action goes to connect, inside the app", async ({ page }) => {
     await page.goto("/#/home");
     await page.getByRole("button", { name: /Watch the demo/ }).click();
     await page.getByRole("button", { name: /Try it on your agent/ }).click({ timeout: 20_000 });
-    await expect(page).toHaveURL(/#\/get-started$/);
+    await expect(page).toHaveURL(/#\/connect$/);
   });
 });
 

@@ -532,7 +532,7 @@ export default function Regression({ initialConfig }: { initialConfig?: string }
                         <div className="flex items-center gap-2">
                           <button
                             onClick={() =>
-                              navigate(`replay/${r.run_id}`, {
+                              navigate(`explain/${r.run_id}`, {
                                 seq: r.escaped_denials[0]?.seq
                                   ?? r.new_denial?.seq ?? r.first_divergence ?? undefined,
                                 node: r.escaped_denials[0]?.node_id,
@@ -540,7 +540,7 @@ export default function Regression({ initialConfig }: { initialConfig?: string }
                             }
                             style={btn({ color: C.steel, fontSize: 11, padding: "5px 10px" })}
                           >
-                            <Play size={11} /> open in replay at divergence
+                            <Play size={11} /> explain at divergence
                           </button>
                         </div>
                       </div>

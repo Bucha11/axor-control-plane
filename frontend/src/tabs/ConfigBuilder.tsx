@@ -675,7 +675,7 @@ export default function ConfigBuilder() {
         </Tooltip>
         {emitted && (
           <span style={{ fontFamily: MONO, fontSize: 12, color: C.green, display: "flex", alignItems: "center", gap: 6 }}>
-            <Check size={13} /> saved · <span style={{ color: C.steel, cursor: "pointer" }} onClick={() => navigate("eval")}>run first governed experiment →</span>
+            <Check size={13} /> saved · <span style={{ color: C.steel, cursor: "pointer" }} onClick={() => navigate("catch")}>run first governed experiment →</span>
           </span>
         )}
         {manifestsSaved && !wrapMissing && !manifestsErr && (

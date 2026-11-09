@@ -7,6 +7,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Check, Copy, Loader2, Trash2 } from "lucide-react";
 import { api } from "../api";
 import { IdentityError, login, logout, signup, signupAvailable } from "../identity";
+import { navigate } from "../router";
 import { MODE_LABEL, useApp } from "../store";
 import { C, MONO, btn } from "../theme";
 import Coach from "../components/Coach";
@@ -300,7 +301,13 @@ export default function Settings() {
         something is actually wrong — and failed deliveries land in the
         dead-letter log instead of vanishing.
       </Coach>
-      <h1 style={{ fontSize: 22, fontWeight: 650, margin: "0 0 20px" }}>Settings</h1>
+      <div className="flex items-center justify-between flex-wrap" style={{ gap: 8, margin: "0 0 20px" }}>
+        <h1 style={{ fontSize: 22, fontWeight: 650, margin: 0 }}>Settings</h1>
+        <button onClick={() => navigate("pricing")}
+          style={{ background: "none", border: "none", color: C.steel, fontFamily: MONO, fontSize: 11.5, cursor: "pointer", padding: 0 }}>
+          plans &amp; pricing →
+        </button>
+      </div>
 
       {/* Learn mode — the adoption layer's own controls */}
       <Section title="LEARN MODE">

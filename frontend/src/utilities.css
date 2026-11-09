@@ -34,18 +34,26 @@ html, body { margin: 0; background: #12161A; }  /* C.bg: no white beyond the app
 }
 .app-header-left { display: flex; align-items: center; gap: 24px; min-width: 0; }
 .app-header-right { display: flex; align-items: center; gap: 12px; flex-shrink: 0; }
-.app-nav { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
+.app-nav { display: flex; align-items: center; gap: 16px; flex-wrap: nowrap; white-space: nowrap; }
 .more-menu { left: 0; }
 
-@media (max-width: 760px) {
-  /* row 1: logo + account controls; row 2: the nav, full width */
+/* between a phone and a wide screen the version badge is the first thing to go,
+   so the nav stays on one line */
+@media (max-width: 1100px) { .hide-medium { display: none; } }
+
+/* below this the nav and the account controls no longer fit one line:
+   row 1 logo + account controls, row 2 the nav, full width */
+@media (max-width: 1000px) {
   .app-header {
     display: grid; grid-template-columns: 1fr auto; row-gap: 14px; column-gap: 12px;
   }
   .app-header-left { display: contents; }
   .app-logo { grid-column: 1; grid-row: 1; justify-self: start; }
   .app-header-right { grid-column: 2; grid-row: 1; gap: 8px; }
-  .app-nav { grid-column: 1 / -1; grid-row: 2; gap: 12px 14px; }
+  .app-nav { grid-column: 1 / -1; grid-row: 2; gap: 12px 14px; flex-wrap: wrap; }
+}
+
+@media (max-width: 760px) {
   .hide-narrow { display: none; }
   /* `more…` sits at the right of the nav on a phone: open toward the left */
   .more-menu { left: auto; right: 0; }

@@ -52,7 +52,6 @@ test.describe("adoption", () => {
       ["get-started", "byte-for-byte"],
       ["health", "localizer blames"],
       ["settings", "dead-letter"],
-      ["expert", "one screen"],
       ["pricing", "one ladder"],
     ];
     for (const [hash, expected] of cases) {
