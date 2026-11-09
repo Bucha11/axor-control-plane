@@ -19,6 +19,14 @@ test.describe("shell", () => {
   });
 
   test("the product is visible first; sign-in is one click from the header", async ({ page }) => {
+    // a deployment with auth ON (this suite's backend runs with it off)
+    await page.route("**/v1/auth/status", (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ auth_enabled: true, authenticated: false, scopes: [] }),
+      }),
+    );
     await goHash(page, "home");
     // No wall: the funnel is on screen before anyone has an account.
     await expect(page.getByText("Your agent lies when its tools fail.")).toBeVisible();
@@ -30,6 +38,12 @@ test.describe("shell", () => {
     await expect(dialog.getByLabel("password")).toBeVisible();
     await page.keyboard.press("Escape");
     await expect(dialog).toHaveCount(0);
+  });
+
+  test("with auth off (a local run) there is no sign-in to offer", async ({ page }) => {
+    await goHash(page, "home");
+    await expect(page.getByText("Your agent lies when its tools fail.")).toBeVisible();
+    await expect(page.getByRole("button", { name: "sign in", exact: true })).toHaveCount(0);
   });
 
   test("an unconnected visit reads as not connected", async ({ page }) => {

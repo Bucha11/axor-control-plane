@@ -278,6 +278,20 @@ function AccountButton() {
   const email = useApp((s) => s.identityEmail);
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
+  // A local `docker compose up` runs with auth OFF: every request already
+  // works, and a "sign in" there is a button that changes nothing. Asked once;
+  // a failed probe keeps the button, since offering a login is the safe side.
+  const [authOn, setAuthOn] = useState<boolean | null>(null);
+  useEffect(() => {
+    let alive = true;
+    api
+      .authStatus()
+      .then((st) => alive && setAuthOn(st.auth_enabled))
+      .catch(() => alive && setAuthOn(true));
+    return () => {
+      alive = false;
+    };
+  }, []);
   useEffect(() => {
     if (!open) return;
     const close = (e: MouseEvent) => {
@@ -291,6 +305,7 @@ function AccountButton() {
       document.removeEventListener("keydown", esc);
     };
   }, [open]);
+  if (authOn !== true && !email) return null;
   return (
     <div ref={ref} style={{ position: "relative" }}>
       <button
