@@ -42,7 +42,13 @@ export default function Evidence() {
 
   return (
     <div style={{ maxWidth: 640, margin: "0 auto" }}>
-      <h1 style={{ fontSize: 22, fontWeight: 700, margin: "0 0 6px" }}>Caught lies</h1>
+      <div className="flex items-center justify-between flex-wrap" style={{ gap: 8, margin: "0 0 6px" }}>
+        <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>Caught lies</h1>
+        <button onClick={() => navigate("catch")}
+          style={{ display: "flex", alignItems: "center", gap: 5, background: "none", border: `1px solid ${C.steel}`, borderRadius: 5, color: C.steel, fontFamily: MONO, fontSize: 11.5, padding: "5px 12px", cursor: "pointer" }}>
+          <Zap size={12} /> test an agent
+        </button>
+      </div>
       <div style={{ fontFamily: MONO, fontSize: 11.5, color: C.dim, marginBottom: 22, lineHeight: 1.6 }}>
         every time an agent claimed something its tools never gave it — what the tool
         really returned, next to what the agent said. replay any one to see how it happened.

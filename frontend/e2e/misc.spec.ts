@@ -172,11 +172,10 @@ test.describe("home demo accordion", () => {
     await expect(page).toHaveURL(/#\/home$/);
     // autoplay: no "Run the recording" click needed. It walks the whole loop,
     // in order, and each step leaves its card behind.
-    await expect(page.getByTestId("demo-catch")).toContainText("FABRICATED TOOL RESULT", { timeout: 20_000 });
-    await expect(page.getByTestId("demo-explain")).toContainText("no source", { timeout: 10_000 });
-    await expect(page.getByTestId("demo-prevent")).toContainText("must-block", { timeout: 10_000 });
-    await expect(page.getByTestId("demo-govern")).toContainText("DENIED", { timeout: 10_000 });
+    await expect(page.getByTestId("demo-govern")).toContainText("DENIED", { timeout: 15_000 });
+    await expect(page.getByTestId("demo-watch")).toContainText("flagged", { timeout: 10_000 });
     await expect(page.getByTestId("demo-repair")).toContainText("healthy", { timeout: 12_000 });
+    await expect(page.getByTestId("demo-catch")).toContainText("FABRICATED TOOL RESULT", { timeout: 15_000 });
 
     await toggle.click();
     await expect(toggle).toHaveAttribute("aria-expanded", "false");
@@ -186,7 +185,7 @@ test.describe("home demo accordion", () => {
   test("the receipt's call to action goes to connect, inside the app", async ({ page }) => {
     await page.goto("/#/home");
     await page.getByRole("button", { name: /Watch the demo/ }).click();
-    await page.getByRole("button", { name: /Catch one on your agent/ }).click({ timeout: 40_000 });
+    await page.getByRole("button", { name: /Govern your agent/ }).click({ timeout: 40_000 });
     await expect(page).toHaveURL(/#\/connect$/);
   });
 });

@@ -27,7 +27,7 @@ test.describe("tour", () => {
     await expect(page).toHaveURL(/#\/explain/);
 
     await next.click();
-    await expect(dialog.getByText("Live agents — operate them live")).toBeVisible();
+    await expect(dialog.getByText("Agents — operate them live")).toBeVisible();
     await expect(page).toHaveURL(/#\/govern/);
 
     await next.click();

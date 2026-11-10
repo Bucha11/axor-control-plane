@@ -88,3 +88,15 @@ async def test_cut_then_reprobe_closes_the_heal(client: httpx.AsyncClient) -> No
     assert outcome and outcome[0]["resolved"] is True
     repair = (await client.get(f"/v1/plane/{node}/repair")).json()
     assert repair["pending"] is None
+
+
+async def test_the_fleet_list_carries_sentinel_and_probe(client: httpx.AsyncClient) -> None:
+    """The list cannot say "healthy" about a node whose sentinel flagged a
+    resource or whose last health check drifted — it now carries both."""
+    await _seed(client)
+    by_id = {n["node_id"]: n for n in (await client.get("/v1/plane/nodes")).json()}
+    assert by_id[demo.FLEET_SENTINEL_NODE]["reputation"]["flagged"] == 1
+    assert by_id[demo.FLEET_PROBE_NODE]["probe"]["verdict"] == "DRIFT_DETECTED"
+    # nothing reported is absent, not clean
+    assert by_id[demo.TREE_WRITER]["reputation"] is None
+    assert by_id[demo.TREE_WRITER]["probe"] is None

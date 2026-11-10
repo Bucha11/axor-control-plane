@@ -4,7 +4,7 @@ import { expect, test } from "@playwright/test";
 import { goHash, setConnection } from "./helpers";
 
 test.describe("evidence", () => {
-  test("a case caught by Test an agent is listed, and opens in Replay", async ({ page }) => {
+  test("a case caught by a fault test is listed, and opens in Replay", async ({ page }) => {
     await setConnection(page, { mode: "demo" });
     await goHash(page, "catch");
     await page.getByRole("button", { name: /Run experiment/ }).click();
@@ -20,8 +20,8 @@ test.describe("evidence", () => {
     await expect(page).toHaveURL(/#\/explain\/[^/?]+/);
   });
 
-  test("a connected visit with no route lands on Evidence", async ({ page }) => {
-    await setConnection(page, { mode: "demo" });
+  test("a proxy-connected visit with no route lands on Caught lies", async ({ page }) => {
+    await setConnection(page, { mode: "proxy" });
     await page.goto("/");
     await expect(page).toHaveURL(/#\/evidence$/);
     await expect(page.getByRole("heading", { name: "Caught lies" })).toBeVisible();

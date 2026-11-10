@@ -24,7 +24,9 @@ test.describe("control", () => {
     await seedNode(request, node);
     await setConnection(page, { mode: "adapter" });
     await goHash(page, "control");
-    await expect(page.getByRole("heading", { name: "All agents healthy." })).toBeVisible();
+    // the suite shares one backend, and other specs leave the example fleet on
+    // it (a flagged resource, a drifting agent) — the heading is not this test's
+    await expect(page.getByRole("heading", { name: /All agents healthy\.|needs? attention\./ })).toBeVisible();
     await page.getByText(node, { exact: true }).click();
     await expect(page.getByText("desired", { exact: false }).first()).toBeVisible();
     await expect(page.getByText("reported", { exact: false }).first()).toBeVisible();

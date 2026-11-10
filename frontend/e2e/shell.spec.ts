@@ -5,26 +5,34 @@ import { expect, test } from "@playwright/test";
 import { goHash, setConnection } from "./helpers";
 
 test.describe("shell", () => {
-  test("a first visit is one plain sentence, the recording, and two ways to try — no menu", async ({ page }) => {
+  test("a first visit leads with governance: one sentence, two ways in, the recording — no menu", async ({ page }) => {
     await goHash(page, "home");
     await expect(page.getByTestId("first-visit")).toBeVisible();
-    await expect(page.getByText("Your AI agent makes things up when its tools break.")).toBeVisible();
-    // the recording plays on its own, without a click
-    await expect(page.getByTestId("demo-catch")).toBeVisible({ timeout: 20_000 });
-    await expect(page.getByRole("button", { name: /Try it on our demo agent/ })).toBeVisible();
-    await expect(page.getByRole("button", { name: /Test my own agent/ })).toBeVisible();
+    await expect(page.getByText("Decide what your AI agents are allowed to do.")).toBeVisible();
+    // the recording plays on its own, and opens on governance
+    await expect(page.getByTestId("demo-govern")).toBeVisible({ timeout: 20_000 });
+    await expect(page.getByRole("button", { name: /See it govern an example fleet/ })).toBeVisible();
+    await expect(page.getByRole("button", { name: /Govern my own agent/ })).toBeVisible();
     // none of the product's vocabulary before there is something in it
-    for (const label of ["Caught lies", "Test an agent", "Replay", "Safe to ship?", "Live agents"]) {
+    for (const label of ["Agents", "Policy", "Caught lies", "Replay", "Safe to ship?"]) {
       await expect(page.getByRole("button", { name: label, exact: true })).toHaveCount(0);
     }
     await expect(page.getByRole("button", { name: "settings" })).toHaveCount(0);
   });
 
-  test("trying the demo agent brings the menu with it", async ({ page }) => {
+  test("the example fleet opens on the governed agents, with the menu", async ({ page }) => {
     await goHash(page, "home");
-    await page.getByRole("button", { name: /Try it on our demo agent/ }).click();
+    await page.getByRole("button", { name: /See it govern an example fleet/ }).click();
+    await expect(page).toHaveURL(/#\/govern$/);
+    await expect(page.getByRole("button", { name: "Agents", exact: true })).toHaveAttribute("aria-current", "page");
+  });
+
+  test("the no-code way in still catches a made-up answer", async ({ page }) => {
+    await goHash(page, "home");
+    await page.getByRole("button", { name: /catch an agent making things up/ }).click();
     await expect(page).toHaveURL(/#\/catch\?auto=1/);
-    await expect(page.getByRole("button", { name: "Caught lies", exact: true })).toBeVisible();
+    // the test screen belongs to Caught lies
+    await expect(page.getByRole("button", { name: "Caught lies", exact: true })).toHaveAttribute("aria-current", "page");
   });
 
   test("the product is visible first; sign-in is one click from the header", async ({ page }) => {
@@ -38,7 +46,7 @@ test.describe("shell", () => {
     );
     await goHash(page, "home");
     // No wall: the funnel is on screen before anyone has an account.
-    await expect(page.getByText("Your AI agent makes things up when its tools break.")).toBeVisible();
+    await expect(page.getByText("Decide what your AI agents are allowed to do.")).toBeVisible();
     await expect(page.getByLabel("email")).toHaveCount(0);
     // ...and signing in is not a trip to Settings.
     await page.getByRole("button", { name: "sign in", exact: true }).click();
@@ -51,13 +59,13 @@ test.describe("shell", () => {
 
   test("with auth off (a local run) there is no sign-in to offer", async ({ page }) => {
     await goHash(page, "home");
-    await expect(page.getByText("Your AI agent makes things up when its tools break.")).toBeVisible();
+    await expect(page.getByText("Decide what your AI agents are allowed to do.")).toBeVisible();
     await expect(page.getByRole("button", { name: "sign in", exact: true })).toHaveCount(0);
   });
 
-  test("testing your own agent starts at connect", async ({ page }) => {
+  test("governing your own agent starts at connect", async ({ page }) => {
     await goHash(page, "home");
-    await page.getByRole("button", { name: /Test my own agent/ }).click();
+    await page.getByRole("button", { name: /Govern my own agent/ }).click();
     await expect(page).toHaveURL(/#\/connect$/);
     await expect(page.getByText(/What tools does your agent use\?/)).toBeVisible();
   });
@@ -73,8 +81,8 @@ test.describe("shell", () => {
     await setConnection(page, { mode: "demo" });
     await goHash(page, "home");
     for (const [label, route] of [
-      ["Caught lies", "evidence"], ["Test an agent", "catch"], ["Replay", "explain"],
-      ["Safe to ship?", "prevent"], ["Live agents", "govern"],
+      ["Agents", "govern"], ["Policy", "policy"], ["Caught lies", "evidence"],
+      ["Replay", "explain"], ["Safe to ship?", "prevent"],
     ]) {
       await page.getByRole("button", { name: label, exact: true }).click();
       await expect(page).toHaveURL(new RegExp(`#/${route}$`));
@@ -86,8 +94,8 @@ test.describe("shell", () => {
   test("old links still land: eval, replay, regression, control, health, get-started", async ({ page }) => {
     await setConnection(page, { mode: "adapter" });
     const cases: [string, string][] = [
-      ["eval", "Test an agent"], ["replay", "Replay"], ["regression", "Safe to ship?"],
-      ["control", "Live agents"], ["health", "Live agents"], ["get-started", ""],
+      ["eval", "Caught lies"], ["replay", "Replay"], ["regression", "Safe to ship?"],
+      ["control", "Agents"], ["health", "Agents"], ["config-builder", "Policy"], ["get-started", ""],
     ];
     for (const [hash, active] of cases) {
       await goHash(page, hash);

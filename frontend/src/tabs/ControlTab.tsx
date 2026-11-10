@@ -123,7 +123,24 @@ function ReputationCard({ nodeId }: { nodeId: string }) {
 }
 
 function isHot(n: NodeInfo): boolean {
-  return (n.reported?.level ?? "NORMAL") !== "NORMAL";
+  return attention(n).length > 0;
+}
+
+/** Why a node needs a look — its degradation level, what its sentinel flagged
+ * across sessions, and whether its last health check drifted. The list used to
+ * read only the level, so it said "all agents healthy" beside a flagged
+ * resource and a drifting agent. Each reason links to where it is explained. */
+function attention(n: NodeInfo): { label: string; color: string; route?: string }[] {
+  const out: { label: string; color: string; route?: string }[] = [];
+  const level = n.reported?.level ?? "NORMAL";
+  if (level !== "NORMAL") out.push({ label: level, color: C.amber });
+  if (n.reputation && n.reputation.flagged > 0) {
+    out.push({ label: `sentinel · ${n.reputation.flagged} flagged`, color: C.red, route: "sentinel" });
+  }
+  if (n.probe?.verdict === "DRIFT_DETECTED") {
+    out.push({ label: "probe · drift", color: C.amber, route: "health" });
+  }
+  return out;
 }
 
 // Spawn a REAL governed node (axor-core IntentLoop) on the proxy: it runs a
@@ -250,6 +267,9 @@ export function ExampleFleet({ compact = false }: { compact?: boolean }) {
 
 export default function ControlTab({ focusNode }: { focusNode?: string }) {
   const { mode, testBench } = useApp((s) => s.connection);
+  const fleet = useQuery({ queryKey: ["nodes"], queryFn: api.nodes });
+  // once the example fleet is on the plane, offering to load it again is noise
+  const fleetLoaded = (fleet.data ?? []).some((n) => n.node_id === "tree-orch");
   // Live control of YOUR agents needs the adapter — the proxy has no handle on
   // internal topology (spec section 12). That used to be a locked page with
   // nothing behind it; now the page is open, says so up front, and has an
@@ -262,8 +282,8 @@ export default function ControlTab({ focusNode }: { focusNode?: string }) {
           live control of <span style={{ color: C.text }}>your</span> agents needs the adapter
           (wrap the agent with axor-core — <span style={{ color: C.steel, cursor: "pointer" }}
             onClick={() => navigate("connect")}>connect →</span>). until then, everything here
-          works on an example fleet:
-          <ExampleFleet />
+          works on {fleetLoaded ? "the" : "an"} example fleet{fleetLoaded ? "." : ":"}
+          {!fleetLoaded && <ExampleFleet />}
           <SpawnGoverned switchToAdapter />
         </div>
       )}
@@ -389,7 +409,7 @@ function ControlBody({ focusNode, testBench }: { focusNode?: string; testBench: 
   }
 
   const node = list.find((n) => n.node_id === sel) ?? null;
-  const anyHot = list.some(isHot);
+  const hotCount = list.filter(isHot).length;
 
   const desired = node?.desired ?? null;
   const reported = node?.reported ?? null;
@@ -418,7 +438,9 @@ function ControlBody({ focusNode, testBench }: { focusNode?: string; testBench: 
         interventions travel over the plane and the node obeys on its next turn.
       </Coach>
       <h1 style={{ fontSize: 22, fontWeight: 650, margin: "0 0 4px" }}>
-        {anyHot ? <>One agent needs attention.</> : <>All agents healthy.</>}
+        {hotCount === 0 ? <>All agents healthy.</>
+          : hotCount === 1 ? <>One agent needs attention.</>
+          : <>{hotCount} agents need attention.</>}
       </h1>
       <div className="flex items-center gap-4" style={{ fontFamily: MONO, fontSize: 11, color: C.mut, marginBottom: 20 }}>
         <span>{list.length} node{list.length === 1 ? "" : "s"} · live</span>
@@ -476,11 +498,15 @@ function ControlBody({ focusNode, testBench }: { focusNode?: string; testBench: 
               <span style={{ fontFamily: MONO, fontSize: 13, color: C.text, flex: 1 }}>
                 {n.node_id}
               </span>
-              {hot && (
-                <span style={{ fontFamily: MONO, fontSize: 10, color: C.amber }}>
-                  {n.reported?.level}
-                </span>
-              )}
+              {hot && attention(n).map((a) => (
+                <button key={a.label}
+                  onClick={(e) => { if (a.route) { e.stopPropagation(); navigate(a.route); } }}
+                  style={{ fontFamily: MONO, fontSize: 10, color: a.color, background: "none",
+                           border: `1px solid ${a.color}`, borderRadius: 20, padding: "1px 8px",
+                           cursor: a.route ? "pointer" : "default" }}>
+                  {a.label}{a.route ? " →" : ""}
+                </button>
+              ))}
             </div>
           );
         })}

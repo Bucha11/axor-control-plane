@@ -169,7 +169,7 @@ export default function ReplayTab({ runId: runIdProp, cursor: cursorProp, seq: s
       <div style={{ maxWidth: 640, margin: "0 auto" }}>
         <div data-tour="replay-picker">
           <div style={{ fontFamily: MONO, fontSize: 12.5, color: C.mut, marginBottom: 12 }}>
-            No runs yet. Catch one first, on Test an agent —
+            No runs yet. Catch one first, from Caught lies —
           </div>
           <SeedButton label="or load an example adapter run →" />
         </div>

@@ -29,10 +29,10 @@ export const TOUR: TourStep[] = [
   },
   {
     route: "home", target: "ladder", title: "Three ways in",
-    body: "Demo-mode: our scripted agent, mock tools, zero credentials. Proxy: we sit in front of YOUR tools, observe-only, no code change. Adapter: your agent wrapped in axor-core for full governance — that's what unlocks Live agents.",
+    body: "Demo-mode: our scripted agent, mock tools, zero credentials. Proxy: we sit in front of YOUR tools, observe-only, no code change. Adapter: your agent wrapped in axor-core for full governance — that's what lets you govern your own agents live.",
   },
   {
-    route: "catch", target: "eval-config", title: "Test an agent — break a tool, catch the lie",
+    route: "catch", target: "eval-config", title: "Caught lies — break a tool, catch the lie",
     body: "Pick a tool to deprive and how. The agent runs; we compare what actually happened against what it claimed. The mismatch becomes an EvidenceCase — a reproducible receipt (not a score) that you can replay, share, and export.",
   },
   {
@@ -40,7 +40,7 @@ export const TOUR: TourStep[] = [
     body: "Every recorded step, scrubbable, coloured by verdict. 'What if…' forks a counterfactual: edit the policy and the recorded trace re-gates deterministically, showing the first step where the outcome diverges. No model call involved.",
   },
   {
-    route: "govern", target: "spawn", title: "Live agents — operate them live",
+    route: "govern", target: "spawn", title: "Agents — operate them live",
     body: "Adapter-connected agents appear here as live nodes: pause them, cap their budgets (decrease-only), stop a whole subtree in one command. Try this button — it spawns a REAL governed node that heartbeats and obeys.",
   },
   {

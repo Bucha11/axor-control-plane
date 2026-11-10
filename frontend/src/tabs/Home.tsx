@@ -3,6 +3,7 @@
 // MY agent behave?" (Get Started). Depth opens on demand; nothing is pushed.
 import { useState } from "react";
 import { ArrowRight, ChevronDown, GraduationCap, Play, X, Zap } from "lucide-react";
+import { api } from "../api";
 import { C, MONO } from "../theme";
 import { navigate } from "../router";
 import { ConnectionMode, MODE_LABEL, isConnected, useApp } from "../store";
@@ -23,30 +24,41 @@ const LADDER: { mode: ConnectionMode; blurb: string }[] = [
 function FirstVisit() {
   const connect = useApp((s) => s.connect);
   const startTour = useStartTour();
+  const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const seeFleet = async () => {
+    setLoading(true);
+    setErr(null);
+    try {
+      await api.seedFleet();
+      connect("demo");
+      navigate("govern");
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setLoading(false);
+    }
+  };
   return (
     <div style={{ maxWidth: 640, margin: "0 auto" }} data-testid="first-visit">
       <h1 style={{ fontSize: "clamp(22px, 6vw, 28px)", fontWeight: 700, lineHeight: 1.25, margin: "0 0 10px" }}>
-        Your AI agent makes things up when its tools break.
+        Decide what your AI agents are allowed to do.
         <br />
-        <span style={{ color: C.steel }}>Axor catches it.</span>
+        <span style={{ color: C.steel }}>Axor enforces it where they touch your tools.</span>
       </h1>
       <div style={{ fontSize: 14.5, color: C.mut, lineHeight: 1.6, marginBottom: 20 }}>
-        A search times out, an API returns nothing — and the agent answers anyway, with
-        something it invented.
+        Policy — not the prompt — decides what an agent may read, send and run. Watch every
+        agent live, stop it, and repair it when its context goes bad.
       </div>
 
-      {/* the two ways in come BEFORE the recording: on a phone the recording
-          alone fills the first screen, and the buttons fell below the fold */}
-      <div className="flex flex-col" style={{ gap: 10, marginBottom: 26 }}>
-        <button
-          onClick={() => {
-            connect("demo");
-            navigate("catch", { auto: "1" });
-          }}
-          style={{ ...bigCta(C.green, true) }}
-        >
+      {/* the ways in come BEFORE the recording: on a phone the recording alone
+          fills the first screen */}
+      <div className="flex flex-col" style={{ gap: 10, marginBottom: 12 }}>
+        <button onClick={() => void seeFleet()} disabled={loading} style={{ ...bigCta(C.green, true) }}>
           <span>
-            <span style={{ display: "block", fontWeight: 700 }}>Try it on our demo agent</span>
+            <span style={{ display: "block", fontWeight: 700 }}>
+              {loading ? "Loading the example fleet…" : "See it govern an example fleet"}
+            </span>
             <span style={{ display: "block", fontSize: 12, opacity: 0.85, marginTop: 2 }}>
               one click · nothing to install · no account
             </span>
@@ -55,12 +67,25 @@ function FirstVisit() {
         </button>
         <button onClick={() => navigate("connect")} style={{ ...bigCta(C.steel, false) }}>
           <span>
-            <span style={{ display: "block", fontWeight: 700 }}>Test my own agent</span>
+            <span style={{ display: "block", fontWeight: 700 }}>Govern my own agent</span>
             <span style={{ display: "block", fontSize: 12, opacity: 0.85, marginTop: 2 }}>
-              about 5 minutes · no code change · your data stays yours
+              wrap it with axor-core · pause, cap, stop and repair it live
             </span>
           </span>
           <ArrowRight size={18} />
+        </button>
+      </div>
+      {err && <div style={{ fontFamily: MONO, fontSize: 11, color: C.red, marginBottom: 8 }}>{err}</div>}
+      <div style={{ fontSize: 13, color: C.mut, marginBottom: 26, lineHeight: 1.6 }}>
+        Not ready to change code?{" "}
+        <button
+          onClick={() => {
+            connect("demo");
+            navigate("catch", { auto: "1" });
+          }}
+          style={{ background: "none", border: "none", padding: 0, color: C.steel, cursor: "pointer", fontSize: 13, textAlign: "left" }}
+        >
+          See it catch an agent making things up when a tool breaks — no code →
         </button>
       </div>
 
@@ -143,12 +168,12 @@ function ConnectedHome() {
         </div>
       )}
       <h1 style={{ fontSize: 26, fontWeight: 700, lineHeight: 1.25, margin: "0 0 8px" }}>
-        Your agent lies when its tools fail.
+        Decide what your AI agents are allowed to do.
         <br />
-        <span style={{ color: C.mut }}>Catch it, then govern it.</span>
+        <span style={{ color: C.mut }}>Then prove it holds.</span>
       </h1>
       <div style={{ fontFamily: MONO, fontSize: 11.5, color: C.dim, marginBottom: 28 }}>
-        the EvidenceCase is the artifact — a reproducible caught discrepancy, not a score
+        policy at the tool boundary, enforced on the node — and every catch kept as a replayable test
       </div>
 
       {/* Demo — a showcase, not an onboarding step (spec section 4). An
@@ -167,7 +192,7 @@ function ConnectedHome() {
             <span>
               <span style={{ display: "block", fontFamily: MONO, fontSize: 13, color: C.text }}>Watch the demo</span>
               <span style={{ display: "block", fontFamily: MONO, fontSize: 10.5, color: C.dim }}>
-                catch · explain · prevent · govern · repair — the whole loop in ~25 seconds
+                govern · watch · repair · prove — the whole loop in ~25 seconds
               </span>
             </span>
           </span>
@@ -217,7 +242,7 @@ function ConnectedHome() {
               <Tooltip
                 content={rung.mode === "proxy"
                   ? "Put the proxy in front of YOUR tools (observe-only, ~5 min, no code change) to run the catch loop on your own agent."
-                  : "Wrap your agent as an axor-core Invokable for full governance — this unlocks Live agents."}
+                  : "Wrap your agent as an axor-core Invokable for full governance — this lets you govern it live."}
                 side="bottom"
               >
                 <button onClick={() => navigate("connect")} style={cta(C.steel)}>

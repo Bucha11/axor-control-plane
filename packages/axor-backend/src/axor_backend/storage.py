@@ -1758,6 +1758,29 @@ class Store:
             return None
         return {"id": row.id, "created_ts": row.created_ts, **row.payload_json}
 
+    async def latest_probe_verdicts(self) -> dict[str, dict[str, Any]]:
+        """Each node's LAST health check verdict, for the fleet list. One query
+        for the whole fleet — the list is polled, and a report per node would be
+        a round trip each. A node that never posted a battery is absent, which
+        the list renders as "no check", not as healthy."""
+        latest_id = (
+            select(probe_reports.c.node_id, func.max(probe_reports.c.id).label("id"))
+            .where(probe_reports.c.org_id == current_org_id())
+            .group_by(probe_reports.c.node_id)
+            .subquery()
+        )
+        async with self.engine.connect() as conn:
+            rows = (await conn.execute(
+                select(probe_reports.c.node_id, probe_reports.c.overall_verdict,
+                       probe_reports.c.created_ts, probe_reports.c.escape_count)
+                .join(latest_id, probe_reports.c.id == latest_id.c.id)
+            )).all()
+        return {
+            r.node_id: {"verdict": r.overall_verdict, "created_ts": r.created_ts,
+                        "escape_count": r.escape_count}
+            for r in rows
+        }
+
     async def probe_report_history(
         self, node_id: str, limit: int = 50,
     ) -> list[dict[str, Any]]:

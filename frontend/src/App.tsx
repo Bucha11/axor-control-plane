@@ -2,13 +2,13 @@
 // surface is reachable by a deep link so EvidenceCases, replay moments and share
 // permalinks are addressable.
 //
-// The nav IS the product's loop, in words a first-time visitor already has:
-//   Caught lies    (#/evidence) — every EvidenceCase caught so far
-//   Test an agent  (#/catch)    — break a tool, see whether it makes things up
+// The nav leads with governance, the product; the catch loop is its proof:
+//   Agents         (#/govern)   — governed agents: graph, sentinel, health & repair
+//   Policy         (#/policy)   — what each agent may read, send and run
+//   Caught lies    (#/evidence) — every EvidenceCase caught (tests run at #/catch)
 //   Replay         (#/explain)  — step through a run, fork what-ifs
-//   Safe to ship?  (#/prevent)  — a config change against the caught cases
-//   Live agents    (#/govern)   — running governed agents and their health
-// Route names stay as they were; only what the reader sees changed.
+//   Safe to ship?  (#/prevent)  — a policy change against the caught cases
+// Older route names stay as aliases, so no shared link breaks.
 // It used to read eval · replay · regression · control · more…, which named
 // the machinery instead of the job, and hid the first step (get started) and a
 // static mock (expert) behind the same "more".
@@ -17,7 +17,7 @@ import { Circle, GraduationCap, Plug, Settings as SettingsIcon } from "lucide-re
 import { api } from "./api";
 import { C, MONO } from "./theme";
 import { navigate, useRoute } from "./router";
-import { ConnectionMode, MODE_LABEL, isConnected, useApp } from "./store";
+import { MODE_LABEL, isConnected, useApp } from "./store";
 import Tooltip from "./components/Tooltip";
 import Tour from "./components/Tour";
 import Home from "./tabs/Home";
@@ -33,12 +33,18 @@ import Regression from "./tabs/Regression";
 import Settings, { IdentityLogin } from "./tabs/Settings";
 import Pricing from "./tabs/Pricing";
 
+// Governance first: the product is the policy membrane between an agent and its
+// tools. "Caught lies" is the proof it works, not the product.
 const LOOP = [
-  { key: "evidence", label: "Caught lies", hint: "Every time an agent claimed something its tools never gave it." },
-  { key: "catch", label: "Test an agent", hint: "Break one of the agent's tools on purpose and see whether it makes something up." },
-  { key: "explain", label: "Replay", hint: "Step through any run and see exactly where the made-up answer came from." },
-  { key: "prevent", label: "Safe to ship?", hint: "Check a config change against every lie you've caught, before it ships." },
+  { key: "govern", label: "Agents", hint: "Your governed agents as a graph: pause, cap, stop — what sentinel sees across sessions, what probe says about their health." },
+  { key: "policy", label: "Policy", hint: "What each agent may read, send and run — the rules enforced at the tool boundary." },
+  { key: "evidence", label: "Caught lies", hint: "Every time an agent claimed something its tools never gave it — and the test that keeps it caught." },
+  { key: "explain", label: "Replay", hint: "Step through any run and see exactly what crossed the boundary, and why." },
+  { key: "prevent", label: "Safe to ship?", hint: "Check a policy change against every case you've caught, before it ships." },
 ] as const;
+
+/** Screens without a tab of their own light up the tab they belong to. */
+const PARENT_TAB: Record<string, string> = { catch: "evidence" };
 
 /** Old route heads keep working — they are in shared links and bookmarks. */
 const ALIAS: Record<string, string> = {
@@ -49,9 +55,9 @@ const ALIAS: Record<string, string> = {
   health: "govern",
   sentinel: "govern",
   "get-started": "connect",
-  "config-builder": "connect",
+  "config-builder": "policy",
 };
-const KNOWN = ["home", "evidence", "catch", "explain", "prevent", "govern", "connect", "pricing", "settings"];
+const KNOWN = ["home", "evidence", "catch", "explain", "prevent", "govern", "policy", "connect", "pricing", "settings"];
 
 function NavLink({ id, label, hint, active }: { id: string; label: string; hint: string; active: boolean }) {
   return (
@@ -71,18 +77,6 @@ function NavLink({ id, label, hint, active }: { id: string; label: string; hint:
   );
 }
 
-// Live agents used to be greyed and locked until an adapter connected — and
-// with nothing behind the lock, governance was the one part of the product a
-// visitor could not see at all. It is open now: without an adapter it shows
-// an example fleet (sentinel, probe and all) and says plainly that live control
-// of YOUR agents needs the adapter.
-function ControlNavLink({ active }: { active: boolean; mode: ConnectionMode }) {
-  return (
-    <NavLink id="govern" label="Live agents" active={active}
-      hint="Running agents as a graph: what sentinel sees across sessions, what probe says about their health, and pause / stop / repair." />
-  );
-}
-
 function routeKey(segments: string[]): string {
   const head = segments[0] ?? "home";
   return ALIAS[head] ?? head;
@@ -96,7 +90,10 @@ export default function App() {
   // No route: a first visit lands on Home (the funnel entry); once something is
   // connected, on Evidence — what has been caught is the thing to look at.
   useEffect(() => {
-    if (route.segments.length === 0) navigate(isConnected(mode) ? "evidence" : "home");
+    // governed (or the example fleet) → the agents; proxy-only → what it caught
+    if (route.segments.length === 0) {
+      navigate(!isConnected(mode) ? "home" : mode === "proxy" ? "evidence" : "govern");
+    }
   }, [route.segments.length, mode]);
 
   const head = route.segments[0] ?? "home";
@@ -118,9 +115,9 @@ export default function App() {
           </button>
           {!firstVisit && <nav className="app-nav">
             {LOOP.map((l) => (
-              <NavLink key={l.key} id={l.key} label={l.label} hint={l.hint} active={key === l.key} />
+              <NavLink key={l.key} id={l.key} label={l.label} hint={l.hint}
+                active={(PARENT_TAB[key] ?? key) === l.key} />
             ))}
-            <ControlNavLink active={key === "govern"} mode={mode} />
           </nav>}
         </div>
         <div className="app-header-right">
@@ -150,15 +147,8 @@ export default function App() {
           {head === "health" ? <Health /> : head === "sentinel" ? <Sentinel /> : <ControlTab focusNode={runIdParam} />}
         </>
       )}
-      {key === "connect" && (
-        <>
-          <SubNav
-            items={[["connect", "connect an agent"], ["config-builder", "build a config"]]}
-            active={head === "config-builder" ? "config-builder" : "connect"}
-          />
-          {head === "config-builder" ? <ConfigBuilder /> : <Onboarding />}
-        </>
-      )}
+      {key === "policy" && <ConfigBuilder />}
+      {key === "connect" && <Onboarding />}
       {key === "pricing" && <Pricing />}
       {key === "settings" && <Settings />}
       {!KNOWN.includes(key) && (

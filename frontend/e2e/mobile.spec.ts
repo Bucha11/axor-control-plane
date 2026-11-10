@@ -43,16 +43,16 @@ test.describe("on a phone", () => {
       }),
     );
     await goHash(page, "home");
-    for (const id of ["Caught lies", "Test an agent", "Replay", "Safe to ship?"]) {
+    for (const id of ["Agents", "Policy", "Caught lies", "Replay"]) {
       await expect(page.getByRole("button", { name: id, exact: true })).toBeInViewport();
     }
     await expect(page.getByRole("button", { name: "sign in", exact: true })).toBeInViewport();
-    await expect(page.getByRole("button", { name: "Live agents", exact: true })).toBeInViewport();
+    await expect(page.getByRole("button", { name: "Safe to ship?", exact: true })).toBeInViewport();
   });
 
   test("a first visit shows both ways in without scrolling", async ({ page }) => {
     await goHash(page, "home");
-    for (const name of [/Try it on our demo agent/, /Test my own agent/]) {
+    for (const name of [/See it govern an example fleet/, /Govern my own agent/]) {
       const box = await page.getByRole("button", { name }).boundingBox();
       expect(box!.y + box!.height).toBeLessThanOrEqual(844);
     }

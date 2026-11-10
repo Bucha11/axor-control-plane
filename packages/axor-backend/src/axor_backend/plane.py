@@ -970,11 +970,16 @@ async def nodes(request: Request) -> list[dict]:
     """Topology data: desired next to reported — divergence is rendered, not
     hidden (protocol, section 5)."""
     ctx = _ctx(request)
-    # Four queries for the whole fleet. Built per node this cost three round
+    # Six queries for the whole fleet. Built per node this cost three round
     # trips each — 151 of them for 50 nodes, on a surface the UI polls.
     desired_by_node = await ctx.store.all_desired()
     reported_by_node = await ctx.store.all_reported()
     facts_by_node = await ctx.store.facts_by_node()
+    # What sentinel and probe say, per node — so the fleet list cannot call an
+    # agent healthy while its sentinel has a resource flagged or its last
+    # health check drifted. None = nothing reported, never "clean".
+    reputation_by_node = await ctx.store.all_reputation()
+    probe_by_node = await ctx.store.latest_probe_verdicts()
     out = []
     for node_id in await ctx.store.list_nodes():
         current = desired_by_node.get(node_id)
@@ -985,6 +990,8 @@ async def nodes(request: Request) -> list[dict]:
             ),
             "reported": reported_by_node.get(node_id),
             "facts": facts_by_node.get(node_id, []),
+            "reputation": _reputation_summary(reputation_by_node.get(node_id)),
+            "probe": probe_by_node.get(node_id),
         })
     return out
 

@@ -172,6 +172,10 @@ export interface NodeInfo {
     updated_ts: string;
   } | null;
   facts: Record<string, unknown>[];
+  /** what this node's axor-sentinel reported; null = no sentinel, never "clean" */
+  reputation?: ReputationSummary | null;
+  /** the node's last axor-probe check; null = never checked, never "healthy" */
+  probe?: { verdict: string; created_ts: string; escape_count: number } | null;
 }
 
 // Behavioral health check (axor-probe, ui-spec 8.2). A family's state is
