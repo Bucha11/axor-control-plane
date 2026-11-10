@@ -9,14 +9,22 @@ kernel event schema (the same one Replay/Regression consume) and uploaded.
 
 A PlaneClient (axor-wrap's `axor_wrap.plane` — the kernel does not ship a plane
 client) then keeps the node live: it heartbeats to the backend (so Control's
-topology shows a real node with its level/budget) and subscribes to desired state
-(so an operator's pause / stop / replan / inject actually reaches this node —
-admission holds or winds the loop down at the intent boundary).
+topology shows a real node with its level/budget) and subscribes to desired state,
+so every operator command reaches this node's PlaneSession, signature-checked.
+
+What the node DOES with each: pause and stop hold or wind down the loop at the
+intent boundary (admission). With axor-core >= 0.12.1 the loop also enforces the
+operator's call cap (ControlDirectives). This node runs its scripted flow once,
+at spawn — it has no later turns, so an excision or an injection sent to it is
+queued and reported, not applied to a context. A long-running agent applies
+them through `GovernedSession(directives=PlaneAdmission(session))`. Replan is
+not acted on by any kernel today.
 """
 from __future__ import annotations
 
 import asyncio
 import contextlib
+import inspect
 import secrets
 from typing import Any
 
@@ -203,6 +211,16 @@ def _build_lines(
     return lines
 
 
+def _directives_kwarg(admission: PlaneAdmission) -> dict[str, Any]:
+    """The operator's call cap reaches the loop on a kernel that has the
+    contract (axor-core >= 0.12.1, axor-wrap >= 0.2.2); on an older one the
+    argument does not exist and the loop runs on admission alone, as before.
+    Drop this once the pins move to 0.12.1."""
+    takes = "directives" in inspect.signature(IntentLoop.__init__).parameters
+    has = hasattr(admission, "budget_cap_calls")
+    return {"directives": admission} if takes and has else {}
+
+
 async def run_governed_session(
     node_id: str, session: PlaneSession,
 ) -> tuple[list[dict], int]:
@@ -210,13 +228,15 @@ async def run_governed_session(
     serialise adapter-fidelity events (recorded verdicts + value provenance).
     Returns the kernel-schema event lines and the number of recorded denials."""
     trace_events: list = []
+    admission = PlaneAdmission(session)
     loop = IntentLoop(
         capability_executor=_executor(),
         trace_events=trace_events,
         taint_engine=TaintEngine(),
-        admission=PlaneAdmission(session),
+        admission=admission,
         egress_sinks=_EGRESS,
         untrusted_sources=_UNTRUSTED,
+        **_directives_kwarg(admission),
     )
     async for _ in loop.run(_scripted_stream(node_id), _envelope(node_id)):
         pass

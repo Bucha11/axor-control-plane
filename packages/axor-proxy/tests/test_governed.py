@@ -50,3 +50,23 @@ async def test_governed_trace_carries_provenance_for_the_taint_graph() -> None:
 @pytest.fixture
 def anyio_backend() -> str:
     return "asyncio"
+
+
+@pytest.mark.anyio
+async def test_an_operator_budget_cap_binds_the_governed_node() -> None:
+    """The cap an operator sends used to be recorded by the node's PlaneSession
+    and never read by the loop that spends the budget. On a kernel with the
+    ControlDirectives contract (axor-core >= 0.12.1) it binds; on an older one
+    there is nothing to assert, so the test says so instead of passing."""
+    pytest.importorskip("axor_core.contracts.directives",
+                        reason="axor-core < 0.12.1: no ControlDirectives contract")
+    uncapped = PlaneSession(node_id="gov-cap0", test_bench=True)
+    _, baseline = await run_governed_session("gov-cap0", uncapped)
+
+    capped = PlaneSession(node_id="gov-cap1", test_bench=True)
+    capped.apply_snapshot(1, {"budget_cap_calls": 1})
+    lines, denials = await run_governed_session("gov-cap1", capped)
+    assert denials > baseline
+    # the extra denials are the budget, named as such
+    budget = [ln for ln in lines if ln.get("verdict") == "deny" and ln.get("gate") == "budget"]
+    assert budget, [ln.get("gate") for ln in lines if ln.get("verdict") == "deny"]

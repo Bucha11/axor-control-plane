@@ -318,6 +318,13 @@ export default function Health() {
                 <>excised {lastHeal.target_refs.join(", ")} → awaiting the verifying
                   re-probe. A heal without one is not resolved, so nothing turns green
                   here until the node posts the next check.
+                  {node !== EXAMPLE_PROBE_NODE && (
+                    <span style={{ display: "block", marginTop: 6, color: C.dim }}>
+                      the node cuts it from its context at its next turn — if it runs
+                      axor-core ≥ 0.12.1 with PlaneAdmission passed as directives.
+                      an older adapter receives the command and cannot apply it.
+                    </span>
+                  )}
                   {node === EXAMPLE_PROBE_NODE && (
                     <span style={{ display: "block", marginTop: 8 }}>
                       {/* a real node consumes the cut and re-probes on its own;
