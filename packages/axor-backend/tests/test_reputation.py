@@ -241,3 +241,23 @@ async def test_one_row_per_node_not_a_series(client: httpx.AsyncClient) -> None:
         await client.post(f"/v1/plane/{NODE}/reputation", json=_snapshot(version))
     assert (await store.reputation(NODE))["version"] == 5
     assert list(await store.all_reputation()) == [NODE]
+
+
+async def test_the_plane_stores_the_snapshot_as_read_not_as_sent(
+    client: httpx.AsyncClient,
+) -> None:
+    """A JSON writer that collapses 1.0 to 1 (any JS hop) sends a snapshot the
+    library accepts — its checksum is verified over the canonical floats. What
+    the plane keeps is that canonical form, so every consumer downstream
+    compares against one spelling."""
+    payload = _snapshot()
+    payload["resource_reputation"] = {
+        k: int(v) if float(v).is_integer() else v
+        for k, v in payload["resource_reputation"].items()
+    }
+    assert payload["resource_reputation"]["db:customers"] == 1  # an int
+    r = await client.post(f"/v1/plane/{NODE}/reputation", json=payload)
+    assert r.status_code == 201
+    rep = (await client.get(f"/v1/plane/{NODE}/reputation")).json()["reputation"]
+    assert rep["resource_reputation"]["db:customers"] == 1.0
+    assert isinstance(rep["resource_reputation"]["db:customers"], float)
