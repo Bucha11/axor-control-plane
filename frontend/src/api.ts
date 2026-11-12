@@ -1174,6 +1174,11 @@ export const api = {
       j<{ latest: ProbeHealth | null; history: ProbeCheck[];
           drift_case: DriftCase | null }>(r)),
 
+  // What the node confirmed about operator commands (its own acks).
+  nodeJournal: (nodeId: string) =>
+    af(`/v1/plane/${encodeURIComponent(nodeId)}/journal`).then((r) =>
+      j<{ entries: { ts: string; kind: string; payload: Record<string, unknown>; run_id: string }[] }>(r)),
+
   // The node's agent runs, newest first (keepalive runs excluded).
   nodeRuns: (nodeId: string) =>
     af(`/v1/plane/${encodeURIComponent(nodeId)}/runs`).then((r) => j<{ runs: NodeRun[] }>(r)),

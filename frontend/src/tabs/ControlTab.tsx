@@ -879,7 +879,7 @@ function RunRow({ run, first, paused, stopped, disabled, send }: {
   );
   return (
     <div className="flex items-center gap-2 px-3 py-2 wrap-narrow"
-      onClick={() => navigate(`explain/${encodeURIComponent(run.run_id)}`)}
+      onClick={() => navigate(`govern/run/${encodeURIComponent(run.run_id)}`)}
       style={{ cursor: "pointer", borderTop: first ? "none" : `1px solid ${C.line}`,
                fontFamily: MONO, fontSize: 11, flexWrap: "wrap" }}>
       <Circle size={7} fill={run.active ? C.green : C.dim} color={run.active ? C.green : C.dim} />
@@ -910,7 +910,7 @@ function RunRow({ run, first, paused, stopped, disabled, send }: {
           </button>
         </span>
       )}
-      <span style={{ color: C.steel }}>replay →</span>
+      <span style={{ color: C.steel }}>open →</span>
     </div>
   );
 }

@@ -770,6 +770,34 @@ async def node_runs(node_id: str, request: Request, limit: int = 20) -> dict:
     return {"runs": out}
 
 
+_ACK_KINDS = frozenset({
+    "context_excision", "excision_refused", "injection_consumed",
+    "injection_refused", "operator_intervention", "state_applied",
+})
+
+
+@router.get("/{node_id}/journal")
+async def node_journal(node_id: str, request: Request, limit: int = 50) -> dict:
+    """What the node confirmed about the operator's commands, newest first:
+    a cut it applied (``context_excision``) or refused, an injection consumed
+    or refused, an experiment armed or refused (``operator_intervention``), a
+    command it would not apply (``state_applied`` with its reason). These ride
+    the node's own telemetry, so this is the node's word, not the plane's
+    record of what was sent — that is desired state, alongside."""
+    ctx = _ctx(request)
+    limit = max(1, min(int(limit), 200))
+    out: list[dict] = []
+    for run in await ctx.store.list_runs():
+        if run["node_id"] != node_id:
+            continue
+        for ln in await ctx.store.run_events(run["run_id"]):
+            if ln.get("kind") in _ACK_KINDS:
+                out.append({"ts": ln.get("ts"), "kind": ln["kind"],
+                            "payload": ln.get("payload") or {}, "run_id": run["run_id"]})
+    out.sort(key=lambda e: str(e.get("ts") or ""), reverse=True)
+    return {"entries": out[:limit]}
+
+
 @router.get("/{node_id}/probe-report")
 async def get_probe_report(node_id: str, request: Request) -> dict:
     """The last health check plus the check series behind it.

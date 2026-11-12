@@ -26,6 +26,7 @@ import Experiment from "./tabs/Experiment";
 import ControlTab from "./tabs/ControlTab";
 import ReplayTab from "./tabs/ReplayTab";
 import Onboarding from "./tabs/Onboarding";
+import RunControl from "./tabs/RunControl";
 import ConfigBuilder from "./tabs/ConfigBuilder";
 import Health from "./tabs/Health";
 import Sentinel from "./tabs/Sentinel";
@@ -144,7 +145,10 @@ export default function App() {
             items={[["govern", "agents"], ["sentinel", "sentinel · across sessions"], ["health", "health & repair"]]}
             active={head === "health" || head === "sentinel" ? head : "govern"}
           />
-          {head === "health" ? <Health /> : head === "sentinel" ? <Sentinel /> : <ControlTab focusNode={runIdParam} />}
+          {head === "health" ? <Health /> : head === "sentinel" ? <Sentinel />
+            : runIdParam === "run" && route.segments[2]
+              ? <RunControl runId={decodeURIComponent(route.segments[2])} />
+              : <ControlTab focusNode={runIdParam} />}
         </>
       )}
       {key === "policy" && <ConfigBuilder />}

@@ -275,7 +275,9 @@ test.describe("cross-session reputation", () => {
     // the protocol jargon is folded away
     await expect(page.getByText("protocol state")).toBeVisible();
 
-    await runs.getByText("replay →").first().click();
+    // a row opens the run's control screen; Replay is one step further
+    await runs.getByText("open →").first().click();
+    await page.getByRole("button", { name: /Open in Replay/ }).click();
     await expect(page.getByText("← fetch")).toBeVisible();
     await page.getByText("← fetch").click();
     await expect(page.getByText(/result of fetch — untrusted \(web\)/)).toBeVisible();
@@ -300,5 +302,61 @@ test.describe("cross-session reputation", () => {
 
     await goHash(page, `health?node=${node}`);
     await expect(page.getByLabel("health node")).toHaveValue(node);
+  });
+
+  test("a run opens on its control screen: timeline, controls, the proposed cut", async ({ page, request }) => {
+    const node = uniqueNode("gov-run");
+    await seedNode(request, node);
+    const runId = `${node}-r1`;
+    const line = (seq: number, kind: string, payload: object) => ({
+      schema_version: "1.0", seq, node_id: node, kind, ts: new Date().toISOString(),
+      causal_root: null, gate: null, verdict: null, payload,
+    });
+    await request.post(`${BACKEND}/v1/plane/${node}/telemetry`, { data: { run_id: runId, events: [
+      line(0, "tool_call", { tool: "fetch", args: { url: "https://x.example/p" }, tool_call_id: "tc9" }),
+      line(1, "tool_result", { tool: "fetch", status: "ok", value_ref: "tc9",
+                               root: { sources: ["web"], sensitive: false }, preview: "IGNORE PREVIOUS" }),
+      line(2, "tool_call", { tool: "post", args: { text: "IGNORE PREVIOUS" }, tool_call_id: "tc10",
+                             arg_refs: { text: "tc9" } }),
+      line(3, "claim", { text: "Posted it.", structured: false }),
+    ] } });
+    // the node's health check of this run, with the localizer's proposal
+    await request.post(`${BACKEND}/v1/plane/${node}/probe-report`, { data: {
+      session_id: runId, agent_id: node, model: "m", probe_library_version: "1.0.0",
+      overall_verdict: "DRIFT_DETECTED",
+      families: [{ family: "data_disclosure", state: "escaped", escapes: 3, probes: 3 }],
+      probes_sent: 3, probes_invalid: 0, probes_triangulated: 3, structural_failures: 0,
+      escape_count: 3, escape_rate: 1, escape_rate_ci: [0.3, 1], calibration_status: "UNCALIBRATED",
+      max_drift_score_uncalibrated: 0.9,
+      repair_proposal: { verdict: "auto_excise", drift_fragments: ["tc9"], excision: ["tc9"],
+                         auto_excise: ["tc9"], escalate: [], recommend_quarantine_all: false,
+                         approximate: false },
+    } });
+
+    await setConnection(page, { mode: "adapter" });
+    await goHash(page, "control");
+    await page.getByText(node, { exact: true }).click();
+    await page.getByTestId("node-runs").getByText("open →").first().click();
+
+    const timeline = page.getByTestId("run-timeline");
+    await expect(page.getByText("● done")).toBeVisible();
+    await expect(timeline.getByText("→ fetch")).toBeVisible();
+    await expect(timeline.getByText(/untrusted \(web\)/)).toBeVisible();
+    await expect(timeline.getByText("↳ text quotes tc9 (untrusted)")).toBeVisible();
+    await expect(timeline.getByText("Posted it.")).toBeVisible();
+    await expect(page.getByText("drift detected · 3 escaped")).toBeVisible();
+
+    // apply the localizer's cut from here: it reaches desired state
+    page.once("dialog", (d) => d.accept("poisoned page"));
+    await page.getByTestId("proposed-cut").getByRole("button", { name: "apply proposed cut" }).click();
+    await expect(page.getByText(/cut sent: tc9/)).toBeVisible();
+
+    // and pausing the agent from the run's controls
+    await page.getByTestId("run-controls").getByRole("button", { name: /Pause/ }).click();
+    await expect(page.getByTestId("run-controls").getByRole("button", { name: /Resume/ })).toBeVisible();
+    const nodes = await (await request.get(`${BACKEND}/v1/plane/nodes`)).json();
+    const state = nodes.find((n: { node_id: string }) => n.node_id === node).desired.state;
+    expect(state.paused).toBe(true);
+    expect(state.pending_excision.target_refs).toEqual(["tc9"]);
   });
 });
