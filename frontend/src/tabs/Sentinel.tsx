@@ -14,6 +14,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Radar } from "lucide-react";
 import { api, type ReputationSnapshot } from "../api";
 import { C, MONO, btn } from "../theme";
+import { useRoute } from "../router";
 
 type Level = "CLEAN" | "WATCH" | "FLAGGED";
 type EdgeKind = "export_denied" | "staging" | "read" | "export" | "touched";
@@ -138,7 +139,12 @@ export default function Sentinel() {
   const qc = useQueryClient();
   const topo = useQuery({ queryKey: ["topology"], queryFn: api.topology });
   const watched = (topo.data?.nodes ?? []).filter((n) => n.reputation);
-  const [node, setNode] = useState<string | null>(null);
+  const route = useRoute();
+  // `#/sentinel?node=X` (the Agents list links here) opens on that node.
+  const [node, setNode] = useState<string | null>(route.query.node || null);
+  useEffect(() => {
+    if (route.query.node) setNode(route.query.node);
+  }, [route.query.node]);
   useEffect(() => {
     if (node === null && watched.length > 0) {
       // the node with the most to say first

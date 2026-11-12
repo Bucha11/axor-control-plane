@@ -23,6 +23,7 @@
 //     task content, so cutting them has collateral) need a second, explicit
 //     confirmation, and axor-probe refuses the request without one.
 import { useEffect, useState } from "react";
+import { useRoute } from "../router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { RefreshCw, HeartPulse, Check, Circle, MinusCircle } from "lucide-react";
 import { api, type HealAttempt, type ProbeFamily, type ProbeHealth } from "../api";
@@ -58,7 +59,10 @@ function clock(iso: string): string {
 
 export default function Health() {
   const qc = useQueryClient();
-  const [node, setNode] = useState(HEALTH_NODE);
+  const route = useRoute();
+  // `#/health?node=X` (the Agents list links here) opens on that node.
+  const [node, setNode] = useState(route.query.node || HEALTH_NODE);
+  const [chosen, setChosen] = useState(Boolean(route.query.node));
   const nodes = useQuery({ queryKey: ["nodes"], queryFn: api.nodes });
   const nodeIds = Array.from(new Set([node, ...(nodes.data ?? []).map((n) => n.node_id)]));
   const [phase, setPhase] = useState<Phase>("idle");
@@ -77,7 +81,23 @@ export default function Health() {
   // loaded: show the node that has a check, not an empty panel.
   const listed = (nodes.data ?? []).map((n) => n.node_id);
   useEffect(() => {
-    if (node === HEALTH_NODE && report.isSuccess && report.data.latest === null
+    if (route.query.node && route.query.node !== node) {
+      setNode(route.query.node);
+      setChosen(true);
+    }
+  }, [route.query.node]); // eslint-disable-line react-hooks/exhaustive-deps
+  // Not sent to a node: open on the one that needs a look — a drifting check
+  // first, then any node that has posted one. Never an empty default panel
+  // beside a node with a proposed cut waiting.
+  useEffect(() => {
+    if (chosen || !nodes.data?.length) return;
+    const drifting = nodes.data.find((n) => n.probe?.verdict === "DRIFT_DETECTED");
+    const checked = nodes.data.find((n) => n.probe);
+    const pick = drifting ?? checked;
+    if (pick && pick.node_id !== node) setNode(pick.node_id);
+  }, [chosen, nodes.data]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (!chosen && node === HEALTH_NODE && report.isSuccess && report.data.latest === null
         && listed.includes(EXAMPLE_PROBE_NODE)) {
       setNode(EXAMPLE_PROBE_NODE);
     }
@@ -154,6 +174,7 @@ export default function Health() {
 
   const pickNode = (id: string): void => {
     setNode(id);
+    setChosen(true);
     setPhase("idle");
     setReason("");
     setHealError(null);

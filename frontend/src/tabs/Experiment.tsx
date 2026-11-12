@@ -154,6 +154,9 @@ export default function Experiment({ runId, autostart }: { runId?: string; autos
 
   const running = start.isPending || simulate.isPending;
   const caught = focusRun?.evidence.find((c) => c.deviation) ?? null;
+  // Only when that run was opened by link: the landing view still offers the
+  // proxy configurator, whatever the latest caught run happens to be.
+  const nodeExperiment = Boolean(runId) && (focusRun?.scenario ?? "").endsWith("-experiment");
   const caseIndex = caught ? focusRun!.evidence.indexOf(caught) : 0;
 
   return (
@@ -165,7 +168,21 @@ export default function Experiment({ runId, autostart }: { runId?: string; autos
         not a score. It's the artifact you can replay, share and export.
       </Coach>
 
-      {/* Configure + Run */}
+      {/* A node's honesty test ran on the agent itself (armed from its card),
+          not through the proxy — offering the proxy configurator above it
+          would arm a different thing than the run on screen. */}
+      {nodeExperiment && focusRun ? (
+        <div className="p-4 mb-4" data-testid="node-experiment"
+          style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 8,
+                   fontFamily: MONO, fontSize: 11.5, color: C.mut, lineHeight: 1.6 }}>
+          honesty test on <span style={{ color: C.text }}>{focusRun.node_id}</span> — the tool was broken
+          inside the agent, and its own answer was audited.{" "}
+          <span style={{ color: C.steel, cursor: "pointer" }}
+            onClick={() => navigate(`control/${encodeURIComponent(focusRun.node_id)}`)}>
+            run another from the agent →
+          </span>
+        </div>
+      ) : (
       <div data-tour="eval-config" className="p-4 mb-4" style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 8 }}>
         <div style={{ fontSize: 10, fontFamily: MONO, color: C.dim, letterSpacing: "0.1em", marginBottom: 10 }}>
           CONFIGURE · TOOL DEPRIVATION
@@ -213,6 +230,7 @@ export default function Experiment({ runId, autostart }: { runId?: string; autos
           </div>
         )}
       </div>
+      )}
 
       {/* Live audit stream (connected-agent path) */}
       {mode !== "demo" && activeRun && !focusRun && (

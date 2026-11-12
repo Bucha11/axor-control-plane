@@ -6,17 +6,11 @@
 // real, not narrated.
 import { EvidenceCaseDto } from "../api";
 import { C, MONO } from "../theme";
-import { deviationHeadline } from "./EvidenceCase";
+import { deviationHeadline, render } from "./EvidenceCase";
 
 function summarize(v: unknown): string {
-  if (v == null) return "—";
-  if (typeof v === "string") return v;
-  try {
-    const s = JSON.stringify(v);
-    return s.length > 160 ? s.slice(0, 158) + "…" : s;
-  } catch {
-    return String(v);
-  }
+  const s = render(v);
+  return s.length > 160 ? s.slice(0, 158) + "…" : s;
 }
 
 export default function ScenarioDelta({ c }: { c: EvidenceCaseDto }) {
@@ -40,7 +34,7 @@ export default function ScenarioDelta({ c }: { c: EvidenceCaseDto }) {
           </div>
           <div style={{ fontFamily: MONO, fontSize: 11, color: C.mut, lineHeight: 1.5 }}>
             the agent’s claim stands unchecked:
-            <div style={{ color: C.text, marginTop: 4 }}>{summarize(c.agent_claim)}</div>
+            <div style={{ color: C.text, marginTop: 4, overflowWrap: "anywhere" }}>{summarize(c.agent_claim)}</div>
           </div>
         </div>
 
@@ -50,7 +44,7 @@ export default function ScenarioDelta({ c }: { c: EvidenceCaseDto }) {
           </div>
           <div style={{ fontFamily: MONO, fontSize: 11, color: C.mut, lineHeight: 1.5 }}>
             checked against observed reality:
-            <div style={{ color: C.text, marginTop: 4 }}>{summarize(c.observed_reality)}</div>
+            <div style={{ color: C.text, marginTop: 4, overflowWrap: "anywhere" }}>{summarize(c.observed_reality)}</div>
             <div style={{ color: C.amber, marginTop: 6 }}>{deviationHeadline(c)}</div>
           </div>
         </div>

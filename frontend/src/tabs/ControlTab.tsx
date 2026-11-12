@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Circle, FlaskConical, Gauge, GitBranch, Pause, Play, Square, Syringe } from "lucide-react";
-import { api, NodeInfo } from "../api";
+import { api, NodeInfo, NodeRun } from "../api";
 import Coverage from "../components/Coverage";
 import TopologyGraph, { PeerCard } from "../components/TopologyGraph";
 import { navigate } from "../router";
@@ -133,12 +133,22 @@ function isHot(n: NodeInfo): boolean {
 function attention(n: NodeInfo): { label: string; color: string; route?: string }[] {
   const out: { label: string; color: string; route?: string }[] = [];
   const level = n.reported?.level ?? "NORMAL";
-  if (level !== "NORMAL") out.push({ label: level, color: C.amber });
+  const paused = n.desired?.state.paused === true;
+  const stopped = n.desired?.state.stopped === true;
+  // A paused node reports CAUTIOUS and a stopped one RESTRICTED: the level
+  // mirrors the posture the operator set. Say the posture, not the mirror;
+  // a level beyond it is still news and is shown.
+  if (stopped) out.push({ label: "stopped", color: C.red });
+  else if (paused) out.push({ label: "paused", color: C.amber });
+  const mirrored = (paused && level === "CAUTIOUS") || (stopped && level === "RESTRICTED");
+  if (level !== "NORMAL" && !mirrored) out.push({ label: level, color: C.amber });
   if (n.reputation && n.reputation.flagged > 0) {
-    out.push({ label: `sentinel · ${n.reputation.flagged} flagged`, color: C.red, route: "sentinel" });
+    out.push({ label: `sentinel · ${n.reputation.flagged} flagged`, color: C.red,
+               route: `sentinel?node=${encodeURIComponent(n.node_id)}` });
   }
   if (n.probe?.verdict === "DRIFT_DETECTED") {
-    out.push({ label: "probe · drift", color: C.amber, route: "health" });
+    out.push({ label: "probe · drift", color: C.amber,
+               route: `health?node=${encodeURIComponent(n.node_id)}` });
   }
   return out;
 }
@@ -529,20 +539,26 @@ function ControlBody({ focusNode, testBench }: { focusNode?: string; testBench: 
             )}
           </div>
 
-          <div className="mb-3" style={{ fontFamily: MONO, fontSize: 11, color: C.mut, lineHeight: 1.7 }}>
-            desired{" "}
+          <RunsPanel nodeId={node.node_id} paused={paused} stopped={stopped}
+            disabled={command.isPending} send={send} />
+
+          <details className="mb-3" style={{ fontFamily: MONO, fontSize: 11, color: C.mut, lineHeight: 1.7 }}>
+            <summary style={{ cursor: "pointer", color: C.dim }}>
+              protocol state{applying ? " · a command is in flight" : ""}
+            </summary>
+            commanded (desired){" "}
             <span style={{ color: C.text }}>
               v{desired?.version ?? 0} {JSON.stringify(desired?.state ?? {})}
             </span>
             <br />
-            reported{" "}
+            applied (reported){" "}
             <span style={{ color: applying ? C.amber : C.text }}>
               v{reported?.applied_version ?? 0} · {reported?.level ?? "unknown"}
               {reported?.budget_remaining != null
                 ? ` · budget ${reported.budget_remaining}`
                 : ""}
             </span>
-          </div>
+          </details>
 
           {/* Budget cap — a first-class control (spec §15). Decrease-only over
               the plane: the adapter refuses any widening, so this can set an
@@ -800,6 +816,101 @@ function HonestyTest({ nodeId, pending, disabled, testBench, send }: {
             onClick={() => navigate(`explain/${encodeURIComponent(last.run_id)}`)}>replay →</span>
         </div>
       )}
+    </div>
+  );
+}
+
+// ── the node's runs ───────────────────────────────────────────────────────────
+//
+// What an operator controls is a run. The card showed the node's posture and
+// nothing of what it was doing: each row is one agent invocation — its tools,
+// the results that arrived tainted (what a cut names), the health check run
+// against it, a caught lie — and opens in Replay. An active run carries the
+// node's controls, because they act on it: pause holds it at its next
+// boundary, stop ends it.
+
+function hhmmss(iso: string): string {
+  const d = new Date(iso);
+  return isNaN(d.getTime()) ? iso : d.toTimeString().slice(0, 8);
+}
+
+function RunsPanel({ nodeId, paused, stopped, disabled, send }: {
+  nodeId: string; paused: boolean; stopped: boolean; disabled: boolean;
+  send: (state: Record<string, unknown>) => void;
+}) {
+  const runs = useQuery({
+    queryKey: ["node-runs", nodeId],
+    queryFn: () => api.nodeRuns(nodeId),
+    refetchInterval: REFETCH_MS,
+  });
+  const rows: NodeRun[] = runs.data?.runs ?? [];
+  return (
+    <div className="mb-4" data-testid="node-runs">
+      <div style={{ fontFamily: MONO, fontSize: 11, color: C.mut, marginBottom: 6 }}>
+        runs {rows.length ? `· ${rows.length} recent` : ""}
+      </div>
+      {runs.isSuccess && rows.length === 0 && (
+        <div style={{ fontFamily: MONO, fontSize: 11, color: C.dim }}>
+          no runs recorded yet — the node is connected; its agent has not done any work since.
+        </div>
+      )}
+      {rows.length > 0 && (
+        <div style={{ border: `1px solid ${C.line}`, borderRadius: 6, overflow: "hidden" }}>
+          {rows.map((r, i) => (
+            <RunRow key={r.run_id} run={r} first={i === 0}
+              paused={paused} stopped={stopped} disabled={disabled} send={send} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function RunRow({ run, first, paused, stopped, disabled, send }: {
+  run: NodeRun; first: boolean; paused: boolean; stopped: boolean; disabled: boolean;
+  send: (state: Record<string, unknown>) => void;
+}) {
+  const experiment = (run.scenario ?? "").endsWith("-experiment");
+  const lies = run.evidence.length;
+  const drift = run.probe?.verdict === "DRIFT_DETECTED";
+  const chip = (label: string, color: string) => (
+    <span style={{ fontFamily: MONO, fontSize: 10, color, border: `1px solid ${color}`,
+                   borderRadius: 20, padding: "0 7px", whiteSpace: "nowrap" }}>{label}</span>
+  );
+  return (
+    <div className="flex items-center gap-2 px-3 py-2 wrap-narrow"
+      onClick={() => navigate(`explain/${encodeURIComponent(run.run_id)}`)}
+      style={{ cursor: "pointer", borderTop: first ? "none" : `1px solid ${C.line}`,
+               fontFamily: MONO, fontSize: 11, flexWrap: "wrap" }}>
+      <Circle size={7} fill={run.active ? C.green : C.dim} color={run.active ? C.green : C.dim} />
+      <span style={{ color: C.mut }}>{hhmmss(run.started_ts)}</span>
+      <span style={{ color: run.active ? C.green : C.dim }}>
+        {run.active ? (paused ? "held" : "running") : "done"}
+      </span>
+      <span style={{ color: C.text, flex: 1, minWidth: 120 }}>
+        {run.tool_calls} call{run.tool_calls === 1 ? "" : "s"}
+        {run.tools.length ? ` · ${run.tools.join(", ")}` : ""}
+      </span>
+      {run.tainted_refs.length > 0 && chip(`${run.tainted_refs.length} tainted`, C.amber)}
+      {run.denied > 0 && chip(`${run.denied} denied`, C.red)}
+      {experiment && chip("honesty test", C.steel)}
+      {lies > 0 && chip("caught lie", C.red)}
+      {experiment && lies === 0 && chip("honest", C.green)}
+      {run.probe && chip(drift ? "drift" : run.probe.verdict.toLowerCase().replace(/_/g, " "),
+                         drift ? C.amber : C.green)}
+      {run.active && !stopped && (
+        <span className="flex gap-1" onClick={(e) => e.stopPropagation()}>
+          <button disabled={disabled} onClick={() => send({ paused: !paused })}
+            style={btn({ fontSize: 10, padding: "2px 8px", color: C.text })}>
+            {paused ? <Play size={10} /> : <Pause size={10} />} {paused ? "resume" : "pause"}
+          </button>
+          <button disabled={disabled} onClick={() => send({ stopped: true })}
+            style={btn({ fontSize: 10, padding: "2px 8px", color: C.mut })}>
+            <Square size={10} /> stop
+          </button>
+        </span>
+      )}
+      <span style={{ color: C.steel }}>replay →</span>
     </div>
   );
 }

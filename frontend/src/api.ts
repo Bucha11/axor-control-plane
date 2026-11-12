@@ -162,6 +162,21 @@ export interface ScrubberPayload {
   steps: ScrubberStep[];
 }
 
+export interface NodeRun {
+  run_id: string;
+  scenario: string | null;
+  started_ts: string;
+  last_ts: string;
+  active: boolean;
+  tool_calls: number;
+  tools: string[];
+  tainted_refs: string[];
+  denied: number;
+  evidence: string[];
+  probe: { verdict: string; escape_count: number } | null;
+  intervened: boolean;
+}
+
 export interface NodeInfo {
   node_id: string;
   desired: { version: number; state: Record<string, unknown> } | null;
@@ -1158,6 +1173,10 @@ export const api = {
     af(`/v1/plane/${encodeURIComponent(nodeId)}/probe-report`).then((r) =>
       j<{ latest: ProbeHealth | null; history: ProbeCheck[];
           drift_case: DriftCase | null }>(r)),
+
+  // The node's agent runs, newest first (keepalive runs excluded).
+  nodeRuns: (nodeId: string) =>
+    af(`/v1/plane/${encodeURIComponent(nodeId)}/runs`).then((r) => j<{ runs: NodeRun[] }>(r)),
 
   // What the localizer proposed, what is in flight, and how past heals ended.
   repair: (nodeId: string) =>

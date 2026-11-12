@@ -81,7 +81,9 @@ test.describe("secondary surfaces", () => {
       },
     });
     await setConnection(page, { mode: "adapter" });
-    await goHash(page, "health");
+    // the node this test heals, by link — Health otherwise opens on whichever
+    // listed agent is drifting, and the suite shares one backend
+    await goHash(page, "health?node=banking-assistant");
 
     await expect(page.getByRole("heading", { name: /A probe family drifted/ })).toBeVisible();
     // The battery graded in Eval's vocabulary: escape-backed, so deterministic —

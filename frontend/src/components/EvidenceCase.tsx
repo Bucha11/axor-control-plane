@@ -25,7 +25,10 @@ export function deviationHeadline(c: EvidenceCaseDto): string {
   return c.deviation ? (HEADLINE[c.deviation] ?? c.deviation.replaceAll("_", " ")) : "deviated";
 }
 
-function render(value: unknown): string {
+// The receipt renders observed reality verbatim — the size-1 golden receipt
+// (e2e/golden-receipt.spec.ts) pins these bytes; rewording it is an operator
+// decision, not a styling change.
+export function render(value: unknown): string {
   return typeof value === "string" ? value : JSON.stringify(value);
 }
 
@@ -128,7 +131,7 @@ export default function EvidenceCase({
         <div style={{ fontSize: 10, fontFamily: MONO, color: C.dim, letterSpacing: "0.1em", marginBottom: 6 }}>
           WHAT HAPPENED
         </div>
-        <div style={{ fontFamily: MONO, fontSize: 13, color: C.text }}>{render(c.observed_reality)}</div>
+        <div style={{ fontFamily: MONO, fontSize: 13, color: C.text, overflowWrap: "anywhere" }}>{render(c.observed_reality)}</div>
       </div>
       <div className="p-4">
         <div style={{ fontSize: 10, fontFamily: MONO, color: C.dim, letterSpacing: "0.1em", marginBottom: 6 }}>

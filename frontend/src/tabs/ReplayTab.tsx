@@ -26,12 +26,25 @@ function useSeedExample(onDone?: (blockRunId: string) => void) {
 
 type Cf = "noexec" | "taint";
 
+// A tool result whose root names an untrusted source: the content an
+// injection rides in, and what an operator's cut names.
+function isTainted(s: ScrubberStep): boolean {
+  if (s.kind !== "tool_result") return false;
+  const root = s.payload.root as { sources?: unknown[] } | undefined;
+  return Array.isArray(root?.sources) && root!.sources.length > 0;
+}
+
 function stepColor(s: ScrubberStep): string {
+  if (isTainted(s)) return C.amber;
   return sevColor(s.reevaluated_verdict ?? s.recorded_verdict, s.kind);
 }
 
 function stepLabel(s: ScrubberStep): string {
   const tool = typeof s.payload.tool === "string" ? ` ${s.payload.tool}` : "";
+  if (s.kind === "tool_result") {
+    const sources = ((s.payload.root as { sources?: string[] } | undefined)?.sources ?? []).join(", ");
+    return `result of${tool}${sources ? ` — untrusted (${sources})` : ""}`;
+  }
   const deny = s.deny_reason ? ` — ${s.deny_reason}` : "";
   return `${s.kind}${tool}${deny}`;
 }
@@ -39,7 +52,12 @@ function stepLabel(s: ScrubberStep): string {
 // The short label inside a timeline box: the tool name when there is one, else a
 // compact tag for the non-tool event kinds (claim, fault, excision, …).
 function stepChip(s: ScrubberStep): string {
-  if (typeof s.payload.tool === "string" && s.payload.tool) return s.payload.tool;
+  if (typeof s.payload.tool === "string" && s.payload.tool) {
+    // a call and its result are two steps of the same tool: say which
+    if (s.kind === "tool_call") return `→ ${s.payload.tool}`;
+    if (s.kind === "tool_result") return `← ${s.payload.tool}`;
+    return s.payload.tool;
+  }
   const tags: Record<string, string> = {
     claim: "claim",
     fault_injected: "⚡fault",
@@ -324,12 +342,23 @@ export default function ReplayTab({ runId: runIdProp, cursor: cursorProp, seq: s
                 {stepLabel(cur)}
               </div>
               <div style={{ fontFamily: MONO, fontSize: 11, color: C.mut, marginTop: 6 }}>
-                level {cur.state.level} · {cur.state.tainted_refs.length} tainted ·{" "}
+                level {cur.state.level} · {cur.state.tainted_refs.length} tainted so far ·{" "}
                 {cur.state.budget_spent_calls} calls spent
                 {typeof cur.state.budget_spent_cost === "number" &&
                   cur.state.budget_spent_cost !== cur.state.budget_spent_calls &&
                   ` · cost ${cur.state.budget_spent_cost}`}
               </div>
+              {typeof cur.payload.preview === "string" && cur.payload.preview && (
+                <div style={{ fontFamily: MONO, fontSize: 11, color: C.text, marginTop: 8,
+                              background: C.panel2, borderRadius: 4, padding: "6px 8px",
+                              whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>
+                  {cur.payload.preview}
+                </div>
+              )}
+              {isTainted(cur) && typeof cur.payload.value_ref === "string" && (
+                <CutResult runId={runId} valueRef={cur.payload.value_ref}
+                  excised={cur.state.excised_refs.includes(cur.payload.value_ref)} />
+              )}
             </div>
           )}
 
@@ -426,5 +455,48 @@ function SeedButton({ label, compact }: { label: string; compact?: boolean }) {
     >
       {seed.isPending ? "seeding…" : label}
     </button>
+  );
+}
+
+// Cut this tool result from the agent's context — the same signed command the
+// Health panel's self-heal sends, aimed at the result you are looking at. The
+// node applies it at its next boundary, once its conversation carries the
+// result (an adapter rebuilds per run; see axor-langchain / axor-claude).
+function CutResult({ runId, valueRef, excised }: { runId: string; valueRef: string; excised: boolean }) {
+  const qc = useQueryClient();
+  const runs = useQuery({ queryKey: ["runs"], queryFn: api.listRuns });
+  const nodeId = (runs.data ?? []).find((r) => r.run_id === runId)?.node_id;
+  const nodes = useQuery({ queryKey: ["nodes"], queryFn: api.nodes, enabled: !!nodeId });
+  const node = (nodes.data ?? []).find((n) => n.node_id === nodeId);
+  const pending = node?.desired?.state.pending_excision as { target_refs?: string[] } | undefined;
+  const cut = useMutation({
+    mutationFn: (reason: string) => api.command(nodeId!, (node?.desired?.version ?? 0) + 1, {
+      pending_excision: { id: `exc_${Date.now()}`, target_refs: [valueRef], reason, operator: "op_ui" },
+    }),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ["nodes"] }),
+  });
+  if (!nodeId || !node) return null;   // not a live node's run: nothing to command
+  const queued = pending?.target_refs?.includes(valueRef);
+  return (
+    <div className="mt-3 flex items-center gap-2 flex-wrap" style={{ fontFamily: MONO, fontSize: 11 }}>
+      {excised ? (
+        <span style={{ color: C.green }}>cut — this result no longer reaches the model</span>
+      ) : queued || cut.isSuccess ? (
+        <span style={{ color: C.amber }}>cut sent to {nodeId} — applied when its conversation carries {valueRef}</span>
+      ) : (
+        <Tooltip content="Redact this tool result from the agent's context (and, for a file it read, the cached copy). A signed operator command; the reason is recorded.">
+          <button
+            onClick={() => {
+              const reason = window.prompt(`Cut ${valueRef} from ${nodeId}'s context — reason (recorded):`);
+              if (reason && reason.trim()) cut.mutate(reason.trim());
+            }}
+            disabled={cut.isPending}
+            style={btn({ color: C.amber, borderColor: C.amber, fontSize: 11, padding: "4px 10px" })}>
+            cut this result from {nodeId}
+          </button>
+        </Tooltip>
+      )}
+      {cut.isError && <span style={{ color: C.red }}>{(cut.error as Error).message}</span>}
+    </div>
   );
 }

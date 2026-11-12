@@ -463,3 +463,24 @@ async def test_experiment_command_is_checked_by_the_fault_engine_and_clears_on_a
         resp = await client.post("/v1/plane/n9/command",
                                  json=_cmd(signing_key, "n9", 2, {"pending_experiment": bad}))
         assert resp.status_code == 400, bad
+
+
+async def test_node_runs_lists_agent_work_not_keepalive(client: httpx.AsyncClient) -> None:
+    def line(seq: int, kind: str, payload: dict) -> dict:
+        return {"schema_version": "1.0", "seq": seq, "node_id": "nr", "kind": kind,
+                "ts": datetime.now(UTC).isoformat(), "causal_root": None, "gate": None,
+                "verdict": None, "payload": payload}
+
+    # keepalive: heartbeats only — not a run of the agent
+    await client.post("/v1/plane/nr/telemetry", json={"run_id": "nr-hb", "events": [
+        line(0, "heartbeat", {"applied_version": 0, "level": "NORMAL"})]})
+    await client.post("/v1/plane/nr/telemetry", json={"run_id": "nr-r1", "events": [
+        line(0, "tool_call", {"tool": "fetch", "args": {"url": "https://x"}}),
+        line(1, "tool_result", {"tool": "fetch", "status": "ok", "value_ref": "tc9",
+                                "root": {"sources": ["web"], "sensitive": False}}),
+    ]})
+    runs = (await client.get("/v1/plane/nr/runs")).json()["runs"]
+    assert [r["run_id"] for r in runs] == ["nr-r1"]
+    (r,) = runs
+    assert r["tool_calls"] == 1 and r["tools"] == ["fetch"]
+    assert r["tainted_refs"] == ["tc9"] and r["active"] is True

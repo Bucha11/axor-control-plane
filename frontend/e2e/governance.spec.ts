@@ -24,7 +24,7 @@ test.describe.serial("governance on the example fleet", () => {
     await expect(page.getByRole("heading", { name: /agents? needs? attention\./ })).toBeVisible();
     await expect(page.getByRole("button", { name: /probe · drift/ })).toBeVisible();
     await page.getByRole("button", { name: /sentinel · 1 flagged/ }).first().click();
-    await expect(page).toHaveURL(/#\/sentinel$/);
+    await expect(page).toHaveURL(/#\/sentinel\?node=/);
   });
 
   test("sentinel draws resources joined by the sessions that touched them", async ({ page }) => {
