@@ -486,8 +486,10 @@ const FRAMEWORKS: { id: Framework; label: string; note: string }[] = [
   {
     id: "langchain", label: "LangChain",
     note: "the middleware connects on its own (background thread, sync or async agent): pause / stop hold every model and "
-      + "tool call, budget caps tool calls, an excision cuts a tool result from the next model call, and tool calls, "
-      + "results and health checks show up here. AXOR_PLANE_URL unset = no plane, nothing changes.",
+      + "tool call, budget caps tool calls, an excision cuts a tool result from the next model call (same thread_id), "
+      + "and every tool call and result lands in Replay with its taint. pip install 'axor-langchain[plane,security]' "
+      + "adds cross-run reputation (Sentinel); AxorMiddleware(probe=True) adds a health check after each run — it costs "
+      + "model calls — whose localizer proposes the cut in Health. AXOR_PLANE_URL unset = no plane, nothing changes.",
   },
   {
     id: "claude", label: "Claude (axor-claude)",
