@@ -71,10 +71,11 @@ test.describe("onboarding", () => {
     await expect(snippet).not.toContainText("<mint a key above>");
     await expect(snippet).toContainText(/AXOR_INGEST_KEY=ak_/);
 
-    // Claude: axor-core owns the loop; the plane is handed to make_session.
+    // Claude: the same one line — make_session reads the plane from the env.
     await page.getByRole("button", { name: "Claude (axor-claude)" }).click();
-    await expect(snippet).toContainText("make_session(plane=PlaneAdmission(node.session))");
-    await expect(snippet).toContainText(/ingest_key="ak_/);
+    await expect(snippet).toContainText("pip install 'axor-claude[plane]'");
+    await expect(snippet).toContainText("session = axor_claude.make_session()");
+    await expect(snippet).toContainText(/AXOR_INGEST_KEY=ak_/);
 
     // Plain Python: the wrapped toolset and the gate, naming the declared tools.
     await page.getByRole("button", { name: "Plain Python" }).click();

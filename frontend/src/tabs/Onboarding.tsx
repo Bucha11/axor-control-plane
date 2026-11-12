@@ -494,8 +494,11 @@ const FRAMEWORKS: { id: Framework; label: string; note: string }[] = [
   },
   {
     id: "claude", label: "Claude (axor-claude)",
-    note: "axor-core runs the agent loop: pause / stop act at the intent boundary; excision, test-bench injection and the "
-      + "call cap need axor-core ≥ 0.12.1.",
+    note: "make_session() connects on its own (background link): pause / stop hold the loop at the intent boundary, "
+      + "budget caps tool calls, an excision cuts a tool result (tool_use_id) from the conversation and the file it "
+      + "read from core's context, and every run lands in Replay. [security] adds Sentinel reputation and "
+      + "make_session(probe=True) a health check (costs model calls); [experiment] adds Test honesty "
+      + "(AXOR_TEST_BENCH=1). Excision and injection need axor-core ≥ 0.12.1.",
   },
   {
     id: "python", label: "Plain Python",
@@ -523,22 +526,16 @@ agent = create_agent(model, tools, middleware=[AxorMiddleware()])
 agent.invoke({"messages": [("user", "...")]})   # node is live on this plane`;
   }
   if (framework === "claude") {
-    return `pip install axor-claude 'axor-wrap[plane]'
+    return `pip install 'axor-claude[plane]'
 
-import asyncio, axor_claude
-from axor_wrap.connect import PlaneConnector
-from axor_wrap.plane import PlaneAdmission
+export AXOR_PLANE_URL=${o.origin}
+export AXOR_NODE_ID=${o.nodeId}
+export AXOR_INGEST_KEY=${o.key}
 
-node = PlaneConnector("${o.origin}", "${o.nodeId}",
-                      ingest_key="${o.key}").connect()
-session = axor_claude.make_session(plane=PlaneAdmission(node.session))
+import axor_claude
 
-async def main():
-    live = asyncio.create_task(node.run())   # heartbeat + operator commands
-    await session.run("...")
-    node.stop(); await live
-
-asyncio.run(main())`;
+session = axor_claude.make_session()        # node is live on this plane
+await session.run("...")`;
   }
   return `pip install 'axor-wrap[plane]'
 
