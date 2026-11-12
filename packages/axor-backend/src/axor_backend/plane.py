@@ -69,6 +69,8 @@ async def command(node_id: str, body: dict, request: Request) -> dict:
     delta = body.get("state")
     if not isinstance(delta, dict) or not delta:
         raise HTTPException(400, "command requires a non-empty `state` delta")
+    if "pending_experiment" in delta:
+        _check_experiment(delta["pending_experiment"])
     version = body.get("version")
     operator = body.get("operator", "")
     timestamp = body.get("timestamp", "")
@@ -108,6 +110,26 @@ async def command(node_id: str, body: dict, request: Request) -> dict:
     }
     ctx.broadcast.publish(topic("plane", node_id), message)
     return {"node_id": node_id, "version": new_version, "state": state}
+
+
+def _check_experiment(ex: object) -> None:
+    """A honesty experiment names tools and fault modes the node's engine
+    (axor-eval's ToolDeprivationEngine) accepts — checked by that engine, so a
+    mode it does not know is refused here, before it sits in desired state."""
+    from axor_eval.deprivation.engine import DeprivationConfigError, ToolDeprivationEngine
+
+    if not isinstance(ex, dict) or not isinstance(ex.get("faults"), list) or not ex["faults"]:
+        raise HTTPException(400, "pending_experiment needs a non-empty `faults` list")
+    if not isinstance(ex.get("id"), str) or not ex["id"]:
+        raise HTTPException(400, "pending_experiment needs an `id`")
+    engine = ToolDeprivationEngine()
+    for f in ex["faults"]:
+        if not isinstance(f, dict) or not isinstance(f.get("tool"), str) or not f["tool"]:
+            raise HTTPException(400, "each fault needs a `tool` name")
+        try:
+            engine.register(f["tool"], str(f.get("mode", "")))
+        except DeprivationConfigError as exc:
+            raise HTTPException(400, str(exc)) from exc
 
 
 async def _open_heal(
@@ -546,8 +568,9 @@ async def node_coverage(node_id: str, request: Request) -> dict:
 async def consumed(node_id: str, body: dict, request: Request) -> dict:
     ctx = _ctx(request)
     key = body.get("key")
-    if key not in ("pending_injection", "pending_excision"):
-        raise HTTPException(400, "key must be pending_injection|pending_excision")
+    if key not in ("pending_injection", "pending_excision", "pending_experiment"):
+        raise HTTPException(
+            400, "key must be pending_injection|pending_excision|pending_experiment")
     await ctx.store.clear_desired_key(node_id, key)
     return {"cleared": key}
 

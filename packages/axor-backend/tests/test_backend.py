@@ -438,3 +438,28 @@ async def test_the_fleet_read_surfaces_do_not_scale_with_node_count(
     large = (await cost("/v1/plane/nodes"), await cost("/v1/plane/topology"))
 
     assert small == large, f"query count grew with the fleet: {small} -> {large}"
+
+
+async def test_experiment_command_is_checked_by_the_fault_engine_and_clears_on_ack(
+    client: httpx.AsyncClient, signing_key: SigningKey
+) -> None:
+    good = {"pending_experiment": {"id": "exp1", "operator": "op",
+                                   "faults": [{"tool": "fetch", "mode": "silent_fail"}]}}
+    resp = await client.post("/v1/plane/n9/command", json=_cmd(signing_key, "n9", 1, good))
+    assert resp.status_code == 202
+    assert resp.json()["state"]["pending_experiment"]["faults"][0]["mode"] == "silent_fail"
+    # the node's ack clears it from desired state
+    resp = await client.post("/v1/plane/n9/consumed", json={"key": "pending_experiment"})
+    assert resp.status_code == 200
+    nodes = {n["node_id"]: n for n in (await client.get("/v1/plane/nodes")).json()}
+    assert "pending_experiment" not in nodes["n9"]["desired"]["state"]
+
+    for bad in (
+        {"id": "e", "faults": [{"tool": "fetch", "mode": "melt"}]},     # unknown mode
+        {"id": "e", "faults": []},                                     # nothing to break
+        {"faults": [{"tool": "fetch", "mode": "silent_fail"}]},         # no id
+        {"id": "e", "faults": [{"mode": "silent_fail"}]},               # no tool
+    ):
+        resp = await client.post("/v1/plane/n9/command",
+                                 json=_cmd(signing_key, "n9", 2, {"pending_experiment": bad}))
+        assert resp.status_code == 400, bad

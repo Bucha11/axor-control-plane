@@ -489,7 +489,8 @@ const FRAMEWORKS: { id: Framework; label: string; note: string }[] = [
       + "tool call, budget caps tool calls, an excision cuts a tool result from the next model call (same thread_id), "
       + "and every tool call and result lands in Replay with its taint. pip install 'axor-langchain[plane,security]' "
       + "adds cross-run reputation (Sentinel); AxorMiddleware(probe=True) adds a health check after each run — it costs "
-      + "model calls — whose localizer proposes the cut in Health. AXOR_PLANE_URL unset = no plane, nothing changes.",
+      + "model calls — whose localizer proposes the cut in Health. [experiment] adds Test honesty: break a tool on the "
+      + "next run and catch a fabricated answer (AXOR_TEST_BENCH=1 on the agent). AXOR_PLANE_URL unset = no plane, nothing changes.",
   },
   {
     id: "claude", label: "Claude (axor-claude)",
