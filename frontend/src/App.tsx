@@ -3,7 +3,7 @@
 // permalinks are addressable.
 //
 // The nav leads with governance, the product; the catch loop is its proof:
-//   Agents         (#/govern)   — governed agents: graph, sentinel, health & repair
+//   Agents         (#/govern)   — governed agents: graph, sentinel reputation, context health & repair
 //   Policy         (#/policy)   — what each agent may read, send and run
 //   Caught lies    (#/evidence) — every EvidenceCase caught (tests run at #/catch)
 //   Replay         (#/explain)  — step through a run, fork what-ifs
@@ -142,7 +142,7 @@ export default function App() {
       {key === "govern" && (
         <>
           <SubNav
-            items={[["govern", "agents"], ["sentinel", "sentinel · across sessions"], ["health", "health & repair"]]}
+            items={[["govern", "agents"], ["sentinel", "sentinel · reputation"], ["health", "context health & repair"]]}
             active={head === "health" || head === "sentinel" ? head : "govern"}
           />
           {head === "health" ? <Health /> : head === "sentinel" ? <Sentinel />
