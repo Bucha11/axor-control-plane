@@ -58,22 +58,31 @@ test.describe("onboarding", () => {
     await page.getByRole("button", { name: /Continue/ }).click();
     await page.getByRole("button", { name: "adapter", exact: true }).click();
 
-    // The snippet is real setup: the wrapped toolset, the connector, the gate.
-    const snippet = page.locator("pre", { hasText: "PlaneConnector" });
-    await expect(snippet).toBeVisible();
-    await expect(snippet).toContainText("pip install 'axor-wrap[plane]'");
-    await expect(snippet).toContainText("node.gate(toolset)");
-    // …and it names the declared tools, not a placeholder.
-    await expect(snippet).toContainText("web_search");
-    await expect(snippet).toContainText("<mint a key above>");
+    // LangChain is the default: one middleware, configured from the environment.
+    const snippet = page.getByTestId("adapter-snippet");
+    await expect(snippet).toContainText("pip install 'axor-langchain[plane]'");
+    await expect(snippet).toContainText("middleware=[AxorMiddleware()]");
+    await expect(snippet).toContainText("AXOR_NODE_ID=agent-1");
+    await expect(snippet).toContainText("AXOR_INGEST_KEY=<mint a key above>");
 
     // Minting binds the key to this node id and shows the secret exactly once.
     await page.getByRole("button", { name: /Mint node-bound key/ }).click();
     await expect(page.getByText(/shown once/)).toBeVisible();
     await expect(snippet).not.toContainText("<mint a key above>");
+    await expect(snippet).toContainText(/AXOR_INGEST_KEY=ak_/);
+
+    // Claude: axor-core owns the loop; the plane is handed to make_session.
+    await page.getByRole("button", { name: "Claude (axor-claude)" }).click();
+    await expect(snippet).toContainText("make_session(plane=PlaneAdmission(node.session))");
     await expect(snippet).toContainText(/ingest_key="ak_/);
 
+    // Plain Python: the wrapped toolset and the gate, naming the declared tools.
+    await page.getByRole("button", { name: "Plain Python" }).click();
+    await expect(snippet).toContainText("pip install 'axor-wrap[plane]'");
+    await expect(snippet).toContainText("node.gate(toolset)");
+    await expect(snippet).toContainText("web_search");
+
     // The honest boundary is stated where the user chooses, not only in a docstring.
-    await expect(page.getByText(/one-shot injection, context excision and replan/)).toBeVisible();
+    await expect(page.getByText(/one-shot injection and context excision need the agent loop/)).toBeVisible();
   });
 });

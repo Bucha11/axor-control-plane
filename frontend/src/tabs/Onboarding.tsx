@@ -128,6 +128,7 @@ export default function Onboarding() {
   // node so it cannot speak for another. Minting it is an admin action, so it
   // happens here rather than being left as an undocumented prerequisite.
   const [nodeId, setNodeId] = useState("agent-1");
+  const [framework, setFramework] = useState<Framework>("langchain");
   const [nodeKey, setNodeKey] = useState<string | null>(null);
   const mintNodeKey = useMutation({
     mutationFn: () => api.createKey(["ingest"], `node ${nodeId}`, nodeId),
@@ -435,27 +436,29 @@ export default function Onboarding() {
                   shown once — copy it now, only its hash is stored
                 </div>
               )}
-              <pre style={{ margin: 0, padding: "12px 14px", background: C.panel2, borderTop: `1px solid ${C.line}`,
+              <div className="px-4 pb-3" style={{ display: "flex", gap: 6, flexWrap: "wrap" }} data-testid="framework-picker">
+                {FRAMEWORKS.map((f) => (
+                  <button key={f.id} onClick={() => setFramework(f.id)}
+                    style={btn({
+                      color: framework === f.id ? C.steel : C.dim,
+                      borderColor: framework === f.id ? C.steel : C.line,
+                      fontSize: 11, padding: "4px 10px",
+                    })}>
+                    {f.label}
+                  </button>
+                ))}
+              </div>
+              <pre data-testid="adapter-snippet" style={{ margin: 0, padding: "12px 14px", background: C.panel2, borderTop: `1px solid ${C.line}`,
                             fontFamily: MONO, fontSize: 11.5, color: C.text, overflowX: "auto", lineHeight: 1.7 }}>
-{`pip install 'axor-wrap[plane]'
-
-from axor_wrap.runtime import wrap_callables
-from axor_wrap.connect import PlaneConnector
-
-toolset = wrap_callables({${tools.map((t) => t.name).join(", ") || "web_search"}})
-
-node = PlaneConnector(
-    "${window.location.origin}", "${nodeId || "agent-1"}",
-    ingest_key="${nodeKey ?? "<mint a key above>"}",
-).connect()
-node.gate(toolset)          # pause/stop from Control now holds real tool calls
-await node.run()            # heartbeat + desired-state subscription`}
+{adapterSnippet(framework, {
+  origin: window.location.origin,
+  nodeId: nodeId || "agent-1",
+  key: nodeKey ?? "<mint a key above>",
+  tools: tools.map((t) => t.name),
+})}
               </pre>
               <div className="px-4 py-3" style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim, lineHeight: 1.6, borderTop: `1px solid ${C.line}` }}>
-                this is the posture half: pause / stop / budget reach the node and hold its tool calls.
-                one-shot injection, context excision and replan act at the intent boundary and need the
-                framework to hand axor-core the agent brain — GovernedSession(executor=Invokable,
-                admission=PlaneAdmission(session)).
+                {FRAMEWORKS.find((f) => f.id === framework)?.note}
               </div>
             </div>
           )}
@@ -475,4 +478,76 @@ await node.run()            # heartbeat + desired-state subscription`}
       )}
     </div>
   );
+}
+
+type Framework = "langchain" | "claude" | "python";
+
+const FRAMEWORKS: { id: Framework; label: string; note: string }[] = [
+  {
+    id: "langchain", label: "LangChain",
+    note: "the middleware connects on its own (background thread, sync or async agent): pause / stop hold every model and "
+      + "tool call, budget caps tool calls, an excision cuts a tool result from the next model call, and tool calls, "
+      + "results and health checks show up here. AXOR_PLANE_URL unset = no plane, nothing changes.",
+  },
+  {
+    id: "claude", label: "Claude (axor-claude)",
+    note: "axor-core runs the agent loop: pause / stop act at the intent boundary; excision, test-bench injection and the "
+      + "call cap need axor-core ≥ 0.12.1.",
+  },
+  {
+    id: "python", label: "Plain Python",
+    note: "this is the posture half: pause / stop / budget reach the node and hold its tool calls. one-shot injection and "
+      + "context excision need the agent loop in axor-core — use the Claude adapter or GovernedSession with "
+      + "admission=PlaneAdmission(session).",
+  },
+];
+
+export function adapterSnippet(
+  framework: Framework,
+  o: { origin: string; nodeId: string; key: string; tools: string[] },
+): string {
+  if (framework === "langchain") {
+    return `pip install 'axor-langchain[plane]'
+
+export AXOR_PLANE_URL=${o.origin}
+export AXOR_NODE_ID=${o.nodeId}
+export AXOR_INGEST_KEY=${o.key}
+
+from langchain.agents import create_agent
+from axor_langchain import AxorMiddleware
+
+agent = create_agent(model, tools, middleware=[AxorMiddleware()])
+agent.invoke({"messages": [("user", "...")]})   # node is live on this plane`;
+  }
+  if (framework === "claude") {
+    return `pip install axor-claude 'axor-wrap[plane]'
+
+import asyncio, axor_claude
+from axor_wrap.connect import PlaneConnector
+from axor_wrap.plane import PlaneAdmission
+
+node = PlaneConnector("${o.origin}", "${o.nodeId}",
+                      ingest_key="${o.key}").connect()
+session = axor_claude.make_session(plane=PlaneAdmission(node.session))
+
+async def main():
+    live = asyncio.create_task(node.run())   # heartbeat + operator commands
+    await session.run("...")
+    node.stop(); await live
+
+asyncio.run(main())`;
+  }
+  return `pip install 'axor-wrap[plane]'
+
+from axor_wrap.runtime import wrap_callables
+from axor_wrap.connect import PlaneConnector
+
+toolset = wrap_callables({${o.tools.join(", ") || "web_search"}})
+
+node = PlaneConnector(
+    "${o.origin}", "${o.nodeId}",
+    ingest_key="${o.key}",
+).connect()
+node.gate(toolset)          # pause/stop from Control now holds real tool calls
+await node.run()            # heartbeat + desired-state subscription`;
 }
