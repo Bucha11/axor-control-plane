@@ -76,7 +76,7 @@ export default function CodingOnboarding({ then }: { then?: () => void }) {
       </div>
 
       <div style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim, letterSpacing: "0.06em", marginBottom: 6 }}>1 · WHICH AGENTS</div>
-      <div className="flex gap-2 mb-4 flex-wrap">
+      <div className="flex gap-2 flex-wrap" style={{ marginBottom: 16 }}>
         {AGENTS.map((a) => (
           <button key={a.id} onClick={() => toggle(a.id)} data-testid={`pick-${a.id}`}
             style={btn({
