@@ -7,7 +7,10 @@ import { track } from "../funnel";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Check, Copy, Loader2, Trash2 } from "lucide-react";
 import { api } from "../api";
-import { IdentityError, login, logout, signup, signupAvailable } from "../identity";
+import {
+  IdentityError, login, logout, oauthProviders, oauthStartUrl, signup, signupAvailable,
+  type OAuthProvider,
+} from "../identity";
 import { navigate } from "../router";
 import { MODE_LABEL, useApp } from "../store";
 import { C, MONO, btn } from "../theme";
@@ -116,8 +119,10 @@ export function IdentityLogin({ onDone, initialMode = "login" }: {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [canSignup, setCanSignup] = useState<boolean | null>(null);
+  const [providers, setProviders] = useState<OAuthProvider[]>([]);
   useEffect(() => {
     void signupAvailable().then(setCanSignup);
+    void oauthProviders().then(setProviders);
   }, []);
 
   if (identityEmail) {
@@ -177,6 +182,19 @@ export function IdentityLogin({ onDone, initialMode = "login" }: {
       <div style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim, letterSpacing: "0.08em" }}>
         SIGN IN · axor identity
       </div>
+      {providers.length > 0 && (
+        <>
+          <div className="flex items-center gap-2" style={{ flexWrap: "wrap" }}>
+            {providers.map((p) => (
+              <a key={p.name} href={oauthStartUrl(p.name)} data-testid={`oauth-${p.name}`}
+                style={btn({ color: C.text, borderColor: C.line, fontSize: 11, padding: "6px 14px", textDecoration: "none" })}>
+                continue with {p.label}
+              </a>
+            ))}
+          </div>
+          <div style={{ fontFamily: MONO, fontSize: 10, color: C.dim }}>or with e-mail</div>
+        </>
+      )}
       <input type="email" autoComplete="email" value={email} placeholder="email"
         onChange={(e) => setEmail(e.target.value)} style={INPUT_STYLE} aria-label="email" />
       <input type="password" value={password} placeholder="password"

@@ -101,3 +101,49 @@ export async function signupAvailable(): Promise<boolean | null> {
     return null;
   }
 }
+
+// ── sign in with GitHub / Google ─────────────────────────────────────────────
+export interface OAuthProvider {
+  name: string;
+  label: string;
+}
+
+/** The providers the identity service has set up; empty when none (or an
+ * older service without the route). */
+export async function oauthProviders(): Promise<OAuthProvider[]> {
+  try {
+    const resp = await fetch(`${IDENTITY_BASE}/v1/oauth/providers`);
+    if (!resp.ok) return [];
+    const body = (await resp.json()) as { providers?: OAuthProvider[] };
+    return Array.isArray(body.providers) ? body.providers : [];
+  } catch {
+    return [];
+  }
+}
+
+/** Where to send the browser to sign in with `provider`. It comes back to this
+ * page with `?axor_login=<code>` (or `?axor_login_error=`). */
+export function oauthStartUrl(provider: string): string {
+  const back = window.location.pathname + window.location.search.replace(/[?&]axor_login[^&]*/g, "") + window.location.hash;
+  return `${IDENTITY_BASE}/v1/oauth/${encodeURIComponent(provider)}/start?return_to=${encodeURIComponent(back)}`;
+}
+
+/** Trade the one-time code from the redirect for a session. `created` is true
+ * when the sign-in made a new account. */
+export function oauthExchange(code: string): Promise<Session & { created: boolean }> {
+  return post<Session & { created: boolean }>("/v1/oauth/exchange", { code });
+}
+
+/** The code or error a provider sign-in left in the address bar, removed from
+ * it so a reload or a copied link does not carry it. */
+export function takeOAuthReturn(): { code?: string; error?: string } | null {
+  const params = new URLSearchParams(window.location.search);
+  const code = params.get("axor_login") ?? undefined;
+  const error = params.get("axor_login_error") ?? undefined;
+  if (!code && !error) return null;
+  params.delete("axor_login");
+  params.delete("axor_login_error");
+  const query = params.toString();
+  window.history.replaceState(null, "", window.location.pathname + (query ? `?${query}` : "") + window.location.hash);
+  return { code, error };
+}

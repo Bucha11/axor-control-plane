@@ -17,6 +17,7 @@ from sqlalchemy import (
     String,
     Table,
     UniqueConstraint,
+    delete,
     func,
     insert,
     select,
@@ -41,8 +42,38 @@ users = Table(
     Column("user_id", String(64), primary_key=True),
     # email is the login handle; unique and stored lower-cased by the app layer.
     Column("email", String(320), nullable=False, unique=True),
-    Column("password_hash", String(200), nullable=False),  # argon2 encoded hash
+    # argon2 encoded hash; NULL for an account made through GitHub / Google
+    # until its owner sets a password
+    Column("password_hash", String(200), nullable=True),
     Column("created_ts", String(40), nullable=False),
+    # a provider vouched for the address (or, later, the verification link)
+    Column("email_verified", Boolean, nullable=False, default=False),
+)
+
+oauth_identities = Table(
+    "oauth_identities", metadata,
+    Column("provider", String(24), primary_key=True),
+    Column("subject", String(128), primary_key=True),  # the provider's stable id
+    Column("user_id", String(64), nullable=False, index=True),
+    Column("email", String(320), nullable=False),
+    Column("created_ts", String(40), nullable=False),
+)
+
+oauth_states = Table(
+    "oauth_states", metadata,
+    Column("state_hash", String(64), primary_key=True),
+    Column("provider", String(24), nullable=False),
+    Column("verifier", String(128), nullable=False),
+    Column("return_to", String(1000), nullable=False),
+    Column("expires_ts", String(40), nullable=False),
+)
+
+login_codes = Table(
+    "login_codes", metadata,
+    Column("code_hash", String(64), primary_key=True),
+    Column("user_id", String(64), nullable=False),
+    Column("created", Boolean, nullable=False, default=False),  # a new account
+    Column("expires_ts", String(40), nullable=False),
 )
 
 memberships = Table(
@@ -127,12 +158,12 @@ class Store:
         return bool(result.rowcount)
 
     # ── users ─────────────────────────────────────────────────────────────────
-    async def create_user(self, user_id: str, email: str, password_hash: str,
-                          ts: str) -> None:
+    async def create_user(self, user_id: str, email: str, password_hash: str | None,
+                          ts: str, *, email_verified: bool = False) -> None:
         async with self.engine.begin() as conn:
             await conn.execute(insert(users).values(
                 user_id=user_id, email=email, password_hash=password_hash,
-                created_ts=ts))
+                created_ts=ts, email_verified=email_verified))
 
     async def count_users(self) -> int:
         """How many users exist at all — the whole table, not one org's.
@@ -160,6 +191,14 @@ class Store:
                 select(users).where(users.c.user_id == user_id))).first()
         return self._user_row(row)
 
+    async def mark_verified(self, user_id: str, *, drop_password: bool = False) -> None:
+        values: dict[str, Any] = {"email_verified": True}
+        if drop_password:
+            values["password_hash"] = None
+        async with self.engine.begin() as conn:
+            await conn.execute(update(users).where(users.c.user_id == user_id)
+                               .values(**values))
+
     async def update_password(self, user_id: str, password_hash: str) -> bool:
         async with self.engine.begin() as conn:
             result = await conn.execute(
@@ -172,7 +211,8 @@ class Store:
         if row is None:
             return None
         return {"user_id": row.user_id, "email": row.email,
-                "password_hash": row.password_hash, "created_ts": row.created_ts}
+                "password_hash": row.password_hash, "created_ts": row.created_ts,
+                "email_verified": bool(row.email_verified)}
 
     # ── memberships ───────────────────────────────────────────────────────────
     async def add_membership(self, user_id: str, org_id: str, role: str,
@@ -220,6 +260,80 @@ class Store:
         return {"token_hash": row.token_hash, "user_id": row.user_id,
                 "org_id": row.org_id, "expires_ts": row.expires_ts,
                 "revoked": bool(row.revoked), "created_ts": row.created_ts}
+
+    async def revoke_all_refresh(self, user_id: str) -> None:
+        async with self.engine.begin() as conn:
+            await conn.execute(update(refresh_tokens)
+                               .where(refresh_tokens.c.user_id == user_id)
+                               .values(revoked=True))
+
+    # ── sign in with a provider ───────────────────────────────────────────────
+    async def user_for_identity(self, provider: str, subject: str) -> str | None:
+        async with self.engine.connect() as conn:
+            row = (await conn.execute(select(oauth_identities.c.user_id).where(
+                oauth_identities.c.provider == provider,
+                oauth_identities.c.subject == subject))).first()
+        return row.user_id if row else None
+
+    async def link_identity(self, provider: str, subject: str, user_id: str,
+                            email: str, ts: str) -> None:
+        async with self.engine.begin() as conn:
+            await conn.execute(insert(oauth_identities).values(
+                provider=provider, subject=subject, user_id=user_id, email=email,
+                created_ts=ts))
+
+    async def identities_for_user(self, user_id: str) -> list[str]:
+        async with self.engine.connect() as conn:
+            rows = (await conn.execute(select(oauth_identities.c.provider).where(
+                oauth_identities.c.user_id == user_id))).all()
+        return sorted({r.provider for r in rows})
+
+    async def put_state(self, state_hash: str, provider: str, verifier: str,
+                        return_to: str, expires_ts: str) -> None:
+        async with self.engine.begin() as conn:
+            await conn.execute(insert(oauth_states).values(
+                state_hash=state_hash, provider=provider, verifier=verifier,
+                return_to=return_to, expires_ts=expires_ts))
+
+    async def take_state(self, state_hash: str) -> dict[str, Any] | None:
+        """Single use: the row is gone once read, so a replayed callback finds
+        nothing."""
+        async with self.engine.begin() as conn:
+            row = (await conn.execute(select(oauth_states).where(
+                oauth_states.c.state_hash == state_hash))).first()
+            if row is None:
+                return None
+            gone = await conn.execute(delete(oauth_states).where(
+                oauth_states.c.state_hash == state_hash))
+        if not gone.rowcount:
+            return None
+        return {"provider": row.provider, "verifier": row.verifier,
+                "return_to": row.return_to, "expires_ts": row.expires_ts}
+
+    async def put_login_code(self, code_hash: str, user_id: str, created: bool,
+                             expires_ts: str) -> None:
+        async with self.engine.begin() as conn:
+            await conn.execute(insert(login_codes).values(
+                code_hash=code_hash, user_id=user_id, created=created,
+                expires_ts=expires_ts))
+
+    async def take_login_code(self, code_hash: str) -> dict[str, Any] | None:
+        async with self.engine.begin() as conn:
+            row = (await conn.execute(select(login_codes).where(
+                login_codes.c.code_hash == code_hash))).first()
+            if row is None:
+                return None
+            gone = await conn.execute(delete(login_codes).where(
+                login_codes.c.code_hash == code_hash))
+        if not gone.rowcount:
+            return None
+        return {"user_id": row.user_id, "created": bool(row.created),
+                "expires_ts": row.expires_ts}
+
+    async def sweep_expired(self, now_ts: str) -> None:
+        async with self.engine.begin() as conn:
+            await conn.execute(delete(oauth_states).where(oauth_states.c.expires_ts <= now_ts))
+            await conn.execute(delete(login_codes).where(login_codes.c.expires_ts <= now_ts))
 
     async def revoke_refresh(self, token_hash: str) -> bool:
         async with self.engine.begin() as conn:

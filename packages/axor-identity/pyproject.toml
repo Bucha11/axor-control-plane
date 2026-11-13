@@ -19,6 +19,8 @@ dependencies = [
   # >=50 avoids PYSEC-2026-3552 (flagged by the pip-audit CI gate on 49.0.0)
   "cryptography>=50.0.0",
   "pydantic[email]>=2.0",
+  # the token and profile calls of sign-in with GitHub / Google
+  "httpx>=0.27",
 ]
 
 [project.urls]

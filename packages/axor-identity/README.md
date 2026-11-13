@@ -51,6 +51,10 @@ bound to (user, org), expiring and revocable. `/v1/refresh` rotates it.
 | POST | `/v1/logout` | revoke a refresh token |
 | GET | `/v1/me` | the caller's identity + memberships (bearer access token) |
 | POST | `/v1/orgs/{org_id}/members` | admin adds a member by email + role |
+| GET | `/v1/oauth/providers` | which "continue with …" buttons to show |
+| GET | `/v1/oauth/{provider}/start?return_to=` | redirect to GitHub / Google (PKCE) |
+| GET | `/v1/oauth/{provider}/callback` | back from the provider → `return_to?axor_login=<code>` |
+| POST | `/v1/oauth/exchange` | the one-time code → access + refresh (`created`: new account) |
 | GET | `/.well-known/jwks.json` | public keys for verifying access tokens |
 | GET | `/v1/healthz` | liveness |
 
@@ -65,3 +69,24 @@ bound to (user, org), expiring and revocable. `/v1/refresh` rotates it.
 - `AXOR_IDENTITY_ACCESS_TTL` — access-token lifetime in seconds (default 900).
 - `AXOR_IDENTITY_REFRESH_TTL` — refresh-token lifetime in seconds
   (default 1209600 = 14 days).
+- `AXOR_IDENTITY_SIGNUP` — `open` | `first-only` | `closed` (default `open`).
+
+### Sign in with GitHub / Google
+
+- `AXOR_IDENTITY_PUBLIC_URL` — where the browser reaches this service, e.g.
+  `https://cp.example.com/identity`. Register
+  `<public url>/v1/oauth/github/callback` (and `/google/callback`) with the
+  provider. Without it no provider is offered.
+- `AXOR_IDENTITY_GITHUB_CLIENT_ID` / `_SECRET`, `AXOR_IDENTITY_GOOGLE_CLIENT_ID`
+  / `_SECRET` — a provider is offered only when both are set.
+- `AXOR_IDENTITY_RETURN_ORIGINS` — other origins a sign-in may return to (the
+  Lab's, when it shares this service). Any other `return_to` is refused.
+
+Only an address the provider says is verified is accepted. A provider identity
+links by the provider's own user id, so a changed address still lands on the
+same account. The first sign-in with an address that already has a password
+account links to it; if that account's address was never verified, its
+password is dropped and its sessions revoked — whoever set it never proved
+they own the address, and the provider just did. Tokens never travel in a URL:
+the redirect carries a single-use code (two minutes) that the app trades for a
+session.

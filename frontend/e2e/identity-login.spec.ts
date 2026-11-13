@@ -116,3 +116,47 @@ test.describe("identity login (Settings)", () => {
     expect((await revoked).postDataJSON()).toEqual({ refresh_token: "ref-token" });
   });
 });
+
+test.describe("sign in with GitHub / Google", () => {
+  test.beforeEach(async ({ page }) => {
+    await setConnection(page, { mode: "adapter" });
+  });
+
+  test("a configured provider gets a button that starts there and comes back here", async ({ page }) => {
+    await page.route("**/identity/v1/oauth/providers", jsonRoute(200, {
+      providers: [{ name: "github", label: "GitHub" }],
+    }));
+    await goHash(page, "settings");
+    const button = page.getByTestId("oauth-github");
+    await expect(button).toHaveText("continue with GitHub");
+    const href = await button.getAttribute("href");
+    expect(href).toContain("/identity/v1/oauth/github/start?return_to=");
+    expect(decodeURIComponent(href!.split("return_to=")[1])).toBe("/#/settings");
+  });
+
+  test("no provider set up, no button", async ({ page }) => {
+    await page.route("**/identity/v1/oauth/providers", jsonRoute(200, { providers: [] }));
+    await goHash(page, "settings");
+    await expect(page.getByLabel("email")).toBeVisible();
+    await expect(page.getByTestId("oauth-github")).toHaveCount(0);
+  });
+
+  test("the code a provider sends back becomes a session and leaves the address", async ({ page }) => {
+    let traded = "";
+    await page.route("**/identity/v1/oauth/exchange", async (route) => {
+      traded = route.request().postDataJSON().code;
+      await route.fulfill({ json: { ...SESSION, created: true } });
+    });
+    await page.goto("/?axor_login=one-time-code-123456#/settings");
+    await expect(page.getByText("signed in as ada@acme.io")).toBeVisible();
+    expect(traded).toBe("one-time-code-123456");
+    expect(page.url()).not.toContain("axor_login");
+    expect(page.url()).toContain("#/settings");
+  });
+
+  test("a refused sign-in says why", async ({ page }) => {
+    await page.goto("/?axor_login_error=GitHub%20sign-in%20was%20cancelled#/settings");
+    await expect(page.getByTestId("oauth-error")).toContainText("GitHub sign-in was cancelled");
+    expect(page.url()).not.toContain("axor_login_error");
+  });
+});

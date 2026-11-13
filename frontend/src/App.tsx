@@ -34,6 +34,7 @@ import Health from "./tabs/Health";
 import Sentinel from "./tabs/Sentinel";
 import Regression from "./tabs/Regression";
 import Settings, { IdentityLogin } from "./tabs/Settings";
+import OAuthReturn from "./components/OAuthReturn";
 import Pricing from "./tabs/Pricing";
 
 // Governance first: the product is the policy membrane between an agent and its
@@ -137,6 +138,7 @@ export default function App() {
       </div>
 
       <GuestSession />
+      <OAuthReturn />
       {key === "home" && <Home />}
       {key === "evidence" && <Evidence />}
       {key === "catch" && <Experiment runId={runIdParam} autostart={route.query.auto === "1"} />}

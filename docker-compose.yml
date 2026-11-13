@@ -92,6 +92,18 @@ services:
       AXOR_IDENTITY_SIGNING_KEY: ${AXOR_IDENTITY_SIGNING_KEY:-}
       # open | first-only | closed. See SIGNUP_MODES in axor_identity.app.
       AXOR_IDENTITY_SIGNUP: ${AXOR_IDENTITY_SIGNUP:-open}
+      # Sign in with GitHub / Google. Where the browser reaches this service
+      # (the /identity path on the app's origin); register
+      # <AXOR_IDENTITY_PUBLIC_URL>/v1/oauth/github/callback (and .../google/...)
+      # with the provider. A provider is offered only with both id and secret.
+      AXOR_IDENTITY_PUBLIC_URL: ${AXOR_IDENTITY_PUBLIC_URL:-}
+      AXOR_IDENTITY_GITHUB_CLIENT_ID: ${AXOR_IDENTITY_GITHUB_CLIENT_ID:-}
+      AXOR_IDENTITY_GITHUB_CLIENT_SECRET: ${AXOR_IDENTITY_GITHUB_CLIENT_SECRET:-}
+      AXOR_IDENTITY_GOOGLE_CLIENT_ID: ${AXOR_IDENTITY_GOOGLE_CLIENT_ID:-}
+      AXOR_IDENTITY_GOOGLE_CLIENT_SECRET: ${AXOR_IDENTITY_GOOGLE_CLIENT_SECRET:-}
+      # other origins a sign-in may return to (the Lab's, when it shares this
+      # identity service), comma-separated
+      AXOR_IDENTITY_RETURN_ORIGINS: ${AXOR_IDENTITY_RETURN_ORIGINS:-}
     ports: ["8402:8402"]
     depends_on:
       postgres:
