@@ -52,7 +52,7 @@ test.describe("on a phone", () => {
 
   test("a first visit shows both ways in without scrolling", async ({ page }) => {
     await goHash(page, "home");
-    for (const name of [/See it govern an example fleet/, /Govern my own agent/]) {
+    for (const name of [/See it govern an example fleet/, /My production agent/]) {
       const box = await page.getByRole("button", { name }).boundingBox();
       expect(box!.y + box!.height).toBeLessThanOrEqual(844);
     }

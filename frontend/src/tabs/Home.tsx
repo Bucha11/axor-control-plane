@@ -10,6 +10,8 @@ import { ConnectionMode, MODE_LABEL, isConnected, useApp } from "../store";
 import Tooltip from "../components/Tooltip";
 import { useStartTour } from "../components/Tour";
 import { DemoStage } from "../demo/DemoLanding";
+import { CodingStage } from "../demo/CodingStage";
+import { WAYS } from "./Onboarding";
 
 const LADDER: { mode: ConnectionMode; blurb: string }[] = [
   { mode: "demo", blurb: "our mock broken tools · zero creds · one click" },
@@ -26,6 +28,7 @@ function FirstVisit() {
   const startTour = useStartTour();
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const [story, setStory] = useState<"production" | "coding">("production");
   const seeFleet = async () => {
     setLoading(true);
     setErr(null);
@@ -44,11 +47,12 @@ function FirstVisit() {
       <h1 style={{ fontSize: "clamp(22px, 6vw, 28px)", fontWeight: 700, lineHeight: 1.25, margin: "0 0 10px" }}>
         Decide what your AI agents are allowed to do.
         <br />
-        <span style={{ color: C.steel }}>Axor enforces it where they touch your tools.</span>
+        <span style={{ color: C.steel }}>Axor enforces it at every tool call — in production and in your repo.</span>
       </h1>
       <div style={{ fontSize: 14.5, color: C.mut, lineHeight: 1.6, marginBottom: 20 }}>
-        Policy — not the prompt — decides what an agent may read, send and run. Watch every
-        agent live, stop it, and repair it when its context goes bad.
+        Policy — not the prompt — decides what an agent may read, send and run: your own
+        agent in production, Claude Code and Codex in your repository. Watch every one live,
+        stop it, and repair it when its context goes bad.
       </div>
 
       {/* the ways in come BEFORE the recording: on a phone the recording alone
@@ -65,25 +69,21 @@ function FirstVisit() {
           </span>
           <ArrowRight size={18} />
         </button>
-        <button onClick={() => navigate("connect?for=production")} style={{ ...bigCta(C.steel, false) }}>
-          <span>
-            <span style={{ display: "block", fontWeight: 700 }}>Govern my own agent</span>
-            <span style={{ display: "block", fontSize: 12, opacity: 0.85, marginTop: 2 }}>
-              wrap it with axor-core · pause, cap, stop and repair it live
+      </div>
+      <div style={{ fontFamily: MONO, fontSize: 11, color: C.dim, letterSpacing: "0.06em", margin: "4px 0 8px" }}>
+        OR GOVERN YOUR OWN
+      </div>
+      <div className="flex flex-col" style={{ gap: 8, marginBottom: 12 }}>
+        {WAYS.map((w) => (
+          <button key={w.id} data-testid={`home-way-${w.id}`}
+            onClick={() => navigate(`connect?for=${w.id}`)} style={{ ...bigCta(C.steel, false), padding: "11px 18px" }}>
+            <span>
+              <span style={{ display: "block", fontWeight: 700 }}>{w.title}</span>
+              <span style={{ display: "block", fontSize: 12, opacity: 0.85, marginTop: 2 }}>{w.body}</span>
             </span>
-          </span>
-          <ArrowRight size={18} />
-        </button>
-        <button onClick={() => navigate("connect?for=coding")} style={{ ...bigCta(C.steel, false) }}
-          data-testid="home-coding">
-          <span>
-            <span style={{ display: "block", fontWeight: 700 }}>Govern my coding agents</span>
-            <span style={{ display: "block", fontSize: 12, opacity: 0.85, marginTop: 2 }}>
-              Claude Code and Codex · two commands · every session on the plane
-            </span>
-          </span>
-          <ArrowRight size={18} />
-        </button>
+            <ArrowRight size={18} />
+          </button>
+        ))}
       </div>
       {err && <div style={{ fontFamily: MONO, fontSize: 11, color: C.red, marginBottom: 8 }}>{err}</div>}
       <div style={{ fontSize: 13, color: C.mut, marginBottom: 26, lineHeight: 1.6 }}>
@@ -99,11 +99,23 @@ function FirstVisit() {
         </button>
       </div>
 
-      <div style={{ fontFamily: MONO, fontSize: 11.5, color: C.mut, marginBottom: 10 }}>
-        watch it happen — 25 seconds:
+      <div className="flex items-center flex-wrap" style={{ gap: 8, marginBottom: 10 }}>
+        <span style={{ fontFamily: MONO, fontSize: 11.5, color: C.mut }}>watch it happen — 25 seconds:</span>
+        {([["production", "a production agent"], ["coding", "coding agents"]] as const).map(([id, name]) => (
+          <button key={id} data-testid={`story-${id}`} onClick={() => setStory(id)}
+            style={{
+              fontFamily: MONO, fontSize: 11, padding: "2px 10px", borderRadius: 20, cursor: "pointer",
+              background: "none", color: story === id ? C.text : C.dim,
+              border: `1px solid ${story === id ? C.steel : C.line}`,
+            }}>
+            {name}
+          </button>
+        ))}
       </div>
       {/* the buttons above are the call to action; the recording needs no third */}
-      <DemoStage autoplay cta={false} onTry={() => navigate("connect")} />
+      {story === "production"
+        ? <DemoStage autoplay cta={false} onTry={() => navigate("connect")} />
+        : <CodingStage autoplay />}
 
       <div style={{ fontFamily: MONO, fontSize: 11, color: C.dim, marginTop: 18 }}>
         open source ·{" "}

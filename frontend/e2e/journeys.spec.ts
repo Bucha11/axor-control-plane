@@ -79,3 +79,16 @@ test("on the connect page the header does not offer to connect, and a session co
   await expect(page.getByTestId("coding-sessions")).toContainText("governed", { timeout: 10000 });
   await expect(page.getByRole("button", { name: /connection:/ })).toBeVisible();
 });
+
+test("home offers the same three ways in, and a coding-agent recording", async ({ page }) => {
+  await setConnection(page, { mode: "none" });
+  await goHash(page, "home");
+  for (const way of ["coding", "production", "both"]) {
+    await expect(page.getByTestId(`home-way-${way}`)).toBeVisible();
+  }
+  await page.getByTestId("story-coding").click();
+  await expect(page.getByTestId("coding-stage")).toBeVisible();
+  await expect(page.getByTestId("coding-demo-contain")).toBeVisible({ timeout: 15000 });
+  await page.getByTestId("home-way-both").click();
+  await expect(page).toHaveURL(/#\/connect\?for=both/);
+});

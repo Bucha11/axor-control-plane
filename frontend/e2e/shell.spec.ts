@@ -12,7 +12,7 @@ test.describe("shell", () => {
     // the recording plays on its own, and opens on governance
     await expect(page.getByTestId("demo-govern")).toBeVisible({ timeout: 20_000 });
     await expect(page.getByRole("button", { name: /See it govern an example fleet/ })).toBeVisible();
-    await expect(page.getByRole("button", { name: /Govern my own agent/ })).toBeVisible();
+    await expect(page.getByRole("button", { name: /My production agent/ })).toBeVisible();
     // none of the product's vocabulary before there is something in it
     for (const label of ["Agents", "Policy", "Caught lies", "Replay", "Safe to ship?"]) {
       await expect(page.getByRole("button", { name: label, exact: true })).toHaveCount(0);
@@ -65,7 +65,7 @@ test.describe("shell", () => {
 
   test("governing your own agent starts at connect", async ({ page }) => {
     await goHash(page, "home");
-    await page.getByRole("button", { name: /Govern my own agent/ }).click();
+    await page.getByRole("button", { name: /My production agent/ }).click();
     await expect(page).toHaveURL(/#\/connect\?for=production$/);
     await expect(page.getByText(/What tools does your agent use\?/)).toBeVisible();
   });

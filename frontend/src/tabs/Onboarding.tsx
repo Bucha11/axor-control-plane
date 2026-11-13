@@ -72,7 +72,7 @@ function parseMcpConfig(raw: string): McpTarget[] {
 // Three ways in. A team that wants its coding agents governed has no tools to
 // declare and no base URLs to repoint; a team wrapping a production agent does
 // not care about Claude Code. Each gets its own path; "both" walks both.
-const WAYS: { id: Journey; title: string; body: string }[] = [
+export const WAYS: { id: Journey; title: string; body: string }[] = [
   { id: "coding", title: "Coding agents",
     body: "Claude Code and Codex, through their hooks. Two commands; every session shows up here." },
   { id: "production", title: "My production agent",
