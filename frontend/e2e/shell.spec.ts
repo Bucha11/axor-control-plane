@@ -11,7 +11,7 @@ test.describe("shell", () => {
     await expect(page.getByText("Decide what your AI agents are allowed to do.")).toBeVisible();
     // the recording plays on its own, and opens on governance
     await expect(page.getByTestId("demo-govern")).toBeVisible({ timeout: 20_000 });
-    await expect(page.getByRole("button", { name: /See it govern an example fleet/ })).toBeVisible();
+    await expect(page.getByRole("button", { name: /Explore an example fleet/ })).toBeVisible();
     await expect(page.getByRole("button", { name: /My production agent/ })).toBeVisible();
     // none of the product's vocabulary before there is something in it
     for (const label of ["Agents", "Policy", "Caught lies", "Replay", "Safe to ship?"]) {
@@ -22,7 +22,7 @@ test.describe("shell", () => {
 
   test("the example fleet opens on the governed agents, with the menu", async ({ page }) => {
     await goHash(page, "home");
-    await page.getByRole("button", { name: /See it govern an example fleet/ }).click();
+    await page.getByRole("button", { name: /Explore an example fleet/ }).click();
     await expect(page).toHaveURL(/#\/govern$/);
     await expect(page.getByRole("button", { name: "Agents", exact: true })).toHaveAttribute("aria-current", "page");
   });

@@ -57,21 +57,8 @@ function FirstVisit() {
 
       {/* the ways in come BEFORE the recording: on a phone the recording alone
           fills the first screen */}
-      <div className="flex flex-col" style={{ gap: 10, marginBottom: 12 }}>
-        <button onClick={() => void seeFleet()} disabled={loading} style={{ ...bigCta(C.green, true) }}>
-          <span>
-            <span style={{ display: "block", fontWeight: 700 }}>
-              {loading ? "Loading the example fleet…" : "See it govern an example fleet"}
-            </span>
-            <span style={{ display: "block", fontSize: 12, opacity: 0.85, marginTop: 2 }}>
-              one click · nothing to install · no account
-            </span>
-          </span>
-          <ArrowRight size={18} />
-        </button>
-      </div>
       <div style={{ fontFamily: MONO, fontSize: 11, color: C.dim, letterSpacing: "0.06em", margin: "4px 0 8px" }}>
-        OR GOVERN YOUR OWN
+        WHAT DO YOU WANT TO GOVERN?
       </div>
       <div className="flex flex-col" style={{ gap: 8, marginBottom: 12 }}>
         {WAYS.map((w) => (
@@ -86,8 +73,13 @@ function FirstVisit() {
         ))}
       </div>
       {err && <div style={{ fontFamily: MONO, fontSize: 11, color: C.red, marginBottom: 8 }}>{err}</div>}
-      <div style={{ fontSize: 13, color: C.mut, marginBottom: 26, lineHeight: 1.6 }}>
-        Not ready to change code?{" "}
+      <div style={{ fontSize: 13, color: C.mut, marginBottom: 26, lineHeight: 1.8 }}>
+        Not ready to install anything?{" "}
+        <button onClick={() => void seeFleet()} disabled={loading} data-testid="home-example-fleet"
+          style={{ background: "none", border: "none", padding: 0, color: C.steel, cursor: "pointer", fontSize: 13, textAlign: "left" }}>
+          {loading ? "loading the example fleet…" : "Explore an example fleet →"}
+        </button>
+        <br />
         <button
           onClick={() => {
             connect("demo");
@@ -95,7 +87,7 @@ function FirstVisit() {
           }}
           style={{ background: "none", border: "none", padding: 0, color: C.steel, cursor: "pointer", fontSize: 13, textAlign: "left" }}
         >
-          See it catch an agent making things up when a tool breaks — no code →
+          See it catch an agent making things up when a tool breaks →
         </button>
       </div>
 
