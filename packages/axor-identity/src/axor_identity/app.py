@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import contextlib
 import datetime
+import logging
 import os
 import secrets
 from collections.abc import AsyncIterator
@@ -21,6 +22,7 @@ from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, EmailStr, Field
 
 from axor_identity.keys import SigningKey, load_signing_key
+from axor_identity.mail import Mailer, mailer_from_env
 from axor_identity.oauth import OAuthError, Provider, digest, pkce_pair, providers_from_env
 from axor_identity.passwords import hash_password, needs_rehash, verify_password
 from axor_identity.storage import Store, init_db, make_engine
@@ -73,6 +75,8 @@ class SignupBody(BaseModel):
     email: EmailStr
     password: str = Field(min_length=8)
     org_name: str = Field(min_length=1)
+    # where the verification link should open (an app page); see _safe_return
+    return_to: str | None = None
 
 
 class LoginBody(BaseModel):
@@ -88,6 +92,30 @@ class RefreshBody(BaseModel):
 class MemberBody(BaseModel):
     email: EmailStr
     role: str
+
+
+class LinkBody(BaseModel):
+    return_to: str | None = None
+
+
+class TokenBody(BaseModel):
+    token: str = Field(min_length=16, max_length=128)
+
+
+class ForgotBody(BaseModel):
+    email: EmailStr
+    return_to: str | None = None
+
+
+class ResetBody(BaseModel):
+    token: str = Field(min_length=16, max_length=128)
+    password: str = Field(min_length=8)
+
+
+# how long an e-mailed link stays good, and how often one may be sent
+_VERIFY_TTL = 24 * 3600
+_RESET_TTL = 3600
+_MAIL_GAP = 60
 
 
 class ExchangeBody(BaseModel):
@@ -123,7 +151,8 @@ def create_app(database_url: str | None = None, *,
                providers: dict[str, Provider] | None = None,
                public_url: str | None = None,
                return_origins: list[str] | None = None,
-               oauth_transport: httpx.AsyncBaseTransport | None = None) -> FastAPI:
+               oauth_transport: httpx.AsyncBaseTransport | None = None,
+               mailer: Mailer | None | bool = True) -> FastAPI:
     url = (database_url or os.environ.get("AXOR_IDENTITY_DATABASE_URL")
            or "sqlite+aiosqlite:///./identity.db")
     signing_key = signing_key or load_signing_key()
@@ -162,6 +191,10 @@ def create_app(database_url: str | None = None, *,
             return _origin(public_url) + return_to
         return return_to if _origin(return_to) in allowed_origins else None
 
+    # True = from the environment (AXOR_IDENTITY_SMTP_URL); None/False = no mail
+    mail: Mailer | None = mailer_from_env() if mailer is True else (mailer or None)
+    last_mail: dict[str, float] = {}  # (purpose:user) → when, for _MAIL_GAP
+
     @contextlib.asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         await init_db(app.state.store.engine)
@@ -182,7 +215,8 @@ def create_app(database_url: str | None = None, *,
                                   _now_iso())
         access = issue_access(
             signing_key, user_id=user["user_id"], email=user["email"],
-            org=org_id, role=role, tier=tier, ttl=access_ttl)
+            org=org_id, role=role, tier=tier, ttl=access_ttl,
+            email_verified=bool(user.get("email_verified")))
         return {
             "access_token": access,
             "refresh_token": raw_refresh,
@@ -221,6 +255,7 @@ def create_app(database_url: str | None = None, *,
         await store.create_org(org_id, body.org_name, "community", ts)
         await store.add_membership(user_id, org_id, "owner", ts)
         user = {"user_id": user_id, "email": email}
+        await _send_link(user, "verify", body.return_to, quiet=True)
         return await _issue_session(user, org_id, "owner", "community")
 
     @app.post("/v1/login")
@@ -414,6 +449,113 @@ def create_app(database_url: str | None = None, *,
         session = await _issue_session(user, chosen["org_id"], chosen["role"],
                                        chosen["tier"])
         return {**session, "created": record["created"]}
+
+    # ── e-mail: verification and password reset ───────────────────────────────
+    def _expiry(seconds: int) -> str:
+        return (datetime.datetime.now(datetime.UTC)
+                + datetime.timedelta(seconds=seconds)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    async def _send_link(user: dict, purpose: str, return_to: str | None, *,
+                         quiet: bool = False) -> bool:
+        """Mail ``user`` a single-use link. ``quiet``: a failure is logged, not
+        raised (a signup does not fail because the mail server is down).
+        Returns whether a message went out."""
+        if mail is None:
+            return False
+        key = f"{purpose}:{user['user_id']}"
+        now = datetime.datetime.now(datetime.UTC).timestamp()
+        if now - last_mail.get(key, 0) < _MAIL_GAP:
+            if quiet:
+                return False
+            raise HTTPException(429, "a link was just sent — check your inbox, "
+                                     "or try again in a minute")
+        target = _safe_return(return_to or "/") if public_url else None
+        if target is None:
+            if quiet:
+                return False
+            raise HTTPException(400, "return_to is not an address this service links to")
+        raw = secrets.token_urlsafe(32)
+        ttl = _VERIFY_TTL if purpose == "verify" else _RESET_TTL
+        await store.put_email_token(digest(raw), user["user_id"], purpose,
+                                    user["email"], _expiry(ttl))
+        param = "axor_verify" if purpose == "verify" else "axor_reset"
+        link = _with_query(target, **{param: raw})
+        if purpose == "verify":
+            subject = "Confirm your e-mail address for Axor"
+            text = ("Confirm that this address is yours:\n\n" + link +
+                    "\n\nThe link works once, for 24 hours. If you did not create "
+                    "an Axor account, ignore this message.")
+        else:
+            subject = "Reset your Axor password"
+            text = ("Someone asked to reset the password of the Axor account for "
+                    "this address. To choose a new one:\n\n" + link +
+                    "\n\nThe link works once, for an hour. If it was not you, "
+                    "ignore this message — the password stays as it is.")
+        try:
+            await mail.send(user["email"], subject, text)
+        except Exception as exc:  # noqa: BLE001 - any transport failure
+            if quiet:
+                logging.getLogger("axor_identity.mail").warning(
+                    "could not send %s mail: %s", purpose, exc)
+                return False
+            raise HTTPException(502, "the mail server did not take the message") from exc
+        last_mail[key] = now
+        return True
+
+    @app.get("/v1/email")
+    async def email_doc() -> dict:
+        """Whether this install sends mail, so a client offers "forgot
+        password?" and "resend" only where they can work."""
+        return {"available": mail is not None and bool(public_url)}
+
+    @app.post("/v1/email/verify/send", status_code=202)
+    async def verify_send(body: LinkBody, caller: Claims = Depends(_caller)) -> dict:
+        if mail is None or not public_url:
+            raise HTTPException(503, "this installation does not send mail")
+        user = await store.get_user(caller.user_id)
+        if user is None:
+            raise HTTPException(404, "user not found")
+        if user["email_verified"]:
+            raise HTTPException(409, "this address is already verified")
+        await _send_link(user, "verify", body.return_to)
+        return {"sent_to": user["email"]}
+
+    @app.post("/v1/email/verify")
+    async def verify(body: TokenBody) -> dict:
+        record = await store.take_email_token(digest(body.token), "verify")
+        user = await store.get_user(record["user_id"]) if record else None
+        if record is None or user is None or record["expires_ts"] <= _now_iso() \
+                or record["email"] != user["email"]:
+            raise HTTPException(400, "this link has expired or was already used")
+        await store.mark_verified(user["user_id"])
+        return {"email": user["email"], "email_verified": True}
+
+    @app.post("/v1/password/forgot", status_code=202)
+    async def forgot(body: ForgotBody) -> dict:
+        """Always the same answer, whether or not the address has an account —
+        the form must not tell a stranger who is registered."""
+        if mail is None or not public_url:
+            raise HTTPException(503, "this installation does not send mail")
+        if _safe_return(body.return_to or "/") is None:
+            raise HTTPException(400, "return_to is not an address this service links to")
+        user = await store.get_user_by_email(_norm_email(body.email))
+        if user is not None:
+            await _send_link(user, "reset", body.return_to, quiet=True)
+        return {"detail": "if that address has an account, a link is on its way"}
+
+    @app.post("/v1/password/reset", status_code=204)
+    async def reset(body: ResetBody) -> None:
+        """A new password from an e-mailed link. Following the link proves the
+        address, so it is marked verified; every session open before the reset
+        is revoked — a reset is often someone taking their account back."""
+        record = await store.take_email_token(digest(body.token), "reset")
+        user = await store.get_user(record["user_id"]) if record else None
+        if record is None or user is None or record["expires_ts"] <= _now_iso() \
+                or record["email"] != user["email"]:
+            raise HTTPException(400, "this link has expired or was already used")
+        await store.update_password(user["user_id"], hash_password(body.password))
+        await store.mark_verified(user["user_id"])
+        await store.revoke_all_refresh(user["user_id"])
 
     # ── keys / health ─────────────────────────────────────────────────────────
     @app.get("/.well-known/jwks.json")

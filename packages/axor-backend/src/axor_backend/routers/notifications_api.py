@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import math
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 
 from axor_backend.deps import NotifierDep, StateDep, StoreDep
 from axor_backend.licensing import require_ee
@@ -88,13 +88,38 @@ def _debounce(body: dict) -> float:
     return seconds
 
 
+def _mail_allowed(request: Request, url: str) -> None:
+    """Who may point alert mail where. A server that sends mail to any address
+    a subscriber types is a spam relay with our name on it, so a signed-in
+    person may subscribe only their own address, and only once the identity
+    service has seen proof it is theirs. The operator credential and API keys
+    (the self-hosted operator's own) may name any address."""
+    from axor_backend.mail import mail_address
+
+    try:
+        address = mail_address(url)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    principal = getattr(request.state, "principal", None)
+    if address is None or principal is None or principal.kind != "user":
+        return
+    if address != (principal.email or "").lower():
+        raise HTTPException(403, "alert mail can go only to your own address "
+                                 f"({principal.email})")
+    if not principal.email_verified:
+        raise HTTPException(403, "confirm your e-mail address first (Settings → "
+                                 "resend link), then sign in again")
+
+
 @router.post("/subscribe")
 async def notif_subscribe(
-    body: dict, state: StateDep, store: StoreDep, notifier: NotifierDep
+    body: dict, request: Request, state: StateDep, store: StoreDep,
+    notifier: NotifierDep,
 ) -> dict:
     from axor_backend.notifications import WebhookRefused
 
     url = _text(body, "url", required=True)
+    _mail_allowed(request, url)
     triggers = _triggers(body)
     debounce = _debounce(body)
     label = _text(body, "label")

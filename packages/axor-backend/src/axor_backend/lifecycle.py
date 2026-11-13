@@ -161,7 +161,7 @@ async def rehydrate(state: Any) -> None:  # noqa: ANN401 - app.state is dynamic
             sub["url"], sub["triggers"], sub["debounce_seconds"],
             label=sub.get("label", ""),
             node_pattern=sub.get("node_pattern", "*"),
-            org=sub["org_id"],
+            org=sub["org_id"], boot=True,
         )
     await load_licenses(state)
 

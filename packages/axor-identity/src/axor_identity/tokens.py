@@ -22,7 +22,8 @@ ALGORITHM = "EdDSA"
 
 
 def issue_access(signing_key: SigningKey, *, user_id: str, email: str, org: str,
-                 role: str, tier: str, ttl: int, now: int | None = None) -> str:
+                 role: str, tier: str, ttl: int, now: int | None = None,
+                 email_verified: bool = False) -> str:
     issued = int(time.time()) if now is None else now
     claims = {
         "iss": ISSUER,
@@ -31,6 +32,8 @@ def issue_access(signing_key: SigningKey, *, user_id: str, email: str, org: str,
         "org": org,
         "role": role,
         "tier": tier,
+        # the address is proven theirs — downstream services gate mail on it
+        "evf": bool(email_verified),
         "iat": issued,
         "exp": issued + ttl,
     }

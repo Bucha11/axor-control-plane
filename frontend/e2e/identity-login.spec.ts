@@ -156,7 +156,86 @@ test.describe("sign in with GitHub / Google", () => {
 
   test("a refused sign-in says why", async ({ page }) => {
     await page.goto("/?axor_login_error=GitHub%20sign-in%20was%20cancelled#/settings");
-    await expect(page.getByTestId("oauth-error")).toContainText("GitHub sign-in was cancelled");
+    await expect(page.getByTestId("auth-note")).toContainText("GitHub sign-in was cancelled");
     expect(page.url()).not.toContain("axor_login_error");
   });
+});
+
+test.describe("e-mail: reset and verification links", () => {
+  test.beforeEach(async ({ page }) => {
+    await setConnection(page, { mode: "adapter" });
+  });
+
+  test("forgot password sends a link where mail is set up", async ({ page }) => {
+    await page.route("**/identity/v1/email", jsonRoute(200, { available: true }));
+    let asked: { email?: string; return_to?: string } = {};
+    await page.route("**/identity/v1/password/forgot", async (route) => {
+      asked = route.request().postDataJSON();
+      await route.fulfill({ status: 202, json: { detail: "if that address has an account, a link is on its way" } });
+    });
+    await goHash(page, "settings");
+    await page.getByRole("button", { name: "forgot password?" }).click();
+    await expect(page.getByLabel("password")).toHaveCount(0);
+    await page.getByLabel("email").fill("ada@acme.io");
+    await page.getByRole("button", { name: "send reset link" }).click();
+    await expect(page.getByTestId("reset-sent")).toContainText("a link is on its way");
+    expect(asked).toEqual({ email: "ada@acme.io", return_to: "/#/settings" });
+  });
+
+  test("no mail set up, no forgot-password", async ({ page }) => {
+    await page.route("**/identity/v1/email", jsonRoute(200, { available: false }));
+    await goHash(page, "settings");
+    await expect(page.getByLabel("email")).toBeVisible();
+    await expect(page.getByRole("button", { name: "forgot password?" })).toHaveCount(0);
+  });
+
+  test("a reset link asks for a new password and sets it", async ({ page }) => {
+    let body: { token?: string; password?: string } = {};
+    await page.route("**/identity/v1/password/reset", async (route) => {
+      body = route.request().postDataJSON();
+      await route.fulfill({ status: 204, body: "" });
+    });
+    await page.goto("/?axor_reset=reset-token-123456789#/settings");
+    await page.getByRole("textbox", { name: "new password" }).fill("brand new pass");
+    await page.getByRole("button", { name: "set password" }).click();
+    await expect(page.getByTestId("auth-note")).toContainText("password changed");
+    expect(body).toEqual({ token: "reset-token-123456789", password: "brand new pass" });
+    expect(page.url()).not.toContain("axor_reset");
+  });
+
+  test("a verification link confirms the address", async ({ page }) => {
+    await page.route("**/identity/v1/email/verify", jsonRoute(200, { email: "ada@acme.io", email_verified: true }));
+    await page.goto("/?axor_verify=verify-token-123456789#/settings");
+    await expect(page.getByTestId("auth-note")).toContainText("ada@acme.io is confirmed");
+  });
+
+  test("signed in with an unconfirmed address offers to resend", async ({ page }) => {
+    await page.route("**/identity/v1/email", jsonRoute(200, { available: true }));
+    await page.route("**/identity/v1/login", jsonRoute(200, SESSION));
+    await page.route("**/identity/v1/me", jsonRoute(200, {
+      user: { user_id: "usr_1", email: "ada@acme.io", email_verified: false },
+      active_org: "org_1", role: "owner",
+      memberships: [{ org_id: "org_1", role: "owner", name: "Acme", tier: "community" }],
+    }));
+    await page.route("**/identity/v1/email/verify/send", jsonRoute(202, { sent_to: "ada@acme.io" }));
+    await goHash(page, "settings");
+    await page.getByLabel("email").fill("ada@acme.io");
+    await page.getByLabel("password").fill("correct horse");
+    await page.getByRole("button", { name: "log in", exact: true }).click();
+    const line = page.getByTestId("email-unverified");
+    await line.getByRole("button", { name: "resend link" }).click();
+    await expect(line).toContainText("link sent to ada@acme.io");
+  });
+});
+
+test("signed in, one click fills in drift alerts to your own address", async ({ page }) => {
+  await setConnection(page, { mode: "adapter" });
+  await page.route("**/identity/v1/login", jsonRoute(200, SESSION));
+  await goHash(page, "settings");
+  await page.getByLabel("email").fill("ada@acme.io");
+  await page.getByLabel("password").fill("correct horse");
+  await page.getByRole("button", { name: "log in", exact: true }).click();
+  await page.getByTestId("mail-me").click();
+  await expect(page.getByPlaceholder(/mailto:you/)).toHaveValue("mailto:ada@acme.io");
+  await expect(page.getByLabel("Probe reports behavioral drift")).toBeChecked();
 });

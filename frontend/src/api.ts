@@ -596,6 +596,12 @@ function noteAccountRequired(resp: Response): void {
 // wins, the rest are rejected, and their failure clears the winner's session.
 let refreshing: Promise<boolean> | null = null;
 
+/** Swap the access token for a fresh one now — after something the token
+ * carries changed (a confirmed address). */
+export function renewSession(): Promise<boolean> {
+  return refreshSession(null);
+}
+
 async function refreshSession(staleToken: string | null): Promise<boolean> {
   const state = useApp.getState();
   // Another request already refreshed while this one was in flight.
@@ -782,7 +788,11 @@ function signingArmed(): boolean {
 }
 
 export interface IdentityMe {
-  user: { user_id: string; email: string };
+  user: {
+    user_id: string; email: string;
+    // absent from an identity service older than e-mail verification
+    email_verified?: boolean; has_password?: boolean; providers?: string[];
+  };
   active_org: string;
   role: string;
   memberships: { org_id: string; role: string; name: string; tier: string }[];
@@ -792,6 +802,12 @@ export const api = {
   // ── identity (signed-in humans) — through af(), so an expired access token
   // refreshes like any other request ─────────────────────────────────────────
   identityMe: () => af(`${IDENTITY_BASE}/v1/me`).then((r) => j<IdentityMe>(r)),
+  resendVerification: (returnTo: string) =>
+    af(`${IDENTITY_BASE}/v1/email/verify/send`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ return_to: returnTo }),
+    }).then((r) => j<{ sent_to: string }>(r)),
   addOrgMember: (orgId: string, email: string, role: string) =>
     af(`${IDENTITY_BASE}/v1/orgs/${encodeURIComponent(orgId)}/members`, {
       method: "POST",

@@ -48,13 +48,17 @@ class Claims:
     org: str
     role: str
     tier: str
+    # the identity service has seen proof the address is theirs (a provider
+    # vouched, or a mailed link was followed). Absent in older tokens: False.
+    email_verified: bool = False
 
     @classmethod
     def from_payload(cls, payload: dict[str, Any]) -> Claims:
         try:
             return cls(user_id=payload["sub"], email=payload["eml"],
                        org=payload["org"], role=payload["role"],
-                       tier=payload["tier"])
+                       tier=payload["tier"],
+                       email_verified=payload.get("evf") is True)
         except KeyError as exc:
             raise IdentityError(f"token missing claim {exc}") from exc
 

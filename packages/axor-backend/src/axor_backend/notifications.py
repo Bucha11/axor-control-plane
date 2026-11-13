@@ -5,6 +5,8 @@ persona is not. The pairing rule: the UI is quiet, the notification channel is
 where wrong gets loud. We emit and route — never a pager.
 
 - Channel: webhook (JSON POST). Slack/Discord/PagerDuty are webhook consumers.
+  Or mail: a ``mailto:`` url is delivered through ``mail.py`` when the
+  deployment has AXOR_SMTP_URL, and refused at subscribe when it does not.
 - Triggers (v1): degradation transition upward, Sentinel heat crossing a
   threshold, a run completing with >=1 EvidenceCase, a node stale, a corpus
   run that regressed (regression_failed).
@@ -40,6 +42,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 from axor_backend.errors import BackendError
+from axor_backend.mail import Mailer, mail_address, render
 from axor_backend.tenancy import PUBLIC_ORG, current_org_id
 
 
@@ -202,7 +205,10 @@ class Notifier:
         dead_sink: Any = None,  # noqa: ANN401 - async callable(DeadLetter) that persists it
         block_private: bool = False,
         clock: Callable[[], float] | None = None,
+        mailer: Mailer | None = None,
     ) -> None:
+        # mailto: subscriptions go out through this; None refuses them
+        self._mailer = mailer
         # Whether registering a webhook crosses a privilege boundary in THIS
         # deployment — see check_webhook_url. The app turns it on for any
         # multi-tenant (identity-configured) server.
@@ -221,7 +227,7 @@ class Notifier:
         self._now: Callable[[], float] = clock or time.monotonic
         self._in_flight: set[asyncio.Task] = set()
 
-    def validate(self, url: str, triggers: list[str]) -> None:
+    def validate(self, url: str, triggers: list[str], *, boot: bool = False) -> None:
         """Everything :meth:`subscribe` would reject, without registering.
 
         A caller that persists a subscription before registering it needs to
@@ -231,11 +237,20 @@ class Notifier:
         bad = set(triggers) - TRIGGERS
         if bad:
             raise ValueError(f"unknown triggers: {sorted(bad)}")
+        if mail_address(url) is not None:
+            # At boot a stored mail subscription is held even with mail now
+            # unconfigured: its deliveries then dead-letter where Settings shows
+            # them, instead of the subscription vanishing without a word.
+            if self._mailer is None and not boot:
+                raise ValueError("this deployment does not send mail (AXOR_SMTP_URL "
+                                 "is unset) — use a webhook")
+            return
         check_webhook_url(url, self._block_private)
 
     def subscribe(
         self, url: str, triggers: list[str], debounce_seconds: float = 0.0,
         label: str = "", node_pattern: str = "*", org: str | None = None,
+        boot: bool = False,
     ) -> None:
         """Register, or update the one already here.
 
@@ -245,7 +260,7 @@ class Notifier:
         from those rows, silently went back to once. The duplicate rate
         depended on how recently the process had been restarted.
         """
-        self.validate(url, triggers)
+        self.validate(url, triggers, boot=boot)
         fresh = Subscription(
             url, frozenset(triggers), debounce_seconds,
             label=label, node_pattern=node_pattern or "*",
@@ -362,6 +377,13 @@ class Notifier:
                 # resolution the check makes is not the one httpx will make
                 # (a DNS-rebinding TOCTOU that only a pinned-IP transport
                 # closes), so it is defence in depth, not a guarantee.
+                address = mail_address(url)
+                if address is not None:
+                    if self._mailer is None:
+                        raise RuntimeError("mail is no longer configured")
+                    subject, text = render(body)
+                    await self._mailer.send(address, subject, text)
+                    return
                 check_webhook_url(url, self._block_private)
                 status = await self._post(url, body)
                 if 200 <= status < 300:

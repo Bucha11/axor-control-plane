@@ -135,6 +135,7 @@ async def resolve_principal(request: Request) -> Principal | None:
             role=claims.role,
             user_id=claims.user_id,
             email=claims.email,
+            email_verified=claims.email_verified,
         )
     return None
 

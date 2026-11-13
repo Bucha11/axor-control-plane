@@ -55,6 +55,11 @@ bound to (user, org), expiring and revocable. `/v1/refresh` rotates it.
 | GET | `/v1/oauth/{provider}/start?return_to=` | redirect to GitHub / Google (PKCE) |
 | GET | `/v1/oauth/{provider}/callback` | back from the provider → `return_to?axor_login=<code>` |
 | POST | `/v1/oauth/exchange` | the one-time code → access + refresh (`created`: new account) |
+| GET | `/v1/email` | whether this install sends mail |
+| POST | `/v1/email/verify/send` | mail the caller a verification link (bearer) |
+| POST | `/v1/email/verify` | follow a verification link (`token`) |
+| POST | `/v1/password/forgot` | mail a reset link; same answer for unknown addresses |
+| POST | `/v1/password/reset` | set a new password from a link; revokes every session |
 | GET | `/.well-known/jwks.json` | public keys for verifying access tokens |
 | GET | `/v1/healthz` | liveness |
 
@@ -90,3 +95,16 @@ password is dropped and its sessions revoked — whoever set it never proved
 they own the address, and the provider just did. Tokens never travel in a URL:
 the redirect carries a single-use code (two minutes) that the app trades for a
 session.
+
+### Mail
+
+- `AXOR_IDENTITY_SMTP_URL` — `smtp://user:pass@host:587` (STARTTLS),
+  `smtps://user:pass@host:465`, or `log` (links go to the log — local installs).
+  Unset: no verification, no reset, and `/v1/email` says so.
+- `AXOR_IDENTITY_MAIL_FROM` — sender (default `no-reply@<smtp host>`).
+
+A signup is mailed a verification link (24 h, single use). A reset link lasts an
+hour; following it sets the password, verifies the address and revokes every
+open session. Links open `return_to` (same rules as sign-in) with
+`?axor_verify=` / `?axor_reset=`; one link per purpose is live at a time, and
+at most one is sent a minute.

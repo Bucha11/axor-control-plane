@@ -8,8 +8,8 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Check, Copy, Loader2, Trash2 } from "lucide-react";
 import { api } from "../api";
 import {
-  IdentityError, login, logout, oauthProviders, oauthStartUrl, signup, signupAvailable,
-  type OAuthProvider,
+  IdentityError, emailAvailable, forgotPassword, here, login, logout, oauthProviders,
+  oauthStartUrl, signup, signupAvailable, type OAuthProvider,
 } from "../identity";
 import { navigate } from "../router";
 import { MODE_LABEL, useApp } from "../store";
@@ -45,6 +45,31 @@ const INPUT_STYLE = {
 // The signed-in human's organization: which orgs they belong to (from the
 // identity service's /v1/me, which also proves the session is still live) and,
 // for an admin, adding an existing user to the active org.
+/** "Address not confirmed · resend" — shown only while it is not, and only
+ * where the identity service sends mail. */
+function EmailStatus() {
+  const me = useQuery({ queryKey: ["identity-me"], queryFn: api.identityMe });
+  const [canMail, setCanMail] = useState(false);
+  useEffect(() => { void emailAvailable().then(setCanMail); }, []);
+  const resend = useMutation({ mutationFn: () => api.resendVerification(here()) });
+  if (!canMail || me.data?.user.email_verified !== false) return null;
+  return (
+    <div className="flex items-center gap-2 mb-2" data-testid="email-unverified"
+      style={{ fontFamily: MONO, fontSize: 11, color: C.amber }}>
+      e-mail not confirmed — alert mail goes only to a confirmed address
+      {resend.isSuccess ? (
+        <span style={{ color: C.green }}>· link sent to {resend.data.sent_to}</span>
+      ) : (
+        <button onClick={() => resend.mutate()} disabled={resend.isPending}
+          style={btn({ color: C.mut, fontSize: 10.5, padding: "2px 8px" })}>
+          {resend.isPending ? "…" : "resend link"}
+        </button>
+      )}
+      {resend.isError && <span style={{ color: C.red }}>{(resend.error as Error).message}</span>}
+    </div>
+  );
+}
+
 function OrgMembers() {
   const me = useQuery({ queryKey: ["identity-me"], queryFn: api.identityMe });
   const [email, setEmail] = useState("");
@@ -111,7 +136,7 @@ export function IdentityLogin({ onDone, initialMode = "login" }: {
   const setSession = useApp((s) => s.setSession);
   const clearSession = useApp((s) => s.clearSession);
   const qc = useQueryClient();
-  const [mode, setMode] = useState<"login" | "signup">(initialMode);
+  const [mode, setMode] = useState<"login" | "signup" | "forgot">(initialMode);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [orgName, setOrgName] = useState("");
@@ -120,9 +145,12 @@ export function IdentityLogin({ onDone, initialMode = "login" }: {
   const [busy, setBusy] = useState(false);
   const [canSignup, setCanSignup] = useState<boolean | null>(null);
   const [providers, setProviders] = useState<OAuthProvider[]>([]);
+  const [canMail, setCanMail] = useState(false);
+  const [sent, setSent] = useState<string | null>(null);
   useEffect(() => {
     void signupAvailable().then(setCanSignup);
     void oauthProviders().then(setProviders);
+    void emailAvailable().then(setCanMail);
   }, []);
 
   if (identityEmail) {
@@ -142,6 +170,7 @@ export function IdentityLogin({ onDone, initialMode = "login" }: {
           log out
         </button>
       </div>
+      <EmailStatus />
       <OrgMembers />
       </>
     );
@@ -150,6 +179,16 @@ export function IdentityLogin({ onDone, initialMode = "login" }: {
   async function submit() {
     setBusy(true);
     setError(null);
+    if (mode === "forgot") {
+      try {
+        setSent((await forgotPassword(email)).detail);
+      } catch (err) {
+        setError(err instanceof IdentityError ? err.message : "could not send the link");
+      } finally {
+        setBusy(false);
+      }
+      return;
+    }
     try {
       const session =
         mode === "signup"
@@ -168,7 +207,7 @@ export function IdentityLogin({ onDone, initialMode = "login" }: {
     }
   }
 
-  const canSubmit = email && password && (mode === "login" || orgName);
+  const canSubmit = mode === "forgot" ? email : email && password && (mode === "login" || orgName);
 
   return (
     <form
@@ -197,10 +236,14 @@ export function IdentityLogin({ onDone, initialMode = "login" }: {
       )}
       <input type="email" autoComplete="email" value={email} placeholder="email"
         onChange={(e) => setEmail(e.target.value)} style={INPUT_STYLE} aria-label="email" />
+      {mode !== "forgot" && (
       <input type="password" value={password} placeholder="password"
         autoComplete={mode === "signup" ? "new-password" : "current-password"}
         onChange={(e) => setPassword(e.target.value)} style={INPUT_STYLE} aria-label="password" />
-      {mode === "signup" ? (
+      )}
+      {mode === "forgot" ? (
+        sent && <div data-testid="reset-sent" style={{ fontFamily: MONO, fontSize: 11, color: C.green }}>{sent}</div>
+      ) : mode === "signup" ? (
         <input value={orgName} placeholder="organization name"
           onChange={(e) => setOrgName(e.target.value)} style={INPUT_STYLE} aria-label="organization name" />
       ) : (
@@ -211,9 +254,21 @@ export function IdentityLogin({ onDone, initialMode = "login" }: {
       <div className="flex items-center gap-2">
         <button type="submit" disabled={!canSubmit || busy}
           style={btn({ color: C.steel, borderColor: C.steel, fontSize: 11, padding: "5px 14px" })}>
-          {busy ? "…" : mode === "signup" ? "create workspace" : "log in"}
+          {busy ? "…" : mode === "signup" ? "create workspace" : mode === "forgot" ? "send reset link" : "log in"}
         </button>
-        {(canSignup !== false || mode === "signup") && (
+        {mode === "login" && canMail && (
+          <button type="button" onClick={() => { setError(null); setSent(null); setMode("forgot"); }}
+            style={btn({ color: C.dim, fontSize: 10.5, padding: "5px 10px" })}>
+            forgot password?
+          </button>
+        )}
+        {mode === "forgot" && (
+          <button type="button" onClick={() => { setError(null); setMode("login"); }}
+            style={btn({ color: C.dim, fontSize: 10.5, padding: "5px 10px" })}>
+            back to log in
+          </button>
+        )}
+        {mode !== "forgot" && (canSignup !== false || mode === "signup") && (
           <button type="button" onClick={() => { setError(null); setMode(mode === "signup" ? "login" : "signup"); }}
             style={btn({ color: C.dim, fontSize: 10.5, padding: "5px 10px" })}>
             {mode === "signup" ? "have an account? log in" : "new? create a workspace"}
@@ -233,6 +288,7 @@ export default function Settings() {
   const qc = useQueryClient();
 
   const [url, setUrl] = useState("");
+  const identityEmail = useApp((s) => s.identityEmail);
   const [selected, setSelected] = useState<string[]>(["level_transition_up", "evidence_run"]);
   const [chanLabel, setChanLabel] = useState("");
   const [nodePattern, setNodePattern] = useState("");
@@ -501,15 +557,28 @@ export default function Settings() {
       </Section>
 
       {/* Notifications */}
-      <Section title="NOTIFICATIONS · WEBHOOK">
+      <Section title="NOTIFICATIONS · WEBHOOK OR E-MAIL">
         <div style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim, marginBottom: 10 }}>
           the UI is quiet; the notification channel is where wrong gets loud. We emit
           and route — Slack/Discord/PagerDuty are webhook consumers, not a pager.
+          mailto:you@… sends mail where the deployment has it set up.
         </div>
+        {identityEmail && (
+          <button data-testid="mail-me"
+            onClick={() => {
+              setUrl(`mailto:${identityEmail}`);
+              setSelected((cur) => (cur.includes("behavioral_drift") ? cur : [...cur, "behavioral_drift"]));
+              subscribe.reset();
+            }}
+            className="mb-2"
+            style={btn({ color: C.steel, borderColor: C.steel, fontSize: 10.5, padding: "3px 10px" })}>
+            e-mail me drift alerts ({identityEmail})
+          </button>
+        )}
         <input
           value={url}
           onChange={(e) => { setUrl(e.target.value); subscribe.reset(); }}
-          placeholder="https://hooks.example/… (JSON POST)"
+          placeholder="https://hooks.example/… (JSON POST) or mailto:you@…"
           className="w-full mb-3"
           style={{ background: C.bg, border: `1px solid ${C.line}`, borderRadius: 5, color: C.text, fontFamily: MONO, fontSize: 12, padding: "7px 9px", outline: "none" }}
         />

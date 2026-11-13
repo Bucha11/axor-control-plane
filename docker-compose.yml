@@ -63,6 +63,10 @@ services:
       # identity service's JWKS, fetched once at boot. Point elsewhere or clear it
       # to run without identity login (operator token + API keys still work).
       AXOR_IDENTITY_JWKS_URL: ${AXOR_IDENTITY_JWKS_URL:-http://identity:8402/.well-known/jwks.json}
+      # Alert mail: a notification subscription to mailto:<address> is sent
+      # through this. Same forms as AXOR_IDENTITY_SMTP_URL. Unset = webhooks only.
+      AXOR_SMTP_URL: ${AXOR_SMTP_URL:-}
+      AXOR_MAIL_FROM: ${AXOR_MAIL_FROM:-}
     ports: ["8400:8400"]
     depends_on:
       postgres:
@@ -104,6 +108,11 @@ services:
       # other origins a sign-in may return to (the Lab's, when it shares this
       # identity service), comma-separated
       AXOR_IDENTITY_RETURN_ORIGINS: ${AXOR_IDENTITY_RETURN_ORIGINS:-}
+      # Address verification and password reset mail. smtp://user:pass@host:587
+      # (STARTTLS), smtps://…:465, or `log` to write the links to the log.
+      # Unset = no mail, and the app offers neither. Needs AXOR_IDENTITY_PUBLIC_URL.
+      AXOR_IDENTITY_SMTP_URL: ${AXOR_IDENTITY_SMTP_URL:-}
+      AXOR_IDENTITY_MAIL_FROM: ${AXOR_IDENTITY_MAIL_FROM:-}
     ports: ["8402:8402"]
     depends_on:
       postgres:

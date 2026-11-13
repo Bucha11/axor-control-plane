@@ -63,7 +63,39 @@ export function login(email: string, password: string, orgId?: string): Promise<
 }
 
 export function signup(email: string, password: string, orgName: string): Promise<Session> {
-  return post<Session>("/v1/signup", { email, password, org_name: orgName });
+  // the verification link it mails opens this page
+  return post<Session>("/v1/signup", { email, password, org_name: orgName, return_to: here() });
+}
+
+/** This page, as a way back for an e-mailed link or a provider sign-in. */
+export function here(): string {
+  const params = new URLSearchParams(window.location.search);
+  for (const k of ["axor_login", "axor_login_error", "axor_verify", "axor_reset"]) params.delete(k);
+  const query = params.toString();
+  return window.location.pathname + (query ? `?${query}` : "") + window.location.hash;
+}
+
+/** Whether this install sends mail (reset links, verification). */
+export async function emailAvailable(): Promise<boolean> {
+  try {
+    const resp = await fetch(`${IDENTITY_BASE}/v1/email`);
+    if (!resp.ok) return false;
+    return Boolean(((await resp.json()) as { available?: boolean }).available);
+  } catch {
+    return false;
+  }
+}
+
+export function forgotPassword(email: string): Promise<{ detail: string }> {
+  return post<{ detail: string }>("/v1/password/forgot", { email, return_to: here() });
+}
+
+export function resetPassword(token: string, password: string): Promise<unknown> {
+  return post<unknown>("/v1/password/reset", { token, password });
+}
+
+export function verifyEmail(token: string): Promise<{ email: string }> {
+  return post<{ email: string }>("/v1/email/verify", { token });
 }
 
 /** Exchange a refresh token for a new access token, rotating it. Returns the
@@ -124,7 +156,7 @@ export async function oauthProviders(): Promise<OAuthProvider[]> {
 /** Where to send the browser to sign in with `provider`. It comes back to this
  * page with `?axor_login=<code>` (or `?axor_login_error=`). */
 export function oauthStartUrl(provider: string): string {
-  const back = window.location.pathname + window.location.search.replace(/[?&]axor_login[^&]*/g, "") + window.location.hash;
+  const back = here();
   return `${IDENTITY_BASE}/v1/oauth/${encodeURIComponent(provider)}/start?return_to=${encodeURIComponent(back)}`;
 }
 
@@ -134,16 +166,17 @@ export function oauthExchange(code: string): Promise<Session & { created: boolea
   return post<Session & { created: boolean }>("/v1/oauth/exchange", { code });
 }
 
-/** The code or error a provider sign-in left in the address bar, removed from
- * it so a reload or a copied link does not carry it. */
-export function takeOAuthReturn(): { code?: string; error?: string } | null {
+/** What a provider sign-in or an e-mailed link left in the address bar,
+ * removed from it so a reload or a copied link does not carry it. */
+export function takeAuthReturn(): { code?: string; error?: string; verify?: string; reset?: string } | null {
   const params = new URLSearchParams(window.location.search);
-  const code = params.get("axor_login") ?? undefined;
-  const error = params.get("axor_login_error") ?? undefined;
-  if (!code && !error) return null;
-  params.delete("axor_login");
-  params.delete("axor_login_error");
-  const query = params.toString();
-  window.history.replaceState(null, "", window.location.pathname + (query ? `?${query}` : "") + window.location.hash);
-  return { code, error };
+  const got = {
+    code: params.get("axor_login") ?? undefined,
+    error: params.get("axor_login_error") ?? undefined,
+    verify: params.get("axor_verify") ?? undefined,
+    reset: params.get("axor_reset") ?? undefined,
+  };
+  if (!got.code && !got.error && !got.verify && !got.reset) return null;
+  window.history.replaceState(null, "", here());
+  return got;
 }

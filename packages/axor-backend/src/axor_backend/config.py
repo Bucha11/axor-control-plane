@@ -82,6 +82,10 @@ class AppConfig:
     usage_reporting: bool = False
     # ── egress ───────────────────────────────────────────────────────────────
     webhook_block_private: bool = False
+    # Alert mail (mail.py): mailto: subscriptions go out through this SMTP URL.
+    # None = webhooks only, and a mail subscription is refused at subscribe.
+    smtp_url: str | None = None
+    mail_from: str | None = None
     # Hosted visitors may work as a guest before signing up (guests.py). Only
     # meaningful with auth on; off by default — a self-hosted plane has no
     # anonymous public to welcome.
@@ -185,6 +189,8 @@ class AppConfig:
             webhook_block_private=(
                 identity_jwks is not None or env.flag("AXOR_WEBHOOK_BLOCK_PRIVATE")
             ),
+            smtp_url=env.text("AXOR_SMTP_URL") or None,
+            mail_from=env.text("AXOR_MAIL_FROM") or None,
         )
 
 

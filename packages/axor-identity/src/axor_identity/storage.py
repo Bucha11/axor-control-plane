@@ -98,6 +98,15 @@ refresh_tokens = Table(
     Column("created_ts", String(40), nullable=False),
 )
 
+email_tokens = Table(
+    "email_tokens", metadata,
+    Column("token_hash", String(64), primary_key=True),
+    Column("user_id", String(64), nullable=False, index=True),
+    Column("purpose", String(16), nullable=False),  # verify | reset
+    Column("email", String(320), nullable=False),
+    Column("expires_ts", String(40), nullable=False),
+)
+
 
 def make_engine(url: str) -> AsyncEngine:
     return create_async_engine(url)
@@ -330,8 +339,33 @@ class Store:
         return {"user_id": row.user_id, "created": bool(row.created),
                 "expires_ts": row.expires_ts}
 
+    # ── e-mail links ──────────────────────────────────────────────────────────
+    async def put_email_token(self, token_hash: str, user_id: str, purpose: str,
+                              email: str, expires_ts: str) -> None:
+        async with self.engine.begin() as conn:
+            # one live link per purpose: a new one retires the old
+            await conn.execute(delete(email_tokens).where(
+                email_tokens.c.user_id == user_id, email_tokens.c.purpose == purpose))
+            await conn.execute(insert(email_tokens).values(
+                token_hash=token_hash, user_id=user_id, purpose=purpose, email=email,
+                expires_ts=expires_ts))
+
+    async def take_email_token(self, token_hash: str, purpose: str) -> dict[str, Any] | None:
+        async with self.engine.begin() as conn:
+            row = (await conn.execute(select(email_tokens).where(
+                email_tokens.c.token_hash == token_hash,
+                email_tokens.c.purpose == purpose))).first()
+            if row is None:
+                return None
+            gone = await conn.execute(delete(email_tokens).where(
+                email_tokens.c.token_hash == token_hash))
+        if not gone.rowcount:
+            return None
+        return {"user_id": row.user_id, "email": row.email, "expires_ts": row.expires_ts}
+
     async def sweep_expired(self, now_ts: str) -> None:
         async with self.engine.begin() as conn:
+            await conn.execute(delete(email_tokens).where(email_tokens.c.expires_ts <= now_ts))
             await conn.execute(delete(oauth_states).where(oauth_states.c.expires_ts <= now_ts))
             await conn.execute(delete(login_codes).where(login_codes.c.expires_ts <= now_ts))
 

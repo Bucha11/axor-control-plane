@@ -55,6 +55,7 @@ from axor_backend.errors import (
 from axor_backend.identity_client import JwksRefresher
 from axor_backend.lifecycle import lifespan
 from axor_backend.limits import SubgraphCache
+from axor_backend.mail import mailer_from_url
 from axor_backend.notifications import Notifier
 from axor_backend.observability import setup_observability
 from axor_backend.routers import ALL_ROUTERS
@@ -150,4 +151,5 @@ def _notifier(app: FastAPI) -> Notifier:
     return Notifier(
         dead_sink=persist_dead_letter,
         block_private=app.state.config.webhook_block_private,
+        mailer=mailer_from_url(app.state.config.smtp_url, app.state.config.mail_from),
     )
