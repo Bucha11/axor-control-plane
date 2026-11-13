@@ -69,3 +69,13 @@ test.describe("three ways in", () => {
     expect(after.months[0].peak_nodes).toBeLessThanOrEqual(before.months[0].peak_nodes);
   });
 });
+
+test("on the connect page the header does not offer to connect, and a session connects", async ({ page, request }) => {
+  await setConnection(page, { mode: "none" });
+  await goHash(page, "connect?for=coding");
+  await expect(page.getByTestId("coding-onboarding")).toBeVisible();
+  await expect(page.getByRole("button", { name: "connect", exact: true })).toHaveCount(0);
+  await seedNode(request, `claude-code-e2ehost-${Date.now().toString(36).slice(-8)}`);
+  await expect(page.getByTestId("coding-sessions")).toContainText("governed", { timeout: 10000 });
+  await expect(page.getByRole("button", { name: /connection:/ })).toBeVisible();
+});

@@ -131,7 +131,7 @@ export default function App() {
             <>
               <LearnToggle />
               <span className="hide-narrow hide-medium"><VersionBadge /></span>
-              <ConnectionBadge />
+              <ConnectionBadge onConnect={key === "connect"} />
               <SettingsButton active={key === "settings"} />
             </>
           )}
@@ -284,8 +284,10 @@ function VersionBadge() {
   );
 }
 
-function ConnectionBadge() {
+function ConnectionBadge({ onConnect }: { onConnect: boolean }) {
   const { mode } = useApp((s) => s.connection);
+  // On the connect page itself a "connect" button leads where you already are.
+  if (mode === "none" && onConnect) return null;
   if (mode === "none") {
     // the first step, so it is a button that says what it does — not a grey
     // status pill that happens to be clickable

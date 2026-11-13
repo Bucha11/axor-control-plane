@@ -1,7 +1,7 @@
 // The coding-agent way in: Claude Code and Codex governed through their hooks.
 // No tools to declare, no base URLs to repoint — two commands and an environment
 // variable, then the first session shows up here on its own.
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Check, Copy } from "lucide-react";
 import { api } from "../api";
@@ -55,6 +55,11 @@ export default function CodingOnboarding({ then }: { then?: () => void }) {
   });
   const nodes = useQuery({ queryKey: ["nodes"], queryFn: api.nodes, refetchInterval: 3000 });
   const sessions = (nodes.data ?? []).filter((n) => isCodingSession(n.node_id));
+  // the first governed session IS the connection: the header stops asking
+  const mode = useApp((s) => s.connection.mode);
+  useEffect(() => {
+    if (sessions.length > 0 && mode === "none") connect("adapter", []);
+  }, [sessions.length, mode, connect]);
   const copy = (id: string, text: string) => {
     void navigator.clipboard?.writeText(text);
     setCopied(id);
