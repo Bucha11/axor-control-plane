@@ -82,6 +82,10 @@ class AppConfig:
     usage_reporting: bool = False
     # ── egress ───────────────────────────────────────────────────────────────
     webhook_block_private: bool = False
+    # Hosted visitors may work as a guest before signing up (guests.py). Only
+    # meaningful with auth on; off by default — a self-hosted plane has no
+    # anonymous public to welcome.
+    guest_sessions: bool = False
 
     @property
     def auth_enabled(self) -> bool:
@@ -155,6 +159,7 @@ class AppConfig:
                 DEFAULT_SCHEDULE_SWEEP_SECONDS, minimum=0.001,
             ),
             org=(org if org is not None else env.text("AXOR_ORG")),
+            guest_sessions=env.flag("AXOR_GUEST_SESSIONS"),
             usage_reporting=(
                 usage_reporting
                 if usage_reporting is not None

@@ -71,6 +71,13 @@ async def resolve_principal(request: Request) -> Principal | None:
         return None
     if config.api_token and auth_mod.constant_time_eq(token, config.api_token):
         return master_principal()
+    guests = getattr(request.app.state, "guests", None)
+    if guests is not None and token.startswith("gs_"):
+        from axor_backend.guests import GUEST_SCOPES
+        org = await guests.resolve(token)
+        if org is None:
+            return None
+        return Principal(kind="guest", key_id=org, scopes=GUEST_SCOPES, org=org)
     # API key: the key_id prefixes the secret (ak_xxx.yyy).
     key_id = token.split(".", 1)[0]
     record = await request.app.state.store.get_api_key(key_id)
@@ -146,6 +153,18 @@ async def auth_middleware(request: Request, call_next: Callable) -> Response:
         # appears — the principal's id does, which is the point of recording it.
         log.warning("401 %s %s: no usable credential", request.method, path)
         return JSONResponse({"error": "unauthorized"}, status_code=401)
+    if principal.kind == "guest":
+        from axor_backend.guests import account_only
+        feature = account_only(request.method, path)
+        if feature is not None:
+            # Not "forbidden": the remedy is a sign-up, and the UI asks for one
+            # at exactly this moment, naming what it unlocks.
+            return JSONResponse(
+                {"error": "account_required", "feature": feature,
+                 "detail": f"{feature} need an account — sign up free; "
+                           "your guest work comes with you"},
+                status_code=403,
+            )
     need = required_scope(request.method, path)
     if not principal.may(need):
         log.warning(

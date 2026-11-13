@@ -148,6 +148,8 @@ _ROUTE_POLICY: tuple[tuple[str, str, str], ...] = (
 # Open paths (no auth even when enabled) are handled separately below.
 _WRITE_POLICY: tuple[tuple[str, str], ...] = (
     ("/v1/ingest/", "ingest"),
+    # claiming your own guest work into your account: any signed-in member
+    ("/v1/auth/claim-guest", "read"),
     ("/v1/wrap/", "ingest"),          # code analysis, not an operational command
     ("/v1/runs/", "ingest"),          # POST .../evidence
     ("/v1/pins/", "ingest"),
@@ -184,6 +186,9 @@ _WRITE_POLICY: tuple[tuple[str, str], ...] = (
 _OPEN_ROUTES: tuple[tuple[str, str], ...] = (
     ("GET", "/v1/healthz"),
     ("GET", "/v1/auth/status"),  # the UI queries this to decide whether to prompt
+    # a hosted visitor asks for a guest session before it has any credential;
+    # the route itself answers 404 unless guest sessions are on
+    ("POST", "/v1/auth/guest"),
     ("GET", "/v1/share/"),
     ("HEAD", "/v1/healthz"),
     ("HEAD", "/v1/share/"),

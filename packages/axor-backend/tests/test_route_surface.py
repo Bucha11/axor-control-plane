@@ -29,6 +29,11 @@ from axor_backend.auth import is_open, required_scope
 EXPECTED: dict[tuple[str, str], str] = {
     ("GET", "/v1/healthz"): "OPEN",
     ("GET", "/v1/auth/status"): "OPEN",
+    # A hosted visitor's guest session: asked for before any credential exists
+    # (404 unless AXOR_GUEST_SESSIONS); claiming it needs a signed-in account,
+    # and any member may claim their own guest work.
+    ("POST", "/v1/auth/guest"): "OPEN",
+    ("POST", "/v1/auth/claim-guest"): "read",
     ("GET", "/v1/share/{token}"): "OPEN",
     # Not OPEN, deliberately: /v1/healthz above stays mute, and the version
     # belongs to callers who are already inside.
@@ -135,6 +140,12 @@ EXPECTED: dict[tuple[str, str], str] = {
     ("POST", "/v1/plane/{node_id}/reputation"): "ingest",
     ("GET", "/v1/plane/{node_id}/reputation"): "read",
     ("GET", "/v1/plane/{node_id}/coverage"): "read",
+    # The console's views of agent work: a node's runs, the acks its own
+    # telemetry carried, the fleet over a day, the newest events across it.
+    ("GET", "/v1/plane/{node_id}/runs"): "read",
+    ("GET", "/v1/plane/{node_id}/journal"): "read",
+    ("GET", "/v1/plane/fleet"): "read",
+    ("GET", "/v1/plane/activity"): "read",
     ("GET", "/v1/plane/topology"): "read",
     ("GET", "/v1/plane/nodes"): "read",
     # ── code analysis ────────────────────────────────────────────────────────

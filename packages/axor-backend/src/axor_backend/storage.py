@@ -372,6 +372,19 @@ heal_attempts = Table(
     Column("org_id", String(64), nullable=False, server_default=PUBLIC_ORG, index=True),
 )
 
+# A hosted visitor's guest session (no account): a short-lived bearer whose
+# HASH is kept here, mapped to the throwaway org its work lives under. Not
+# tenant data itself — it is what lets that work be claimed into an account
+# at sign-up, and swept when nobody did.
+guest_sessions = Table(
+    "guest_sessions", metadata,
+    Column("token_hash", String(64), primary_key=True),
+    Column("org_id", String(64), nullable=False, index=True),
+    Column("created_ts", String(40), nullable=False),
+    Column("expires_ts", String(40), nullable=False),
+    Column("claimed_by", String(64), nullable=True),
+)
+
 api_keys = Table(
     "api_keys", metadata,
     Column("key_id", String(32), primary_key=True),
@@ -654,6 +667,64 @@ class Store:
         # one and Rule 0 says we do not rebuild its reader) serialises there,
         # inside the thread, rather than here on the event loop.
         return [r.line for r in rows]
+
+    # ── guest sessions (hosted visitors without an account) ─────────────────
+
+    async def create_guest(self, token_hash: str, org: str, created: str, expires: str) -> None:
+        async with self.engine.begin() as conn:
+            await conn.execute(guest_sessions.insert().values(
+                token_hash=token_hash, org_id=org, created_ts=created, expires_ts=expires))
+
+    async def guest_session(self, token_hash: str) -> dict[str, Any] | None:
+        async with self.engine.connect() as conn:
+            row = (await conn.execute(select(guest_sessions).where(
+                guest_sessions.c.token_hash == token_hash))).first()
+        return dict(row._mapping) if row else None
+
+    async def live_guest_count(self, now_ts: str) -> int:
+        async with self.engine.connect() as conn:
+            rows = (await conn.execute(select(guest_sessions.c.token_hash).where(
+                guest_sessions.c.expires_ts > now_ts,
+                guest_sessions.c.claimed_by.is_(None)))).all()
+        return len(rows)
+
+    async def claim_guest(self, token_hash: str, to_org: str) -> dict[str, int]:
+        """Move a guest org's rows into ``to_org``, in one transaction. The
+        account wins a clash: a guest row whose key (minus the org) the
+        account already holds is dropped, not merged. Returns rows moved per
+        table. The guest session is marked claimed and stops authenticating."""
+        moved: dict[str, int] = {}
+        async with self.engine.begin() as conn:
+            row = (await conn.execute(select(guest_sessions).where(
+                guest_sessions.c.token_hash == token_hash))).first()
+            if row is None or row.claimed_by is not None:
+                return moved
+            src = row.org_id
+            for table in metadata.sorted_tables:
+                if table is guest_sessions or "org_id" not in table.c:
+                    continue
+                moved_n = await _reassign(conn, table, src, to_org)
+                if moved_n:
+                    moved[table.name] = moved_n
+            await conn.execute(guest_sessions.update()
+                               .where(guest_sessions.c.token_hash == token_hash)
+                               .values(claimed_by=to_org))
+        return moved
+
+    async def sweep_guests(self, before_ts: str) -> int:
+        """Delete the data of guest sessions that expired before ``before_ts``
+        and were never claimed, and the sessions themselves."""
+        async with self.engine.begin() as conn:
+            rows = (await conn.execute(select(guest_sessions).where(
+                guest_sessions.c.expires_ts < before_ts))).all()
+            for r in rows:
+                if r.claimed_by is None:
+                    for table in metadata.sorted_tables:
+                        if table is not guest_sessions and "org_id" in table.c:
+                            await conn.execute(table.delete().where(table.c.org_id == r.org_id))
+                await conn.execute(guest_sessions.delete().where(
+                    guest_sessions.c.token_hash == r.token_hash))
+        return len(rows)
 
     async def recent_events(
         self, limit: int, exclude_kinds: tuple[str, ...] = (),
@@ -2256,6 +2327,36 @@ async def _stored_coordinates(
         )
     )).all()
     return {(r.node_id, r.seq) for r in rows} & wanted
+
+
+async def _reassign(conn: Any, table: Table, src: str, dst: str) -> int:  # noqa: ANN401
+    """Move ``table``'s rows from org ``src`` to ``dst``; on a key the
+    destination already holds, keep the destination's row and drop the source's."""
+    keys: list[list[str]] = []
+    pk = [c.name for c in table.primary_key.columns]
+    if "org_id" in pk:
+        keys.append([c for c in pk if c != "org_id"])
+    for cons in table.constraints:
+        if isinstance(cons, UniqueConstraint):
+            cols = [c.name for c in cons.columns]
+            if "org_id" in cols:
+                keys.append([c for c in cols if c != "org_id"])
+    for idx in table.indexes:
+        if idx.unique:
+            cols = [c.name for c in idx.columns]
+            if "org_id" in cols:
+                keys.append([c for c in cols if c != "org_id"])
+    for key in keys:
+        if not key:
+            continue
+        held = table.alias("held")
+        clash = select(held.c.org_id).where(
+            held.c.org_id == dst,
+            *[held.c[k] == table.c[k] for k in key],
+        ).exists()
+        await conn.execute(table.delete().where(table.c.org_id == src, clash))
+    result = await conn.execute(table.update().where(table.c.org_id == src).values(org_id=dst))
+    return int(result.rowcount or 0)
 
 
 def _run_row(row: Any) -> dict[str, Any]:  # noqa: ANN401 - SQLAlchemy Row

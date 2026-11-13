@@ -114,6 +114,11 @@ def create_app(
     # a heartbeat every ten seconds is not a write every ten seconds. Per app,
     # not per process: a module global would outlive the store it describes.
     app.state.active_today = {}
+    # Hosted visitors as guests (guests.py) — only with auth on and the flag set.
+    from axor_backend.guests import GuestIssuer
+    app.state.guests = (
+        GuestIssuer(app.state.store) if config.guest_sessions and config.auth_enabled else None
+    )
     app.state.notifier = _notifier(app)
 
     # ConfigInvalid before the catch-all: a malformed kernel config is a

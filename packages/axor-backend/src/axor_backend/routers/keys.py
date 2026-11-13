@@ -72,7 +72,44 @@ async def auth_status(request: Request, config: ConfigDep) -> dict:
         "auth_enabled": True,
         "authenticated": principal is not None,
         "scopes": sorted(principal.scopes) if principal else [],
+        # whether a visitor can start as a guest, and whether this caller is one
+        "guest_sessions": getattr(request.app.state, "guests", None) is not None,
+        "guest": principal is not None and principal.kind == "guest",
     }
+
+
+@router.post("/auth/guest", status_code=201)
+async def guest_session(request: Request) -> dict:
+    """A guest session for a hosted visitor: work now, sign up to keep it.
+    404 unless the deployment turned guests on (AXOR_GUEST_SESSIONS)."""
+    from axor_backend.guests import GuestLimit
+
+    guests = getattr(request.app.state, "guests", None)
+    if guests is None:
+        raise HTTPException(404, "guest sessions are off on this deployment")
+    forwarded = request.headers.get("x-forwarded-for", "")
+    address = forwarded.split(",")[0].strip() or (request.client.host if request.client else "")
+    try:
+        return await guests.issue(address)
+    except GuestLimit as exc:
+        raise HTTPException(429, str(exc)) from exc
+
+
+@router.post("/auth/claim-guest")
+async def claim_guest(request: Request, body: dict) -> dict:
+    """Move a guest session's work into the signed-in account's org: runs,
+    agents and their state, evidence, health checks, reputation. The account
+    wins a clash. The guest token stops working."""
+    from axor_backend.guests import hash_token
+
+    principal = getattr(request.state, "principal", None)
+    if principal is None or principal.kind != "user" or not principal.org:
+        raise HTTPException(403, "claiming guest work needs a signed-in account")
+    token = body.get("guest_token")
+    if not isinstance(token, str) or not token.startswith("gs_"):
+        raise HTTPException(400, "guest_token is required")
+    moved = await request.app.state.store.claim_guest(hash_token(token), principal.org)
+    return {"claimed": bool(moved), "moved": moved}
 
 
 def _presented_a_token(request: Request) -> bool:

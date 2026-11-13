@@ -494,7 +494,8 @@ async def test_node_journal_carries_the_nodes_acks(client: httpx.AsyncClient) ->
     await client.post("/v1/plane/nj/telemetry", json={"run_id": "nj-link", "events": [
         line(0, "heartbeat", {"applied_version": 1}, "2026-01-01T00:00:00+00:00"),
         line(1, "context_excision", {"id": "exc1", "refs": ["tc9"]}, "2026-01-01T00:00:01+00:00"),
-        line(2, "injection_refused", {"id": "i1", "reason": "not test-bench"}, "2026-01-01T00:00:02+00:00"),
+        line(2, "injection_refused", {"id": "i1", "reason": "not test-bench"},
+             "2026-01-01T00:00:02+00:00"),
     ]})
     entries = (await client.get("/v1/plane/nj/journal")).json()["entries"]
     assert [e["kind"] for e in entries] == ["injection_refused", "context_excision"]
