@@ -82,7 +82,7 @@ const TIERS: Tier[] = [
       { text: "Config Builder" },
       { text: "runtime enforcement — gates, degradation, denials" },
       { text: "1 governed node" },
-      { text: "1 developer — Claude Code / Codex, every coding feature (hooks, trees, control)" },
+      { text: "1 developer, 1 agent — Claude Code or Codex, with hooks, trees and control" },
     ],
     kind: "free",
     note: "free forever — safety never checks a license, at any scale",
@@ -96,7 +96,7 @@ const TIERS: Tier[] = [
     who: "teams governing Claude Code and Codex · no production runtime needed",
     features: [
       { text: "everything in Community, for every developer on the team:", plus: true },
-      { text: "Claude Code + Codex hooks, one install command each" },
+      { text: "Claude Code and Codex together — one writes, the other reviews, in one tree" },
       { text: "where text came from is tracked across every agent in a repository" },
       { text: "agent trees — planner → parallel readers → implementer, any agent / model" },
       { text: "read-only readers, findings checked against the files they opened" },

@@ -800,6 +800,18 @@ export interface TreeSummary {
   tree_run: string; status: "running" | "done" | "failed"; updated_ts: string;
   task: string; nodes: number; agents: number;
   members?: string[];
+  agent_families?: string[];
+}
+// What the plan lets the plane show and operate for coding agents: the free
+// rung keeps one developer and one agent family; sessions and tree runs past
+// that are kept but locked, with the reason.
+export type LockReason = "developer" | "agent_family";
+export interface Entitlements {
+  tier: string; free: boolean;
+  developers: number | null; agent_families: number | null; agent_family: string | null;
+  locked: Record<string, LockReason[]>;
+  locked_trees: Record<string, LockReason[]>;
+  reasons: Record<LockReason, string>;
 }
 export interface TreeNodeRun {
   index: number; node_id?: string; status: string; reason?: string;
@@ -1270,6 +1282,7 @@ export const api = {
   // ── governed-node usage, and the statement drawn from it ───────────────────
   // Their fleet history and their own bill. Both were reachable only by curl:
   // measured, priced, tested, and invisible to the customer they are about.
+  entitlements: () => af("/v1/license/entitlements").then((r) => j<Entitlements>(r)),
   licenseUsage: (months = 3) =>
     af(`/v1/license/usage?months=${months}`).then((r) => j<UsageReport>(r)),
   licenseInvoice: (month?: string) =>

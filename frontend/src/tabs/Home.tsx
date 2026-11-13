@@ -89,7 +89,7 @@ function FirstVisit() {
             </button>
           </div>
           <div style={{ fontFamily: MONO, fontSize: 11, color: C.dim, marginBottom: 24 }}>
-            1 developer free · then $25 / developer / month ·{" "}
+            free for 1 developer and 1 agent · mixing agents or a team: $25 / developer / month ·{" "}
             <button onClick={() => navigate("pricing?for=coding")} style={{ ...link, fontFamily: MONO, fontSize: 11 }}>pricing →</button>
           </div>
         </>

@@ -743,6 +743,9 @@ class Store:
                         "updated_ts": row.updated_ts, "task": doc.get("task", ""),
                         "nodes": len(nodes),
                         "agents": sum(len(n.get("runs") or []) for n in nodes.values()),
+                        # which agent families it mixes (the free plan has one)
+                        "agent_families": sorted({str(n["agent"]) for n in nodes.values()
+                                                  if isinstance(n, dict) and n.get("agent")}),
                         # the plane nodes its runs are — so a fleet list can fold
                         # a tree into one row instead of listing its agents loose
                         "members": members})
@@ -1379,6 +1382,18 @@ class Store:
                 node_profiles.c.org_id == current_org_id()))).all()
         return {r.node_id: {"kind": r.kind, "agent": r.agent, "developer": r.developer}
                 for r in rows}
+
+    async def coding_profiles(self) -> list[dict[str, str]]:
+        """Every coding session this workspace has seen, first to report first
+        — the order the free plan's one developer and one agent family are
+        taken in."""
+        async with self.engine.connect() as conn:
+            rows = (await conn.execute(select(node_profiles).where(
+                node_profiles.c.org_id == current_org_id(),
+                node_profiles.c.kind == "coding")
+                .order_by(node_profiles.c.first_ts, node_profiles.c.node_id))).all()
+        return [{"node_id": r.node_id, "agent": r.agent, "developer": r.developer}
+                for r in rows]
 
     async def developer_usage(self, start_day: str, end_day: str) -> dict[str, Any]:
         """Developers whose coding agents reported in the range — the seat

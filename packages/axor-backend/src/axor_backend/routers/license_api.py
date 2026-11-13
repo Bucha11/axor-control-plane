@@ -203,6 +203,18 @@ async def license_status(state: StateDep, config: ConfigDep) -> dict:
     }
 
 
+@router.get("/entitlements")
+async def license_entitlements(state: StateDep, store: StoreDep) -> dict:
+    """What the plan lets the plane show and operate for coding agents: on the
+    free rung one developer and one agent family; the sessions and tree runs
+    past that, locked, with the reason. An ingest key may read it — a tree run
+    asks before it mixes agent families."""
+    from axor_backend.ee.entitlements import coding_entitlements, workspace_tier
+
+    tier = workspace_tier(active_license(state, current_org_id()))
+    return await coding_entitlements(store, tier)
+
+
 @router.get("/usage")
 async def license_usage(state: StateDep, store: StoreDep, months: int = 3) -> dict:
     """Governed-node usage per billing month — what a per-node line is drawn from.

@@ -55,6 +55,15 @@ TIER_NODE_CEILING: dict[str, int] = {"community": 1, "coding": 1, "team": 10, "s
 # seats so one plan covers both journeys.
 TIER_DEVELOPER_SEATS: dict[str, int] = {"community": 1, "coding": 0, "team": 5, "security": 25}
 
+# What the free rung LOCKS on the plane, beyond which a coding session is kept
+# but not shown or operated until the workspace pays: one developer and one
+# agent family (Claude Code or Codex — mixing them, say one writing and the
+# other reviewing, is the paid part). Paid rungs lock nothing: past their
+# included seats a developer is billed, not refused. Protection itself never
+# looks at this — the hooks deny locally whatever the plan.
+FREE_DEVELOPERS = 1
+FREE_AGENT_FAMILIES = 1
+
 
 class LicenseError(Exception):
     """License missing, malformed, badly signed, or from an untrusted vendor key."""

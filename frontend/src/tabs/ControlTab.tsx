@@ -2,8 +2,8 @@
 // Wired to /v1/plane/nodes; divergence between desired and reported is rendered, not hidden.
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Circle, FlaskConical, Gauge, GitBranch, Pause, Play, Square, Syringe } from "lucide-react";
-import { ActivityEvent, api, FleetRow, NodeInfo, NodeRun, type TreeSummary } from "../api";
+import { Circle, FlaskConical, Gauge, GitBranch, Lock, Pause, Play, Square, Syringe } from "lucide-react";
+import { ActivityEvent, api, FleetRow, NodeInfo, NodeRun, type LockReason, type TreeSummary } from "../api";
 import { describeAck } from "./RunControl";
 import Coverage from "../components/Coverage";
 import TopologyGraph, { PeerCard } from "../components/TopologyGraph";
@@ -352,6 +352,12 @@ function ControlBody({ focusNode, testBench }: { focusNode?: string; testBench: 
   const fleetQ = useQuery({ queryKey: ["fleet"], queryFn: api.fleet, refetchInterval: REFETCH_MS });
   // a tree's agents fold into one row: which node belongs to which tree run
   const treesQ = useQuery({ queryKey: ["trees"], queryFn: api.trees, refetchInterval: REFETCH_MS });
+  // past the free plan a coding session (or a tree mixing agent families) is
+  // kept but locked: named in its row, and its panel says what unlocks it
+  const entQ = useQuery({ queryKey: ["entitlements"], queryFn: api.entitlements,
+                          refetchInterval: REFETCH_MS, retry: false });
+  const lockedOf = (id: string): LockReason[] | undefined =>
+    entQ.data?.locked[id] ?? entQ.data?.locked_trees[id];
   const treeOf = new Map<string, TreeSummary>();
   for (const t of treesQ.data?.trees ?? []) {
     treeOf.set(t.tree_run, t);
@@ -573,7 +579,7 @@ function ControlBody({ focusNode, testBench }: { focusNode?: string; testBench: 
             const tree = treeOf.get(n.node_id);
             if (!tree) {
               out.push(
-                <FleetRowView key={n.node_id} n={n} row={fleetRows.get(n.node_id)}
+                <FleetRowView key={n.node_id} n={n} row={fleetRows.get(n.node_id)} locked={lockedOf(n.node_id)}
                   st={statuses.get(n.node_id)!} first={out.length === 0} selected={sel === n.node_id}
                   onPick={() => pick(n.node_id)} />,
               );
@@ -586,6 +592,7 @@ function ControlBody({ focusNode, testBench }: { focusNode?: string; testBench: 
             const open = openTrees.has(tree.tree_run) || members.some((m) => m.node_id === sel);
             out.push(
               <TreeGroupRow key={`tree:${tree.tree_run}`} tree={tree} first={out.length === 0}
+                locked={lockedOf(tree.tree_run)}
                 open={open}
                 onToggle={() => setOpenTrees((cur) => {
                   const next = new Set(cur);
@@ -593,7 +600,7 @@ function ControlBody({ focusNode, testBench }: { focusNode?: string; testBench: 
                   return next;
                 })}>
                 {members.map((m) => (
-                  <FleetRowView key={m.node_id} n={m} row={fleetRows.get(m.node_id)}
+                  <FleetRowView key={m.node_id} n={m} row={fleetRows.get(m.node_id)} locked={lockedOf(m.node_id)}
                     st={statuses.get(m.node_id)!} first={false} selected={sel === m.node_id}
                     onPick={() => pick(m.node_id)} />
                 ))}
@@ -617,6 +624,9 @@ function ControlBody({ focusNode, testBench }: { focusNode?: string; testBench: 
               ✕ back to activity
             </button>
           </div>
+          {lockedOf(node.node_id) ? (
+            <PlanLock nodeId={node.node_id} reasons={lockedOf(node.node_id)!} />
+          ) : (<>
           {topo.data?.nodes.find((n) => n.node_id === node.node_id)?.kind !== "peer" && (
             <ReputationCard nodeId={node.node_id} />
           )}
@@ -815,6 +825,7 @@ function ControlBody({ focusNode, testBench }: { focusNode?: string; testBench: 
             </div>
           )}
         </div>
+          </>)}
         </>
       ) : (
         <ActivityFeed />
@@ -1106,8 +1117,50 @@ function FleetTotals({ totals }: { totals: { runs: number; calls: number; tainte
 
 /** A tree run's agents, folded into one row: the task, how many agents, the
  * status — and the tree's own screen one click away. Unfold to operate one. */
-function TreeGroupRow({ tree, first, open, onToggle, children }: {
+const LOCK_LABEL: Record<LockReason, string> = {
+  developer: "second developer",
+  agent_family: "second agent family",
+};
+
+function LockChip({ reasons }: { reasons: LockReason[] }) {
+  return (
+    <span data-testid="plan-lock" style={{ fontFamily: MONO, fontSize: 10, color: C.amber,
+      border: `1px solid ${C.amber}`, borderRadius: 20, padding: "1px 8px",
+      display: "inline-flex", alignItems: "center", gap: 4 }}>
+      <Lock size={9} /> paid plan · {reasons.map((r) => LOCK_LABEL[r]).join(", ")}
+    </span>
+  );
+}
+
+/** The panel of a session past the free plan: why, what still holds, what unlocks it. */
+function PlanLock({ nodeId, reasons }: { nodeId: string; reasons: LockReason[] }) {
+  return (
+    <div data-testid="plan-lock-card" className="p-4" style={{ background: C.panel,
+      border: `1px solid ${C.amber}`, borderRadius: 8, fontFamily: MONO, fontSize: 11.5,
+      color: C.mut, lineHeight: 1.7 }}>
+      <div style={{ color: C.text, fontSize: 13, marginBottom: 6 }}>{nodeId}</div>
+      <div style={{ color: C.amber, marginBottom: 6 }}>
+        <Lock size={11} style={{ display: "inline", marginRight: 6 }} />
+        {reasons.includes("agent_family")
+          ? "A second agent family — the free plan keeps one (Claude Code or Codex)."
+          : "A second developer — the free plan keeps one."}
+      </div>
+      <div>
+        The session is still protected: its hooks deny what they must, whatever the plan.
+        It is recorded too — on the Coding plan it shows here with its history, and you
+        can pause, stop and cap it.
+      </div>
+      <button onClick={() => navigate("pricing?for=coding")} data-testid="plan-lock-pricing"
+        style={btn({ color: C.text, borderColor: C.steel, fontSize: 11.5, padding: "5px 12px", marginTop: 10 })}>
+        Coding plan · $25 / developer / month →
+      </button>
+    </div>
+  );
+}
+
+function TreeGroupRow({ tree, first, open, onToggle, locked, children }: {
   tree: TreeSummary; first: boolean; open: boolean; onToggle: () => void;
+  locked?: LockReason[];
   children: React.ReactNode;
 }) {
   const color = tree.status === "running" ? C.green : tree.status === "failed" ? C.red : C.dim;
@@ -1120,6 +1173,7 @@ function TreeGroupRow({ tree, first, open, onToggle, children }: {
           <span style={{ fontFamily: MONO, fontSize: 13, color: C.text, flex: 1, minWidth: 120 }}>
             {tree.task || tree.tree_run}
           </span>
+          {locked && <LockChip reasons={locked} />}
           <button onClick={(e) => { e.stopPropagation(); navigate(`trees/${encodeURIComponent(tree.tree_run)}`); }}
             style={{ fontFamily: MONO, fontSize: 10.5, color: C.steel, background: "none",
                      border: "none", cursor: "pointer" }}>
@@ -1138,8 +1192,9 @@ function TreeGroupRow({ tree, first, open, onToggle, children }: {
   );
 }
 
-function FleetRowView({ n, row, st, first, selected, onPick }: {
+function FleetRowView({ n, row, st, first, selected, onPick, locked }: {
   n: NodeInfo; row?: FleetRow; st: Status[]; first: boolean; selected: boolean; onPick: () => void;
+  locked?: LockReason[];
 }) {
   const p = primary(st);
   const color = STATUS_COLOR[p];
@@ -1149,8 +1204,9 @@ function FleetRowView({ n, row, st, first, selected, onPick }: {
                background: selected ? "rgba(127,168,204,0.05)" : "transparent" }}>
       <div className="flex items-center gap-2.5 flex-wrap">
         <Circle size={8} fill={color} color={color} />
-        <span style={{ fontFamily: MONO, fontSize: 13, color: C.text, flex: 1, minWidth: 120 }}>{n.node_id}</span>
-        {attention(n).map((a) => (
+        <span style={{ fontFamily: MONO, fontSize: 13, color: locked ? C.mut : C.text, flex: 1, minWidth: 120 }}>{n.node_id}</span>
+        {locked && <LockChip reasons={locked} />}
+        {!locked && attention(n).map((a) => (
           <button key={a.label}
             onClick={(e) => { if (a.route) { e.stopPropagation(); navigate(a.route); } }}
             style={{ fontFamily: MONO, fontSize: 10, color: a.color, background: "none",
@@ -1164,6 +1220,11 @@ function FleetRowView({ n, row, st, first, selected, onPick }: {
                          borderRadius: 20, padding: "1px 8px" }}>caught lie</span>
         )}
       </div>
+      {locked ? (
+        <div style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim, marginTop: 4, marginLeft: 18 }}>
+          protected by its hooks · shown and operated on the Coding plan
+        </div>
+      ) : (
       <div className="flex gap-3 flex-wrap" style={{ fontFamily: MONO, fontSize: 10.5, color: C.mut, marginTop: 4, marginLeft: 18 }}>
         {row?.active_run ? (
           <span style={{ color: C.green, cursor: "pointer" }}
@@ -1177,6 +1238,7 @@ function FleetRowView({ n, row, st, first, selected, onPick }: {
         {row && row.tainted > 0 && <span style={{ color: C.amber }}>{row.tainted} untrusted</span>}
         {row && row.denied > 0 && <span style={{ color: C.red }}>{row.denied} denied</span>}
       </div>
+      )}
     </div>
   );
 }

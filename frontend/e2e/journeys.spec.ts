@@ -14,10 +14,13 @@ test.describe("three ways in", () => {
     // free tier, said before anything is installed
     await expect(page.getByTestId("coding-free")).toContainText("free for 1 developer");
     const install = page.getByTestId("cmd-repo");
+    // one agent by default — the free plan; adding the second says it is the paid one
     await expect(install).toContainText("axor-wrap agents install claude-code");
-    await expect(install).toContainText("axor-wrap agents install codex");
-    await page.getByTestId("pick-codex").click();
     await expect(install).not.toContainText("codex");
+    await expect(page.getByTestId("coding-both-note")).toHaveCount(0);
+    await page.getByTestId("pick-codex").click();
+    await expect(install).toContainText("axor-wrap agents install codex");
+    await expect(page.getByTestId("coding-both-note")).toContainText("paid plan");
     await expect(page.getByTestId("cmd-env")).toContainText("AXOR_PLANE_URL=");
     // no tool declaration, no base URL to repoint
     await expect(page.getByText("What tools does your agent use?")).toHaveCount(0);
@@ -142,4 +145,31 @@ test("a tree's agents fold into one row on Agents", async ({ page }) => {
   await expect(page.getByTestId("agent-row-codex-example-r0")).toBeVisible();
   await row.getByRole("button", { name: "open tree →" }).click();
   await expect(page).toHaveURL(/#\/trees\/tree-example-coding/);
+});
+
+test("past the free plan a session is kept but locked, and says what unlocks it", async ({ page, request }) => {
+  const tag = Date.now().toString(36).slice(-6);
+  const first = `claude-code-lock-a-${tag}`;
+  const second = `claude-code-lock-b-${tag}`;
+  for (const [node, dev] of [[first, `dev-lock-a-${tag}`], [second, `dev-lock-b-${tag}`]]) {
+    await seedNode(request, node);
+    const r = await request.post(`${BACKEND}/v1/plane/${node}/profile`,
+      { data: { kind: "coding", agent: "claude-code", developer: dev } });
+    expect(r.status()).toBe(204);
+  }
+  // whoever reported first in this workspace keeps the free seat: the second is locked
+  const ent = await (await request.get(`${BACKEND}/v1/license/entitlements`)).json();
+  expect(ent.locked[second]).toContain("developer");
+  const cmd = await request.post(`${BACKEND}/v1/plane/${second}/command`,
+    { data: { version: 1, operator: "op", state: { paused: true } } });
+  expect(cmd.status()).toBe(402);
+
+  await setConnection(page, { mode: "adapter" });
+  await goHash(page, "govern");
+  const row = page.getByTestId(`agent-row-${second}`);
+  await expect(row.getByTestId("plan-lock")).toContainText("second developer");
+  await row.click();
+  await expect(page.getByTestId("plan-lock-card")).toContainText("still protected");
+  await page.getByTestId("plan-lock-pricing").click();
+  await expect(page).toHaveURL(/#\/pricing\?for=coding/);
 });

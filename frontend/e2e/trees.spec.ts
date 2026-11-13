@@ -5,14 +5,14 @@
 import { expect, test } from "@playwright/test";
 import { BACKEND, goHash, seedNode, setConnection, uniqueNode } from "./helpers";
 
-function snapshot(status: string) {
+function snapshot(status: string, readAgent = "claude-code", readModel = "claude-haiku-5-5") {
   return {
     task: "Add rate limiting to the auth module", status,
     stages: [["plan"], ["read"], ["impl"]],
     nodes: {
       plan: { agent: "claude-code", model: "claude-fable-5-2", count: 1, access: "write", out: "plan",
               after: [], runs: [{ index: 0, node_id: "node_plan0", status: "ok" }] },
-      read: { agent: "codex", model: "luna", count: 2, access: "read", out: "findings", after: ["plan"],
+      read: { agent: readAgent, model: readModel, count: 2, access: "read", out: "findings", after: ["plan"],
               runs: [{ index: 0, node_id: "node_read0", status: "ok", verified: 1, unverified: 1 },
                      { index: 1, node_id: "node_read1", status: "running" }] },
       impl: { agent: "claude-code", model: "claude-opus-5-5", count: 1, access: "write", out: "text",
@@ -45,7 +45,9 @@ test.describe("agent trees", () => {
     await expect(page.getByTestId("tree-status")).toContainText("running");
 
     const read = page.getByTestId("tree-node-read");
-    await expect(read).toContainText("codex/luna");
+    await expect(read).toContainText("claude-code/claude-haiku-5-5");
+    // one agent family: the free plan runs it, cuts included
+    await expect(page.getByTestId("tree-plan-lock")).toHaveCount(0);
     await expect(read).toContainText("read-only");
     await expect(read).toContainText("1 verified");
     await expect(page.getByTestId("tree-node-plan")).toContainText("claude-code/claude-fable-5-2");
@@ -64,6 +66,19 @@ test.describe("agent trees", () => {
     // a run links to its own agent on the plane
     await read.getByText("#0 node_read0").click();
     await expect(page).toHaveURL(/#\/govern\/node_read0/);
+  });
+
+  test("a tree mixing agent families is on the paid plan", async ({ page, request }) => {
+    const tree = uniqueNode("tree");
+    await seedNode(request, tree);
+    await request.post(`${BACKEND}/v1/trees/${tree}`, { data: snapshot("running", "codex", "luna") });
+    await setConnection(page, { mode: "adapter" });
+    await goHash(page, `trees/${tree}`);
+    await expect(page.getByTestId("tree-node-read")).toContainText("codex/luna");
+    await expect(page.getByTestId("tree-plan-lock")).toContainText("mixes agent families");
+    const cut = await request.post(`${BACKEND}/v1/plane/${tree}/command`,
+      { data: { version: 1, operator: "op", state: { pending_excision: { target_refs: ["plan#0"] } } } });
+    expect(cut.status()).toBe(402);
   });
 
   test("a finished tree offers no cut", async ({ page, request }) => {

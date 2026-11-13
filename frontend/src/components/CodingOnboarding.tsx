@@ -55,7 +55,7 @@ const step = (n: number, text: string, first = false) => (
 const hint = { fontFamily: MONO, fontSize: 10.5, color: C.dim, marginBottom: 4, lineHeight: 1.6 } as const;
 
 export default function CodingOnboarding({ then }: { then?: () => void }) {
-  const [agents, setAgents] = useState<Agent[]>(["claude-code", "codex"]);
+  const [agents, setAgents] = useState<Agent[]>(["claude-code"]);
   const [copied, setCopied] = useState<string | null>(null);
   const [key, setKey] = useState<string | null>(null);
   const connect = useApp((s) => s.connect);
@@ -101,10 +101,10 @@ export default function CodingOnboarding({ then }: { then?: () => void }) {
       </div>
       <div data-testid="coding-free" style={{ fontFamily: MONO, fontSize: 11, color: C.mut, lineHeight: 1.7,
         border: `1px solid ${C.line}`, borderRadius: 6, padding: "8px 12px", marginBottom: 18 }}>
-        <span style={{ color: C.green }}>free for 1 developer</span> — every feature: hooks, agent
-        trees, pause / stop / cap. Any number of repositories and sessions.
-        <br />more developers: $25 per developer per month — a developer is someone whose agents
-        ran that month.{" "}
+        <span style={{ color: C.green }}>free for 1 developer and 1 agent</span> — Claude Code or
+        Codex, with hooks, agent trees and pause / stop / cap. Any number of repositories and sessions.
+        <br />both agents together (one writes, the other reviews) or a second developer: $25 per
+        developer per month.{" "}
         <button onClick={() => navigate("pricing?for=coding")} data-testid="coding-pricing"
           style={{ background: "none", border: "none", padding: 0, cursor: "pointer",
                    fontFamily: MONO, fontSize: 11, color: C.steel }}>pricing →</button>
@@ -122,6 +122,13 @@ export default function CodingOnboarding({ then }: { then?: () => void }) {
           </button>
         ))}
       </div>
+
+      {agents.length > 1 && (
+        <div data-testid="coding-both-note" style={{ ...hint, marginTop: 6 }}>
+          both is the paid plan: on the free one the plane keeps the agent that reports first —
+          the other is still protected by its hooks.
+        </div>
+      )}
 
       {step(2, "INSTALL — ONCE, ON YOUR MACHINE")}
       <Block id="install" copied={copied} onCopy={copy} text="uv tool install 'axor-wrap[plane]'" />

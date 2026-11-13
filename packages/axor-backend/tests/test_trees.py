@@ -44,7 +44,8 @@ async def test_a_tree_run_is_posted_replaced_and_listed(client: httpx.AsyncClien
     listed = (await client.get("/v1/trees")).json()["trees"]
     assert listed == [{"tree_run": "tree-1a2b", "status": "done",
                        "updated_ts": listed[0]["updated_ts"], "task": "Add rate limiting",
-                       "nodes": 2, "agents": 1, "members": ["node_a"]}]
+                       "nodes": 2, "agents": 1, "members": ["node_a"],
+                       "agent_families": ["claude-code", "codex"]}]
 
 
 async def test_bad_snapshots_are_refused(client: httpx.AsyncClient) -> None:

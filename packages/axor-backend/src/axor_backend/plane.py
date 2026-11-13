@@ -63,12 +63,29 @@ def _ctx(request: Request) -> Any:  # noqa: ANN401 - app.state is dynamic
     return request.app.state
 
 
+async def _require_plan(ctx: Any, node_id: str) -> None:  # noqa: ANN401
+    """A coding session or tree run past the free plan is kept but not
+    operated: 402 with the reason, so the UI can say what unlocks it."""
+    from axor_backend.ee.entitlements import REASONS, coding_entitlements, workspace_tier
+    from axor_backend.licensing import active_license
+
+    tier = workspace_tier(active_license(ctx, current_org_id()))
+    if tier != "community":
+        return
+    ent = await coding_entitlements(ctx.store, tier)
+    reasons = ent["locked"].get(node_id) or ent["locked_trees"].get(node_id)
+    if reasons:
+        raise HTTPException(402, {"error": "plan_required", "reasons": reasons,
+                                  "detail": REASONS[reasons[0]]})
+
+
 @router.post("/{node_id}/command", status_code=202)
 async def command(node_id: str, body: dict, request: Request) -> dict:
     ctx = _ctx(request)
     delta = body.get("state")
     if not isinstance(delta, dict) or not delta:
         raise HTTPException(400, "command requires a non-empty `state` delta")
+    await _require_plan(ctx, node_id)
     if "pending_experiment" in delta:
         _check_experiment(delta["pending_experiment"])
     version = body.get("version")
