@@ -3,6 +3,7 @@
 // the dead-letter log surfaced honestly; a notification system that fails
 // silently is worse than none.
 import { useEffect, useState } from "react";
+import { track } from "../funnel";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Check, Copy, Loader2, Trash2 } from "lucide-react";
 import { api } from "../api";
@@ -150,6 +151,7 @@ export function IdentityLogin({ onDone, initialMode = "login" }: {
           ? await signup(email, password, orgName)
           : await login(email, password, orgId || undefined);
       setSession(session.access_token, session.refresh_token, session.user.email);
+      if (mode === "signup") track("signup_completed");
       setPassword("");
       // Queries that 401'd before sign-in stay failed otherwise.
       void qc.invalidateQueries();
@@ -342,6 +344,8 @@ export default function Settings() {
           </div>
         </div>
       </Section>
+
+      <FunnelPanel />
 
       {/* Authentication (architecture section 9) */}
       <Section title="AUTHENTICATION">
@@ -856,5 +860,60 @@ function Section({ title, children }: { title: string; children: React.ReactNode
       </div>
       {children}
     </div>
+  );
+}
+
+// The sign-up funnel (axor_backend/funnel.py) — shown only to the operator:
+// the report answers 401/403 to anyone else, and then this renders nothing.
+function FunnelPanel() {
+  const [days, setDays] = useState(30);
+  const report = useQuery({
+    queryKey: ["funnel", days], queryFn: () => api.funnelReport(days), retry: false,
+  });
+  if (!report.data) return null;
+  const r = report.data;
+  // Steps are counted per tab, and a later step can happen in another tab
+  // (sign-up opened from a link), so a ratio can pass 100%: shown as such.
+  const pct = (v: number | null) =>
+    v == null ? "—" : v > 1 ? "100%+" : `${Math.round(v * 100)}%`;
+  return (
+    <Section title="SIGN-UP FUNNEL · operator">
+      <div className="flex items-center gap-2 mb-2" style={{ fontFamily: MONO, fontSize: 11, color: C.mut }}>
+        last
+        {[7, 30, 90].map((d) => (
+          <button key={d} onClick={() => setDays(d)}
+            style={btn({ fontSize: 10.5, padding: "2px 8px", color: d === days ? C.text : C.dim,
+                         borderColor: d === days ? C.steel : C.line })}>{d}d</button>
+        ))}
+        <span style={{ color: C.dim }}>· anonymous tabs, first-party, Do Not Track honoured</span>
+      </div>
+      <table data-testid="funnel-table" style={{ fontFamily: MONO, fontSize: 11.5, borderCollapse: "collapse", width: "100%" }}>
+        <thead>
+          <tr style={{ color: C.dim, textAlign: "left" }}>
+            <th style={{ padding: "4px 6px" }}>step</th>
+            <th style={{ padding: "4px 6px", textAlign: "right" }}>tabs</th>
+            <th style={{ padding: "4px 6px", textAlign: "right" }}>of previous</th>
+            <th style={{ padding: "4px 6px", textAlign: "right" }}>of visits</th>
+          </tr>
+        </thead>
+        <tbody>
+          {r.steps.map((s) => (
+            <tr key={s.step} style={{ borderTop: `1px solid ${C.line}` }}>
+              <td style={{ padding: "4px 6px", color: C.text }}>{s.step}</td>
+              <td style={{ padding: "4px 6px", textAlign: "right", color: C.text }}>{s.count}</td>
+              <td style={{ padding: "4px 6px", textAlign: "right", color: C.mut }}>{pct(s.from_previous)}</td>
+              <td style={{ padding: "4px 6px", textAlign: "right", color: C.mut }}>{pct(s.from_visit)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <div style={{ fontFamily: MONO, fontSize: 11, color: C.mut, marginTop: 8, lineHeight: 1.6 }}>
+        real agents connected: <span style={{ color: C.text }}>{r.agents_connected}</span>
+        {Object.keys(r.signup_prompts).length > 0 && (
+          <> · sign-up asked by: {Object.entries(r.signup_prompts)
+            .sort((a, b) => b[1] - a[1]).map(([f, n]) => `${f} ${n}`).join(", ")}</>
+        )}
+      </div>
+    </Section>
   );
 }

@@ -1,6 +1,7 @@
 import { canonicalize } from "./jcs";
 import { IDENTITY_BASE, refresh } from "./identity";
 import { useApp } from "./store";
+import { track } from "./funnel";
 
 // Backend client. Vite dev-proxies /v1 -> backend :8400 and /axor -> proxy :8401.
 
@@ -565,6 +566,7 @@ export async function startGuest(stale?: string): Promise<boolean> {
         if (!r.ok) return false;
         const g = (await r.json()) as { token: string; expires_at: string };
         useApp.getState().setGuest(g.token, g.expires_at);
+        track("guest_started");
         return true;
       })
       .catch(() => false)
@@ -959,9 +961,12 @@ export const api = {
   // proposal on the scraper — built by those libraries, posted through the
   // plane's own ingest routes.
   seedFleet: () =>
-    af("/v1/demo/seed-fleet", { method: "POST" }).then(
-      (r) => j<{ seeded: string[]; nodes: string[]; sentinel_node: string; probe_node: string }>(r),
-    ),
+    af("/v1/demo/seed-fleet", { method: "POST" }).then((r) =>
+      j<{ seeded: string[]; nodes: string[]; sentinel_node: string; probe_node: string }>(r)
+        .then((out) => {
+          track("demo_fleet_loaded");
+          return out;
+        })),
   // The example scraper's half of a heal: consume the cut, run the re-probe.
   // 409 unless a cut is actually pending on it.
   fleetReprobe: () =>
@@ -992,6 +997,12 @@ export const api = {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ side, label }),
     }).then((r) => j<{ pinned: string }>(r)),
+  // The sign-up funnel report — the operator's (master token); 401/403 otherwise.
+  funnelReport: (days = 30) =>
+    af(`/v1/funnel?days=${days}`).then((r) =>
+      j<{ days: number; agents_connected: number; signup_prompts: Record<string, number>;
+          steps: { step: string; count: number; from_previous: number | null;
+                   from_visit: number | null }[] }>(r)),
   // The North-star surface: the regression corpus as counts (see GET /v1/pins).
   getPins: () =>
     af("/v1/pins").then((r) =>

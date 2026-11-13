@@ -34,6 +34,10 @@ EXPECTED: dict[tuple[str, str], str] = {
     # and any member may claim their own guest work.
     ("POST", "/v1/auth/guest"): "OPEN",
     ("POST", "/v1/auth/claim-guest"): "read",
+    # The sign-up funnel: steps are posted anonymously by visitors (whitelisted,
+    # rate-limited); the report is checked in-route as the operator's only.
+    ("POST", "/v1/funnel"): "OPEN",
+    ("GET", "/v1/funnel"): "read",
     ("GET", "/v1/share/{token}"): "OPEN",
     # Not OPEN, deliberately: /v1/healthz above stays mute, and the version
     # belongs to callers who are already inside.

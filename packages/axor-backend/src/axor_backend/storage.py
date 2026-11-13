@@ -372,6 +372,18 @@ heal_attempts = Table(
     Column("org_id", String(64), nullable=False, server_default=PUBLIC_ORG, index=True),
 )
 
+# Sign-up funnel steps (funnel.py): anonymous, first-party. `dedup_key` makes a
+# server-side step (agent_connected) record once.
+funnel_events = Table(
+    "funnel_events", metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("ts", String(40), nullable=False, index=True),
+    Column("session_id", String(64), nullable=False),
+    Column("event", String(40), nullable=False, index=True),
+    Column("detail", String(64), nullable=False, server_default=""),
+    Column("dedup_key", String(200), nullable=True, unique=True),
+)
+
 # A hosted visitor's guest session (no account): a short-lived bearer whose
 # HASH is kept here, mapped to the throwaway org its work lives under. Not
 # tenant data itself — it is what lets that work be claimed into an account
@@ -667,6 +679,35 @@ class Store:
         # one and Rule 0 says we do not rebuild its reader) serialises there,
         # inside the thread, rather than here on the event loop.
         return [r.line for r in rows]
+
+    # ── sign-up funnel ────────────────────────────────────────────────────
+
+    async def add_funnel_event(self, ts: str, session_id: str, event: str,
+                               detail: str = "", dedup_key: str | None = None) -> bool:
+        try:
+            async with self.engine.begin() as conn:
+                await conn.execute(funnel_events.insert().values(
+                    ts=ts, session_id=session_id, event=event, detail=detail,
+                    dedup_key=dedup_key))
+        except IntegrityError:
+            return False      # a once-only step already recorded
+        return True
+
+    async def funnel_counts(self, since: str) -> dict[str, Any]:
+        """Distinct tab ids per event since ``since``, and the details of the
+        sign-up prompts (which feature asked)."""
+        async with self.engine.connect() as conn:
+            rows = (await conn.execute(
+                select(funnel_events.c.event, funnel_events.c.session_id, funnel_events.c.detail)
+                .where(funnel_events.c.ts >= since))).all()
+        sessions: dict[str, set[str]] = {}
+        prompts: dict[str, int] = {}
+        for r in rows:
+            sessions.setdefault(r.event, set()).add(r.session_id)
+            if r.event == "signup_prompt_shown":
+                prompts[r.detail or "unspecified"] = prompts.get(r.detail or "unspecified", 0) + 1
+        return {"sessions": sessions, "prompts": prompts,
+                "events": {k: sum(1 for r in rows if r.event == k) for k in sessions}}
 
     # ── guest sessions (hosted visitors without an account) ─────────────────
 

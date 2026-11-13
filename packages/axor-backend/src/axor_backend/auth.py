@@ -189,6 +189,8 @@ _OPEN_ROUTES: tuple[tuple[str, str], ...] = (
     # a hosted visitor asks for a guest session before it has any credential;
     # the route itself answers 404 unless guest sessions are on
     ("POST", "/v1/auth/guest"),
+    # sign-up funnel steps (funnel.py): anonymous, whitelisted, rate-limited
+    ("POST", "/v1/funnel"),
     ("GET", "/v1/share/"),
     ("HEAD", "/v1/healthz"),
     ("HEAD", "/v1/share/"),

@@ -19,6 +19,7 @@ import {
   streamRun,
 } from "../api";
 import { navigate } from "../router";
+import { track } from "../funnel";
 import { isConnected, useApp } from "../store";
 import { C, MONO, btn, sevColor } from "../theme";
 import EvidenceCase, { deviationHeadline } from "../components/EvidenceCase";
@@ -138,6 +139,13 @@ export default function Experiment({ runId, autostart }: { runId?: string; autos
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [autostart, mode]);
+
+  // the moment the product proves itself: a lie caught in a run started here
+  // (above the early return: hooks run unconditionally)
+  const caughtHere = focusRun?.evidence.some((c) => c.deviation) ?? false;
+  useEffect(() => {
+    if (caughtHere && activeRun && focusRun?.run_id === activeRun) track("lie_caught");
+  }, [caughtHere, activeRun, focusRun?.run_id]);
 
   if (!isConnected(mode)) {
     return (

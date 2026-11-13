@@ -294,6 +294,7 @@ async def telemetry(
     # hit and gating it on `replayed` would lose the day of a node whose only
     # successful delivery that day was a resend.
     await _note_active(ctx, node_id)
+    await _note_agent_connected(ctx, node_id)
     # Each stored event carries the id a reconnecting subscriber resumes from.
     for event_id, line in result.rows:
         ctx.broadcast.publish(
@@ -301,6 +302,27 @@ async def telemetry(
             {"type": "event", "id": event_id, "line": line},
         )
     return {"stored": len(result.rows)}
+
+
+async def _note_agent_connected(ctx: Any, node_id: str) -> None:  # noqa: ANN401
+    """The funnel's last step: a real tenant's agent reported for the first
+    time (once per org and node; a guest's demo is not one). Keyed on a hash
+    so the funnel table never holds the org or node name."""
+    import hashlib
+
+    from axor_backend.guests import ORG_PREFIX
+
+    org = current_org_id()
+    if org.startswith(ORG_PREFIX):
+        return
+    key = "agent:" + hashlib.sha256(f"{org}\x1f{node_id}".encode()).hexdigest()[:32]
+    seen = getattr(ctx, "agents_seen", None)
+    if seen is None:
+        seen = ctx.agents_seen = set()
+    if key in seen:
+        return
+    seen.add(key)
+    await ctx.store.add_funnel_event(now(), "server", "agent_connected", "", dedup_key=key)
 
 
 async def _note_active(ctx: Any, node_id: str) -> None:  # noqa: ANN401

@@ -13,6 +13,7 @@ import { api, startGuest } from "../api";
 import { isGuestToken, useApp } from "../store";
 import { C, MONO, btn } from "../theme";
 import { IdentityLogin } from "../tabs/Settings";
+import { track } from "../funnel";
 
 const LABELS: [string, string][] = [
   ["runs", "run"], ["desired_state", "agent"], ["probe_reports", "health check"],
@@ -33,6 +34,10 @@ export default function GuestSession() {
   const guestTokens = useApp((s) => s.guestTokens);
   const [ask, setAsk] = useState<string | null>(null);
   const [moved, setMoved] = useState<string | null>(null);
+
+  useEffect(() => {
+    track("visit");
+  }, []);
 
   // nothing to authenticate with: start as a guest, if the plane offers it
   useEffect(() => {
@@ -59,7 +64,10 @@ export default function GuestSession() {
       for (const r of results) {
         for (const [k, v] of Object.entries(r?.moved ?? {})) total[k] = (total[k] ?? 0) + v;
       }
-      if (Object.keys(total).length) setMoved(describeMoved(total));
+      if (Object.keys(total).length) {
+        setMoved(describeMoved(total));
+        track("guest_claimed");
+      }
       void qc.invalidateQueries();
     });
   }, [apiToken, refreshToken, guestTokens, qc]);
@@ -68,7 +76,10 @@ export default function GuestSession() {
   useEffect(() => {
     const on = (e: Event) => {
       const detail = (e as CustomEvent<{ feature?: string }>).detail;
-      if (isGuestToken(useApp.getState().apiToken)) setAsk(detail?.feature ?? "this");
+      if (isGuestToken(useApp.getState().apiToken)) {
+        setAsk(detail?.feature ?? "this");
+        track("signup_prompt_shown", detail?.feature ?? "");
+      }
     };
     window.addEventListener("axor:account-required", on);
     return () => window.removeEventListener("axor:account-required", on);

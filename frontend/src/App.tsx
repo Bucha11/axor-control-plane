@@ -19,6 +19,7 @@ import { C, MONO } from "./theme";
 import { navigate, useRoute } from "./router";
 import { MODE_LABEL, isConnected, isGuestToken, useApp } from "./store";
 import GuestSession, { guestTimeLeft } from "./components/GuestSession";
+import { track } from "./funnel";
 import Tooltip from "./components/Tooltip";
 import Tour from "./components/Tour";
 import Home from "./tabs/Home";
@@ -358,7 +359,10 @@ function AccountButton() {
   return (
     <div ref={ref} style={{ position: "relative" }}>
       <button
-        onClick={() => setOpen((v) => !v)}
+        onClick={() => {
+          if (!open && guest) track("signup_prompt_shown", "header");
+          setOpen((v) => !v);
+        }}
         aria-expanded={open}
         style={{
           background: "none", cursor: "pointer", borderRadius: 20, padding: "4px 12px",

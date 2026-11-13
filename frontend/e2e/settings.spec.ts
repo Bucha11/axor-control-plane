@@ -48,7 +48,7 @@ test.describe("settings", () => {
     await expect(page.getByPlaceholder("vendor public key (hex)")).toHaveCount(0);
     await page.getByRole("button", { name: /Verify license/ }).click();
     // A 4xx from the verify endpoint surfaces as a red error line.
-    await expect(page.getByText(/^\d{3}\b/)).toBeVisible();
+    await expect(page.getByText(/^\d{3} \{"detail"/)).toBeVisible();
   });
 
   test("every trigger the backend emits can be subscribed to", async ({ page }) => {
