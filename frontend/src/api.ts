@@ -1022,6 +1022,14 @@ export const api = {
           track("demo_fleet_loaded");
           return out;
         })),
+  // Example coding agents: a Claude Code and a Codex session on one ledger
+  // (Codex denied running what Claude Code fetched) and a tree run.
+  seedCoding: () =>
+    af("/v1/demo/seed-coding", { method: "POST" }).then((r) =>
+      j<{ sessions: string[]; tree_run: string; runs: string[] }>(r).then((out) => {
+        track("demo_fleet_loaded", "coding");
+        return out;
+      })),
   // The example scraper's half of a heal: consume the cut, run the re-probe.
   // 409 unless a cut is actually pending on it.
   fleetReprobe: () =>

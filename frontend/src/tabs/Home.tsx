@@ -5,13 +5,12 @@ import { useState } from "react";
 import { ArrowRight, ChevronDown, GraduationCap, Play, X, Zap } from "lucide-react";
 import { api } from "../api";
 import { C, MONO } from "../theme";
-import { navigate } from "../router";
+import { navigate, useRoute } from "../router";
 import { ConnectionMode, MODE_LABEL, isConnected, useApp } from "../store";
 import Tooltip from "../components/Tooltip";
 import { useStartTour } from "../components/Tour";
 import { DemoStage } from "../demo/DemoLanding";
 import { CodingStage } from "../demo/CodingStage";
-import { WAYS } from "./Onboarding";
 
 const LADDER: { mode: ConnectionMode; blurb: string }[] = [
   { mode: "demo", blurb: "our mock broken tools · zero creds · one click" },
@@ -19,97 +18,141 @@ const LADDER: { mode: ConnectionMode; blurb: string }[] = [
   { mode: "adapter", blurb: "wrap in Invokable · full governance + Control" },
 ];
 
-/** The first thing someone sees, knowing nothing about Axor. No menu, no
- * terms: one sentence of what goes wrong, the recording showing it happen, and
- * two ways to try it. The app's vocabulary (evidence, catch, explain…) waits
- * until there is something in it to name. */
+/** The first thing someone sees, knowing nothing about Axor. Two kinds of
+ * visitor arrive and want different things: one governs Claude Code / Codex in
+ * a repository, the other a production agent. A tab each — its own headline,
+ * its own way in, its own example to explore with nothing installed, its own
+ * recording and its own price — and "both" one link away. */
+type Side = "coding" | "production";
+
 function FirstVisit() {
   const connect = useApp((s) => s.connect);
   const startTour = useStartTour();
+  const route = useRoute();
+  const [side, setSide] = useState<Side>(route.query.for === "production" ? "production" : "coding");
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
-  const [story, setStory] = useState<"production" | "coding">("production");
-  const seeFleet = async () => {
+  const explore = async (which: Side) => {
     setLoading(true);
     setErr(null);
     try {
-      await api.seedFleet();
+      if (which === "coding") await api.seedCoding();
+      else await api.seedFleet();
       connect("demo");
-      navigate("govern");
+      navigate(which === "coding" ? "trees/tree-example-coding" : "govern");
     } catch (e) {
       setErr((e as Error).message);
     } finally {
       setLoading(false);
     }
   };
+  const link: React.CSSProperties = {
+    background: "none", border: "none", padding: 0, color: C.steel, cursor: "pointer",
+    fontSize: 13, textAlign: "left",
+  };
   return (
     <div style={{ maxWidth: 640, margin: "0 auto" }} data-testid="first-visit">
-      <h1 style={{ fontSize: "clamp(22px, 6vw, 28px)", fontWeight: 700, lineHeight: 1.25, margin: "0 0 10px" }}>
-        Decide what your AI agents are allowed to do.
-        <br />
-        <span style={{ color: C.steel }}>Axor enforces it at every tool call — in production and in your repo.</span>
-      </h1>
-      <div style={{ fontSize: 14.5, color: C.mut, lineHeight: 1.6, marginBottom: 20 }}>
-        Policy — not the prompt — decides what an agent may read, send and run: your own
-        agent in production, Claude Code and Codex in your repository. Watch every one live,
-        stop it, and repair it when its context goes bad.
-      </div>
-
-      {/* the ways in come BEFORE the recording: on a phone the recording alone
-          fills the first screen */}
-      <div style={{ fontFamily: MONO, fontSize: 11, color: C.dim, letterSpacing: "0.06em", margin: "4px 0 8px" }}>
-        WHAT DO YOU WANT TO GOVERN?
-      </div>
-      <div className="flex flex-col" style={{ gap: 8, marginBottom: 12 }}>
-        {WAYS.map((w) => (
-          <button key={w.id} data-testid={`home-way-${w.id}`}
-            onClick={() => navigate(`connect?for=${w.id}`)} style={{ ...bigCta(C.steel, false), padding: "11px 18px" }}>
-            <span>
-              <span style={{ display: "block", fontWeight: 700 }}>{w.title}</span>
-              <span style={{ display: "block", fontSize: 12, opacity: 0.85, marginTop: 2 }}>{w.body}</span>
-            </span>
-            <ArrowRight size={18} />
-          </button>
-        ))}
-      </div>
-      {err && <div style={{ fontFamily: MONO, fontSize: 11, color: C.red, marginBottom: 8 }}>{err}</div>}
-      <div style={{ fontSize: 13, color: C.mut, marginBottom: 26, lineHeight: 1.8 }}>
-        Not ready to install anything?{" "}
-        <button onClick={() => void seeFleet()} disabled={loading} data-testid="home-example-fleet"
-          style={{ background: "none", border: "none", padding: 0, color: C.steel, cursor: "pointer", fontSize: 13, textAlign: "left" }}>
-          {loading ? "loading the example fleet…" : "Explore an example fleet →"}
-        </button>
-        <br />
-        <button
-          onClick={() => {
-            connect("demo");
-            navigate("catch", { auto: "1" });
-          }}
-          style={{ background: "none", border: "none", padding: 0, color: C.steel, cursor: "pointer", fontSize: 13, textAlign: "left" }}
-        >
-          See it catch an agent making things up when a tool breaks →
-        </button>
-      </div>
-
-      <div className="flex items-center flex-wrap" style={{ gap: 8, marginBottom: 10 }}>
-        <span style={{ fontFamily: MONO, fontSize: 11.5, color: C.mut }}>watch it happen — 25 seconds:</span>
-        {([["production", "a production agent"], ["coding", "coding agents"]] as const).map(([id, name]) => (
-          <button key={id} data-testid={`story-${id}`} onClick={() => setStory(id)}
+      <div className="flex" role="tablist" style={{ gap: 6, marginBottom: 18 }}>
+        {([["coding", "Coding agents"], ["production", "Production agents"]] as const).map(([id, name]) => (
+          <button key={id} role="tab" aria-selected={side === id} data-testid={`home-tab-${id}`}
+            onClick={() => { setSide(id); setErr(null); }}
             style={{
-              fontFamily: MONO, fontSize: 11, padding: "2px 10px", borderRadius: 20, cursor: "pointer",
-              background: "none", color: story === id ? C.text : C.dim,
-              border: `1px solid ${story === id ? C.steel : C.line}`,
+              fontFamily: MONO, fontSize: 12.5, padding: "6px 16px", borderRadius: 20, cursor: "pointer",
+              background: side === id ? "rgba(127,168,204,0.12)" : "none",
+              color: side === id ? C.text : C.dim,
+              border: `1px solid ${side === id ? C.steel : C.line}`,
             }}>
             {name}
           </button>
         ))}
       </div>
-      {/* the buttons above are the call to action; the recording needs no third */}
-      {story === "production"
-        ? <DemoStage autoplay cta={false} onTry={() => navigate("connect")} />
-        : <CodingStage autoplay />}
 
-      <div style={{ fontFamily: MONO, fontSize: 11, color: C.dim, marginTop: 18 }}>
+      {side === "coding" ? (
+        <>
+          <h1 style={{ fontSize: "clamp(22px, 6vw, 28px)", fontWeight: 700, lineHeight: 1.25, margin: "0 0 10px" }}>
+            Govern Claude Code and Codex in your repository.
+            <br />
+            <span style={{ color: C.steel }}>Every tool call checked — across every agent, in one ledger.</span>
+          </h1>
+          <div style={{ fontSize: 14.5, color: C.mut, lineHeight: 1.6, marginBottom: 20 }}>
+            What one agent read from the web is tainted when another carries it into a shell.
+            Run trees of agents — a planner, parallel readers, an implementer — with findings
+            checked against the files they opened. Every session on the plane: pause, stop, cap.
+          </div>
+          <button data-testid="home-connect-coding" onClick={() => navigate("connect?for=coding")}
+            style={{ ...bigCta(C.steel, true), marginBottom: 12 }}>
+            <span>
+              <span style={{ display: "block", fontWeight: 700 }}>Connect your coding agents</span>
+              <span style={{ display: "block", fontSize: 12, opacity: 0.85, marginTop: 2 }}>
+                two commands · no code change · every session shows up here
+              </span>
+            </span>
+            <ArrowRight size={18} />
+          </button>
+          <div style={{ fontSize: 13, color: C.mut, marginBottom: 6, lineHeight: 1.8 }}>
+            Not ready to install anything?{" "}
+            <button data-testid="home-example-coding" onClick={() => void explore("coding")} disabled={loading} style={link}>
+              {loading ? "loading the example…" : "Explore example coding agents →"}
+            </button>
+          </div>
+          <div style={{ fontFamily: MONO, fontSize: 11, color: C.dim, marginBottom: 24 }}>
+            1 developer free · then $25 / developer / month ·{" "}
+            <button onClick={() => navigate("pricing?for=coding")} style={{ ...link, fontFamily: MONO, fontSize: 11 }}>pricing →</button>
+          </div>
+        </>
+      ) : (
+        <>
+          <h1 style={{ fontSize: "clamp(22px, 6vw, 28px)", fontWeight: 700, lineHeight: 1.25, margin: "0 0 10px" }}>
+            Decide what your production agents are allowed to do.
+            <br />
+            <span style={{ color: C.steel }}>Axor enforces it where they touch your tools.</span>
+          </h1>
+          <div style={{ fontSize: 14.5, color: C.mut, lineHeight: 1.6, marginBottom: 20 }}>
+            Policy — not the prompt — decides what an agent may read, send and run. Watch every
+            agent live, stop it, and repair it when its context goes bad.
+          </div>
+          <button data-testid="home-connect-production" onClick={() => navigate("connect?for=production")}
+            style={{ ...bigCta(C.steel, true), marginBottom: 12 }}>
+            <span>
+              <span style={{ display: "block", fontWeight: 700 }}>Govern my production agent</span>
+              <span style={{ display: "block", fontSize: 12, opacity: 0.85, marginTop: 2 }}>
+                proxy in front of its tools, or wrap it with an adapter · pause, cap, stop, repair live
+              </span>
+            </span>
+            <ArrowRight size={18} />
+          </button>
+          <div style={{ fontSize: 13, color: C.mut, marginBottom: 6, lineHeight: 1.8 }}>
+            Not ready to install anything?{" "}
+            <button data-testid="home-example-fleet" onClick={() => void explore("production")} disabled={loading} style={link}>
+              {loading ? "loading the example fleet…" : "Explore an example fleet →"}
+            </button>
+            <br />
+            <button onClick={() => { connect("demo"); navigate("catch", { auto: "1" }); }} style={link}>
+              See it catch an agent making things up when a tool breaks →
+            </button>
+          </div>
+          <div style={{ fontFamily: MONO, fontSize: 11, color: C.dim, marginBottom: 24 }}>
+            1 governed node free · Team from $299 / month ·{" "}
+            <button onClick={() => navigate("pricing?for=production")} style={{ ...link, fontFamily: MONO, fontSize: 11 }}>pricing →</button>
+          </div>
+        </>
+      )}
+      {err && <div style={{ fontFamily: MONO, fontSize: 11, color: C.red, marginBottom: 8 }}>{err}</div>}
+
+      <div style={{ fontFamily: MONO, fontSize: 11.5, color: C.mut, marginBottom: 10 }}>
+        watch it happen — 25 seconds:
+      </div>
+      {side === "coding"
+        ? <CodingStage key="coding" autoplay />
+        : <DemoStage key="production" autoplay cta={false} onTry={() => navigate("connect?for=production")} />}
+
+      <div style={{ fontSize: 13, color: C.mut, marginTop: 22 }}>
+        Both?{" "}
+        <button data-testid="home-both" onClick={() => navigate("connect?for=both")} style={link}>
+          One plane for your production fleet and your developers' coding agents →
+        </button>
+      </div>
+      <div style={{ fontFamily: MONO, fontSize: 11, color: C.dim, marginTop: 14 }}>
         open source ·{" "}
         <button onClick={startTour} style={{ background: "none", border: "none", padding: 0, color: C.steel, cursor: "pointer", fontFamily: MONO, fontSize: 11 }}>
           Take the tour

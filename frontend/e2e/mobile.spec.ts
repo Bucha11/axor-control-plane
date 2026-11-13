@@ -50,10 +50,10 @@ test.describe("on a phone", () => {
     await expect(page.getByRole("button", { name: "Safe to ship?", exact: true })).toBeInViewport();
   });
 
-  test("a first visit shows both ways in without scrolling", async ({ page }) => {
+  test("a first visit shows the tabs and the way in without scrolling", async ({ page }) => {
     await goHash(page, "home");
-    for (const name of [/Explore an example fleet/, /My production agent/]) {
-      const box = await page.getByRole("button", { name }).boundingBox();
+    for (const id of ["home-tab-production", "home-connect-coding", "home-example-coding"]) {
+      const box = await page.getByTestId(id).boundingBox();
       expect(box!.y + box!.height).toBeLessThanOrEqual(844);
     }
   });

@@ -5,14 +5,20 @@ import { expect, test } from "@playwright/test";
 import { goHash, setConnection } from "./helpers";
 
 test.describe("shell", () => {
-  test("a first visit leads with governance: one sentence, two ways in, the recording — no menu", async ({ page }) => {
+  test("a first visit leads with governance: a tab per kind of agent, a way in each, the recording — no menu", async ({ page }) => {
     await goHash(page, "home");
     await expect(page.getByTestId("first-visit")).toBeVisible();
-    await expect(page.getByText("Decide what your AI agents are allowed to do.")).toBeVisible();
-    // the recording plays on its own, and opens on governance
+    // coding agents first: its own headline, way in, example and recording
+    await expect(page.getByText("Govern Claude Code and Codex in your repository.")).toBeVisible();
+    await expect(page.getByTestId("home-connect-coding")).toBeVisible();
+    await expect(page.getByTestId("home-example-coding")).toBeVisible();
+    await expect(page.getByTestId("coding-demo-contain")).toBeVisible({ timeout: 20_000 });
+    // the production tab has its own
+    await page.getByTestId("home-tab-production").click();
+    await expect(page.getByText("Decide what your production agents are allowed to do.")).toBeVisible();
     await expect(page.getByTestId("demo-govern")).toBeVisible({ timeout: 20_000 });
     await expect(page.getByRole("button", { name: /Explore an example fleet/ })).toBeVisible();
-    await expect(page.getByRole("button", { name: /My production agent/ })).toBeVisible();
+    await expect(page.getByRole("button", { name: /Govern my production agent/ })).toBeVisible();
     // none of the product's vocabulary before there is something in it
     for (const label of ["Agents", "Policy", "Caught lies", "Replay", "Safe to ship?"]) {
       await expect(page.getByRole("button", { name: label, exact: true })).toHaveCount(0);
@@ -21,14 +27,14 @@ test.describe("shell", () => {
   });
 
   test("the example fleet opens on the governed agents, with the menu", async ({ page }) => {
-    await goHash(page, "home");
+    await goHash(page, "home?for=production");
     await page.getByRole("button", { name: /Explore an example fleet/ }).click();
     await expect(page).toHaveURL(/#\/govern$/);
     await expect(page.getByRole("button", { name: "Agents", exact: true })).toHaveAttribute("aria-current", "page");
   });
 
   test("the no-code way in still catches a made-up answer", async ({ page }) => {
-    await goHash(page, "home");
+    await goHash(page, "home?for=production");
     await page.getByRole("button", { name: /catch an agent making things up/ }).click();
     await expect(page).toHaveURL(/#\/catch\?auto=1/);
     // the test screen belongs to Caught lies
@@ -46,7 +52,7 @@ test.describe("shell", () => {
     );
     await goHash(page, "home");
     // No wall: the funnel is on screen before anyone has an account.
-    await expect(page.getByText("Decide what your AI agents are allowed to do.")).toBeVisible();
+    await expect(page.getByText("Govern Claude Code and Codex in your repository.")).toBeVisible();
     await expect(page.getByLabel("email")).toHaveCount(0);
     // ...and signing in is not a trip to Settings.
     await page.getByRole("button", { name: "sign in", exact: true }).click();
@@ -59,13 +65,13 @@ test.describe("shell", () => {
 
   test("with auth off (a local run) there is no sign-in to offer", async ({ page }) => {
     await goHash(page, "home");
-    await expect(page.getByText("Decide what your AI agents are allowed to do.")).toBeVisible();
+    await expect(page.getByText("Govern Claude Code and Codex in your repository.")).toBeVisible();
     await expect(page.getByRole("button", { name: "sign in", exact: true })).toHaveCount(0);
   });
 
   test("governing your own agent starts at connect", async ({ page }) => {
-    await goHash(page, "home");
-    await page.getByRole("button", { name: /My production agent/ }).click();
+    await goHash(page, "home?for=production");
+    await page.getByRole("button", { name: /Govern my production agent/ }).click();
     await expect(page).toHaveURL(/#\/connect\?for=production$/);
     await expect(page.getByText(/What tools does your agent use\?/)).toBeVisible();
   });

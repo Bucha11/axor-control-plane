@@ -39,7 +39,7 @@ import time
 
 from fastapi import APIRouter, HTTPException, Request
 
-from axor_backend.clock import now
+from axor_backend.clock import now, today
 from axor_backend.deps import StoreDep, SubgraphCacheDep
 from axor_backend.storage import Store
 from axor_backend.tenancy import current_org_id
@@ -153,6 +153,43 @@ async def seed_fleet(
         "sentinel_node": demo.FLEET_SENTINEL_NODE,
         "probe_node": demo.FLEET_PROBE_NODE,
     }
+
+
+@router.post("/seed-coding")
+async def seed_coding(store: StoreDep, cache: SubgraphCacheDep) -> dict:
+    """Example coding agents: a Claude Code and a Codex session in one
+    repository (one ledger — Codex is denied running what Claude Code fetched),
+    and a tree run with checked findings. Every node is profiled as a coding
+    session, so the meter reads developers, not governed nodes."""
+    from axor_backend import demo
+
+    # stamped now: the example reads as a session that just ran, not one
+    # from the date the fixture was written
+    stamp = now()
+    for run_id, node, events in (
+        ("ex_coding_claude", demo.CODING_CLAUDE, demo.CODING_CLAUDE_EVENTS),
+        ("ex_coding_codex", demo.CODING_CODEX, demo.CODING_CODEX_EVENTS),
+    ):
+        await _seed(store, cache, run_id, node, "coding-demo",
+                    [{**e, "ts": stamp} for e in events], [])
+    sessions = [demo.CODING_CLAUDE, demo.CODING_CODEX, *demo.CODING_TREE_NODES]
+    ts = now()
+    for node in [*sessions, demo.CODING_TREE]:
+        if await store.get_reported(node) is None:
+            await store.upsert_reported(node, applied_version=0, level="NORMAL",
+                                        budget_remaining=None, ts=ts)
+    for node in sessions:
+        agent = "codex" if node.startswith("codex-") else "claude-code"
+        developer = demo.CODING_DEVELOPERS.get(node, "dev-example-ada")
+        await store.put_node_profile(node, "coding", agent, developer, ts)
+        # reported today, as a real session's heartbeat records — the seat
+        # meter counts developers whose agents were active
+        await store.record_node_activity(node, today())
+    await store.put_node_profile(demo.CODING_TREE, "tree", "", "", ts)
+    snapshot = demo.coding_tree_snapshot()
+    await store.put_tree_run(demo.CODING_TREE, snapshot.pop("status"), snapshot, ts)
+    return {"sessions": [demo.CODING_CLAUDE, demo.CODING_CODEX],
+            "tree_run": demo.CODING_TREE, "runs": ["ex_coding_claude", "ex_coding_codex"]}
 
 
 @router.post("/fleet-reprobe", status_code=201)

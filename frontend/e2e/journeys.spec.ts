@@ -80,15 +80,19 @@ test("on the connect page the header does not offer to connect, and a session co
   await expect(page.getByRole("button", { name: /connection:/ })).toBeVisible();
 });
 
-test("home offers the same three ways in, and a coding-agent recording", async ({ page }) => {
+test("home: a coding tab and a production tab, and the coding example opens a tree", async ({ page }) => {
   await setConnection(page, { mode: "none" });
   await goHash(page, "home");
-  for (const way of ["coding", "production", "both"]) {
-    await expect(page.getByTestId(`home-way-${way}`)).toBeVisible();
-  }
-  await page.getByTestId("story-coding").click();
   await expect(page.getByTestId("coding-stage")).toBeVisible();
-  await expect(page.getByTestId("coding-demo-contain")).toBeVisible({ timeout: 15000 });
-  await page.getByTestId("home-way-both").click();
+  await page.getByTestId("home-example-coding").click();
+  await expect(page).toHaveURL(/#\/trees\/tree-example-coding/);
+  await expect(page.getByTestId("tree-node-read")).toContainText("codex/luna");
+  await expect(page.getByTestId("tree-item-read#3/f0")).toContainText("withheld · untrusted");
+});
+
+test("home: both is one link away", async ({ page }) => {
+  await setConnection(page, { mode: "none" });
+  await goHash(page, "home");
+  await page.getByTestId("home-both").click();
   await expect(page).toHaveURL(/#\/connect\?for=both/);
 });
