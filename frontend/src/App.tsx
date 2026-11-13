@@ -105,41 +105,48 @@ export default function App() {
 
   const head = route.segments[0] ?? "home";
   const runIdParam = route.segments[1];
+  const wide = useWide();
   // Someone who has not tried anything yet sees no menu on Home: five tabs of
   // product vocabulary is what made a first visit read as "close and leave".
   const firstVisit = key === "home" && !isConnected(mode);
 
-  return (
-    <div style={{ minHeight: "100vh", background: C.bg, color: C.text, fontFamily: "Inter, system-ui, sans-serif", padding: "28px 20px" }}>
-      <div className="app-header" style={{ maxWidth: 1200, margin: "0 auto 36px" }}>
-        <div className="app-header-left">
-          <button
-            className="app-logo"
-            onClick={() => navigate("home")}
-            style={{ background: "none", border: "none", cursor: "pointer", fontFamily: MONO, fontSize: 14, fontWeight: 700, color: C.text, padding: 0, whiteSpace: "nowrap" }}
-          >
-            AXOR<span className="hide-narrow hide-medium" style={{ color: C.steel }}> CONTROL PLANE</span>
-          </button>
-          {!firstVisit && <nav className="app-nav">
-            {LOOP.map((l) => (
-              <NavLink key={l.key} id={l.key} label={l.label} hint={l.hint}
-                active={(PARENT_TAB[key] ?? key) === l.key} />
-            ))}
-          </nav>}
-        </div>
-        <div className="app-header-right">
-          {!firstVisit && (
-            <>
-              <LearnToggle />
-              <span className="hide-narrow hide-medium"><VersionBadge /></span>
-              <ConnectionBadge onConnect={key === "connect"} />
-              <SettingsButton active={key === "settings"} />
-            </>
-          )}
-          <AccountButton />
-        </div>
+  // A wide screen gets the navigation as a sidebar: the sections and, under
+  // Agents, its views — instead of a row of sections plus a row of views on
+  // top of every page. A phone keeps the compact header.
+  const sidebar = wide && !firstVisit;
+  const governView = head === "health" || head === "sentinel" || head === "trees" ? head : "govern";
+  const header = (
+    <div className="app-header" style={{ maxWidth: 1200, margin: "0 auto 36px" }}>
+      <div className="app-header-left">
+        <button
+          className="app-logo"
+          onClick={() => navigate("home")}
+          style={{ background: "none", border: "none", cursor: "pointer", fontFamily: MONO, fontSize: 14, fontWeight: 700, color: C.text, padding: 0, whiteSpace: "nowrap" }}
+        >
+          AXOR<span className="hide-narrow hide-medium" style={{ color: C.steel }}> CONTROL PLANE</span>
+        </button>
+        {!firstVisit && <nav className="app-nav">
+          {LOOP.map((l) => (
+            <NavLink key={l.key} id={l.key} label={l.label} hint={l.hint}
+              active={(PARENT_TAB[key] ?? key) === l.key} />
+          ))}
+        </nav>}
       </div>
-
+      <div className="app-header-right">
+        {!firstVisit && (
+          <>
+            <LearnToggle />
+            <span className="hide-narrow hide-medium"><VersionBadge /></span>
+            <ConnectionBadge onConnect={key === "connect"} />
+            <SettingsButton active={key === "settings"} />
+          </>
+        )}
+        <AccountButton />
+      </div>
+    </div>
+  );
+  const body = (
+    <>
       <GuestSession />
       <AuthReturn />
       {key === "home" && <Home />}
@@ -149,10 +156,7 @@ export default function App() {
       {key === "prevent" && <Regression />}
       {key === "govern" && (
         <>
-          <SubNav
-            items={[["govern", "agents"], ["trees", "agent trees"], ["sentinel", "reputation across sessions"], ["health", "context health & repair"]]}
-            active={head === "health" || head === "sentinel" || head === "trees" ? head : "govern"}
-          />
+          {!sidebar && <SubNav items={GOVERN_VIEWS} active={governView} />}
           {head === "health" ? <Health /> : head === "sentinel" ? <Sentinel />
             : head === "trees" ? <Trees treeRun={runIdParam} />
             : runIdParam === "run" && route.segments[2]
@@ -170,8 +174,107 @@ export default function App() {
           <span style={{ color: C.steel, cursor: "pointer" }} onClick={() => navigate("home")}>Go home →</span>
         </div>
       )}
+    </>
+  );
+
+  if (sidebar) {
+    return (
+      <div style={{ minHeight: "100vh", background: C.bg, color: C.text, fontFamily: "Inter, system-ui, sans-serif", display: "flex" }}>
+        <Sidebar active={PARENT_TAB[key] ?? key} view={key === "govern" ? governView : ""} connectPage={key === "connect"} settingsPage={key === "settings"} />
+        <main style={{ flex: 1, minWidth: 0, padding: "28px 24px" }}>
+          {body}
+        </main>
+        <Tour />
+      </div>
+    );
+  }
+  return (
+    <div style={{ minHeight: "100vh", background: C.bg, color: C.text, fontFamily: "Inter, system-ui, sans-serif", padding: "28px 20px" }}>
+      {header}
+      {body}
       <Tour />
     </div>
+  );
+}
+
+const GOVERN_VIEWS: [string, string][] = [
+  ["govern", "agents"], ["trees", "agent trees"],
+  ["sentinel", "reputation across sessions"], ["health", "context health & repair"],
+];
+
+const WIDE = "(min-width: 1000px)";
+
+/** Whether the window is wide enough for the sidebar. */
+function useWide(): boolean {
+  const [wide, setWide] = useState(() =>
+    typeof window !== "undefined" && window.matchMedia(WIDE).matches);
+  useEffect(() => {
+    const mq = window.matchMedia(WIDE);
+    const on = () => setWide(mq.matches);
+    mq.addEventListener("change", on);
+    return () => mq.removeEventListener("change", on);
+  }, []);
+  return wide;
+}
+
+/** The navigation as a sidebar: sections, Agents' views under it, and the
+ * session's controls at the bottom. */
+function Sidebar({ active, view, connectPage, settingsPage }: {
+  active: string; view: string; connectPage: boolean; settingsPage: boolean;
+}) {
+  const item = (on: boolean, indent: boolean): React.CSSProperties => ({
+    display: "block", width: "100%", textAlign: "left", cursor: "pointer",
+    background: on ? "rgba(127,168,204,0.10)" : "none", border: "none",
+    borderLeft: `2px solid ${on ? C.steel : "transparent"}`,
+    color: on ? C.text : indent ? C.dim : C.mut,
+    fontFamily: MONO, fontSize: indent ? 11.5 : 13, fontWeight: on && !indent ? 700 : 400,
+    padding: indent ? "5px 10px 5px 26px" : "8px 10px 8px 14px", borderRadius: "0 6px 6px 0",
+  });
+  return (
+    <aside data-testid="sidebar" style={{
+      width: 232, flexShrink: 0, borderRight: `1px solid ${C.line}`, position: "sticky", top: 0,
+      height: "100vh", display: "flex", flexDirection: "column", padding: "24px 12px 16px 0",
+      overflowY: "auto",
+    }}>
+      <button onClick={() => navigate("home")} style={{
+        background: "none", border: "none", cursor: "pointer", textAlign: "left", padding: "0 0 22px 16px",
+        fontFamily: MONO, fontSize: 14, fontWeight: 700, color: C.text,
+      }}>
+        AXOR<span style={{ color: C.steel }}> CONTROL PLANE</span>
+      </button>
+      <nav className="flex flex-col" style={{ gap: 2 }}>
+        {LOOP.map((l) => (
+          <div key={l.key}>
+            <button title={l.hint} onClick={() => navigate(l.key)}
+              aria-current={active === l.key ? "page" : undefined}
+              style={item(active === l.key && (l.key !== "govern" || view === "govern"), false)}>
+              {l.label}
+            </button>
+            {l.key === "govern" && (
+              <div className="flex flex-col" style={{ gap: 1, margin: "2px 0 6px" }}>
+                {GOVERN_VIEWS.slice(1).map(([route, label]) => (
+                  <button key={route} onClick={() => navigate(route)}
+                    aria-current={view === route ? "page" : undefined}
+                    data-testid={`side-${route}`} style={item(view === route, true)}>
+                    {label}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        ))}
+      </nav>
+      <div style={{ flex: 1 }} />
+      <div className="flex flex-col" style={{ gap: 10, padding: "12px 0 0 16px", borderTop: `1px solid ${C.line}` }}>
+        <ConnectionBadge onConnect={connectPage} />
+        <div className="flex items-center" style={{ gap: 8, flexWrap: "wrap" }}>
+          <LearnToggle />
+          <SettingsButton active={settingsPage} />
+        </div>
+        <AccountButton />
+        <VersionBadge />
+      </div>
+    </aside>
   );
 }
 

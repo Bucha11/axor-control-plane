@@ -73,7 +73,8 @@ test.describe("on a phone", () => {
   });
 });
 
-// Between a phone and a wide screen the header switches from one row to two.
+// Between a phone and a wide screen the header switches from one row to two;
+// from 1000px the navigation is a sidebar instead.
 // It used to switch at 760px, and from ~760 to ~1000 the nav ran into the
 // account controls.
 test.describe("header at every width", () => {
@@ -90,6 +91,13 @@ test.describe("header at every width", () => {
       await page.setViewportSize({ width, height: 600 });
       await goHash(page, "evidence");
       await page.waitForLoadState("networkidle");
+      if (width >= 1000) {
+        // wide: the navigation is a sidebar, and the page still fits
+        await expect(page.getByTestId("sidebar")).toBeVisible();
+        await expect(page.getByRole("button", { name: "sign in", exact: true })).toBeVisible();
+        expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width);
+        return;
+      }
       const overlap = await page.evaluate(() => {
         const nav = document.querySelector(".app-nav")!.getBoundingClientRect();
         const right = document.querySelector(".app-header-right")!.getBoundingClientRect();
