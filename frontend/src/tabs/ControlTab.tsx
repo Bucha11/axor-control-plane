@@ -474,7 +474,7 @@ function ControlBody({ focusNode, testBench }: { focusNode?: string; testBench: 
   };
 
   return (
-    <div className="fleet-grid">
+    <div className={node ? "fleet-grid fleet-grid-open" : "fleet-grid"}>
     <div style={{ minWidth: 0 }}>
       <Coach id="control" title="Control — operate governed agents live">
         Each row is a live governed agent (a node). Click one to open its panel:{" "}
@@ -517,7 +517,9 @@ function ControlBody({ focusNode, testBench }: { focusNode?: string; testBench: 
         topo.data.nodes.find((n) => n.node_id === sel)?.kind === "peer" && (
         <PeerCard node={topo.data.nodes.find((n) => n.node_id === sel)!} />
       )}
-      {sel && topo.data?.nodes.find((n) => n.node_id === sel)?.kind !== "peer" && (
+      {/* a traced node that does not report has no panel: its reputation
+          stays here, by the graph */}
+      {sel && !node && topo.data?.nodes.find((n) => n.node_id === sel)?.kind !== "peer" && (
         <ReputationCard nodeId={sel} />
       )}
 
@@ -537,7 +539,22 @@ function ControlBody({ focusNode, testBench }: { focusNode?: string; testBench: 
         ))}
       </div>
 
-      {node && (
+    </div>
+    <aside className="fleet-sticky" data-testid={node ? "agent-panel" : "fleet-activity"}>
+      {node ? (
+        <>
+          <div className="flex items-center" style={{ marginBottom: 8 }}>
+            <span style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim, letterSpacing: "0.06em" }}>AGENT</span>
+            <button onClick={() => pick(node.node_id)} aria-label="close the agent panel"
+              data-testid="agent-panel-close"
+              style={{ marginLeft: "auto", background: "none", border: "none", cursor: "pointer",
+                       fontFamily: MONO, fontSize: 11, color: C.dim }}>
+              ✕ back to activity
+            </button>
+          </div>
+          {topo.data?.nodes.find((n) => n.node_id === node.node_id)?.kind !== "peer" && (
+            <ReputationCard nodeId={node.node_id} />
+          )}
         <div className="mt-3 p-4" style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 8 }}>
           <div className="flex items-center justify-between mb-3">
             <span style={{ fontFamily: MONO, fontSize: 13, color: C.text }}>{node.node_id}</span>
@@ -733,10 +750,10 @@ function ControlBody({ focusNode, testBench }: { focusNode?: string; testBench: 
             </div>
           )}
         </div>
+        </>
+      ) : (
+        <ActivityFeed />
       )}
-    </div>
-    <aside className="fleet-sticky" data-testid="fleet-activity">
-      <ActivityFeed />
     </aside>
     </div>
   );

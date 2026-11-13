@@ -80,9 +80,11 @@ html, body { margin: 0; background: #12161A; }  /* C.bg: no white beyond the app
   margin: 0 auto;
   align-items: start;
 }
+/* an agent picked: its panel takes the feed's column, a little wider */
+.fleet-grid-open { grid-template-columns: minmax(0, 1fr) minmax(380px, 460px); }
 .fleet-sticky { position: sticky; top: 12px; max-height: calc(100vh - 24px); overflow-y: auto; }
 @media (max-width: 1100px) {
-  .fleet-grid { grid-template-columns: minmax(0, 1fr); }
+  .fleet-grid, .fleet-grid-open { grid-template-columns: minmax(0, 1fr); }
   .fleet-side { display: none; }
   .fleet-sticky { position: static; max-height: none; }
 }
