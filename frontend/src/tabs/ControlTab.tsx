@@ -472,9 +472,31 @@ function ControlBody({ focusNode, testBench }: { focusNode?: string; testBench: 
   };
 
   const statuses = new Map(list.map((n) => [n.node_id, statusesOf(n, fleetRows.get(n.node_id))]));
+  // Counters count what the list shows: a tree is one row, so it is one unit,
+  // and its statuses are its agents' together (one agent needing you puts the
+  // tree in "needs you"; one running makes it running, not idle).
+  const unitOf = (id: string) => {
+    const t = treeOf.get(id);
+    return t ? `tree:${t.tree_run}` : id;
+  };
+  const unitStatuses = new Map<string, Status[]>();
+  for (const n of list) {
+    const k = unitOf(n.node_id);
+    unitStatuses.set(k, [...(unitStatuses.get(k) ?? []), ...statuses.get(n.node_id)!]);
+  }
+  for (const [k, st] of unitStatuses) {
+    if (!k.startsWith("tree:")) continue;
+    const merged = new Set(st);
+    if (treeOf.get(k.slice(5))?.status === "running") merged.add("running");
+    if (merged.has("running") || merged.has("paused") || merged.has("stopped")) merged.delete("idle");
+    unitStatuses.set(k, [...merged]);
+  }
+  const units = [...unitStatuses.values()];
+  const treeCount = [...unitStatuses.keys()].filter((k) => k.startsWith("tree:")).length;
+  const looseCount = units.length - treeCount;
   // the heading counts what the "needs you" chip counts — one definition
-  const needYou = list.filter((n) => statuses.get(n.node_id)!.includes("needs_you")).length;
-  const shown = list.filter((n) => filter === "all" || statuses.get(n.node_id)!.includes(filter));
+  const needYou = units.filter((st) => st.includes("needs_you")).length;
+  const shown = list.filter((n) => filter === "all" || unitStatuses.get(unitOf(n.node_id))!.includes(filter));
   const pick = (id: string) => {
     setSel(sel === id ? null : id);
     setMore(false);
@@ -496,10 +518,13 @@ function ControlBody({ focusNode, testBench }: { focusNode?: string; testBench: 
           : needYou === 1 ? <>One agent needs attention.</>
           : <>{needYou} agents need attention.</>}
       </h1>
-      <StatusChips list={list} statuses={statuses} filter={filter} setFilter={setFilter} />
+      <StatusChips units={units} filter={filter} setFilter={setFilter} />
       {fleetQ.data && <FleetTotals totals={fleetQ.data.totals} />}
       <div className="flex items-center gap-4" style={{ fontFamily: MONO, fontSize: 11, color: C.mut, marginBottom: 20 }}>
-        <span>{list.length} node{list.length === 1 ? "" : "s"} · live</span>
+        <span data-testid="fleet-count">
+          {looseCount} agent{looseCount === 1 ? "" : "s"}
+          {treeCount > 0 && <> · {treeCount} tree{treeCount === 1 ? "" : "s"}</>} · live
+        </span>
         <span style={{ marginLeft: "auto", display: "flex", gap: 12 }}>
           {(["list", "graph"] as const).map((l) => (
             <button key={l} onClick={() => setLens(l)}
@@ -1038,11 +1063,11 @@ function ago(iso?: string | null): string {
   return `${Math.floor(s / 86400)}d ago`;
 }
 
-function StatusChips({ list, statuses, filter, setFilter }: {
-  list: NodeInfo[]; statuses: Map<string, Status[]>;
+function StatusChips({ units, filter, setFilter }: {
+  units: Status[][];
   filter: Status | "all"; setFilter: (f: Status | "all") => void;
 }) {
-  const count = (s: Status) => list.filter((n) => statuses.get(n.node_id)!.includes(s)).length;
+  const count = (s: Status) => units.filter((st) => st.includes(s)).length;
   const chip = (id: Status | "all", label: string, n: number, color: string) => (
     <button key={id} onClick={() => setFilter(id)} aria-pressed={filter === id}
       style={{ fontFamily: MONO, fontSize: 11.5, background: filter === id ? "rgba(127,168,204,0.10)" : "none",
@@ -1054,7 +1079,7 @@ function StatusChips({ list, statuses, filter, setFilter }: {
   );
   return (
     <div className="flex gap-2 flex-wrap mb-2" data-testid="status-chips">
-      {chip("all", "all", list.length, C.text)}
+      {chip("all", "all", units.length, C.text)}
       {(["needs_you", "running", "paused", "stopped", "idle"] as Status[]).map((s) =>
         chip(s, STATUS_LABEL[s], count(s), STATUS_COLOR[s]))}
     </div>
