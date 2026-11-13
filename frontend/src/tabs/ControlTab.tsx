@@ -141,7 +141,7 @@ function attention(n: NodeInfo): { label: string; color: string; route?: string 
   const mirrored = (paused && level === "CAUTIOUS") || (stopped && level === "RESTRICTED");
   if (level !== "NORMAL" && !mirrored) out.push({ label: level, color: C.amber });
   if (n.reputation && n.reputation.flagged > 0) {
-    out.push({ label: `sentinel · ${n.reputation.flagged} flagged`, color: C.red,
+    out.push({ label: `reputation · ${n.reputation.flagged} flagged`, color: C.red,
                route: `sentinel?node=${encodeURIComponent(n.node_id)}` });
   }
   if (n.probe?.verdict === "DRIFT_DETECTED") {
