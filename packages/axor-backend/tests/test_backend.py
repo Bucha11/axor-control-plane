@@ -499,3 +499,32 @@ async def test_node_journal_carries_the_nodes_acks(client: httpx.AsyncClient) ->
     entries = (await client.get("/v1/plane/nj/journal")).json()["entries"]
     assert [e["kind"] for e in entries] == ["injection_refused", "context_excision"]
     assert entries[1]["payload"]["refs"] == ["tc9"]
+
+
+async def test_fleet_and_activity(client: httpx.AsyncClient) -> None:
+    def line(seq: int, kind: str, payload: dict, node: str = "nf") -> dict:
+        return {"schema_version": "1.0", "seq": seq, "node_id": node, "kind": kind,
+                "ts": datetime.now(UTC).isoformat(), "causal_root": None, "gate": None,
+                "verdict": None, "payload": payload}
+
+    await client.post("/v1/plane/nf/telemetry", json={"run_id": "nf-hb", "events": [
+        line(0, "heartbeat", {"applied_version": 0, "level": "NORMAL"})]})
+    # a finished run, and one still waiting on a slow tool
+    await client.post("/v1/plane/nf/telemetry", json={"run_id": "nf-r1", "events": [
+        line(0, "tool_call", {"tool": "fetch", "tool_call_id": "a"}),
+        line(1, "tool_result", {"tool": "fetch", "value_ref": "a",
+                                "root": {"sources": ["web"], "sensitive": False}}),
+        line(2, "claim", {"text": "done", "structured": False}),
+    ]})
+    await client.post("/v1/plane/nf/telemetry", json={"run_id": "nf-r2", "events": [
+        line(0, "tool_call", {"tool": "slow_search", "tool_call_id": "b"})]})
+
+    fleet = (await client.get("/v1/plane/fleet")).json()
+    (row,) = [n for n in fleet["nodes"] if n["node_id"] == "nf"]
+    assert (row["runs"], row["calls"], row["tainted"]) == (2, 2, 1)
+    assert row["active_run"] == "nf-r2" and row["current_tool"] == "slow_search"
+    assert fleet["totals"]["active"] >= 1
+
+    events = (await client.get("/v1/plane/activity")).json()["events"]
+    kinds = [e["kind"] for e in events if e["node_id"] == "nf"]
+    assert "heartbeat" not in kinds and kinds[0] == "tool_call"   # newest first

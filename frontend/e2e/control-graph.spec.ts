@@ -84,7 +84,8 @@ test.describe("control graph lens", () => {
     await ctx.dispose();
 
     await goHash(page, "control");
-    await expect(page.getByText(nid)).toBeVisible();
+    // the list lens: the node's row (it is in the fleet sidebar too)
+    await expect(page.getByTestId(`agent-row-${nid}`)).toBeVisible();
     await expect(page.getByText("FEDERATION · your keyset")).not.toBeVisible();
   });
 });

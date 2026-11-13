@@ -655,6 +655,19 @@ class Store:
         # inside the thread, rather than here on the event loop.
         return [r.line for r in rows]
 
+    async def recent_events(
+        self, limit: int, exclude_kinds: tuple[str, ...] = (),
+    ) -> list[dict[str, Any]]:
+        """The newest events across every run of this tenant, newest first —
+        arrival order (``events.id``), the same order ``run_events`` keeps."""
+        q = select(events.c.run_id, events.c.node_id, events.c.line).where(
+            events.c.org_id == current_org_id())
+        if exclude_kinds:
+            q = q.where(events.c.kind.notin_(exclude_kinds))
+        async with self.engine.connect() as conn:
+            rows = (await conn.execute(q.order_by(events.c.id.desc()).limit(limit))).all()
+        return [{"run_id": r.run_id, "node_id": r.node_id, "line": r.line} for r in rows]
+
     async def has_recorded_denial(self, run_id: str) -> bool:
         """Did this run record a DENY at a boundary?
 

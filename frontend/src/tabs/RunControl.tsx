@@ -430,7 +430,7 @@ function Posture({ paused, stopped, cap, applying }: {
   );
 }
 
-function describeAck(kind: string, p: Record<string, unknown>): string {
+export function describeAck(kind: string, p: Record<string, unknown>): string {
   switch (kind) {
     case "context_excision": return `cut applied: ${((p.refs as string[]) ?? []).join(", ")}`;
     case "excision_refused": return `cut refused (${String(p.reason ?? "")}): ${((p.refs as string[]) ?? []).join(", ")}`;

@@ -701,6 +701,52 @@ async def _close_heals(ctx: Any, node_id: str, verdict: str) -> list[dict]:  # n
 
 
 _ACTIVE_WINDOW_S = 30.0
+_WORK_KINDS = ("tool_call", "tool_result", "claim")
+
+
+def _run_summary(run: dict, lines: list[dict], probes: dict, now_dt: Any) -> dict | None:  # noqa: ANN401
+    """One agent run, summarised from its stored lines — or None when the run
+    recorded no agent work (the link's keepalive: heartbeats and acks)."""
+    from datetime import datetime
+
+    if not any(ln.get("kind") in _WORK_KINDS for ln in lines):
+        return None
+    calls = [ln for ln in lines if ln.get("kind") == "tool_call"]
+    results = [ln for ln in lines if ln.get("kind") == "tool_result"]
+    tainted = [
+        str((ln.get("payload") or {}).get("value_ref") or ln.get("causal_root") or "")
+        for ln in results if ((ln.get("payload") or {}).get("root") or {}).get("sources")
+    ]
+    stamps = sorted(str(ln.get("ts") or "") for ln in lines if ln.get("ts"))
+    last = stamps[-1] if stamps else run.get("created_ts")
+    try:
+        age = (now_dt - datetime.fromisoformat(str(last))).total_seconds()
+    except (TypeError, ValueError):
+        age = None
+    active = (age is not None and age < _ACTIVE_WINDOW_S
+              and not any(ln.get("kind") == "claim" for ln in lines))
+    answered = {str((ln.get("payload") or {}).get("value_ref") or "") for ln in results}
+    waiting = [ln for ln in calls if ln.get("verdict") != "deny"
+               and str((ln.get("payload") or {}).get("tool_call_id") or "") not in answered]
+    probe = probes.get(run["run_id"])
+    return {
+        "run_id": run["run_id"],
+        "scenario": run.get("scenario"),
+        "started_ts": stamps[0] if stamps else run.get("created_ts"),
+        "last_ts": last,
+        "active": active,
+        # what an active run is doing right now: the call still waiting on its result
+        "current_tool": (str((waiting[-1].get("payload") or {}).get("tool", "")) or None)
+                        if active and waiting else None,
+        "tool_calls": len(calls),
+        "tools": sorted({str((ln.get("payload") or {}).get("tool", "")) for ln in calls} - {""}),
+        "tainted_refs": [r for r in tainted if r],
+        "denied": sum(1 for ln in lines if ln.get("verdict") == "deny"),
+        "evidence": [e.get("deviation") for e in (run.get("evidence") or []) if e.get("deviation")],
+        "probe": ({"verdict": probe["overall_verdict"], "escape_count": probe["escape_count"]}
+                  if probe else None),
+        "intervened": bool(run.get("intervened")),
+    }
 
 
 @router.get("/{node_id}/runs")
@@ -714,8 +760,8 @@ async def node_runs(node_id: str, request: Request, limit: int = 20) -> dict:
     value refs are what an excision names), denials, the evidence the plane
     derived, the health check run against it (a probe report's session_id is
     the run it probed), and whether it is still active — events within the
-    last 30 s, the honest reading of "running" for a node that ships as it
-    goes. Read-only; commands still go through the node's one door.
+    last 30 s and no answer yet. Read-only; commands still go through the
+    node's one door.
     """
     from datetime import UTC, datetime
 
@@ -726,48 +772,80 @@ async def node_runs(node_id: str, request: Request, limit: int = 20) -> dict:
         for p in await ctx.store.probe_report_history(node_id, limit=200)
         if p.get("session_id")
     }
-    now = datetime.now(UTC)
+    now_dt = datetime.now(UTC)
     out: list[dict] = []
     for run in await ctx.store.list_runs():
         if run["node_id"] != node_id:
             continue
-        lines = await ctx.store.run_events(run["run_id"])
-        work = [ln for ln in lines if ln.get("kind") in ("tool_call", "tool_result", "claim")]
-        if not work:
+        summary = _run_summary(run, await ctx.store.run_events(run["run_id"]), probes, now_dt)
+        if summary is None:
             continue
-        calls = [ln for ln in lines if ln.get("kind") == "tool_call"]
-        tainted = [
-            str((ln.get("payload") or {}).get("value_ref") or ln.get("causal_root") or "")
-            for ln in lines
-            if ln.get("kind") == "tool_result"
-            and ((ln.get("payload") or {}).get("root") or {}).get("sources")
-        ]
-        stamps = sorted(str(ln.get("ts") or "") for ln in lines if ln.get("ts"))
-        last = stamps[-1] if stamps else run.get("created_ts")
-        try:
-            age = (now - datetime.fromisoformat(str(last))).total_seconds()
-        except (TypeError, ValueError):
-            age = None
-        probe = probes.get(run["run_id"])
-        out.append({
-            "run_id": run["run_id"],
-            "scenario": run.get("scenario"),
-            "started_ts": stamps[0] if stamps else run.get("created_ts"),
-            "last_ts": last,
-            "active": (age is not None and age < _ACTIVE_WINDOW_S
-                       and not any(ln.get("kind") == "claim" for ln in lines)),
-            "tool_calls": len(calls),
-            "tools": sorted({str((ln.get("payload") or {}).get("tool", "")) for ln in calls} - {""}),
-            "tainted_refs": [r for r in tainted if r],
-            "denied": sum(1 for ln in lines if ln.get("verdict") == "deny"),
-            "evidence": [e.get("deviation") for e in (run.get("evidence") or []) if e.get("deviation")],
-            "probe": ({"verdict": probe["overall_verdict"], "escape_count": probe["escape_count"]}
-                      if probe else None),
-            "intervened": bool(run.get("intervened")),
-        })
+        out.append(summary)
         if len(out) >= limit:
             break
     return {"runs": out}
+
+
+@router.get("/fleet")
+async def fleet(request: Request) -> dict:
+    """The fleet at a glance, for the last 24 hours: per node, whether a run
+    is active and what it is doing now, how many runs and tool calls, how many
+    results arrived tainted, denials and caught lies — and the totals. Built
+    from the same run summaries as ``/{node}/runs``; the posture (paused,
+    stopped, drift, reputation) is ``/nodes``, which the console reads beside it."""
+    from datetime import UTC, datetime, timedelta
+
+    ctx = _ctx(request)
+    now_dt = datetime.now(UTC)
+    since = (now_dt - timedelta(hours=24)).isoformat()
+    nodes = await ctx.store.list_nodes()
+    probes: dict[str, dict] = {}
+    for nid in nodes:
+        for p in await ctx.store.probe_report_history(nid, limit=200):
+            if p.get("session_id"):
+                probes[p["session_id"]] = p
+    stats = {nid: {"node_id": nid, "active_run": None, "current_tool": None, "last_ts": None,
+                   "runs": 0, "calls": 0, "tainted": 0, "denied": 0, "lies": 0}
+             for nid in nodes}
+    for run in await ctx.store.list_runs():   # newest first
+        if str(run.get("created_ts") or "") < since:
+            break
+        st = stats.get(run["node_id"])
+        if st is None:
+            continue
+        summary = _run_summary(run, await ctx.store.run_events(run["run_id"]), probes, now_dt)
+        if summary is None:
+            continue
+        st["runs"] += 1
+        st["calls"] += summary["tool_calls"]
+        st["tainted"] += len(summary["tainted_refs"])
+        st["denied"] += summary["denied"]
+        st["lies"] += len(summary["evidence"])
+        if summary["active"] and st["active_run"] is None:
+            st["active_run"] = summary["run_id"]
+            st["current_tool"] = summary["current_tool"]
+        if st["last_ts"] is None or str(summary["last_ts"]) > str(st["last_ts"]):
+            st["last_ts"] = summary["last_ts"]
+    rows = list(stats.values())
+    totals = {k: sum(r[k] for r in rows) for k in ("runs", "calls", "tainted", "denied", "lies")}
+    totals["active"] = sum(1 for r in rows if r["active_run"])
+    return {"nodes": rows, "totals": totals, "since": since}
+
+
+@router.get("/activity")
+async def activity(request: Request, limit: int = 60) -> dict:
+    """The newest events across the fleet, for the console's live feed: agent
+    work (calls, results, answers, faults) and the nodes' acks of operator
+    commands. Heartbeats are left out — they are liveness, not activity."""
+    ctx = _ctx(request)
+    limit = max(1, min(int(limit), 200))
+    rows = await ctx.store.recent_events(limit, exclude_kinds=("heartbeat",))
+    return {"events": [
+        {"run_id": r["run_id"], "node_id": r["node_id"], "kind": r["line"].get("kind"),
+         "ts": r["line"].get("ts"), "verdict": r["line"].get("verdict"),
+         "payload": r["line"].get("payload") or {}}
+        for r in rows
+    ]}
 
 
 _ACK_KINDS = frozenset({

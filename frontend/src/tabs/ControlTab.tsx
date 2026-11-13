@@ -3,7 +3,8 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Circle, FlaskConical, Gauge, GitBranch, Pause, Play, Square, Syringe } from "lucide-react";
-import { api, NodeInfo, NodeRun } from "../api";
+import { ActivityEvent, api, FleetRow, NodeInfo, NodeRun } from "../api";
+import { describeAck } from "./RunControl";
 import Coverage from "../components/Coverage";
 import TopologyGraph, { PeerCard } from "../components/TopologyGraph";
 import { navigate } from "../router";
@@ -122,9 +123,6 @@ function ReputationCard({ nodeId }: { nodeId: string }) {
   );
 }
 
-function isHot(n: NodeInfo): boolean {
-  return attention(n).length > 0;
-}
 
 /** Why a node needs a look — its degradation level, what its sentinel flagged
  * across sessions, and whether its last health check drifted. The list used to
@@ -325,6 +323,9 @@ function ControlBody({ focusNode, testBench }: { focusNode?: string; testBench: 
   });
   const [more, setMore] = useState(false);
   const [cmdError, setCmdError] = useState<string | null>(null);
+  const [filter, setFilter] = useState<Status | "all">("all");
+  const fleetQ = useQuery({ queryKey: ["fleet"], queryFn: api.fleet, refetchInterval: REFETCH_MS });
+  const fleetRows = new Map((fleetQ.data?.nodes ?? []).map((r) => [r.node_id, r]));
   const [budgetInput, setBudgetInput] = useState("");
 
   useEffect(() => {
@@ -419,7 +420,6 @@ function ControlBody({ focusNode, testBench }: { focusNode?: string; testBench: 
   }
 
   const node = list.find((n) => n.node_id === sel) ?? null;
-  const hotCount = list.filter(isHot).length;
 
   const desired = node?.desired ?? null;
   const reported = node?.reported ?? null;
@@ -438,8 +438,22 @@ function ControlBody({ focusNode, testBench }: { focusNode?: string; testBench: 
     });
   };
 
+  const statuses = new Map(list.map((n) => [n.node_id, statusesOf(n, fleetRows.get(n.node_id))]));
+  // the heading counts what the "needs you" chip counts — one definition
+  const needYou = list.filter((n) => statuses.get(n.node_id)!.includes("needs_you")).length;
+  const shown = list.filter((n) => filter === "all" || statuses.get(n.node_id)!.includes(filter));
+  const pick = (id: string) => {
+    setSel(sel === id ? null : id);
+    setMore(false);
+    setCmdError(null);
+  };
+
   return (
-    <div style={{ maxWidth: 640, margin: "0 auto" }}>
+    <div className="fleet-grid">
+    <aside className="fleet-side fleet-sticky" data-testid="fleet-sidebar">
+      <FleetSidebar list={list} statuses={statuses} rows={fleetRows} sel={sel} onPick={pick} />
+    </aside>
+    <div style={{ minWidth: 0 }}>
       <Coach id="control" title="Control — operate governed agents live">
         Each row is a live governed agent (a node). Click one to open its panel:{" "}
         <span style={{ color: C.text }}>desired</span> is what you've commanded,{" "}
@@ -448,10 +462,12 @@ function ControlBody({ focusNode, testBench }: { focusNode?: string; testBench: 
         interventions travel over the plane and the node obeys on its next turn.
       </Coach>
       <h1 style={{ fontSize: 22, fontWeight: 650, margin: "0 0 4px" }}>
-        {hotCount === 0 ? <>All agents healthy.</>
-          : hotCount === 1 ? <>One agent needs attention.</>
-          : <>{hotCount} agents need attention.</>}
+        {needYou === 0 ? <>All agents healthy.</>
+          : needYou === 1 ? <>One agent needs attention.</>
+          : <>{needYou} agents need attention.</>}
       </h1>
+      <StatusChips list={list} statuses={statuses} filter={filter} setFilter={setFilter} />
+      {fleetQ.data && <FleetTotals totals={fleetQ.data.totals} />}
       <div className="flex items-center gap-4" style={{ fontFamily: MONO, fontSize: 11, color: C.mut, marginBottom: 20 }}>
         <span>{list.length} node{list.length === 1 ? "" : "s"} · live</span>
         <span style={{ marginLeft: "auto", display: "flex", gap: 12 }}>
@@ -487,39 +503,16 @@ function ControlBody({ focusNode, testBench }: { focusNode?: string; testBench: 
           the live topology instead of the (absent) spawn button. */}
       <div data-tour="spawn" style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 8,
                                       display: lens === "graph" ? "none" : "block" }}>
-        {list.map((n, i) => {
-          const hot = isHot(n);
-          return (
-            <div
-              key={n.node_id}
-              onClick={() => {
-                setSel(sel === n.node_id ? null : n.node_id);
-                setMore(false);
-                setCmdError(null);
-              }}
-              className="flex items-center gap-2.5 px-4 py-3"
-              style={{
-                cursor: "pointer",
-                borderTop: i === 0 ? "none" : `1px solid ${C.line}`,
-                background: sel === n.node_id ? "rgba(127,168,204,0.05)" : "transparent",
-              }}
-            >
-              <Circle size={8} fill={hot ? C.amber : C.green} color={hot ? C.amber : C.green} />
-              <span style={{ fontFamily: MONO, fontSize: 13, color: C.text, flex: 1 }}>
-                {n.node_id}
-              </span>
-              {hot && attention(n).map((a) => (
-                <button key={a.label}
-                  onClick={(e) => { if (a.route) { e.stopPropagation(); navigate(a.route); } }}
-                  style={{ fontFamily: MONO, fontSize: 10, color: a.color, background: "none",
-                           border: `1px solid ${a.color}`, borderRadius: 20, padding: "1px 8px",
-                           cursor: a.route ? "pointer" : "default" }}>
-                  {a.label}{a.route ? " →" : ""}
-                </button>
-              ))}
-            </div>
-          );
-        })}
+        {shown.length === 0 && (
+          <div className="px-4 py-3" style={{ fontFamily: MONO, fontSize: 11, color: C.dim }}>
+            no agents {filter === "all" ? "" : `in “${STATUS_LABEL[filter as Status]}”`}
+          </div>
+        )}
+        {shown.map((n, i) => (
+          <FleetRowView key={n.node_id} n={n} row={fleetRows.get(n.node_id)}
+            st={statuses.get(n.node_id)!} first={i === 0} selected={sel === n.node_id}
+            onPick={() => pick(n.node_id)} />
+        ))}
       </div>
 
       {node && (
@@ -720,6 +713,10 @@ function ControlBody({ focusNode, testBench }: { focusNode?: string; testBench: 
         </div>
       )}
     </div>
+    <aside className="fleet-sticky" data-testid="fleet-activity">
+      <ActivityFeed />
+    </aside>
+    </div>
   );
 }
 
@@ -911,6 +908,237 @@ function RunRow({ run, first, paused, stopped, disabled, send }: {
         </span>
       )}
       <span style={{ color: C.steel }}>open →</span>
+    </div>
+  );
+}
+
+// ── the fleet console: status, totals, sidebar, activity ──────────────────────
+//
+// One screen for the whole fleet: which agents are running and on what, which
+// need you and why, what the last day cost in calls and what it caught — and,
+// beside it, everything happening across the fleet as it happens.
+
+type Status = "needs_you" | "running" | "paused" | "stopped" | "idle";
+
+const STATUS_LABEL: Record<Status, string> = {
+  needs_you: "needs you", running: "running", paused: "paused", stopped: "stopped", idle: "idle",
+};
+
+const STATUS_COLOR: Record<Status, string> = {
+  needs_you: C.amber, running: C.green, paused: C.amber, stopped: C.red, idle: C.dim,
+};
+
+function statusesOf(n: NodeInfo, row?: FleetRow): Status[] {
+  const out: Status[] = [];
+  const stopped = n.desired?.state.stopped === true;
+  const paused = n.desired?.state.paused === true;
+  const posture = attention(n).filter((a) => a.label !== "paused" && a.label !== "stopped");
+  if (posture.length > 0 || (row?.lies ?? 0) > 0) out.push("needs_you");
+  if (stopped) out.push("stopped");
+  else if (paused) out.push("paused");
+  if (row?.active_run && !stopped) out.push("running");
+  if (!row?.active_run && !stopped && !paused) out.push("idle");
+  return out;
+}
+
+/** The dot an agent shows: its most urgent state. */
+function primary(st: Status[]): Status {
+  for (const s of ["stopped", "needs_you", "paused", "running", "idle"] as Status[]) {
+    if (st.includes(s)) return s;
+  }
+  return "idle";
+}
+
+function ago(iso?: string | null): string {
+  if (!iso) return "—";
+  const s = Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 1000));
+  if (isNaN(s)) return "—";
+  if (s < 60) return `${s}s ago`;
+  if (s < 3600) return `${Math.floor(s / 60)}m ago`;
+  if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
+  return `${Math.floor(s / 86400)}d ago`;
+}
+
+function StatusChips({ list, statuses, filter, setFilter }: {
+  list: NodeInfo[]; statuses: Map<string, Status[]>;
+  filter: Status | "all"; setFilter: (f: Status | "all") => void;
+}) {
+  const count = (s: Status) => list.filter((n) => statuses.get(n.node_id)!.includes(s)).length;
+  const chip = (id: Status | "all", label: string, n: number, color: string) => (
+    <button key={id} onClick={() => setFilter(id)} aria-pressed={filter === id}
+      style={{ fontFamily: MONO, fontSize: 11.5, background: filter === id ? "rgba(127,168,204,0.10)" : "none",
+               border: `1px solid ${filter === id ? C.steel : C.line}`, borderRadius: 6, padding: "4px 10px",
+               color: n ? C.text : C.dim, cursor: "pointer", display: "flex", alignItems: "center", gap: 6 }}>
+      {id !== "all" && <Circle size={7} fill={color} color={color} />}
+      {label} <span style={{ color: C.mut }}>{n}</span>
+    </button>
+  );
+  return (
+    <div className="flex gap-2 flex-wrap mb-2" data-testid="status-chips">
+      {chip("all", "all", list.length, C.text)}
+      {(["needs_you", "running", "paused", "stopped", "idle"] as Status[]).map((s) =>
+        chip(s, STATUS_LABEL[s], count(s), STATUS_COLOR[s]))}
+    </div>
+  );
+}
+
+function FleetTotals({ totals }: { totals: { runs: number; calls: number; tainted: number; denied: number; lies: number; active: number } }) {
+  const part = (v: number, label: string, color?: string) => (
+    <span style={{ color: v && color ? color : C.mut }}><span style={{ color: v ? (color ?? C.text) : C.mut }}>{v}</span> {label}</span>
+  );
+  return (
+    <div className="flex gap-3 flex-wrap mb-3" data-testid="fleet-totals"
+      style={{ fontFamily: MONO, fontSize: 11, color: C.dim }}>
+      <span>last 24h</span>
+      {part(totals.active, "running now", C.green)}
+      {part(totals.runs, "runs")}
+      {part(totals.calls, "tool calls")}
+      {part(totals.tainted, "untrusted results", C.amber)}
+      {part(totals.denied, "denied", C.red)}
+      {part(totals.lies, "caught lies", C.red)}
+    </div>
+  );
+}
+
+function FleetRowView({ n, row, st, first, selected, onPick }: {
+  n: NodeInfo; row?: FleetRow; st: Status[]; first: boolean; selected: boolean; onPick: () => void;
+}) {
+  const p = primary(st);
+  const color = STATUS_COLOR[p];
+  return (
+    <div onClick={onPick} className="px-4 py-3" data-testid={`agent-row-${n.node_id}`}
+      style={{ cursor: "pointer", borderTop: first ? "none" : `1px solid ${C.line}`,
+               background: selected ? "rgba(127,168,204,0.05)" : "transparent" }}>
+      <div className="flex items-center gap-2.5 flex-wrap">
+        <Circle size={8} fill={color} color={color} />
+        <span style={{ fontFamily: MONO, fontSize: 13, color: C.text, flex: 1, minWidth: 120 }}>{n.node_id}</span>
+        {attention(n).map((a) => (
+          <button key={a.label}
+            onClick={(e) => { if (a.route) { e.stopPropagation(); navigate(a.route); } }}
+            style={{ fontFamily: MONO, fontSize: 10, color: a.color, background: "none",
+                     border: `1px solid ${a.color}`, borderRadius: 20, padding: "1px 8px",
+                     cursor: a.route ? "pointer" : "default" }}>
+            {a.label}{a.route ? " →" : ""}
+          </button>
+        ))}
+        {(row?.lies ?? 0) > 0 && (
+          <span style={{ fontFamily: MONO, fontSize: 10, color: C.red, border: `1px solid ${C.red}`,
+                         borderRadius: 20, padding: "1px 8px" }}>caught lie</span>
+        )}
+      </div>
+      <div className="flex gap-3 flex-wrap" style={{ fontFamily: MONO, fontSize: 10.5, color: C.mut, marginTop: 4, marginLeft: 18 }}>
+        {row?.active_run ? (
+          <span style={{ color: C.green, cursor: "pointer" }}
+            onClick={(e) => { e.stopPropagation(); navigate(`govern/run/${encodeURIComponent(row.active_run!)}`); }}>
+            ● running{row.current_tool ? ` · ${row.current_tool}` : ""} →
+          </span>
+        ) : (
+          <span>{STATUS_LABEL[p]} · last active {ago(row?.last_ts)}</span>
+        )}
+        {row && <span>{row.runs} run{row.runs === 1 ? "" : "s"} · {row.calls} calls</span>}
+        {row && row.tainted > 0 && <span style={{ color: C.amber }}>{row.tainted} untrusted</span>}
+        {row && row.denied > 0 && <span style={{ color: C.red }}>{row.denied} denied</span>}
+      </div>
+    </div>
+  );
+}
+
+function FleetSidebar({ list, statuses, rows, sel, onPick }: {
+  list: NodeInfo[]; statuses: Map<string, Status[]>; rows: Map<string, FleetRow>;
+  sel: string | null; onPick: (id: string) => void;
+}) {
+  // the agents that need a look first, then the running, then the rest
+  const order = (n: NodeInfo) => ["stopped", "needs_you", "paused", "running", "idle"]
+    .indexOf(primary(statuses.get(n.node_id)!));
+  const sorted = [...list].sort((a, b) => order(a) - order(b) || a.node_id.localeCompare(b.node_id));
+  return (
+    <div style={{ fontFamily: MONO, fontSize: 12 }}>
+      <div style={{ color: C.mut, fontSize: 11, marginBottom: 6 }}>agents · {list.length}</div>
+      {sorted.map((n) => {
+        const p = primary(statuses.get(n.node_id)!);
+        const row = rows.get(n.node_id);
+        return (
+          <div key={n.node_id} onClick={() => onPick(n.node_id)}
+            className="flex items-center gap-2"
+            style={{ padding: "5px 8px", borderRadius: 5, cursor: "pointer",
+                     background: sel === n.node_id ? "rgba(127,168,204,0.10)" : "transparent" }}>
+            <Circle size={7} fill={STATUS_COLOR[p]} color={STATUS_COLOR[p]} />
+            <span style={{ color: C.text, flex: 1, minWidth: 0, overflow: "hidden",
+                           textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={n.node_id}>{n.node_id}</span>
+            {row?.active_run
+              ? <span style={{ color: C.green, fontSize: 10 }}>{row.current_tool ?? "run"}</span>
+              : <span style={{ color: C.dim, fontSize: 10 }}>{row?.runs ?? 0}</span>}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function feedLine(e: ActivityEvent): { text: string; color: string } {
+  const p = e.payload;
+  const tool = typeof p.tool === "string" ? p.tool : "";
+  switch (e.kind) {
+    case "tool_call":
+      return e.verdict === "deny" ? { text: `→ ${tool} denied`, color: C.red } : { text: `→ ${tool}`, color: C.text };
+    case "tool_result": {
+      const src = ((p.root as { sources?: string[] } | undefined)?.sources ?? []).join(", ");
+      return src ? { text: `← ${tool} · untrusted (${src})`, color: C.amber } : { text: `← ${tool}`, color: C.text };
+    }
+    case "claim": return { text: `answered: ${String(p.text ?? "").slice(0, 60)}`, color: C.mut };
+    case "fault_injected": return { text: `⚡ ${tool} broken on purpose`, color: C.steel };
+    case "denial": return { text: `denied ${tool}`, color: C.red };
+    case "fact": return { text: `fact ${String(p.fact_type ?? "")}`, color: C.amber };
+    default: {
+      const t = describeAck(e.kind, p);
+      return { text: t, color: e.kind.endsWith("refused") ? C.red : C.steel };
+    }
+  }
+}
+
+function ActivityFeed() {
+  const feed = useQuery({ queryKey: ["activity"], queryFn: api.activity, refetchInterval: 2000 });
+  const [find, setFind] = useState("");
+  const events = (feed.data?.events ?? []).filter((e) => {
+    if (!find) return true;
+    const t = `${e.node_id} ${feedLine(e).text}`.toLowerCase();
+    return t.includes(find.toLowerCase());
+  });
+  const work = new Set(["tool_call", "tool_result", "claim", "fault_injected", "denial"]);
+  return (
+    <div style={{ fontFamily: MONO, fontSize: 11 }}>
+      <div className="flex items-center gap-2" style={{ marginBottom: 6 }}>
+        <span style={{ color: C.mut }}>activity</span>
+        <span style={{ flex: 1 }} />
+        <input value={find} onChange={(e) => setFind(e.target.value)} placeholder="find" aria-label="filter activity"
+          style={{ width: 120, background: C.bg, border: `1px solid ${C.line}`, borderRadius: 4,
+                   color: C.text, fontFamily: MONO, fontSize: 11, padding: "3px 7px", outline: "none" }} />
+      </div>
+      <div style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 8 }}>
+        {events.length === 0 && (
+          <div className="p-3" style={{ color: C.dim }}>
+            {feed.isLoading ? "loading…" : "nothing yet — agent steps and operator acks land here as they happen."}
+          </div>
+        )}
+        {events.map((e, i) => {
+          const { text, color } = feedLine(e);
+          // agent work opens its run; an ack opens the agent it came from
+          const go = () => work.has(e.kind)
+            ? navigate(`govern/run/${encodeURIComponent(e.run_id)}`)
+            : navigate(`control/${encodeURIComponent(e.node_id)}`);
+          return (
+            <div key={i} onClick={go} className="px-3 py-1.5"
+              style={{ borderTop: i === 0 ? "none" : `1px solid ${C.line}`, cursor: "pointer" }}>
+              <div className="flex gap-2">
+                <span style={{ color: C.dim }}>{e.ts ? new Date(e.ts).toTimeString().slice(0, 8) : ""}</span>
+                <span style={{ color: C.steel, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis",
+                               whiteSpace: "nowrap" }}>{e.node_id}</span>
+              </div>
+              <div style={{ color, overflowWrap: "anywhere" }}>{text}</div>
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }

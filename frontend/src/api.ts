@@ -162,6 +162,33 @@ export interface ScrubberPayload {
   steps: ScrubberStep[];
 }
 
+export interface FleetRow {
+  node_id: string;
+  active_run: string | null;
+  current_tool: string | null;
+  last_ts: string | null;
+  runs: number;
+  calls: number;
+  tainted: number;
+  denied: number;
+  lies: number;
+}
+
+export interface FleetSummary {
+  nodes: FleetRow[];
+  totals: { runs: number; calls: number; tainted: number; denied: number; lies: number; active: number };
+  since: string;
+}
+
+export interface ActivityEvent {
+  run_id: string;
+  node_id: string;
+  kind: string;
+  ts: string | null;
+  verdict: string | null;
+  payload: Record<string, unknown>;
+}
+
 export interface NodeRun {
   run_id: string;
   scenario: string | null;
@@ -1173,6 +1200,10 @@ export const api = {
     af(`/v1/plane/${encodeURIComponent(nodeId)}/probe-report`).then((r) =>
       j<{ latest: ProbeHealth | null; history: ProbeCheck[];
           drift_case: DriftCase | null }>(r)),
+
+  // The fleet over the last 24 h, and the newest events across it.
+  fleet: () => af("/v1/plane/fleet").then((r) => j<FleetSummary>(r)),
+  activity: () => af("/v1/plane/activity").then((r) => j<{ events: ActivityEvent[] }>(r)),
 
   // What the node confirmed about operator commands (its own acks).
   nodeJournal: (nodeId: string) =>

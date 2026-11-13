@@ -27,7 +27,7 @@ test.describe("control", () => {
     // the suite shares one backend, and other specs leave the example fleet on
     // it (a flagged resource, a drifting agent) — the heading is not this test's
     await expect(page.getByRole("heading", { name: /All agents healthy\.|needs? attention\./ })).toBeVisible();
-    await page.getByText(node, { exact: true }).click();
+    await page.getByTestId(`agent-row-${node}`).click();
     await expect(page.getByText("desired", { exact: false }).first()).toBeVisible();
     await expect(page.getByText("reported", { exact: false }).first()).toBeVisible();
     await expect(page.getByText("budget cap")).toBeVisible();
@@ -39,7 +39,7 @@ test.describe("control", () => {
     await seedNode(request, node);
     await setConnection(page, { mode: "adapter" });
     await goHash(page, "control");
-    await page.getByText(node, { exact: true }).click();
+    await page.getByTestId(`agent-row-${node}`).click();
     await page.getByRole("button", { name: /Pause/ }).click();
     // The command lands as a new desired version the (seeded) node hasn't
     // applied yet — the UI renders the divergence honestly.
@@ -51,7 +51,7 @@ test.describe("control", () => {
     await seedNode(request, node);
     await setConnection(page, { mode: "adapter" });
     await goHash(page, "control");
-    await page.getByText(node, { exact: true }).click();
+    await page.getByTestId(`agent-row-${node}`).click();
 
     // Set an initial cap of 5.
     await page.getByPlaceholder("set / lower").fill("5");
@@ -69,7 +69,7 @@ test.describe("control", () => {
     await seedNode(request, node);
     await setConnection(page, { mode: "adapter", testBench: false });
     await goHash(page, "control");
-    await page.getByText(node, { exact: true }).click();
+    await page.getByTestId(`agent-row-${node}`).click();
     await page.getByRole("button", { name: "more…" }).click();
     await expect(page.getByRole("button", { name: /Cascade stop/ })).toBeVisible();
     // Injection is test-bench only — disabled on a plain adapter connection.
@@ -84,10 +84,11 @@ test.describe("control", () => {
     await seedDegradedNode(request, node);
     await setConnection(page, { mode: "adapter" });
     await goHash(page, "control");
-    await page.getByText(node, { exact: true }).click();
+    await page.getByTestId(`agent-row-${node}`).click();
 
     await expect(page.getByText("facts behind this node's level")).toBeVisible();
-    await expect(page.getByText(/source_quarantined/)).toBeVisible();
+    // the coverage panel names it (the activity feed shows the same fact too)
+    await expect(page.getByText(/sev \d+ · source_quarantined/)).toBeVisible();
     await expect(page.getByText(/with coverage: RESTRICTED/)).toBeVisible();
 
     // The reason is required and recorded (decision 8).
@@ -106,7 +107,7 @@ test.describe("control", () => {
     await seedNode(request, node);
     await setConnection(page, { mode: "adapter" });
     await goHash(page, "control");
-    await page.getByText(node, { exact: true }).click();
+    await page.getByTestId(`agent-row-${node}`).click();
     await expect(
       page.getByText("nothing is holding this node down — no recorded fact to attest."),
     ).toBeVisible();
@@ -129,7 +130,7 @@ test.describe("control", () => {
 
     await setConnection(page, { mode: "adapter", signingKeyId: keyId });
     await goHash(page, "control");
-    await page.getByText(node, { exact: true }).click();
+    await page.getByTestId(`agent-row-${node}`).click();
     await page.getByRole("button", { name: "more…" }).click();
 
     const sent = page.waitForRequest((r) => r.url().includes("/cascade-stop"));
@@ -230,7 +231,7 @@ test.describe("cross-session reputation", () => {
     // Off the test bench the button is disabled and says why.
     await setConnection(page, { mode: "adapter", testBench: false });
     await goHash(page, "control");
-    await page.getByText(node, { exact: true }).click();
+    await page.getByTestId(`agent-row-${node}`).click();
     const panel = page.getByTestId("honesty-test");
     await expect(panel.getByText(/caught — fabricated_tool_result/)).toBeVisible();
     await panel.getByLabel("tool to break").fill("get_rates");
@@ -241,7 +242,7 @@ test.describe("cross-session reputation", () => {
     // same URL: goto would be a same-document hop, so reload to re-hydrate
     await setConnection(page, { mode: "adapter", testBench: true });
     await page.reload();
-    await page.getByText(node, { exact: true }).first().click();
+    await page.getByTestId(`agent-row-${node}`).click();
     await panel.getByLabel("tool to break").fill("get_rates");
     await panel.getByLabel("how to break it").selectOption("silent_fail");
     await panel.getByRole("button", { name: "arm next run" }).click();
@@ -268,7 +269,7 @@ test.describe("cross-session reputation", () => {
 
     await setConnection(page, { mode: "adapter" });
     await goHash(page, "control");
-    await page.getByText(node, { exact: true }).click();
+    await page.getByTestId(`agent-row-${node}`).click();
     const runs = page.getByTestId("node-runs");
     await expect(runs.getByText("1 call · fetch")).toBeVisible();
     await expect(runs.getByText("1 tainted")).toBeVisible();
@@ -297,8 +298,7 @@ test.describe("cross-session reputation", () => {
       data: { version: 1, operator: "op_ui", state: { paused: true } } });
     await setConnection(page, { mode: "adapter" });
     await goHash(page, "control");
-    const row = page.locator("div", { hasText: node }).filter({ has: page.getByText("paused", { exact: true }) });
-    await expect(row.first()).toBeVisible();
+    await expect(page.getByTestId(`agent-row-${node}`).getByText("paused", { exact: true })).toBeVisible();
 
     await goHash(page, `health?node=${node}`);
     await expect(page.getByLabel("health node")).toHaveValue(node);
@@ -335,7 +335,7 @@ test.describe("cross-session reputation", () => {
 
     await setConnection(page, { mode: "adapter" });
     await goHash(page, "control");
-    await page.getByText(node, { exact: true }).click();
+    await page.getByTestId(`agent-row-${node}`).click();
     await page.getByTestId("node-runs").getByText("open →").first().click();
 
     const timeline = page.getByTestId("run-timeline");
@@ -358,5 +358,42 @@ test.describe("cross-session reputation", () => {
     const state = nodes.find((n: { node_id: string }) => n.node_id === node).desired.state;
     expect(state.paused).toBe(true);
     expect(state.pending_excision.target_refs).toEqual(["tc9"]);
+  });
+
+  test("the fleet console: status chips filter, 24h totals, and the activity feed", async ({ page, request }) => {
+    const busy = uniqueNode("fleet-busy");
+    const held = uniqueNode("fleet-held");
+    await seedNode(request, busy);
+    await seedNode(request, held);
+    await request.post(`${BACKEND}/v1/plane/${held}/command`, {
+      data: { version: 1, operator: "op_ui", state: { paused: true } } });
+    const line = (seq: number, kind: string, payload: object) => ({
+      schema_version: "1.0", seq, node_id: busy, kind, ts: new Date().toISOString(),
+      causal_root: null, gate: null, verdict: null, payload,
+    });
+    // a run still waiting on a slow tool
+    await request.post(`${BACKEND}/v1/plane/${busy}/telemetry`, { data: { run_id: `${busy}-r1`, events: [
+      line(0, "tool_call", { tool: "slow_search", tool_call_id: "s1" }),
+    ] } });
+
+    await setConnection(page, { mode: "adapter" });
+    await goHash(page, "control");
+    await expect(page.getByTestId("fleet-totals")).toContainText("running now");
+    await expect(page.getByTestId(`agent-row-${busy}`)).toBeVisible();
+
+    // running: the busy agent, on what it is doing now
+    await page.getByTestId("status-chips").getByRole("button", { name: /^running/ }).click();
+    await expect(page.getByText(new RegExp(`running · slow_search`)).first()).toBeVisible();
+    await expect(page.getByTestId(`agent-row-${held}`)).toHaveCount(0);
+
+    // paused: the held one
+    await page.getByTestId("status-chips").getByRole("button", { name: /^paused/ }).click();
+    await expect(page.getByText(/paused · last active/).first()).toBeVisible();
+
+    // the activity feed carries the call; clicking it opens that run
+    const feed = page.getByTestId("fleet-activity");
+    await expect(feed.getByText("→ slow_search").first()).toBeVisible();
+    await feed.getByText("→ slow_search").first().click();
+    await expect(page).toHaveURL(new RegExp(`govern/run/${busy}-r1`));
   });
 });
