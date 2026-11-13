@@ -737,10 +737,15 @@ class Store:
         for row in rows:
             doc = json.loads(row.doc)
             nodes = doc.get("nodes") or {}
+            members = [str(r["node_id"]) for n in nodes.values()
+                       for r in (n.get("runs") or []) if r.get("node_id")]
             out.append({"tree_run": row.tree_run, "status": row.status,
                         "updated_ts": row.updated_ts, "task": doc.get("task", ""),
                         "nodes": len(nodes),
-                        "agents": sum(len(n.get("runs") or []) for n in nodes.values())})
+                        "agents": sum(len(n.get("runs") or []) for n in nodes.values()),
+                        # the plane nodes its runs are — so a fleet list can fold
+                        # a tree into one row instead of listing its agents loose
+                        "members": members})
         return out
 
     async def add_funnel_event(self, ts: str, session_id: str, event: str,

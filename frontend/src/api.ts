@@ -799,6 +799,7 @@ function signingArmed(): boolean {
 export interface TreeSummary {
   tree_run: string; status: "running" | "done" | "failed"; updated_ts: string;
   task: string; nodes: number; agents: number;
+  members?: string[];
 }
 export interface TreeNodeRun {
   index: number; node_id?: string; status: string; reason?: string;

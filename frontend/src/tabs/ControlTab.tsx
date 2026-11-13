@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Circle, FlaskConical, Gauge, GitBranch, Pause, Play, Square, Syringe } from "lucide-react";
-import { ActivityEvent, api, FleetRow, NodeInfo, NodeRun } from "../api";
+import { ActivityEvent, api, FleetRow, NodeInfo, NodeRun, type TreeSummary } from "../api";
 import { describeAck } from "./RunControl";
 import Coverage from "../components/Coverage";
 import TopologyGraph, { PeerCard } from "../components/TopologyGraph";
@@ -350,6 +350,14 @@ function ControlBody({ focusNode, testBench }: { focusNode?: string; testBench: 
   const [cmdError, setCmdError] = useState<string | null>(null);
   const [filter, setFilter] = useState<Status | "all">("all");
   const fleetQ = useQuery({ queryKey: ["fleet"], queryFn: api.fleet, refetchInterval: REFETCH_MS });
+  // a tree's agents fold into one row: which node belongs to which tree run
+  const treesQ = useQuery({ queryKey: ["trees"], queryFn: api.trees, refetchInterval: REFETCH_MS });
+  const treeOf = new Map<string, TreeSummary>();
+  for (const t of treesQ.data?.trees ?? []) {
+    treeOf.set(t.tree_run, t);
+    for (const m of t.members ?? []) treeOf.set(m, t);
+  }
+  const [openTrees, setOpenTrees] = useState<Set<string>>(new Set());
   const fleetRows = new Map((fleetQ.data?.nodes ?? []).map((r) => [r.node_id, r]));
   const [budgetInput, setBudgetInput] = useState("");
 
@@ -532,11 +540,43 @@ function ControlBody({ focusNode, testBench }: { focusNode?: string; testBench: 
             no agents {filter === "all" ? "" : `in “${STATUS_LABEL[filter as Status]}”`}
           </div>
         )}
-        {shown.map((n, i) => (
-          <FleetRowView key={n.node_id} n={n} row={fleetRows.get(n.node_id)}
-            st={statuses.get(n.node_id)!} first={i === 0} selected={sel === n.node_id}
-            onPick={() => pick(n.node_id)} />
-        ))}
+        {(() => {
+          // one row per tree, where its first agent would have been
+          const out: React.ReactNode[] = [];
+          const done = new Set<string>();
+          shown.forEach((n) => {
+            const tree = treeOf.get(n.node_id);
+            if (!tree) {
+              out.push(
+                <FleetRowView key={n.node_id} n={n} row={fleetRows.get(n.node_id)}
+                  st={statuses.get(n.node_id)!} first={out.length === 0} selected={sel === n.node_id}
+                  onPick={() => pick(n.node_id)} />,
+              );
+              return;
+            }
+            if (done.has(tree.tree_run)) return;
+            done.add(tree.tree_run);
+            const members = shown.filter((m) => treeOf.get(m.node_id)?.tree_run === tree.tree_run
+                                                && m.node_id !== tree.tree_run);
+            const open = openTrees.has(tree.tree_run) || members.some((m) => m.node_id === sel);
+            out.push(
+              <TreeGroupRow key={`tree:${tree.tree_run}`} tree={tree} first={out.length === 0}
+                open={open}
+                onToggle={() => setOpenTrees((cur) => {
+                  const next = new Set(cur);
+                  if (next.has(tree.tree_run)) next.delete(tree.tree_run); else next.add(tree.tree_run);
+                  return next;
+                })}>
+                {members.map((m) => (
+                  <FleetRowView key={m.node_id} n={m} row={fleetRows.get(m.node_id)}
+                    st={statuses.get(m.node_id)!} first={false} selected={sel === m.node_id}
+                    onPick={() => pick(m.node_id)} />
+                ))}
+              </TreeGroupRow>,
+            );
+          });
+          return out;
+        })()}
       </div>
 
     </div>
@@ -1035,6 +1075,40 @@ function FleetTotals({ totals }: { totals: { runs: number; calls: number; tainte
       {part(totals.tainted, "untrusted results", C.amber)}
       {part(totals.denied, "denied", C.red)}
       {part(totals.lies, "caught lies", C.red)}
+    </div>
+  );
+}
+
+/** A tree run's agents, folded into one row: the task, how many agents, the
+ * status — and the tree's own screen one click away. Unfold to operate one. */
+function TreeGroupRow({ tree, first, open, onToggle, children }: {
+  tree: TreeSummary; first: boolean; open: boolean; onToggle: () => void;
+  children: React.ReactNode;
+}) {
+  const color = tree.status === "running" ? C.green : tree.status === "failed" ? C.red : C.dim;
+  return (
+    <div data-testid={`tree-row-${tree.tree_run}`}
+      style={{ borderTop: first ? "none" : `1px solid ${C.line}` }}>
+      <div onClick={onToggle} className="px-4 py-3" style={{ cursor: "pointer" }}>
+        <div className="flex items-center gap-2.5 flex-wrap">
+          <GitBranch size={12} color={color} />
+          <span style={{ fontFamily: MONO, fontSize: 13, color: C.text, flex: 1, minWidth: 120 }}>
+            {tree.task || tree.tree_run}
+          </span>
+          <button onClick={(e) => { e.stopPropagation(); navigate(`trees/${encodeURIComponent(tree.tree_run)}`); }}
+            style={{ fontFamily: MONO, fontSize: 10.5, color: C.steel, background: "none",
+                     border: "none", cursor: "pointer" }}>
+            open tree →
+          </button>
+        </div>
+        <div className="flex gap-3 flex-wrap" style={{ fontFamily: MONO, fontSize: 10.5, color: C.mut, marginTop: 4, marginLeft: 22 }}>
+          <span style={{ color }}>{tree.status}</span>
+          <span>agent tree · {tree.agents} agent run{tree.agents === 1 ? "" : "s"}</span>
+          <span style={{ color: C.dim }}>{tree.tree_run}</span>
+          <span style={{ color: C.steel }}>{open ? "▾ hide agents" : "▸ show agents"}</span>
+        </div>
+      </div>
+      {open && <div style={{ marginLeft: 22, borderLeft: `1px solid ${C.line}` }}>{children}</div>}
     </div>
   );
 }

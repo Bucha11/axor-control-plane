@@ -96,3 +96,20 @@ test("home: both is one link away", async ({ page }) => {
   await page.getByTestId("home-both").click();
   await expect(page).toHaveURL(/#\/connect\?for=both/);
 });
+
+test("a tree's agents fold into one row on Agents", async ({ page }) => {
+  await setConnection(page, { mode: "none" });
+  await goHash(page, "home");
+  await page.getByTestId("home-example-coding").click();
+  await expect(page).toHaveURL(/#\/trees\/tree-example-coding/);
+  await goHash(page, "govern");
+  const row = page.getByTestId("tree-row-tree-example-coding");
+  await expect(row).toContainText("Add rate limiting to the auth module");
+  await expect(page.getByTestId("agent-row-codex-example-r0")).toHaveCount(0);
+  // the two loose sessions are not part of the tree
+  await expect(page.getByTestId("agent-row-codex-example-77b0e4d2")).toBeVisible();
+  await row.getByText("▸ show agents").click();
+  await expect(page.getByTestId("agent-row-codex-example-r0")).toBeVisible();
+  await row.getByRole("button", { name: "open tree →" }).click();
+  await expect(page).toHaveURL(/#\/trees\/tree-example-coding/);
+});
