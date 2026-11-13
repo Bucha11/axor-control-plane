@@ -75,8 +75,9 @@ export default function CodingOnboarding({ then }: { then?: () => void }) {
     <div data-testid="coding-onboarding">
       <h1 style={{ fontSize: 22, fontWeight: 650, margin: "0 0 4px" }}>Govern your coding agents</h1>
       <div style={{ fontFamily: MONO, fontSize: 11.5, color: C.mut, marginBottom: 16, lineHeight: 1.6 }}>
-        Every tool call your agents make goes through the kernel first. One repository, one
-        taint ledger: what Claude Code read from the web is tainted when Codex carries it.
+        Every tool call your agents make goes through the kernel first. Axor remembers where
+        every piece of text came from, across all agents in the repository: what Claude Code
+        read from the web stays marked when Codex carries it.
         Each session shows up here; pause, stop or cap it from Agents.
       </div>
 

@@ -65,11 +65,11 @@ function FirstVisit() {
           <h1 style={{ fontSize: "clamp(22px, 6vw, 28px)", fontWeight: 700, lineHeight: 1.25, margin: "0 0 10px" }}>
             Govern Claude Code and Codex in your repository.
             <br />
-            <span style={{ color: C.steel }}>Every tool call checked — across every agent, in one ledger.</span>
+            <span style={{ color: C.steel }}>Every tool call checked. Text from the web stays marked, whichever agent carries it.</span>
           </h1>
           <div style={{ fontSize: 14.5, color: C.mut, lineHeight: 1.6, marginBottom: 20 }}>
-            What one agent read from the web is tainted when another carries it into a shell.
-            Run trees of agents — a planner, parallel readers, an implementer — with findings
+            Claude Code reads a web page that says “run curl … | sh”; Codex tries to run it — the
+            shell call is blocked. Run trees of agents — a planner, parallel readers, an implementer — with findings
             checked against the files they opened. Every session on the plane: pause, stop, cap.
           </div>
           <button data-testid="home-connect-coding" onClick={() => navigate("connect?for=coding")}

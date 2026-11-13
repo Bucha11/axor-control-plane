@@ -97,7 +97,7 @@ const TIERS: Tier[] = [
     features: [
       { text: "everything in Community, plus:", plus: true },
       { text: "Claude Code + Codex hooks, one install command each" },
-      { text: "one taint ledger per repository, shared by every agent in it" },
+      { text: "where text came from is tracked across every agent in a repository" },
       { text: "agent trees — planner → parallel readers → implementer, any agent / model" },
       { text: "read-only readers, findings checked against the files they opened" },
       { text: "ranked, budgeted context between agents · cut from the Control Plane" },

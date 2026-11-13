@@ -1023,7 +1023,7 @@ export const api = {
           track("demo_fleet_loaded");
           return out;
         })),
-  // Example coding agents: a Claude Code and a Codex session on one ledger
+  // Example coding agents: a Claude Code and a Codex session sharing one record of where text came from
   // (Codex denied running what Claude Code fetched) and a tree run.
   seedCoding: () =>
     af("/v1/demo/seed-coding", { method: "POST" }).then((r) =>
