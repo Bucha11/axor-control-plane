@@ -29,6 +29,7 @@ from axor_backend.routers import (
     provenance_api,
     runs,
     share_api,
+    trees_api,
     vault,
     version,
 )
@@ -39,6 +40,7 @@ ALL_ROUTERS: tuple[APIRouter, ...] = (
     runs.router,
     demo.router,
     funnel_api.router,
+    trees_api.router,
     analysis.router,
     vault.router,
     lab.router,

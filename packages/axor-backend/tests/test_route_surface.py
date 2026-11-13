@@ -38,6 +38,9 @@ EXPECTED: dict[tuple[str, str], str] = {
     # rate-limited); the report is checked in-route as the operator's only.
     ("POST", "/v1/funnel"): "OPEN",
     ("GET", "/v1/funnel"): "read",
+    ("POST", "/v1/trees/{tree_run}"): "ingest",
+    ("GET", "/v1/trees"): "read",
+    ("GET", "/v1/trees/{tree_run}"): "read",
     ("GET", "/v1/share/{token}"): "OPEN",
     # Not OPEN, deliberately: /v1/healthz above stays mute, and the version
     # belongs to callers who are already inside.

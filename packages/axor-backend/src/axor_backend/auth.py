@@ -153,6 +153,8 @@ _WRITE_POLICY: tuple[tuple[str, str], ...] = (
     ("/v1/wrap/", "ingest"),          # code analysis, not an operational command
     ("/v1/runs/", "ingest"),          # POST .../evidence
     ("/v1/pins/", "ingest"),
+    # a tree run posts its own snapshot, like a node its trace
+    ("/v1/trees/", "ingest"),
     ("/v1/plane/", "operate"),        # command / facts / cascade-stop
     ("/v1/keys", "admin"),            # mint / revoke API keys
     ("/v1/regression/schedule", "operate"),  # EE schedule is operator config

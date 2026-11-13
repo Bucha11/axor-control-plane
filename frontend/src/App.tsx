@@ -29,6 +29,7 @@ import ControlTab from "./tabs/ControlTab";
 import ReplayTab from "./tabs/ReplayTab";
 import Onboarding from "./tabs/Onboarding";
 import RunControl from "./tabs/RunControl";
+import Trees from "./tabs/Trees";
 import ConfigBuilder from "./tabs/ConfigBuilder";
 import Health from "./tabs/Health";
 import Sentinel from "./tabs/Sentinel";
@@ -58,6 +59,7 @@ const ALIAS: Record<string, string> = {
   control: "govern",
   health: "govern",
   sentinel: "govern",
+  trees: "govern",
   "get-started": "connect",
   "config-builder": "policy",
 };
@@ -147,10 +149,11 @@ export default function App() {
       {key === "govern" && (
         <>
           <SubNav
-            items={[["govern", "agents"], ["sentinel", "sentinel · reputation"], ["health", "context health & repair"]]}
-            active={head === "health" || head === "sentinel" ? head : "govern"}
+            items={[["govern", "agents"], ["trees", "agent trees"], ["sentinel", "sentinel · reputation"], ["health", "context health & repair"]]}
+            active={head === "health" || head === "sentinel" || head === "trees" ? head : "govern"}
           />
           {head === "health" ? <Health /> : head === "sentinel" ? <Sentinel />
+            : head === "trees" ? <Trees treeRun={runIdParam} />
             : runIdParam === "run" && route.segments[2]
               ? <RunControl runId={decodeURIComponent(route.segments[2])} />
               : <ControlTab focusNode={runIdParam} />}

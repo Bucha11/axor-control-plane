@@ -25,6 +25,7 @@ from sqlalchemy import (
     PrimaryKeyConstraint,
     String,
     Table,
+    Text,
     UniqueConstraint,
     delete,
     func,
@@ -384,6 +385,17 @@ funnel_events = Table(
     Column("dedup_key", String(200), nullable=True, unique=True),
 )
 
+# Agent tree runs (axor-wrap `tree run`): the latest snapshot of each run —
+# stages, nodes, the context that flowed between them. Replaced as the run goes.
+tree_runs = Table(
+    "tree_runs", metadata,
+    Column("org_id", String(64), primary_key=True),
+    Column("tree_run", String(64), primary_key=True),
+    Column("updated_ts", String(40), nullable=False, index=True),
+    Column("status", String(16), nullable=False),
+    Column("doc", Text, nullable=False),
+)
+
 # A hosted visitor's guest session (no account): a short-lived bearer whose
 # HASH is kept here, mapped to the throwaway org its work lives under. Not
 # tenant data itself — it is what lets that work be claimed into an account
@@ -681,6 +693,42 @@ class Store:
         return [r.line for r in rows]
 
     # ── sign-up funnel ────────────────────────────────────────────────────
+
+    async def put_tree_run(self, tree_run: str, status: str, doc: dict, ts: str) -> None:
+        org = current_org_id()
+        body = json.dumps(doc, separators=(",", ":"))
+        async with self.engine.begin() as conn:
+            done = await conn.execute(tree_runs.update().where(
+                tree_runs.c.org_id == org, tree_runs.c.tree_run == tree_run,
+            ).values(updated_ts=ts, status=status, doc=body))
+            if not done.rowcount:
+                await conn.execute(tree_runs.insert().values(
+                    org_id=org, tree_run=tree_run, updated_ts=ts, status=status, doc=body))
+
+    async def get_tree_run(self, tree_run: str) -> dict[str, Any] | None:
+        async with self.engine.connect() as conn:
+            row = (await conn.execute(select(tree_runs).where(
+                tree_runs.c.org_id == current_org_id(),
+                tree_runs.c.tree_run == tree_run))).first()
+        if row is None:
+            return None
+        return {"tree_run": row.tree_run, "status": row.status,
+                "updated_ts": row.updated_ts, **json.loads(row.doc)}
+
+    async def list_tree_runs(self, limit: int = 50) -> list[dict[str, Any]]:
+        async with self.engine.connect() as conn:
+            rows = (await conn.execute(
+                select(tree_runs).where(tree_runs.c.org_id == current_org_id())
+                .order_by(tree_runs.c.updated_ts.desc()).limit(limit))).all()
+        out = []
+        for row in rows:
+            doc = json.loads(row.doc)
+            nodes = doc.get("nodes") or {}
+            out.append({"tree_run": row.tree_run, "status": row.status,
+                        "updated_ts": row.updated_ts, "task": doc.get("task", ""),
+                        "nodes": len(nodes),
+                        "agents": sum(len(n.get("runs") or []) for n in nodes.values())})
+        return out
 
     async def add_funnel_event(self, ts: str, session_id: str, event: str,
                                detail: str = "", dedup_key: str | None = None) -> bool:

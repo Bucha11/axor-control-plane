@@ -787,6 +787,33 @@ function signingArmed(): boolean {
   return Boolean(useApp.getState().signingKeyId);
 }
 
+// ── agent tree runs (axor-wrap `tree run`) ───────────────────────────────────
+export interface TreeSummary {
+  tree_run: string; status: "running" | "done" | "failed"; updated_ts: string;
+  task: string; nodes: number; agents: number;
+}
+export interface TreeNodeRun {
+  index: number; node_id?: string; status: string; reason?: string;
+  verified?: number; unverified?: number;
+}
+export interface TreeNode {
+  agent: string; model: string; count: number; access: string; out: string;
+  after: string[]; runs: TreeNodeRun[];
+}
+export interface TreeItem {
+  ref: string; node: string; kind: "plan" | "finding" | "text"; headline: string;
+  file?: string; line?: number | null; verified?: boolean | null;
+  untrusted: boolean; excised: boolean;
+}
+export interface TreeRun {
+  tree_run: string; status: "running" | "done" | "failed"; updated_ts: string; task: string;
+  stages: string[][];
+  nodes: Record<string, TreeNode>;
+  items: TreeItem[];
+  flow: Record<string, { pushed: string[]; pointers: string[]; withheld: string[]; tokens: number }>;
+  excised: string[];
+}
+
 export interface IdentityMe {
   user: {
     user_id: string; email: string;
@@ -835,6 +862,10 @@ export const api = {
   nodes: () => af("/v1/plane/nodes").then((r) => j<NodeInfo[]>(r)),
 
   topology: () => af("/v1/plane/topology").then((r) => j<TopologyPayload>(r)),
+
+  trees: () => af("/v1/trees").then((r) => j<{ trees: TreeSummary[] }>(r)),
+  tree: (treeRun: string) =>
+    af(`/v1/trees/${encodeURIComponent(treeRun)}`).then((r) => j<TreeRun>(r)),
 
   // What a node's axor-sentinel found across sessions — the one axis in the
   // product that survives between them. The cycle runs on the NODE (enforcement
