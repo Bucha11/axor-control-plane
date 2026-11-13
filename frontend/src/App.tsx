@@ -149,7 +149,7 @@ export default function App() {
       {key === "govern" && (
         <>
           <SubNav
-            items={[["govern", "agents"], ["trees", "agent trees"], ["sentinel", "sentinel · reputation"], ["health", "context health & repair"]]}
+            items={[["govern", "agents"], ["trees", "agent trees"], ["sentinel", "reputation across sessions"], ["health", "context health & repair"]]}
             active={head === "health" || head === "sentinel" || head === "trees" ? head : "govern"}
           />
           {head === "health" ? <Health /> : head === "sentinel" ? <Sentinel />
