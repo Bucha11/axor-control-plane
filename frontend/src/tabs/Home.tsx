@@ -11,6 +11,7 @@ import Tooltip from "../components/Tooltip";
 import { useStartTour } from "../components/Tour";
 import { DemoStage } from "../demo/DemoLanding";
 import { CodingStage } from "../demo/CodingStage";
+import Tabs from "../components/Tabs";
 
 const LADDER: { mode: ConnectionMode; blurb: string }[] = [
   { mode: "demo", blurb: "our mock broken tools · zero creds · one click" },
@@ -52,20 +53,12 @@ function FirstVisit() {
   };
   return (
     <div style={{ maxWidth: 640, margin: "0 auto" }} data-testid="first-visit">
-      <div className="flex" role="tablist" style={{ gap: 6, marginBottom: 18 }}>
-        {([["coding", "Coding agents"], ["production", "Production agents"]] as const).map(([id, name]) => (
-          <button key={id} role="tab" aria-selected={side === id} data-testid={`home-tab-${id}`}
-            onClick={() => { setSide(id); setErr(null); }}
-            style={{
-              fontFamily: MONO, fontSize: 12.5, padding: "6px 16px", borderRadius: 20, cursor: "pointer",
-              background: side === id ? "rgba(127,168,204,0.12)" : "none",
-              color: side === id ? C.text : C.dim,
-              border: `1px solid ${side === id ? C.steel : C.line}`,
-            }}>
-            {name}
-          </button>
-        ))}
-      </div>
+      <Tabs size="lg" style={{ marginBottom: 22 }} active={side}
+        onChange={(id) => { setSide(id); setErr(null); }}
+        items={[
+          { id: "coding", label: "Coding agents", testId: "home-tab-coding" },
+          { id: "production", label: "Production agents", testId: "home-tab-production" },
+        ]} />
 
       {side === "coding" ? (
         <>

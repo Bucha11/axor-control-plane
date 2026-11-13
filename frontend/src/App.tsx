@@ -36,6 +36,7 @@ import Sentinel from "./tabs/Sentinel";
 import Regression from "./tabs/Regression";
 import Settings, { IdentityLogin } from "./tabs/Settings";
 import AuthReturn from "./components/AuthReturn";
+import Tabs from "./components/Tabs";
 import Pricing from "./tabs/Pricing";
 
 // Governance first: the product is the policy membrane between an agent and its
@@ -178,22 +179,9 @@ export default function App() {
  * agent | config). Each keeps its own route, so both stay deep-linkable. */
 function SubNav({ items, active }: { items: [string, string][]; active: string }) {
   return (
-    <div className="flex gap-2 flex-wrap" style={{ maxWidth: 640, margin: "-20px auto 20px" }}>
-      {items.map(([route, label]) => (
-        <button
-          key={route}
-          onClick={() => navigate(route)}
-          aria-pressed={active === route}
-          style={{
-            background: active === route ? "rgba(127,168,204,0.12)" : "none",
-            border: `1px solid ${active === route ? C.steel : C.line}`, borderRadius: 20,
-            padding: "4px 12px", cursor: "pointer", fontFamily: MONO, fontSize: 11,
-            color: active === route ? C.steel : C.mut,
-          }}
-        >
-          {label}
-        </button>
-      ))}
+    <div style={{ maxWidth: 1200, margin: "-20px auto 20px" }}>
+      <Tabs items={items.map(([id, label]) => ({ id, label }))} active={active}
+        onChange={(id) => navigate(id)} />
     </div>
   );
 }

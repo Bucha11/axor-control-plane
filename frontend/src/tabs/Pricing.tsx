@@ -10,6 +10,7 @@
 import { useState } from "react";
 import { C, MONO, btn } from "../theme";
 import Coach from "../components/Coach";
+import Tabs from "../components/Tabs";
 import { navigate, useRoute } from "../router";
 
 // A feature is either shipping today or on the roadmap. We mark the difference
@@ -243,20 +244,9 @@ export default function Pricing() {
       <div style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim, marginBottom: 6, letterSpacing: "0.06em" }}>
         WHAT ARE YOU GOVERNING?
       </div>
-      <div className="flex gap-2 flex-wrap" style={{ marginBottom: 10 }} role="tablist">
-        {JOURNEYS.map((j) => (
-          <button key={j.id} role="tab" aria-selected={journey === j.id}
-            data-testid={`journey-${j.id}`}
-            onClick={() => { setJourney(j.id); navigate(`pricing?for=${j.id}`); }}
-            style={btn({
-              color: journey === j.id ? C.text : C.mut,
-              borderColor: journey === j.id ? C.steel : C.line,
-              fontSize: 12, padding: "6px 14px",
-            })}>
-            {j.label}
-          </button>
-        ))}
-      </div>
+      <Tabs size="lg" style={{ marginBottom: 12 }} active={journey}
+        onChange={(id) => { setJourney(id); navigate(`pricing?for=${id}`); }}
+        items={JOURNEYS.map((j) => ({ id: j.id, label: j.label, testId: `journey-${j.id}` }))} />
       <div style={{ fontFamily: MONO, fontSize: 11, color: C.mut, marginBottom: 24, lineHeight: 1.7 }}>
         {JOURNEYS.find((j) => j.id === journey)!.blurb}
         <br />
