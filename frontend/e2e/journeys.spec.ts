@@ -114,6 +114,15 @@ test("home: a coding tab and a production tab, and the coding example opens a tr
   await expect(page).toHaveURL(/#\/trees\/tree-example-coding/);
   await expect(page.getByTestId("tree-node-read")).toContainText("codex/luna");
   await expect(page.getByTestId("tree-item-read#3/f0")).toContainText("withheld · untrusted");
+  // the example tells its story: who did what, and what was caught — each a link to its row
+  const intro = page.getByTestId("example-intro");
+  await expect(intro).toContainText("5 × Codex (luna), read-only, reports findings");
+  await page.getByTestId("example-caught-read#1/f0").click();
+  await expect(page.getByTestId("tree-item-read#1/f0")).toBeInViewport();
+  await expect(intro).toContainText("withheld");
+  // and it does not end in a dead end
+  await page.getByTestId("example-connect").click();
+  await expect(page).toHaveURL(/#\/connect\?for=coding/);
 });
 
 test("home: both is one link away", async ({ page }) => {

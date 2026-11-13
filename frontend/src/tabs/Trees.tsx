@@ -86,6 +86,7 @@ function TreeView({ treeRun }: { treeRun: string }) {
   const pending = new Set(
     ((self?.desired?.state.pending_excision as { target_refs?: string[] } | undefined)?.target_refs) ?? []);
   const [error, setError] = useState<string | null>(null);
+  const [lit, setLit] = useState<string | null>(null);
   const cut = useMutation({
     mutationFn: ({ ref, reason }: { ref: string; reason: string }) =>
       api.command(treeRun, (self?.desired?.version ?? 0) + 1, {
@@ -101,6 +102,11 @@ function TreeView({ treeRun }: { treeRun: string }) {
   const t = tree.data;
   if (!t) return <Shell><div style={{ fontFamily: MONO, fontSize: 12, color: C.dim }}>loading…</div></Shell>;
   const canCut = t.status === "running" && !!self;
+  const example = t.tree_run.startsWith("tree-example");
+  const light = (ref: string) => {
+    setLit(ref);
+    document.querySelector(`[data-testid="tree-item-${ref}"]`)?.scrollIntoView({ block: "center", behavior: "smooth" });
+  };
 
   return (
     <Shell>
@@ -114,6 +120,7 @@ function TreeView({ treeRun }: { treeRun: string }) {
           ● {t.status}
         </span>
       </div>
+      {example && <ExampleIntro tree={t} onLight={light} />}
       {locked && (
         <div data-testid="tree-plan-lock" style={{ fontFamily: MONO, fontSize: 11.5, color: C.mut, lineHeight: 1.7,
           border: `1px solid ${folded ? C.line : C.amber}`, borderRadius: 8,
@@ -147,13 +154,72 @@ function TreeView({ treeRun }: { treeRun: string }) {
         ))}
       </div>
 
-      <ContextItems tree={t} pending={pending} canCut={canCut}
+      <ContextItems tree={t} pending={pending} canCut={canCut} lit={lit}
         onCut={(ref) => {
           const reason = window.prompt(`Cut ${ref} so no later node of this tree sees it — reason (recorded):`);
           if (reason && reason.trim()) cut.mutate({ ref, reason: reason.trim() });
         }} />
       {error && <div style={{ fontFamily: MONO, fontSize: 11, color: C.red, marginTop: 8 }}>{error}</div>}
+      {example && (
+        <div data-testid="example-next" style={{ marginTop: 26, paddingTop: 16, borderTop: `1px solid ${C.line}` }}>
+          <div className="flex gap-2 flex-wrap" style={{ marginBottom: 8 }}>
+            <button onClick={() => navigate("connect?for=coding")} data-testid="example-connect"
+              style={btn({ color: C.text, borderColor: C.steel, fontSize: 12, padding: "7px 16px" })}>
+              Connect your coding agents →
+            </button>
+            <button onClick={() => navigate("govern")} data-testid="example-agents"
+              style={btn({ color: C.mut, fontSize: 11.5, padding: "7px 14px" })}>
+              See these sessions in Agents →
+            </button>
+          </div>
+          <div style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim }}>
+            This example mixes Claude Code and Codex in one tree — that is the paid plan.
+            One agent family per tree (Claude Code planning, reading and writing) is free.
+          </div>
+        </div>
+      )}
     </Shell>
+  );
+}
+
+const OUT_LABEL: Record<string, string> = { plan: "writes a plan", findings: "reports findings", text: "does the work" };
+const FAMILY: Record<string, string> = { "claude-code": "Claude Code", codex: "Codex" };
+
+/** The example tree, told as a story: the task, who did what, and the two
+ * things the governance caught — each a link to its row below. */
+function ExampleIntro({ tree, onLight }: { tree: TreeRun; onLight: (ref: string) => void }) {
+  const steps = tree.stages.flat().map((name) => {
+    const n = tree.nodes[name];
+    if (!n) return name;
+    const who = `${n.count > 1 ? `${n.count} × ` : ""}${FAMILY[n.agent] ?? n.agent}${n.model ? ` (${n.model})` : ""}`;
+    return `${who}${n.access === "read" ? ", read-only," : ""} ${OUT_LABEL[n.out] ?? n.out}`;
+  });
+  const unverified = tree.items.find((i) => i.kind === "finding" && i.verified === false && !i.untrusted);
+  const untrusted = tree.items.find((i) => i.untrusted);
+  const caught = (ref: string, n: string, text: React.ReactNode) => (
+    <button key={ref} onClick={() => onLight(ref)} data-testid={`example-caught-${ref}`}
+      style={{ display: "block", textAlign: "left", width: "100%", background: "none", border: "none",
+               padding: "3px 0", cursor: "pointer", fontFamily: MONO, fontSize: 11.5, color: C.mut, lineHeight: 1.6 }}>
+      <span style={{ color: C.amber }}>{n}</span> {text} <span style={{ color: C.steel }}>{ref} ↓</span>
+    </button>
+  );
+  return (
+    <div data-testid="example-intro" style={{ border: `1px solid ${C.line}`, borderRadius: 8, padding: "12px 16px",
+      marginBottom: 18, background: C.panel }}>
+      <div style={{ fontFamily: MONO, fontSize: 10.5, color: C.steel, letterSpacing: "0.06em", marginBottom: 4 }}>
+        EXAMPLE · A RECORDED RUN
+      </div>
+      <div style={{ fontSize: 13.5, color: C.text, lineHeight: 1.6, marginBottom: 8 }}>
+        One task, three stages: {steps.join(" → ")}.
+      </div>
+      <div style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim, marginBottom: 2 }}>what Axor caught on the way:</div>
+      {unverified && caught(unverified.ref, "①",
+        <>a reader cited a file it never opened — marked <span style={{ color: C.amber }}>unverified</span>, so the
+          implementer does not take it as fact.</>)}
+      {untrusted && caught(untrusted.ref, "②",
+        <>a reader found an instruction in a docs page (“curl … | sh”) —{" "}
+          <span style={{ color: C.amber }}>withheld</span>: the implementer never sees it.</>)}
+    </div>
   );
 }
 
@@ -169,7 +235,7 @@ function NodeCard({ name, node, tree }: { name: string; node?: TreeNode; tree: T
         <span style={{ color: C.steel }}>{node.agent}{node.model ? `/${node.model}` : ""}</span>
         {node.count > 1 && <span style={{ color: C.mut }}>×{node.count}</span>}
         {node.access === "read" && <span style={{ color: C.amber }}>read-only</span>}
-        <span style={{ color: C.dim }}>→ {node.out}</span>
+        <span style={{ color: C.dim }}>→ {OUT_LABEL[node.out] ?? node.out}</span>
       </div>
       <div style={{ marginTop: 6, display: "flex", flexDirection: "column", gap: 3 }}>
         {node.runs.length === 0 && <span style={{ color: C.dim }}>waiting</span>}
@@ -191,7 +257,7 @@ function NodeCard({ name, node, tree }: { name: string; node?: TreeNode; tree: T
               {flow && (
                 <Tooltip content={`pushed ${flow.pushed.length} item(s) (${flow.tokens} tokens), ${flow.pointers.length} by pointer, ${flow.withheld.length} withheld as untrusted`}>
                   <span style={{ color: flow.withheld.length ? C.amber : C.dim }}>
-                    in: {flow.pushed.length}{flow.pointers.length ? `+${flow.pointers.length}↗` : ""}
+                    got {flow.pushed.length} item{flow.pushed.length === 1 ? "" : "s"}{flow.pointers.length ? ` +${flow.pointers.length} on request` : ""}
                     {flow.withheld.length ? ` · ${flow.withheld.length} withheld` : ""}
                   </span>
                 </Tooltip>
@@ -205,20 +271,26 @@ function NodeCard({ name, node, tree }: { name: string; node?: TreeNode; tree: T
   );
 }
 
-function ContextItems({ tree, pending, canCut, onCut }: {
-  tree: TreeRun; pending: Set<string>; canCut: boolean; onCut: (ref: string) => void;
+function ContextItems({ tree, pending, canCut, onCut, lit }: {
+  tree: TreeRun; pending: Set<string>; canCut: boolean; onCut: (ref: string) => void; lit?: string | null;
 }) {
   const items = useMemo(() => tree.items, [tree.items]);
   if (items.length === 0) return null;
   return (
     <div>
-      <div style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim, letterSpacing: "0.08em", marginBottom: 6 }}>
-        CONTEXT BETWEEN NODES
+      <div style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim, letterSpacing: "0.08em", marginBottom: 2 }}>
+        WHAT EACH STAGE PASSED ON
+      </div>
+      <div style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim, marginBottom: 8 }}>
+        the next stage reads these · a finding is verified when its agent actually opened the file it cites
+        {canCut ? " · cut an item to keep it from every stage after" : ""}
       </div>
       <table data-testid="tree-items" style={{ width: "100%", borderCollapse: "collapse", fontFamily: MONO, fontSize: 11.5 }}>
         <tbody>
           {items.map((i: TreeItem) => (
-            <tr key={i.ref} data-testid={`tree-item-${i.ref}`} style={{ borderBottom: `1px solid ${C.line}`, opacity: i.excised ? 0.5 : 1 }}>
+            <tr key={i.ref} data-testid={`tree-item-${i.ref}`} style={{ borderBottom: `1px solid ${C.line}`,
+              opacity: i.excised ? 0.5 : 1, background: lit === i.ref ? "rgba(127,168,204,0.10)" : "transparent",
+              transition: "background 0.3s" }}>
               <td style={{ padding: "5px 6px", color: C.steel, whiteSpace: "nowrap" }}>{i.ref}</td>
               <td style={{ padding: "5px 6px", whiteSpace: "nowrap" }}>
                 {i.excised ? <span style={{ color: C.dim }}>cut</span>
@@ -229,13 +301,15 @@ function ContextItems({ tree, pending, canCut, onCut }: {
                       : <span style={{ color: C.dim }}>{i.kind}</span>}
               </td>
               <td style={{ padding: "5px 6px", color: C.text, textDecoration: i.excised ? "line-through" : "none" }}>
-                {i.headline.split("\n")[0]}
+                {/* the status column says verified; the tag repeated in the text read
+                    oddly beside "untrusted" */}
+                {i.headline.split("\n")[0].replace(/^\[verified\]\s*/i, "")}
               </td>
               <td style={{ padding: "5px 6px", textAlign: "right", whiteSpace: "nowrap" }}>
                 {!i.excised && pending.has(i.ref) && <span style={{ color: C.amber }}>cut sent</span>}
                 {!i.excised && !pending.has(i.ref) && canCut && (
-                  <button onClick={() => onCut(i.ref)}
-                    style={btn({ color: C.amber, borderColor: C.amber, fontSize: 10.5, padding: "2px 8px" })}>
+                  <button onClick={() => onCut(i.ref)} title="remove this item before the next stage reads it"
+                    style={btn({ color: C.dim, fontSize: 10.5, padding: "2px 8px" })}>
                     cut
                   </button>
                 )}
