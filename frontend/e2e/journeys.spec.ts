@@ -10,7 +10,10 @@ test.describe("three ways in", () => {
     await expect(page.getByTestId("journey-chooser")).toBeVisible();
     await page.getByTestId("way-coding").click();
     await expect(page).toHaveURL(/#\/connect\?for=coding/);
-    const install = page.getByTestId("cmd-install");
+    await expect(page.getByTestId("cmd-install")).toContainText("uv tool install");
+    // free tier, said before anything is installed
+    await expect(page.getByTestId("coding-free")).toContainText("free for 1 developer");
+    const install = page.getByTestId("cmd-repo");
     await expect(install).toContainText("axor-wrap agents install claude-code");
     await expect(install).toContainText("axor-wrap agents install codex");
     await page.getByTestId("pick-codex").click();
@@ -18,6 +21,26 @@ test.describe("three ways in", () => {
     await expect(page.getByTestId("cmd-env")).toContainText("AXOR_PLANE_URL=");
     // no tool declaration, no base URL to repoint
     await expect(page.getByText("What tools does your agent use?")).toHaveCount(0);
+  });
+
+  test("with auth on, a signed-out visitor is asked to sign in before the key", async ({ page }) => {
+    await setConnection(page, { mode: "none" });
+    await page.route("**/v1/auth/status", (route) => route.fulfill({
+      status: 200, contentType: "application/json",
+      body: JSON.stringify({ auth_enabled: true, authenticated: false, scopes: [] }),
+    }));
+    await goHash(page, "connect?for=coding");
+    await expect(page.getByTestId("coding-signin")).toContainText("needs an account");
+    await expect(page.getByTestId("mint-coding-key")).toHaveCount(0);
+    await expect(page.getByTestId("cmd-env")).toHaveCount(0);
+  });
+
+  test("on an open plane no key is asked for", async ({ page }) => {
+    await setConnection(page, { mode: "none" });
+    await goHash(page, "connect?for=coding");
+    await expect(page.getByText(/this plane is open — no key needed/)).toBeVisible();
+    await expect(page.getByTestId("cmd-env")).not.toContainText("AXOR_INGEST_KEY");
+    await expect(page.getByTestId("coding-skip")).toBeVisible();
   });
 
   test("a coding session appears on its own", async ({ page, request }) => {

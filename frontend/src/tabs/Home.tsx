@@ -77,7 +77,7 @@ function FirstVisit() {
             <span>
               <span style={{ display: "block", fontWeight: 700 }}>Connect your coding agents</span>
               <span style={{ display: "block", fontSize: 12, opacity: 0.85, marginTop: 2 }}>
-                two commands · no code change · every session shows up here
+                one install · no code change · every session shows up here
               </span>
             </span>
             <ArrowRight size={18} />

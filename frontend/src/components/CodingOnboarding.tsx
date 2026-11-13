@@ -1,18 +1,22 @@
 // The coding-agent way in: Claude Code and Codex governed through their hooks.
-// No tools to declare, no base URLs to repoint — two commands and an environment
-// variable, then the first session shows up here on its own.
+// No tools to declare, no base URLs to repoint — one install, one command per
+// repository, two environment variables, then the first session shows up here
+// on its own. What a first-time visitor asks before any of that is answered at
+// the top: what is free, and whether they need an account (they do when the
+// plane has auth on — the sessions report into their workspace).
 import { useEffect, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Check, Copy } from "lucide-react";
 import { api } from "../api";
 import { navigate } from "../router";
-import { useApp } from "../store";
+import { isGuestToken, useApp } from "../store";
 import { C, MONO, btn } from "../theme";
+import { IdentityLogin } from "../tabs/Settings";
 
 type Agent = "claude-code" | "codex";
 const AGENTS: { id: Agent; label: string; note: string }[] = [
-  { id: "claude-code", label: "Claude Code", note: "hooks in .claude/settings.json" },
-  { id: "codex", label: "Codex", note: "hooks in .codex/hooks.json — trust them once with /hooks" },
+  { id: "claude-code", label: "Claude Code", note: "adds hooks to .claude/settings.json — nothing else to do" },
+  { id: "codex", label: "Codex", note: "adds hooks to .codex/hooks.json — then run /hooks in Codex once and approve them" },
 ];
 
 const PLANE_URL = typeof window === "undefined" ? "" : window.location.origin;
@@ -44,11 +48,23 @@ function Block({ text, id, copied, onCopy }: {
   );
 }
 
+const step = (n: number, text: string, first = false) => (
+  <div style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim, letterSpacing: "0.06em",
+                margin: first ? "0 0 6px" : "16px 0 6px" }}>{n} · {text}</div>
+);
+const hint = { fontFamily: MONO, fontSize: 10.5, color: C.dim, marginBottom: 4, lineHeight: 1.6 } as const;
+
 export default function CodingOnboarding({ then }: { then?: () => void }) {
   const [agents, setAgents] = useState<Agent[]>(["claude-code", "codex"]);
   const [copied, setCopied] = useState<string | null>(null);
   const [key, setKey] = useState<string | null>(null);
   const connect = useApp((s) => s.connect);
+  const email = useApp((s) => s.identityEmail);
+  const token = useApp((s) => s.apiToken);
+  // auth off (a local plane): nothing to sign in to, no key to make
+  const auth = useQuery({ queryKey: ["auth-status"], queryFn: api.authStatus, staleTime: 60_000 });
+  const authOn = auth.data?.auth_enabled ?? null;
+  const signedIn = !!email || (!!token && !isGuestToken(token));
   const mint = useMutation({
     mutationFn: () => api.createKey(["ingest"], "coding agents"),
     onSuccess: (k) => setKey(k.secret),
@@ -68,21 +84,34 @@ export default function CodingOnboarding({ then }: { then?: () => void }) {
   const toggle = (a: Agent) =>
     setAgents((cur) => (cur.includes(a) ? cur.filter((x) => x !== a) : [...cur, a]));
 
-  const env = [`export AXOR_PLANE_URL=${PLANE_URL}`, key ? `export AXOR_INGEST_KEY=${key}` : null]
-    .filter(Boolean).join("\n");
+  const needsKey = authOn !== false;
+  const env = [
+    `export AXOR_PLANE_URL=${PLANE_URL}`,
+    needsKey ? `export AXOR_INGEST_KEY=${key ?? "<the key — create it below>"}` : null,
+  ].filter(Boolean).join("\n");
+  const goAgents = () => { connect("adapter", []); if (then) then(); else navigate("govern"); };
 
   return (
     <div data-testid="coding-onboarding">
       <h1 style={{ fontSize: 22, fontWeight: 650, margin: "0 0 4px" }}>Govern your coding agents</h1>
-      <div style={{ fontFamily: MONO, fontSize: 11.5, color: C.mut, marginBottom: 16, lineHeight: 1.6 }}>
-        Every tool call your agents make goes through the kernel first. Axor remembers where
-        every piece of text came from, across all agents in the repository: what Claude Code
-        read from the web stays marked when Codex carries it.
-        Each session shows up here; pause, stop or cap it from Agents.
+      <div style={{ fontSize: 13.5, color: C.mut, marginBottom: 10, lineHeight: 1.6 }}>
+        Every tool call your agents make is checked before it runs. What Claude Code read from
+        the web stays marked when Codex carries it. Each session shows up here — pause, stop or
+        cap it from Agents.
+      </div>
+      <div data-testid="coding-free" style={{ fontFamily: MONO, fontSize: 11, color: C.mut, lineHeight: 1.7,
+        border: `1px solid ${C.line}`, borderRadius: 6, padding: "8px 12px", marginBottom: 18 }}>
+        <span style={{ color: C.green }}>free for 1 developer</span> — every feature: hooks, agent
+        trees, pause / stop / cap. Any number of repositories and sessions.
+        <br />more developers: $25 per developer per month — a developer is someone whose agents
+        ran that month.{" "}
+        <button onClick={() => navigate("pricing?for=coding")} data-testid="coding-pricing"
+          style={{ background: "none", border: "none", padding: 0, cursor: "pointer",
+                   fontFamily: MONO, fontSize: 11, color: C.steel }}>pricing →</button>
       </div>
 
-      <div style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim, letterSpacing: "0.06em", marginBottom: 6 }}>1 · WHICH AGENTS</div>
-      <div className="flex gap-2 flex-wrap" style={{ marginBottom: 16 }}>
+      {step(1, "WHICH AGENTS", true)}
+      <div className="flex gap-2 flex-wrap">
         {AGENTS.map((a) => (
           <button key={a.id} onClick={() => toggle(a.id)} data-testid={`pick-${a.id}`}
             style={btn({
@@ -94,31 +123,51 @@ export default function CodingOnboarding({ then }: { then?: () => void }) {
         ))}
       </div>
 
-      <div style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim, letterSpacing: "0.06em", marginBottom: 6 }}>2 · IN YOUR REPOSITORY</div>
-      <Block id="install" copied={copied} onCopy={copy}
-        text={["pip install 'axor-wrap[plane]'",
-          ...agents.map((a) => `axor-wrap agents install ${a}`)].join("\n")} />
+      {step(2, "INSTALL — ONCE, ON YOUR MACHINE")}
+      <Block id="install" copied={copied} onCopy={copy} text="uv tool install 'axor-wrap[plane]'" />
+      <div style={hint}>no uv? <span style={{ color: C.mut }}>pipx install 'axor-wrap[plane]'</span></div>
+
+      {step(3, "IN EACH REPOSITORY")}
+      <Block id="repo" copied={copied} onCopy={copy}
+        text={agents.map((a) => `axor-wrap agents install ${a}`).join("\n") || "# pick an agent above"} />
       {agents.map((a) => (
-        <div key={a} style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim, marginBottom: 4 }}>
+        <div key={a} style={hint}>
           {AGENTS.find((x) => x.id === a)!.label}: {AGENTS.find((x) => x.id === a)!.note}
         </div>
       ))}
 
-      <div style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim, letterSpacing: "0.06em", margin: "14px 0 6px" }}>3 · WHERE THE AGENTS RUN</div>
-      <Block id="env" copied={copied} onCopy={copy} text={env} />
-      {!key && (
-        <button onClick={() => mint.mutate()} disabled={mint.isPending} data-testid="mint-coding-key"
-          style={btn({ color: C.steel, borderColor: C.steel, fontSize: 10.5, padding: "4px 10px" })}>
-          {mint.isPending ? "…" : "create an ingest key for them"}
-        </button>
-      )}
-      {mint.isError && (
-        <div style={{ fontFamily: MONO, fontSize: 10.5, color: C.mut, marginTop: 4 }}>
-          could not create a key ({(mint.error as Error).message}) — on an open plane none is needed.
+      {step(4, "CONNECT THEM TO THIS WORKSPACE")}
+      {needsKey && authOn && !signedIn ? (
+        <div data-testid="coding-signin" style={{ border: `1px solid ${C.line}`, borderRadius: 8, padding: 14 }}>
+          <div style={{ fontFamily: MONO, fontSize: 11, color: C.mut, lineHeight: 1.6, marginBottom: 10 }}>
+            Your agents report into your workspace, so this step needs an account — free,
+            a minute. Then the key for your agents is one click, right here.
+          </div>
+          <IdentityLogin initialMode="signup" />
         </div>
+      ) : (
+        <>
+          <Block id="env" copied={copied} onCopy={copy} text={env} />
+          {needsKey && !key && (
+            <button onClick={() => mint.mutate()} disabled={mint.isPending} data-testid="mint-coding-key"
+              style={btn({ color: C.steel, borderColor: C.steel, fontSize: 10.5, padding: "4px 10px" })}>
+              {mint.isPending ? "…" : "create the key"}
+            </button>
+          )}
+          <div style={{ ...hint, marginTop: 6 }}>
+            {key ? <span style={{ color: C.amber }}>the key is shown once — copy it now. </span> : null}
+            {needsKey
+              ? "the key lets your agents report here and nothing else. "
+              : "this plane is open — no key needed. "}
+            Put these in your shell profile (~/.zshrc, ~/.bashrc) so every terminal has them.
+          </div>
+          {mint.isError && (
+            <div style={{ ...hint, color: C.red }}>could not create a key ({(mint.error as Error).message})</div>
+          )}
+        </>
       )}
 
-      <div style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim, letterSpacing: "0.06em", margin: "18px 0 6px" }}>4 · START A SESSION</div>
+      {step(5, "START A SESSION")}
       <div data-testid="coding-sessions" className="p-3" style={{ background: C.panel, border: `1px solid ${sessions.length ? C.green : C.line}`, borderRadius: 8, fontFamily: MONO, fontSize: 11.5 }}>
         {sessions.length === 0 ? (
           <span style={{ color: C.mut }}>waiting for the first session — run <span style={{ color: C.text }}>claude</span> or <span style={{ color: C.text }}>codex</span> in the repository…</span>
@@ -141,16 +190,24 @@ export default function CodingOnboarding({ then }: { then?: () => void }) {
         <Block id="tree" copied={copied} onCopy={copy} text={TREE} />
       </details>
 
-      <div className="flex gap-2 mt-5">
-        <button data-testid="coding-done"
-          onClick={() => { connect("adapter", []); if (then) then(); else navigate("govern"); }}
-          style={btn({ color: C.text, borderColor: C.steel, fontSize: 12, padding: "7px 16px" })}>
-          {then ? "next: your production agent →" : sessions.length ? "see them in Agents →" : "done — go to Agents →"}
-        </button>
-        <button onClick={() => navigate("pricing?for=coding")}
-          style={btn({ color: C.dim, fontSize: 11, padding: "7px 12px" })}>
-          pricing for coding agents
-        </button>
+      <div className="flex gap-3 mt-5 items-center">
+        {then ? (
+          <button data-testid="coding-done" onClick={goAgents}
+            style={btn({ color: C.text, borderColor: C.steel, fontSize: 12, padding: "7px 16px" })}>
+            next: your production agent →
+          </button>
+        ) : sessions.length ? (
+          <button data-testid="coding-done" onClick={goAgents}
+            style={btn({ color: C.text, borderColor: C.green, fontSize: 12, padding: "7px 16px" })}>
+            see them in Agents →
+          </button>
+        ) : (
+          <button data-testid="coding-skip" onClick={goAgents}
+            style={{ background: "none", border: "none", padding: 0, cursor: "pointer",
+                     fontFamily: MONO, fontSize: 11, color: C.dim }}>
+            skip — I'll start a session later →
+          </button>
+        )}
       </div>
     </div>
   );
