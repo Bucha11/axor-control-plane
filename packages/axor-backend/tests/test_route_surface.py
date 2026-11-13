@@ -116,6 +116,7 @@ EXPECTED: dict[tuple[str, str], str] = {
     # the license status it sits next to.
     ("GET", "/v1/license/usage"): "read",
     ("GET", "/v1/license/entitlements"): "read",
+    ("PUT", "/v1/license/agent-family"): "admin",
     # The statement drawn from that usage. Their own bill, so `read` — the same
     # bar as the usage it is computed from.
     ("GET", "/v1/license/invoice"): "read",

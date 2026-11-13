@@ -95,3 +95,22 @@ async def test_the_example_sessions_do_not_use_up_the_free_plan(app_client) -> N
     ent = (await c.get("/v1/license/entitlements")).json()
     assert ent["locked"] == {} and ent["locked_trees"] == {}
     assert ent["agent_family"] == "codex"
+
+
+async def test_a_free_workspace_can_switch_the_family_it_keeps(app_client) -> None:  # noqa: ANN001
+    _, c = app_client
+    await _session(c, "codex-first", "codex", "dev-ada")
+    await _session(c, "claude-code-later", "claude-code", "dev-ada")
+    ent = (await c.get("/v1/license/entitlements")).json()
+    assert ent["agent_family"] == "codex" and not ent["agent_family_chosen"]
+    assert ent["locked"] == {"claude-code-later": ["agent_family"]}
+
+    r = await c.put("/v1/license/agent-family", json={"agent": "claude-code"})
+    assert r.status_code == 200
+    ent = (await c.get("/v1/license/entitlements")).json()
+    assert ent["agent_family"] == "claude-code" and ent["agent_family_chosen"]
+    assert ent["locked"] == {"codex-first": ["agent_family"]}
+    assert (await _pause(c, "claude-code-later")).status_code == 202
+
+    bad = await c.put("/v1/license/agent-family", json={"agent": "notepad"})
+    assert bad.status_code == 400

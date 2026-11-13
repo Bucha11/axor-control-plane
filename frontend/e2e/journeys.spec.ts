@@ -173,3 +173,29 @@ test("past the free plan a session is kept but locked, and says what unlocks it"
   await page.getByTestId("plan-lock-pricing").click();
   await expect(page).toHaveURL(/#\/pricing\?for=coding/);
 });
+
+test("the paid-plan notice folds, and a locked session stays out of the activity feed", async ({ page, request }) => {
+  const tag = Date.now().toString(36).slice(-6);
+  const first = `claude-code-fold-a-${tag}`;
+  const second = `claude-code-fold-b-${tag}`;
+  for (const [node, dev] of [[first, `dev-fold-a-${tag}`], [second, `dev-fold-b-${tag}`]]) {
+    await seedNode(request, node);
+    await request.post(`${BACKEND}/v1/plane/${node}/profile`,
+      { data: { kind: "coding", agent: "claude-code", developer: dev } });
+  }
+  await setConnection(page, { mode: "adapter" });
+  await goHash(page, "govern");
+  // the activity feed carries the open session's heartbeat run, never the locked one's
+  await expect(page.getByTestId("fleet-activity")).not.toContainText(second);
+  await page.getByTestId(`agent-row-${second}`).click();
+  const card = page.getByTestId("plan-lock-card");
+  await expect(card).toContainText("still protected");
+  await page.getByTestId("plan-lock-fold").click();
+  await expect(card).not.toContainText("still protected");
+  await expect(card).toContainText("paid plan · second developer");
+  // remembered (the e2e helper rewrites storage on every load, so read it there)
+  expect(await page.evaluate(() => JSON.parse(localStorage.getItem("axor-app")!).state.planNoticesFolded))
+    .toBe(true);
+  await page.getByTestId("plan-lock-fold").click();
+  await expect(page.getByTestId("plan-lock-card")).toContainText("still protected");
+});

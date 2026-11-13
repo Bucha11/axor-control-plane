@@ -7,7 +7,8 @@ refused with 402 ``plan_required``. A tree run that mixes agent families (one
 writing, another reviewing) is locked the same way.
 
 Who is "the" developer and which family is "the" family: the first to report,
-in the order the plane first saw them. The example sessions the demo seeds are
+in the order the plane first saw them — unless the workspace picked its family
+(``PUT /v1/license/agent-family``), which then wins. The example sessions the demo seeds are
 never counted — they exist to show the product, not to use up the free plan.
 
 Protection is not here and never will be: the hooks deny locally whatever the
@@ -30,10 +31,16 @@ def workspace_tier(license_: Any | None) -> str:  # noqa: ANN401 - License | Non
     return license_.workspace_tier if license_ is not None else "community"
 
 
+FAMILY_SETTING = "coding_agent_family"
+KNOWN_FAMILIES = ("claude-code", "codex")
+
+
 async def coding_entitlements(store: Any, tier: str) -> dict[str, Any]:  # noqa: ANN401
     free = tier == "community"
     allowed_devs: list[str] = []
-    allowed_agents: list[str] = []
+    # the family the workspace picked, if it did; else the first to report
+    chosen = await store.get_setting(FAMILY_SETTING) if free else None
+    allowed_agents: list[str] = [chosen] if isinstance(chosen, str) and chosen else []
     locked: dict[str, list[str]] = {}
     for row in await store.coding_profiles():
         dev, agent = row["developer"], row["agent"]
@@ -69,6 +76,7 @@ async def coding_entitlements(store: Any, tier: str) -> dict[str, Any]:  # noqa:
         "developers": FREE_DEVELOPERS if free else None,
         "agent_families": FREE_AGENT_FAMILIES if free else None,
         "agent_family": allowed_agents[0] if free and allowed_agents else None,
+        "agent_family_chosen": bool(free and isinstance(chosen, str) and chosen),
         "locked": locked,
         "locked_trees": locked_trees,
         "reasons": REASONS,

@@ -215,6 +215,21 @@ async def license_entitlements(state: StateDep, store: StoreDep) -> dict:
     return await coding_entitlements(store, tier)
 
 
+@router.put("/agent-family")
+async def choose_agent_family(body: dict, store: StoreDep) -> dict:
+    """Which agent family the free plan keeps — Claude Code or Codex. Without
+    a choice it is the first to report; this lets a workspace that started on
+    one switch to the other. Sessions of the other family stay recorded and
+    locked, and come back when the choice does."""
+    from axor_backend.ee.entitlements import FAMILY_SETTING, KNOWN_FAMILIES
+
+    agent = body.get("agent")
+    if agent not in KNOWN_FAMILIES:
+        raise HTTPException(400, f"agent must be one of {list(KNOWN_FAMILIES)}")
+    await store.set_setting(FAMILY_SETTING, agent)
+    return {"agent_family": agent}
+
+
 @router.get("/usage")
 async def license_usage(state: StateDep, store: StoreDep, months: int = 3) -> dict:
     """Governed-node usage per billing month — what a per-node line is drawn from.

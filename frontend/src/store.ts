@@ -53,6 +53,10 @@ interface AppState {
   learnMode: boolean;
   learnSeen: boolean;
   coachDismissed: string[];
+  // The paid-plan notices (a locked session's card, a mixed tree's banner)
+  // folded to one line — the user has read them and wants the room back.
+  planNoticesFolded: boolean;
+  setPlanNoticesFolded: (v: boolean) => void;
   // Guided tour position: index into TOUR (components/Tour.tsx), null = not
   // running. Persisted, so a mid-tour reload resumes where the user was.
   tourStep: number | null;
@@ -181,6 +185,8 @@ export const useApp = create<AppState>()(
       learnMode: false,
       learnSeen: false,
       coachDismissed: [],
+      planNoticesFolded: false,
+      setPlanNoticesFolded: (v) => set({ planNoticesFolded: v }),
       tourStep: null,
       connect: (mode, tools) =>
         set((s) => ({

@@ -1132,28 +1132,81 @@ function LockChip({ reasons }: { reasons: LockReason[] }) {
   );
 }
 
-/** The panel of a session past the free plan: why, what still holds, what unlocks it. */
+const FAMILY_LABEL: Record<string, string> = { "claude-code": "Claude Code", codex: "Codex" };
+const familyOf = (nodeId: string) =>
+  nodeId.startsWith("claude-code-") ? "claude-code" : nodeId.startsWith("codex-") ? "codex" : null;
+
+/** The panel of a session past the free plan: why, what still holds, what
+ * unlocks it — and, for a second agent family, keeping this one instead.
+ * Folds to one line once read (remembered). */
 function PlanLock({ nodeId, reasons }: { nodeId: string; reasons: LockReason[] }) {
+  const folded = useApp((s) => s.planNoticesFolded);
+  const setFolded = useApp((s) => s.setPlanNoticesFolded);
+  const qc = useQueryClient();
+  const ent = useQuery({ queryKey: ["entitlements"], queryFn: api.entitlements, retry: false });
+  const mine = familyOf(nodeId);
+  const kept = ent.data?.agent_family ?? null;
+  const swap = useMutation({
+    mutationFn: (agent: string) => api.chooseAgentFamily(agent),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["entitlements"] }),
+  });
+  const why = reasons.includes("agent_family")
+    ? "A second agent family — the free plan keeps one (Claude Code or Codex)."
+    : "A second developer — the free plan keeps one.";
   return (
-    <div data-testid="plan-lock-card" className="p-4" style={{ background: C.panel,
-      border: `1px solid ${C.amber}`, borderRadius: 8, fontFamily: MONO, fontSize: 11.5,
+    <div data-testid="plan-lock-card" className={folded ? "px-4 py-2" : "p-4"} style={{ background: C.panel,
+      border: `1px solid ${folded ? C.line : C.amber}`, borderRadius: 8, fontFamily: MONO, fontSize: 11.5,
       color: C.mut, lineHeight: 1.7 }}>
-      <div style={{ color: C.text, fontSize: 13, marginBottom: 6 }}>{nodeId}</div>
-      <div style={{ color: C.amber, marginBottom: 6 }}>
-        <Lock size={11} style={{ display: "inline", marginRight: 6 }} />
-        {reasons.includes("agent_family")
-          ? "A second agent family — the free plan keeps one (Claude Code or Codex)."
-          : "A second developer — the free plan keeps one."}
+      <div className="flex items-center gap-2">
+        <span style={{ color: C.text, fontSize: 13, flex: 1 }}>{nodeId}</span>
+        <button onClick={() => setFolded(!folded)} data-testid="plan-lock-fold"
+          aria-label={folded ? "show why this session is locked" : "fold this notice"}
+          style={{ background: "none", border: "none", cursor: "pointer", fontFamily: MONO,
+                   fontSize: 10.5, color: C.dim }}>
+          {folded ? "▸ why" : "▴ fold"}
+        </button>
       </div>
-      <div>
-        The session is still protected: its hooks deny what they must, whatever the plan.
-        It is recorded too — on the Coding plan it shows here with its history, and you
-        can pause, stop and cap it.
-      </div>
-      <button onClick={() => navigate("pricing?for=coding")} data-testid="plan-lock-pricing"
-        style={btn({ color: C.text, borderColor: C.steel, fontSize: 11.5, padding: "5px 12px", marginTop: 10 })}>
-        Coding plan · $25 / developer / month →
-      </button>
+      {folded ? (
+        <div style={{ color: C.amber, fontSize: 10.5 }}>
+          <Lock size={9} style={{ display: "inline", marginRight: 5 }} />
+          paid plan · {reasons.map((r) => LOCK_LABEL[r]).join(", ")}
+        </div>
+      ) : (
+        <>
+          <div style={{ color: C.amber, margin: "6px 0" }}>
+            <Lock size={11} style={{ display: "inline", marginRight: 6 }} />{why}
+          </div>
+          <div>
+            The session is still protected: its hooks deny what they must, whatever the plan.
+            It is recorded too — on the Coding plan it shows here with its history, and you
+            can pause, stop and cap it.
+          </div>
+          <div className="flex gap-2 flex-wrap" style={{ marginTop: 10 }}>
+            <button onClick={() => navigate("pricing?for=coding")} data-testid="plan-lock-pricing"
+              style={btn({ color: C.text, borderColor: C.steel, fontSize: 11.5, padding: "5px 12px" })}>
+              Coding plan · $25 / developer / month →
+            </button>
+            {reasons.includes("agent_family") && mine && kept && mine !== kept && (
+              <button onClick={() => swap.mutate(mine)} disabled={swap.isPending}
+                data-testid="plan-lock-keep"
+                style={btn({ color: C.mut, fontSize: 11, padding: "5px 12px" })}>
+                {swap.isPending ? "…" : `keep ${FAMILY_LABEL[mine]} on the free plan instead`}
+              </button>
+            )}
+          </div>
+          {reasons.includes("agent_family") && mine && kept && mine !== kept && (
+            <div style={{ fontSize: 10.5, color: C.dim, marginTop: 6 }}>
+              then {FAMILY_LABEL[kept] ?? kept} sessions lock instead — nothing is deleted, and you
+              can switch back.
+            </div>
+          )}
+          {swap.isError && (
+            <div style={{ fontSize: 10.5, color: C.red, marginTop: 6 }}>
+              {(swap.error as Error).message} — choosing the family takes a workspace admin
+            </div>
+          )}
+        </>
+      )}
     </div>
   );
 }
@@ -1196,6 +1249,7 @@ function FleetRowView({ n, row, st, first, selected, onPick, locked }: {
   n: NodeInfo; row?: FleetRow; st: Status[]; first: boolean; selected: boolean; onPick: () => void;
   locked?: LockReason[];
 }) {
+  const folded = useApp((s) => s.planNoticesFolded);
   const p = primary(st);
   const color = STATUS_COLOR[p];
   return (
@@ -1220,11 +1274,11 @@ function FleetRowView({ n, row, st, first, selected, onPick, locked }: {
                          borderRadius: 20, padding: "1px 8px" }}>caught lie</span>
         )}
       </div>
-      {locked ? (
+      {locked ? (!folded && (
         <div style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim, marginTop: 4, marginLeft: 18 }}>
           protected by its hooks · shown and operated on the Coding plan
         </div>
-      ) : (
+      )) : (
       <div className="flex gap-3 flex-wrap" style={{ fontFamily: MONO, fontSize: 10.5, color: C.mut, marginTop: 4, marginLeft: 18 }}>
         {row?.active_run ? (
           <span style={{ color: C.green, cursor: "pointer" }}
@@ -1298,8 +1352,11 @@ function feedLine(e: ActivityEvent): { text: string; color: string } {
 
 function ActivityFeed() {
   const feed = useQuery({ queryKey: ["activity"], queryFn: api.activity, refetchInterval: 2000 });
+  // a session past the free plan is not shown, here either
+  const ent = useQuery({ queryKey: ["entitlements"], queryFn: api.entitlements, retry: false });
   const [find, setFind] = useState("");
   const events = (feed.data?.events ?? []).filter((e) => {
+    if (ent.data?.locked[e.node_id] || ent.data?.locked_trees[e.node_id]) return false;
     if (!find) return true;
     const t = `${e.node_id} ${feedLine(e).text}`.toLowerCase();
     return t.includes(find.toLowerCase());

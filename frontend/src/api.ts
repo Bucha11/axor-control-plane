@@ -809,6 +809,7 @@ export type LockReason = "developer" | "agent_family";
 export interface Entitlements {
   tier: string; free: boolean;
   developers: number | null; agent_families: number | null; agent_family: string | null;
+  agent_family_chosen?: boolean;
   locked: Record<string, LockReason[]>;
   locked_trees: Record<string, LockReason[]>;
   reasons: Record<LockReason, string>;
@@ -1283,6 +1284,11 @@ export const api = {
   // Their fleet history and their own bill. Both were reachable only by curl:
   // measured, priced, tested, and invisible to the customer they are about.
   entitlements: () => af("/v1/license/entitlements").then((r) => j<Entitlements>(r)),
+  chooseAgentFamily: (agent: string) =>
+    af("/v1/license/agent-family", {
+      method: "PUT", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ agent }),
+    }).then((r) => j<{ agent_family: string }>(r)),
   licenseUsage: (months = 3) =>
     af(`/v1/license/usage?months=${months}`).then((r) => j<UsageReport>(r)),
   licenseInvoice: (month?: string) =>

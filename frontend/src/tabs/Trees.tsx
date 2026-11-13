@@ -10,6 +10,7 @@ import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, type TreeItem, type TreeNode, type TreeRun } from "../api";
 import { navigate } from "../router";
+import { useApp } from "../store";
 import { C, MONO, btn } from "../theme";
 import Tooltip from "../components/Tooltip";
 
@@ -79,6 +80,8 @@ function TreeView({ treeRun }: { treeRun: string }) {
   const nodes = useQuery({ queryKey: ["nodes"], queryFn: api.nodes, refetchInterval: live ? LIVE_MS : IDLE_MS });
   const ent = useQuery({ queryKey: ["entitlements"], queryFn: api.entitlements, retry: false });
   const locked = ent.data?.locked_trees[treeRun];
+  const folded = useApp((s) => s.planNoticesFolded);
+  const setFolded = useApp((s) => s.setPlanNoticesFolded);
   const self = (nodes.data ?? []).find((n) => n.node_id === treeRun);
   const pending = new Set(
     ((self?.desired?.state.pending_excision as { target_refs?: string[] } | undefined)?.target_refs) ?? []);
@@ -113,13 +116,23 @@ function TreeView({ treeRun }: { treeRun: string }) {
       </div>
       {locked && (
         <div data-testid="tree-plan-lock" style={{ fontFamily: MONO, fontSize: 11.5, color: C.mut, lineHeight: 1.7,
-          border: `1px solid ${C.amber}`, borderRadius: 8, padding: "10px 14px", marginBottom: 16 }}>
+          border: `1px solid ${folded ? C.line : C.amber}`, borderRadius: 8,
+          padding: folded ? "4px 14px" : "10px 14px", marginBottom: 16 }}>
           <span style={{ color: C.amber }}>This tree mixes agent families — on the paid plan.</span>{" "}
-          The free plan keeps one family per tree (Claude Code writing and Claude Code reviewing is
-          free); every session in it is still protected by its hooks.{" "}
-          <span style={{ color: C.steel, cursor: "pointer" }} onClick={() => navigate("pricing?for=coding")}>
-            Coding plan · $25 / developer / month →
-          </span>
+          {!folded && (
+            <>
+              The free plan keeps one family per tree (Claude Code writing and Claude Code reviewing is
+              free); every session in it is still protected by its hooks.{" "}
+              <span style={{ color: C.steel, cursor: "pointer" }} onClick={() => navigate("pricing?for=coding")}>
+                Coding plan · $25 / developer / month →
+              </span>
+            </>
+          )}
+          <button onClick={() => setFolded(!folded)} data-testid="tree-plan-lock-fold"
+            style={{ float: "right", background: "none", border: "none", cursor: "pointer",
+                     fontFamily: MONO, fontSize: 10.5, color: C.dim }}>
+            {folded ? "▸ why" : "▴ fold"}
+          </button>
         </div>
       )}
 
