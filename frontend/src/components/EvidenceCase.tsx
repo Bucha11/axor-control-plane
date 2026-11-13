@@ -28,6 +28,11 @@ export function deviationHeadline(c: EvidenceCaseDto): string {
 // The receipt renders observed reality verbatim — the size-1 golden receipt
 // (e2e/golden-receipt.spec.ts) pins these bytes; rewording it is an operator
 // decision, not a styling change.
+/** A guest hit an account-only action: the app's sign-up prompt has it. */
+function needsAccount(err: unknown): boolean {
+  return err instanceof Error && err.message.includes("account_required");
+}
+
 export function render(value: unknown): string {
   return typeof value === "string" ? value : JSON.stringify(value);
 }
@@ -225,9 +230,12 @@ export default function EvidenceCase({
         </div>
       )}
       {(share.isError || revoked.isError) && (
-        <div className="px-4 py-2" style={{ borderTop: `1px solid ${C.line}`, fontFamily: MONO, fontSize: 10.5, color: C.red }}>
+        <div className="px-4 py-2" style={{ borderTop: `1px solid ${C.line}`, fontFamily: MONO, fontSize: 10.5,
+                                           color: needsAccount(share.error) ? C.mut : C.red }}>
           {share.isError
-            ? `share failed: ${(share.error as Error).message}`
+            ? needsAccount(share.error)
+              ? "share links need an account — sign up to share this receipt"
+              : `share failed: ${(share.error as Error).message}`
             : `revoke failed: ${(revoked.error as Error).message}`}
         </div>
       )}

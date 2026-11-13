@@ -38,7 +38,9 @@ class BackendUploader:
         payload = {"node_id": run.node_id, "scenario": run.scenario, "events": events}
         client = self._client or httpx.AsyncClient(timeout=15.0)
         owns = self._client is None
-        h = self._headers
+        # the armer's own credential wins: their run, their org
+        h = ({"Authorization": f"Bearer {run.upload_token}"}
+             if run.upload_token else self._headers)
         try:
             # raise_for_status so a backend 4xx (auth off-key, bad payload) is an
             # honest {"uploaded": false}, not a silent success.

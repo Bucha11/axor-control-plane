@@ -109,8 +109,9 @@ async def test_a_guest_works_in_an_org_of_its_own(client: httpx.AsyncClient) -> 
 
 async def test_account_features_ask_for_a_sign_up(client: httpx.AsyncClient) -> None:
     g = _bearer((await client.post("/v1/auth/guest")).json()["token"])
-    for method, path in (("POST", "/v1/keys"), ("GET", "/v1/notifications"),
-                         ("POST", "/v1/pins"), ("GET", "/v1/vault/creds")):
+    for method, path in (("POST", "/v1/keys"), ("GET", "/v1/notifications/subscriptions"),
+                         ("POST", "/v1/pins/r1"), ("GET", "/v1/vault/creds/audit"),
+                         ("POST", "/v1/runs/r1/cases/0/share"), ("POST", "/v1/regression")):
         r = await client.request(method, path, headers=g, json={})
         assert r.status_code == 403, path
         assert r.json()["error"] == "account_required"
@@ -158,3 +159,9 @@ async def test_only_a_signed_in_user_claims(client: httpx.AsyncClient) -> None:
     r = await client.post("/v1/auth/claim-guest", headers=_bearer(TOKEN),
                           json={"guest_token": guest["token"]})
     assert r.status_code == 403
+
+
+async def test_a_guest_still_reads_and_exports_its_own_runs(client: httpx.AsyncClient) -> None:
+    g = _bearer((await client.post("/v1/auth/guest")).json()["token"])
+    assert (await client.get("/v1/runs", headers=g)).status_code == 200
+    assert (await client.get("/v1/runs/nope/cases/0/export", headers=g)).status_code != 403

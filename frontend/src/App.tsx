@@ -17,7 +17,8 @@ import { Circle, GraduationCap, Plug, Settings as SettingsIcon } from "lucide-re
 import { api } from "./api";
 import { C, MONO } from "./theme";
 import { navigate, useRoute } from "./router";
-import { MODE_LABEL, isConnected, useApp } from "./store";
+import { MODE_LABEL, isConnected, isGuestToken, useApp } from "./store";
+import GuestSession, { guestTimeLeft } from "./components/GuestSession";
 import Tooltip from "./components/Tooltip";
 import Tour from "./components/Tour";
 import Home from "./tabs/Home";
@@ -134,6 +135,7 @@ export default function App() {
         </div>
       </div>
 
+      <GuestSession />
       {key === "home" && <Home />}
       {key === "evidence" && <Evidence />}
       {key === "catch" && <Experiment runId={runIdParam} autostart={route.query.auto === "1"} />}
@@ -314,6 +316,15 @@ function ConnectionBadge() {
  * they want their own data, the button is in the corner of every screen. */
 function AccountButton() {
   const email = useApp((s) => s.identityEmail);
+  const guest = isGuestToken(useApp((s) => s.apiToken));
+  const guestExpiresAt = useApp((s) => s.guestExpiresAt);
+  // re-render the countdown
+  const [, tick] = useState(0);
+  useEffect(() => {
+    if (!guest) return;
+    const t = window.setInterval(() => tick((n) => n + 1), 30_000);
+    return () => window.clearInterval(t);
+  }, [guest]);
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   // A local `docker compose up` runs with auth OFF: every request already
@@ -352,12 +363,12 @@ function AccountButton() {
         style={{
           background: "none", cursor: "pointer", borderRadius: 20, padding: "4px 12px",
           fontFamily: MONO, fontSize: 10.5,
-          border: `1px solid ${email ? C.line : C.steel}`,
-          color: email ? C.mut : C.steel,
-          maxWidth: 180, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+          border: `1px solid ${email ? C.line : guest ? C.amber : C.steel}`,
+          color: email ? C.mut : guest ? C.amber : C.steel,
+          maxWidth: guest ? 260 : 180, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
         }}
       >
-        {email || "sign in"}
+        {email || (guest ? `save your work · guest, ${guestTimeLeft(guestExpiresAt)}` : "sign in")}
       </button>
       {open && (
         <div
@@ -369,7 +380,13 @@ function AccountButton() {
             boxShadow: "0 8px 24px rgba(0,0,0,0.35)",
           }}
         >
-          <IdentityLogin onDone={() => setOpen(false)} />
+          {guest && (
+            <div style={{ fontFamily: MONO, fontSize: 11, color: C.mut, lineHeight: 1.6, marginBottom: 10 }}>
+              You are working as a guest: nothing is kept after the session ends. Sign up free —
+              your runs, agents and caught lies move into the new workspace.
+            </div>
+          )}
+          <IdentityLogin initialMode={guest ? "signup" : "login"} onDone={() => setOpen(false)} />
         </div>
       )}
     </div>

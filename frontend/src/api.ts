@@ -538,7 +538,55 @@ async function af(path: string, init: RequestInit = {}, retried = false): Promis
   if (resp.status === 401 && !retried && (await refreshSession(token))) {
     return af(path, init, true);
   }
+  // A guest session ran out: start a fresh one and carry on (the expired
+  // one's work stays claimable at sign-up).
+  if (resp.status === 401 && !retried && token.startsWith("gs_") && (await renewGuest(token))) {
+    return af(path, init, true);
+  }
+  // only for something the user DID: a panel's background read that needs an
+  // account shows that inline, it does not throw a sign-up in their face
+  if (resp.status === 403 && (init.method ?? "GET").toUpperCase() !== "GET") {
+    noteAccountRequired(resp);
+  }
   return resp;
+}
+
+// ── hosted guest sessions ─────────────────────────────────────────────────────
+
+let renewing: Promise<boolean> | null = null;
+
+/** Start a guest session (hosted plane, AXOR_GUEST_SESSIONS). False when the
+ * deployment offers none or is full. One at a time. */
+export async function startGuest(stale?: string): Promise<boolean> {
+  if (stale && apiToken() !== stale) return true;   // someone else renewed it
+  if (!renewing) {
+    renewing = fetch("/v1/auth/guest", { method: "POST" })
+      .then(async (r) => {
+        if (!r.ok) return false;
+        const g = (await r.json()) as { token: string; expires_at: string };
+        useApp.getState().setGuest(g.token, g.expires_at);
+        return true;
+      })
+      .catch(() => false)
+      .finally(() => {
+        renewing = null;
+      });
+  }
+  return renewing;
+}
+
+function renewGuest(stale: string): Promise<boolean> {
+  return startGuest(stale);
+}
+
+/** A guest reached a feature that needs an account: tell the app, which asks
+ * for a sign-up right there, naming what it unlocks. */
+function noteAccountRequired(resp: Response): void {
+  void resp.clone().json().then((body: { error?: string; feature?: string }) => {
+    if (body?.error === "account_required") {
+      window.dispatchEvent(new CustomEvent("axor:account-required", { detail: body }));
+    }
+  }).catch(() => undefined);
 }
 
 // One refresh at a time. The refresh token is single-use (identity rotates it),
@@ -983,7 +1031,10 @@ export const api = {
   startRun: (scenario: string, faults: { tool: string; mode: string }[], nodeId = "proxy") =>
     af("/axor/runs", {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      // whose run this is: the proxy uploads it with this credential, so it
+      // lands in the guest's or user's own org rather than the proxy's
+      headers: { "content-type": "application/json",
+                 ...(apiToken() ? { "X-Axor-Upload-Token": apiToken() } : {}) },
       body: JSON.stringify({ scenario, faults, node_id: nodeId }),
     }).then((r) => j<StartRunResult>(r)),
   simulate: (runId: string, body: Record<string, unknown> = {}) =>
@@ -1283,9 +1334,18 @@ export const api = {
     }).then((r) => j<LicenseInfo>(r)),
 
   // ── auth: local token + scoped API keys (architecture section 9) ───────────
+  // Move a guest session's work into the signed-in account.
+  claimGuest: (guestToken: string) =>
+    af("/v1/auth/claim-guest", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ guest_token: guestToken }),
+    }).then((r) => j<{ claimed: boolean; moved: Record<string, number> }>(r)),
+
   authStatus: () =>
     af("/v1/auth/status").then((r) =>
-      j<{ auth_enabled: boolean; authenticated: boolean; scopes: string[] }>(r),
+      j<{ auth_enabled: boolean; authenticated: boolean; scopes: string[];
+          guest_sessions?: boolean; guest?: boolean }>(r),
     ),
   listKeys: () =>
     af("/v1/keys").then((r) =>

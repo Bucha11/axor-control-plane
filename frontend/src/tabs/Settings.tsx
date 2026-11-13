@@ -100,12 +100,14 @@ function OrgMembers() {
   );
 }
 
-export function IdentityLogin({ onDone }: { onDone?: () => void } = {}) {
+export function IdentityLogin({ onDone, initialMode = "login" }: {
+  onDone?: () => void; initialMode?: "login" | "signup";
+} = {}) {
   const identityEmail = useApp((s) => s.identityEmail);
   const setSession = useApp((s) => s.setSession);
   const clearSession = useApp((s) => s.clearSession);
   const qc = useQueryClient();
-  const [mode, setMode] = useState<"login" | "signup">("login");
+  const [mode, setMode] = useState<"login" | "signup">(initialMode);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [orgName, setOrgName] = useState("");

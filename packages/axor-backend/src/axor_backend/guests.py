@@ -31,16 +31,16 @@ TOKEN_PREFIX = "gs_"
 ORG_PREFIX = "guest_"
 GUEST_SCOPES = frozenset({"read", "ingest", "operate"})
 
-# (method or "*", path prefix, feature) — what needs an account
-ACCOUNT_ONLY: tuple[tuple[str, str, str], ...] = (
-    ("POST", "/v1/share", "share links"),
-    ("*", "/v1/notifications", "notifications"),
-    ("POST", "/v1/pins", "the regression corpus"),
-    ("*", "/v1/corpus", "the regression corpus"),
-    ("*", "/v1/lab", "Lab deploys"),
-    ("*", "/v1/vault", "the vault"),
-    ("*", "/v1/keys", "API and node keys"),
-    ("*", "/v1/license", "licences"),
+# (method or "*", path prefix, path suffix, feature) — what needs an account
+ACCOUNT_ONLY: tuple[tuple[str, str, str, str], ...] = (
+    ("POST", "/v1/runs/", "/share", "share links"),
+    ("*", "/v1/notifications", "", "notifications"),
+    ("POST", "/v1/pins/", "", "the regression corpus"),
+    ("*", "/v1/regression", "", "the regression corpus"),
+    ("*", "/v1/lab/", "", "Lab deploys"),
+    ("*", "/v1/vault", "", "the vault"),
+    ("*", "/v1/keys", "", "API and node keys"),
+    ("*", "/v1/license", "", "licences"),
 )
 
 
@@ -49,8 +49,8 @@ def hash_token(token: str) -> str:
 
 
 def account_only(method: str, path: str) -> str | None:
-    for m, prefix, feature in ACCOUNT_ONLY:
-        if (m == "*" or m == method) and path.startswith(prefix):
+    for m, prefix, suffix, feature in ACCOUNT_ONLY:
+        if (m == "*" or m == method) and path.startswith(prefix) and path.endswith(suffix):
             return feature
     return None
 

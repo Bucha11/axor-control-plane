@@ -83,6 +83,10 @@ class Run:
     claims: AgentClaims | None = None
     evidence: list[EvidenceCase] = field(default_factory=list)
     completed: bool = False
+    # The CP credential of whoever armed this run (sent as X-Axor-Upload-Token),
+    # so its trace lands in THEIR org — a hosted guest's or a user's — rather
+    # than the proxy's own. Held in memory for the run only; never in the trace.
+    upload_token: str | None = field(default=None, repr=False)
 
     def next_seq(self) -> int:
         s = self.seq

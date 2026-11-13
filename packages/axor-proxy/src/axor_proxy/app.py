@@ -641,6 +641,10 @@ def create_app(state: ProxyState) -> Starlette:
                 {"error": "bad_manifests", "detail": f"{type(exc).__name__}: {exc}"},
                 status_code=400,
             )
+        # A browser on the hosted plane names whose run this is: its own CP
+        # credential (a guest's or a user's), so the upload lands in its org.
+        upload_token = request.headers.get("x-axor-upload-token", "").strip()
+        run.upload_token = upload_token or None
         return JSONResponse(
             {"run_id": run.run_id, "armed": True,
              "governed": run.governor is not None,

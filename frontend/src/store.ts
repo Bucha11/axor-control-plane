@@ -31,6 +31,11 @@ interface AppState {
   refreshToken: string;
   // Who is logged in, for display (identity login only).
   identityEmail: string;
+  // Hosted guest sessions this tab has held (newest first; the live one is
+  // also `apiToken`). Kept so signing up can claim every one of them — an
+  // expired guest's work is still claimable for a day.
+  guestTokens: string[];
+  guestExpiresAt: string;
   // Signed command posture (protocol §6). When both are set, operator commands
   // and facts are canonicalized in the browser and signed by the vault signing
   // custody (never the operator key itself — only this token, which authorizes
@@ -59,6 +64,9 @@ interface AppState {
   // establish an identity session (access + refresh + email); clear it on logout
   setSession: (access: string, refresh: string, email: string) => void;
   clearSession: () => void;
+  // start (or renew) a guest session: it becomes the bearer
+  setGuest: (token: string, expiresAt: string) => void;
+  clearGuests: () => void;
   setSigningKeyId: (id: string) => void;
   setVaultSigningToken: (token: string) => void;
   setVaultCredsToken: (token: string) => void;
@@ -81,7 +89,7 @@ export const MODE_LABEL: Record<ConnectionMode, string> = {
 
 // Keys whose values are credentials; everything else is UI preference.
 const SECRET_KEYS = [
-  "apiToken", "refreshToken", "vaultSigningToken", "vaultCredsToken",
+  "apiToken", "refreshToken", "vaultSigningToken", "vaultCredsToken", "guestTokens",
 ] as const;
 
 // One Storage face over two backing stores: session for the secret half of the
@@ -165,6 +173,8 @@ export const useApp = create<AppState>()(
       apiToken: "",
       refreshToken: "",
       identityEmail: "",
+      guestTokens: [],
+      guestExpiresAt: "",
       signingKeyId: "",
       vaultSigningToken: "",
       vaultCredsToken: "",
@@ -189,6 +199,13 @@ export const useApp = create<AppState>()(
       setSession: (access, refresh, email) =>
         set({ apiToken: access, refreshToken: refresh, identityEmail: email }),
       clearSession: () => set({ apiToken: "", refreshToken: "", identityEmail: "" }),
+      setGuest: (token, expiresAt) =>
+        set((s) => ({
+          apiToken: token,
+          guestTokens: [token, ...s.guestTokens.filter((t) => t !== token)].slice(0, 5),
+          guestExpiresAt: expiresAt,
+        })),
+      clearGuests: () => set({ guestTokens: [], guestExpiresAt: "" }),
       setSigningKeyId: (id) => set({ signingKeyId: id }),
       setVaultSigningToken: (token) => set({ vaultSigningToken: token }),
       setVaultCredsToken: (token) => set({ vaultCredsToken: token }),
@@ -222,3 +239,6 @@ export const useApp = create<AppState>()(
     },
   ),
 );
+
+/** A hosted guest session's bearer (no account yet). */
+export const isGuestToken = (token: string): boolean => token.startsWith("gs_");

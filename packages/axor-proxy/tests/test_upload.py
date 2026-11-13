@@ -93,3 +93,45 @@ async def test_claim_uploads_trace_and_evidence(stack) -> None:  # noqa: ANN001
     # until that stopped being the case.
     assert report["rows"] == []
     assert report["safe_to_ship"] is False
+
+
+async def test_a_guest_run_lands_in_the_guests_org(tmp_path: pathlib.Path, monkeypatch) -> None:  # noqa: ANN001
+    """On the hosted plane the proxy uploads with its own key (the public
+    org), so a guest's experiment was invisible to the guest. The browser now
+    names whose run it is, and the upload carries that credential."""
+    monkeypatch.setenv("AXOR_GUEST_SESSIONS", "1")
+    backend = create_backend(
+        database_url=f"sqlite+aiosqlite:///{tmp_path}/g.db",
+        operator_keys={}, allow_unsigned=True, api_token="proxy-master",
+    )
+    backend_client = httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=backend), base_url="http://backend.test"
+    )
+    async with backend.router.lifespan_context(backend):
+        upstream = httpx.AsyncClient(transport=make_upstream(), base_url="http://upstream.test")
+        state = ProxyState(
+            tools={"web_search": "http://upstream.test/s"}, trace_dir=tmp_path, client=upstream,
+            uploader=BackendUploader("http://backend.test", client=backend_client,
+                                     ingest_key="proxy-master"),
+        )
+        proxy = httpx.AsyncClient(transport=httpx.ASGITransport(app=create_proxy(state)),
+                                  base_url="http://proxy.test")
+        guest = (await backend_client.post("/v1/auth/guest")).json()["token"]
+        run_id = (await proxy.post(
+            "/axor/runs", headers={"X-Axor-Upload-Token": guest},
+            json={"scenario": "tool-deprivation",
+                  "faults": [{"tool": "web_search", "mode": "silent_fail"}]},
+        )).json()["run_id"]
+        await proxy.get("/t/web_search/", params={"q": "x"})
+        claim = (await proxy.post(f"/axor/runs/{run_id}/claim", json={
+            "text": "rates rose", "claims": {"tools_succeeded": ["web_search"]},
+        })).json()
+        assert claim["upload"]["uploaded"] is True
+
+        as_guest = {"Authorization": f"Bearer {guest}"}
+        as_operator = {"Authorization": "Bearer proxy-master"}
+        guest_runs = (await backend_client.get("/v1/runs", headers=as_guest)).json()
+        public_runs = (await backend_client.get("/v1/runs", headers=as_operator)).json()
+        assert [r["run_id"] for r in guest_runs] == [run_id]
+        assert all(r["run_id"] != run_id for r in public_runs)
+        assert guest_runs[0]["evidence"]          # the lie is the guest's to see
