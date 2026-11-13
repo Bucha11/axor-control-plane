@@ -1,7 +1,11 @@
 """The rate card, and the statement drawn from it (axor-packaging.md §1).
 
-One ladder: a rung carries a monthly price and an allowance of governed nodes,
-and a fleet past the allowance is charged per node. `node_activity` measures the
+One ladder: a rung carries a monthly price, an allowance of governed nodes and
+an allowance of developer seats; a fleet past the node allowance is charged per
+node, and developers past the seat allowance per seat. Two meters because there
+are two journeys: production agents are counted as governed nodes, coding
+agents (Claude Code / Codex sessions) as the developers running them — a coding
+session is not a node, or one developer would be a fleet by lunchtime. `node_activity` measures the
 fleet; this turns a measurement into a line a customer can be asked to pay.
 
 Three rules shape every function here.
@@ -35,9 +39,14 @@ from datetime import UTC, date, datetime
 # it is contracted — see the module docstring.
 RATE_CARD: dict[str, tuple[int, int]] = {
     "community": (0, 0),
+    "coding": (0, 0),
     "team": (299_00, 75_00),
     "security": (1_500_00, 50_00),
 }
+# per developer seat beyond the rung's included seats, in cents. Community has
+# none to sell: one developer is free, and a second is the coding plan.
+SEAT_PRICE: dict[str, int] = {"community": 0, "coding": 25_00, "team": 25_00,
+                              "security": 25_00}
 CURRENCY = "USD"
 
 
@@ -68,6 +77,10 @@ class Statement:
     computed_on: str
     priced: bool  # false for a contracted rung: usage measured, total withheld
     note: str
+    included_developers: int = 0
+    active_developers: int = 0
+    billable_developers: int = 0
+    seat_cents: int = 0
 
     def as_dict(self) -> dict[str, object]:
         return {
@@ -89,6 +102,11 @@ class Statement:
             "computed_on": self.computed_on,
             "priced": self.priced,
             "note": self.note,
+            "included_developers": self.included_developers,
+            "active_developers": self.active_developers,
+            "billable_developers": self.billable_developers,
+            "seat_cents": self.seat_cents,
+            "seats": money(self.seat_cents),
         }
 
 
@@ -108,6 +126,8 @@ def statement(
     peak_day: str | None,
     *,
     on: date | None = None,
+    included_developers: int = 0,
+    active_developers: int = 0,
 ) -> Statement:
     """The statement for one month, from the rung and the measured peak.
 
@@ -117,6 +137,10 @@ def statement(
     closed = month_is_closed(month, on)
     today = (on or datetime.now(UTC).date()).isoformat()
     billable = max(0, peak_nodes - included_nodes)
+    billable_devs = max(0, active_developers - included_developers)
+    devs = {"included_developers": included_developers,
+            "active_developers": active_developers,
+            "billable_developers": billable_devs}
     rate = RATE_CARD.get(workspace_tier)
     if rate is None:
         return Statement(
@@ -125,7 +149,7 @@ def statement(
             base_cents=0, included_nodes=included_nodes,
             peak_nodes=peak_nodes, peak_day=peak_day,
             billable_nodes=billable, overage_cents=0, total_cents=0,
-            provisional=not closed, computed_on=today, priced=False,
+            provisional=not closed, computed_on=today, priced=False, **devs,
             note=(
                 f"the {workspace_tier} rung is contracted and has no list "
                 "price; the usage above is what it is billed from, and the "
@@ -134,11 +158,13 @@ def statement(
         )
     base, per_node = rate
     overage = billable * per_node
+    seats = billable_devs * SEAT_PRICE.get(workspace_tier, 0)
     return Statement(
         month=month, organization=organization, workspace_tier=workspace_tier,
         currency=CURRENCY, base_cents=base, included_nodes=included_nodes,
         peak_nodes=peak_nodes, peak_day=peak_day, billable_nodes=billable,
-        overage_cents=overage, total_cents=base + overage,
+        overage_cents=overage, total_cents=base + overage + seats,
+        seat_cents=seats, **devs,
         provisional=not closed, computed_on=today, priced=True,
         note=(
             "final" if closed else

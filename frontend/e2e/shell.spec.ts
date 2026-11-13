@@ -66,7 +66,7 @@ test.describe("shell", () => {
   test("governing your own agent starts at connect", async ({ page }) => {
     await goHash(page, "home");
     await page.getByRole("button", { name: /Govern my own agent/ }).click();
-    await expect(page).toHaveURL(/#\/connect$/);
+    await expect(page).toHaveURL(/#\/connect\?for=production$/);
     await expect(page.getByText(/What tools does your agent use\?/)).toBeVisible();
   });
 
@@ -74,7 +74,8 @@ test.describe("shell", () => {
     await goHash(page, "explain");
     await page.getByRole("button", { name: "connect", exact: true }).click();
     await expect(page).toHaveURL(/#\/connect$/);
-    await expect(page.getByText(/What tools does your agent use\?/)).toBeVisible();
+    // the header does not know which way in: it asks
+    await expect(page.getByTestId("journey-chooser")).toBeVisible();
   });
 
   test("primary nav is the product's loop, in plain words", async ({ page }) => {

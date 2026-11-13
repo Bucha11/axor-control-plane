@@ -1087,14 +1087,22 @@ def test_the_rate_card_and_the_pricing_page_state_one_ladder() -> None:
     """
     import pathlib
 
-    from axor_backend.ee.license import TIER_NODE_CEILING
-    from axor_backend.ee.pricing import RATE_CARD, money
+    from axor_backend.ee.license import TIER_DEVELOPER_SEATS, TIER_NODE_CEILING
+    from axor_backend.ee.pricing import RATE_CARD, SEAT_PRICE, money
 
     page = (pathlib.Path(__file__).resolve().parents[3]
             / "frontend" / "src" / "tabs" / "Pricing.tsx").read_text()
+    # the coding-agent meter: a seat price, and the seats each rung includes
+    for tier, seat_cents in SEAT_PRICE.items():
+        if seat_cents:
+            assert f"{money(seat_cents).removesuffix('.00')} / developer / mo" in page, tier
+        seats = TIER_DEVELOPER_SEATS[tier]
+        if seats > 1:
+            assert f"{seats} developer seats" in page, (tier, seats)
+    assert "1 developer" in page  # community's free seat
     for tier, (base_cents, over_cents) in RATE_CARD.items():
-        if tier == "community":
-            continue  # free: the page states $0 without a rate or an allowance
+        if tier in ("community", "coding"):
+            continue  # no base, no node allowance to sell: priced by seat above
         base = money(base_cents).removesuffix(".00")
         over = money(over_cents).removesuffix(".00")
         included = TIER_NODE_CEILING[tier]

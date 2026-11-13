@@ -39,6 +39,7 @@ EXPECTED: dict[tuple[str, str], str] = {
     ("POST", "/v1/funnel"): "OPEN",
     ("GET", "/v1/funnel"): "read",
     ("POST", "/v1/trees/{tree_run}"): "ingest",
+    ("POST", "/v1/plane/{node_id}/profile"): "ingest",
     ("GET", "/v1/trees"): "read",
     ("GET", "/v1/trees/{tree_run}"): "read",
     ("GET", "/v1/share/{token}"): "OPEN",

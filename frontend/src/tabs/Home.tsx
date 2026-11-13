@@ -65,11 +65,21 @@ function FirstVisit() {
           </span>
           <ArrowRight size={18} />
         </button>
-        <button onClick={() => navigate("connect")} style={{ ...bigCta(C.steel, false) }}>
+        <button onClick={() => navigate("connect?for=production")} style={{ ...bigCta(C.steel, false) }}>
           <span>
             <span style={{ display: "block", fontWeight: 700 }}>Govern my own agent</span>
             <span style={{ display: "block", fontSize: 12, opacity: 0.85, marginTop: 2 }}>
               wrap it with axor-core · pause, cap, stop and repair it live
+            </span>
+          </span>
+          <ArrowRight size={18} />
+        </button>
+        <button onClick={() => navigate("connect?for=coding")} style={{ ...bigCta(C.steel, false) }}
+          data-testid="home-coding">
+          <span>
+            <span style={{ display: "block", fontWeight: 700 }}>Govern my coding agents</span>
+            <span style={{ display: "block", fontSize: 12, opacity: 0.85, marginTop: 2 }}>
+              Claude Code and Codex · two commands · every session on the plane
             </span>
           </span>
           <ArrowRight size={18} />

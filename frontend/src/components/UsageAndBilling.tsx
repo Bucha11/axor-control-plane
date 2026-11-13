@@ -73,6 +73,15 @@ export default function UsageAndBilling() {
           {m.over_ceiling && (
             <span style={{ color: C.amber, fontSize: 10 }}>over ceiling</span>
           )}
+          {(m.active_developers ?? 0) > 0 && (
+            <Tooltip content="Developers whose coding agents (Claude Code, Codex) reported this month — counted once each, however many sessions. Not governed nodes.">
+              <span style={{ color: C.text, fontSize: 10.5 }} data-testid={`devs-${m.month}`}>
+                · {m.active_developers} developer{m.active_developers === 1 ? "" : "s"}
+                {usage.data?.developer_seats != null
+                  ? <span style={{ color: C.dim }}> of {usage.data.developer_seats} seats</span> : null}
+              </span>
+            </Tooltip>
+          )}
         </div>
       ))}
       {usage.data && usage.data.months.every((m) => m.peak_nodes === 0) && (
@@ -113,6 +122,13 @@ export default function UsageAndBilling() {
                     ? `${invoice.data.billable_nodes} node(s) past the ${invoice.data.included_nodes} included → ${money(invoice.data.overage_cents, invoice.data.currency)}`
                     : `peak ${invoice.data.peak_nodes} within the ${invoice.data.included_nodes} included`}
                 </div>
+                {(invoice.data.active_developers ?? 0) > 0 && (
+                  <div style={{ color: C.mut, fontSize: 10.5, marginTop: 3 }}>
+                    {invoice.data.billable_developers
+                      ? `${invoice.data.billable_developers} developer(s) past the ${invoice.data.included_developers} included → ${money(invoice.data.seat_cents ?? 0, invoice.data.currency)}`
+                      : `${invoice.data.active_developers} developer(s) within the ${invoice.data.included_developers} included`}
+                  </div>
+                )}
                 <div style={{ color: C.text, marginTop: 3 }}>
                   total {money(invoice.data.total_cents, invoice.data.currency)}
                 </div>

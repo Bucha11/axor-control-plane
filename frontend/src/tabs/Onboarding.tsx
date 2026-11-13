@@ -4,7 +4,9 @@ import { useState } from "react";
 import { useMutation } from "@tanstack/react-query";
 import { ArrowRight, Check, Circle, Copy, Plug, RefreshCw, Zap } from "lucide-react";
 import { api } from "../api";
-import { navigate } from "../router";
+import { navigate, useRoute } from "../router";
+import CodingOnboarding from "../components/CodingOnboarding";
+import type { Journey } from "./Pricing";
 import { ConnectionMode, useApp } from "../store";
 import { C, MONO, btn } from "../theme";
 import Coach from "../components/Coach";
@@ -67,7 +69,73 @@ function parseMcpConfig(raw: string): McpTarget[] {
   return targets;
 }
 
+// Three ways in. A team that wants its coding agents governed has no tools to
+// declare and no base URLs to repoint; a team wrapping a production agent does
+// not care about Claude Code. Each gets its own path; "both" walks both.
+const WAYS: { id: Journey; title: string; body: string }[] = [
+  { id: "coding", title: "Coding agents",
+    body: "Claude Code and Codex, through their hooks. Two commands; every session shows up here." },
+  { id: "production", title: "My production agent",
+    body: "Your own agent in production: put the proxy in front of its tools, or wrap it with an adapter." },
+  { id: "both", title: "Both",
+    body: "Your developers' coding agents and your production fleet, on one plane." },
+];
+
 export default function Onboarding() {
+  const route = useRoute();
+  // the old /get-started link was the proxy walkthrough: it still is
+  const initial = route.query.for ?? (route.segments[0] === "get-started" ? "production" : undefined);
+  const [way, setWay] = useState<Journey | null>(
+    initial === "coding" || initial === "production" || initial === "both" ? initial : null);
+  const [codingDone, setCodingDone] = useState(false);
+  const choose = (j: Journey) => { setWay(j); setCodingDone(false); navigate(`connect?for=${j}`); };
+
+  if (way === null) {
+    return (
+      <div style={{ maxWidth: 640, margin: "0 auto" }} data-testid="journey-chooser">
+        <h1 style={{ fontSize: 22, fontWeight: 650, margin: "0 0 4px" }}>What do you want to govern?</h1>
+        <div style={{ fontFamily: MONO, fontSize: 11.5, color: C.mut, marginBottom: 16 }}>
+          Pick one — you can add the other later.
+        </div>
+        <div className="flex flex-col gap-3">
+          {WAYS.map((w) => (
+            <button key={w.id} data-testid={`way-${w.id}`} onClick={() => choose(w.id)}
+              style={{
+                textAlign: "left", cursor: "pointer", background: C.panel, color: C.text,
+                border: `1px solid ${C.line}`, borderRadius: 8, padding: "14px 16px",
+              }}>
+              <div style={{ fontFamily: MONO, fontSize: 13.5, fontWeight: 700, marginBottom: 4 }}>{w.title}</div>
+              <div style={{ fontFamily: MONO, fontSize: 11.5, color: C.mut, lineHeight: 1.5 }}>{w.body}</div>
+            </button>
+          ))}
+        </div>
+      </div>
+    );
+  }
+
+  const back = (
+    <button onClick={() => { setWay(null); navigate("connect"); }}
+      style={btn({ color: C.dim, fontSize: 10.5, padding: "3px 10px", marginBottom: 14 })}>
+      ← choose another way in
+    </button>
+  );
+  if (way === "coding" || (way === "both" && !codingDone)) {
+    return (
+      <div style={{ maxWidth: 640, margin: "0 auto" }}>
+        {back}
+        <CodingOnboarding then={way === "both" ? () => setCodingDone(true) : undefined} />
+      </div>
+    );
+  }
+  return (
+    <div>
+      <div style={{ maxWidth: 640, margin: "0 auto" }}>{back}</div>
+      <ProductionOnboarding />
+    </div>
+  );
+}
+
+function ProductionOnboarding() {
   const [step, setStep] = useState(1);
   const [tools, setTools] = useState<Tool[]>([]);
   const [copied, setCopied] = useState<string | null>(null);

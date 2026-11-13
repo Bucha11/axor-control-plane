@@ -7,8 +7,10 @@
 // decided nothing. Static, no backend. Safety and hobby-scale privacy are free
 // forever; you pay for hosted collaboration, the security workflow, and the
 // size of the governed fleet.
-import { C, MONO } from "../theme";
+import { useState } from "react";
+import { C, MONO, btn } from "../theme";
 import Coach from "../components/Coach";
+import { navigate, useRoute } from "../router";
 
 // A feature is either shipping today or on the roadmap. We mark the difference
 // explicitly rather than listing aspirational capabilities as if they exist — a
@@ -22,6 +24,22 @@ interface Feature {
 
 type Kind = "free" | "paid" | "contract";
 
+// Three ways in. Someone governing Claude Code / Codex does not care about the
+// production runtime, someone wrapping a production agent does not care about
+// coding agents, and some want both — each sees the plans for their way in,
+// metered the way their agents run: coding agents by DEVELOPER (a session is
+// not a governed node), production agents by governed node.
+export type Journey = "coding" | "production" | "both";
+
+export const JOURNEYS: { id: Journey; label: string; blurb: string }[] = [
+  { id: "coding", label: "Coding agents",
+    blurb: "Claude Code and Codex, governed through their hooks — priced per developer." },
+  { id: "production", label: "A production agent",
+    blurb: "Your own agent in production, wrapped and governed — priced per governed node." },
+  { id: "both", label: "Both",
+    blurb: "One plan: the production fleet and your developers' coding agents." },
+];
+
 interface Tier {
   name: string;
   price: string; // the "price shape", not an invoice
@@ -32,6 +50,8 @@ interface Tier {
   kind: Kind;
   note: string; // free-vs-paid / add-on line
   highlight?: boolean;
+  journeys: Journey[]; // which ways in show this plan
+  highlightFor?: Journey[];
 }
 
 // Badge colour + label per kind (matches the theme's four-colour taxonomy).
@@ -61,9 +81,33 @@ const TIERS: Tier[] = [
       { text: "Config Builder" },
       { text: "runtime enforcement — gates, degradation, denials" },
       { text: "1 governed node" },
+      { text: "1 developer — Claude Code / Codex governed through hooks" },
     ],
     kind: "free",
     note: "free forever — safety never checks a license, at any scale",
+    journeys: ["coding", "production", "both"],
+  },
+  {
+    name: "Coding",
+    price: "$25 / developer / mo",
+    priceNote: "card · per developer whose coding agents ran that month",
+    module: "Coding agents + Control Plane",
+    who: "teams governing Claude Code and Codex · no production runtime needed",
+    features: [
+      { text: "everything in Community, plus:", plus: true },
+      { text: "Claude Code + Codex hooks, one install command each" },
+      { text: "one taint ledger per repository, shared by every agent in it" },
+      { text: "agent trees — planner → parallel readers → implementer, any agent / model" },
+      { text: "read-only readers, findings checked against the files they opened" },
+      { text: "ranked, budgeted context between agents · cut from the Control Plane" },
+      { text: "every session on the Control Plane: pause, stop, call budget" },
+      { text: "reputation per agent and model, across sessions" },
+      { text: "a developer = someone whose agents reported that month, not a session" },
+    ],
+    kind: "paid",
+    note: "paid — coding agents only; add production agents with Team",
+    journeys: ["coding"],
+    highlightFor: ["coding"],
   },
   {
     name: "Team Workspace",
@@ -86,9 +130,13 @@ const TIERS: Tier[] = [
       { text: "limited retention", roadmap: true },
       { text: "includes 10,000 hosted trials", roadmap: true },
       { text: "+$75 / governed node / mo beyond 10" },
+      { text: "5 developer seats included — everything in Coding" },
+      { text: "+$25 / developer / mo beyond 5" },
     ],
     kind: "paid",
     note: "paid — the self-serve first step, workspace and runtime together",
+    journeys: ["production", "both"],
+    highlightFor: ["production"],
   },
   {
     name: "Security Workspace",
@@ -108,10 +156,13 @@ const TIERS: Tier[] = [
       { text: "longer history + integration hooks", roadmap: true },
       { text: "includes 50,000 hosted trials", roadmap: true },
       { text: "+$50 / governed node / mo beyond 50" },
+      { text: "25 developer seats included — everything in Coding" },
+      { text: "+$25 / developer / mo beyond 25" },
     ],
     kind: "paid",
     note: "paid — the primary commercial unit",
-    highlight: true,
+    journeys: ["production", "both"],
+    highlightFor: ["both"],
   },
   {
     name: "Enterprise Platform",
@@ -126,12 +177,14 @@ const TIERS: Tier[] = [
       { text: "self-hosted backend (Postgres / SQLite)" },
       { text: "VPC / air-gapped deployment", roadmap: true },
       { text: "negotiated governed-node band" },
+      { text: "negotiated developer seats" },
       { text: "audit + retention policies · compliance exports", roadmap: true },
       { text: "private benchmark registry", roadmap: true },
       { text: "SLA + support", roadmap: true },
     ],
     kind: "contract",
     note: "contracted — the top rung of the same ladder, not a separate product",
+    journeys: ["coding", "production", "both"],
   },
 ];
 
@@ -158,7 +211,15 @@ function ctaLabel(tier: Tier): string {
   return `Get ${tier.name}`;
 }
 
+function initialJourney(query: Record<string, string>): Journey {
+  const want = query.for;
+  return want === "coding" || want === "production" || want === "both" ? want : "both";
+}
+
 export default function Pricing() {
+  const route = useRoute();
+  const [journey, setJourney] = useState<Journey>(() => initialJourney(route.query));
+  const shown = TIERS.filter((t) => t.journeys.includes(journey));
   return (
     <div style={{ maxWidth: 1040, margin: "0 auto" }}>
       <Coach id="pricing" title="Pricing — one ladder">
@@ -179,17 +240,36 @@ export default function Pricing() {
         never for how much you run.
       </div>
 
-      <div
-        style={{ fontFamily: MONO, fontSize: 10.5, color: C.mut, marginBottom: 24, lineHeight: 1.7 }}
-      >
-        Community&nbsp;→&nbsp;Team Workspace&nbsp;→&nbsp;Security Workspace&nbsp;→&nbsp;Enterprise Platform
+      <div style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim, marginBottom: 6, letterSpacing: "0.06em" }}>
+        WHAT ARE YOU GOVERNING?
+      </div>
+      <div className="flex gap-2 flex-wrap" style={{ marginBottom: 10 }} role="tablist">
+        {JOURNEYS.map((j) => (
+          <button key={j.id} role="tab" aria-selected={journey === j.id}
+            data-testid={`journey-${j.id}`}
+            onClick={() => { setJourney(j.id); navigate(`pricing?for=${j.id}`); }}
+            style={btn({
+              color: journey === j.id ? C.text : C.mut,
+              borderColor: journey === j.id ? C.steel : C.line,
+              fontSize: 12, padding: "6px 14px",
+            })}>
+            {j.label}
+          </button>
+        ))}
+      </div>
+      <div style={{ fontFamily: MONO, fontSize: 11, color: C.mut, marginBottom: 24, lineHeight: 1.7 }}>
+        {JOURNEYS.find((j) => j.id === journey)!.blurb}
         <br />
-        Every rung: the workspace and the Control Plane together. What grows with
-        the rung is the governed fleet, not the feature matrix.
+        {journey === "coding"
+          ? "A developer is counted once a month, however many sessions, agents or trees they ran. One developer is free."
+          : journey === "production"
+            ? "Community → Team Workspace → Security Workspace → Enterprise Platform. What grows with the rung is the governed fleet, not the feature matrix."
+            : "Team and Security include developer seats, so one plan covers the fleet and the coding agents. Only coding agents? The Coding plan is cheaper."}
       </div>
 
       <div className="flex gap-4" style={{ flexWrap: "wrap" }}>
-        {TIERS.map((t) => {
+        {shown.map((t) => {
+          const highlight = t.highlightFor?.includes(journey) ?? false;
           const meta = KIND_META[t.kind];
           return (
             <div
@@ -199,9 +279,10 @@ export default function Pricing() {
                 flex: "1 1 190px",
                 minWidth: 190,
                 background: C.panel,
-                border: `1px solid ${t.highlight ? C.steel : C.line}`,
+                border: `1px solid ${highlight ? C.steel : C.line}`,
                 borderRadius: 10,
               }}
+              data-testid={`tier-${t.name.split(" ")[0].toLowerCase()}`}
             >
               <div className="flex items-center justify-between mb-1">
                 <div style={{ fontFamily: MONO, fontSize: 13.5, fontWeight: 700, color: C.text }}>
@@ -285,7 +366,7 @@ export default function Pricing() {
                   marginTop: 10,
                   textAlign: "center",
                   textDecoration: "none",
-                  border: `1px solid ${t.highlight ? C.steel : C.line}`,
+                  border: `1px solid ${highlight ? C.steel : C.line}`,
                   borderRadius: 6,
                   padding: "8px 12px",
                   fontFamily: MONO,

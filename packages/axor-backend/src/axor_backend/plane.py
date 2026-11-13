@@ -1017,6 +1017,30 @@ async def build_excision(node_id: str, body: dict, request: Request) -> dict:
 # second answer to the question Sentinel exists to answer.
 
 
+_PROFILE_KINDS = ("agent", "coding", "tree")
+
+
+@router.post("/{node_id}/profile", status_code=204)
+async def post_profile(node_id: str, body: dict, request: Request) -> None:
+    """What this node is, said once by the node: a production ``agent``, a
+    ``coding`` agent session (Claude Code / Codex through their hooks), or a
+    ``tree`` run. Coding sessions and tree runs are metered by the developer
+    running them, not counted as governed nodes; ``developer`` is an opaque id
+    the client derives (never an address). The first profile stands."""
+    kind = body.get("kind")
+    if kind not in _PROFILE_KINDS:
+        raise HTTPException(400, f"kind must be one of {list(_PROFILE_KINDS)}")
+    agent = str(body.get("agent") or "")[:40]
+    developer = str(body.get("developer") or "")
+    if developer and not all(c.isalnum() or c in "-_." for c in developer) \
+            or len(developer) > 64:
+        raise HTTPException(400, "developer is an opaque id: letters, digits, -_. "
+                                 "(at most 64)")
+    if kind == "coding" and not developer:
+        raise HTTPException(400, "a coding session names its developer (an opaque id)")
+    await _ctx(request).store.put_node_profile(node_id, kind, agent, developer, now())
+
+
 @router.post("/{node_id}/reputation", status_code=201)
 async def post_reputation(node_id: str, body: dict, request: Request) -> dict:
     """Ingest one ReputationSnapshot from a node's axor-sentinel.

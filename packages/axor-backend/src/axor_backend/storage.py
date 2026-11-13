@@ -385,6 +385,19 @@ funnel_events = Table(
     Column("dedup_key", String(200), nullable=True, unique=True),
 )
 
+# What a node is (migration 0021): `coding` (a Claude Code / Codex session) and
+# `tree` (a tree run) are metered by developer, not as governed nodes.
+NON_FLEET_KINDS = ("coding", "tree")
+node_profiles = Table(
+    "node_profiles", metadata,
+    Column("org_id", String(64), primary_key=True),
+    Column("node_id", String(200), primary_key=True),
+    Column("kind", String(16), nullable=False),
+    Column("agent", String(40), nullable=False, server_default=""),
+    Column("developer", String(64), nullable=False, server_default="", index=True),
+    Column("first_ts", String(40), nullable=False),
+)
+
 # Agent tree runs (axor-wrap `tree run`): the latest snapshot of each run —
 # stages, nodes, the context that flowed between them. Replaced as the run goes.
 tree_runs = Table(
@@ -1341,6 +1354,55 @@ class Store:
                     org_id=org, node_id=node_id, day=day,
                 ))
 
+    async def put_node_profile(self, node_id: str, kind: str, agent: str,
+                               developer: str, ts: str) -> None:
+        """First word wins: a node is what it said it was when it first
+        reported, so a later profile cannot move it out of the fleet count."""
+        org = current_org_id()
+        async with self.engine.begin() as conn:
+            held = (await conn.execute(select(node_profiles.c.node_id).where(
+                node_profiles.c.org_id == org,
+                node_profiles.c.node_id == node_id))).first()
+            if held is None:
+                await conn.execute(node_profiles.insert().values(
+                    org_id=org, node_id=node_id, kind=kind, agent=agent,
+                    developer=developer, first_ts=ts))
+
+    async def node_kinds(self) -> dict[str, dict[str, str]]:
+        async with self.engine.connect() as conn:
+            rows = (await conn.execute(select(node_profiles).where(
+                node_profiles.c.org_id == current_org_id()))).all()
+        return {r.node_id: {"kind": r.kind, "agent": r.agent, "developer": r.developer}
+                for r in rows}
+
+    async def developer_usage(self, start_day: str, end_day: str) -> dict[str, Any]:
+        """Developers whose coding agents reported in the range — the seat
+        count — and their sessions per agent. Ids are opaque hashes."""
+        async with self.engine.connect() as conn:
+            rows = (await conn.execute(
+                select(node_profiles.c.developer, node_profiles.c.agent,
+                       node_activity.c.node_id)
+                .select_from(node_activity.join(node_profiles, (
+                    (node_profiles.c.org_id == node_activity.c.org_id)
+                    & (node_profiles.c.node_id == node_activity.c.node_id))))
+                .where(node_activity.c.org_id == current_org_id(),
+                       node_activity.c.day >= start_day,
+                       node_activity.c.day <= end_day,
+                       node_profiles.c.kind == "coding",
+                       node_profiles.c.developer != ""))).all()
+        sessions: dict[str, set[str]] = {}
+        agents: dict[str, set[str]] = {}
+        for r in rows:
+            sessions.setdefault(r.developer, set()).add(r.node_id)
+            agents.setdefault(r.developer, set()).add(r.agent)
+        return {
+            "start_day": start_day, "end_day": end_day,
+            "active_developers": len(sessions),
+            "developers": [{"developer": d, "sessions": len(n),
+                            "agents": sorted(agents[d])}
+                           for d, n in sorted(sessions.items())],
+        }
+
     async def node_usage(self, start_day: str, end_day: str) -> dict[str, Any]:
         """This tenant's governed-node usage over an inclusive day range.
 
@@ -1357,12 +1419,18 @@ class Store:
         * ``days`` — the count per day, so the peak can be checked rather than
           believed.
         """
+        # coding-agent sessions and tree runs are not the fleet: they are
+        # metered by developer (developer_usage)
+        not_fleet = select(node_profiles.c.node_id).where(
+            node_profiles.c.org_id == current_org_id(),
+            node_profiles.c.kind.in_(NON_FLEET_KINDS))
         async with self.engine.connect() as conn:
             rows = (await conn.execute(
                 select(node_activity.c.day, node_activity.c.node_id).where(
                     node_activity.c.org_id == current_org_id(),
                     node_activity.c.day >= start_day,
                     node_activity.c.day <= end_day,
+                    node_activity.c.node_id.not_in(not_fleet),
                 )
             )).all()
         by_day: dict[str, set[str]] = {}

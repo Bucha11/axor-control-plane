@@ -652,10 +652,14 @@ export interface UsageMonth {
   distinct_nodes: number;
   days: { day: string; nodes: number }[];
   over_ceiling: boolean;
+  // the coding-agent meter: developers whose Claude Code / Codex sessions
+  // reported this month (a session is not a governed node)
+  active_developers?: number;
 }
 
 export interface UsageReport {
   governed_node_ceiling: number | null;
+  developer_seats?: number | null;
   months: UsageMonth[];
 }
 
@@ -671,6 +675,10 @@ export interface Statement {
   billable_nodes: number;
   overage_cents: number;
   total_cents: number;
+  included_developers?: number;
+  active_developers?: number;
+  billable_developers?: number;
+  seat_cents?: number;
   // The month is still running, so the peak can still rise.
   provisional: boolean;
   computed_on: string;

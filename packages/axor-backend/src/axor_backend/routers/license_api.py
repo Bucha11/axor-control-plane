@@ -48,6 +48,7 @@ from datetime import date, timedelta
 from fastapi import APIRouter, HTTPException
 
 from axor_backend.deps import ConfigDep, PrincipalDep, StateDep, StoreDep
+from axor_backend.ee.license import TIER_DEVELOPER_SEATS
 from axor_backend.ee.pricing import statement
 from axor_backend.licensing import (
     active_license,
@@ -238,16 +239,20 @@ async def license_usage(state: StateDep, store: StoreDep, months: int = 3) -> di
     for _ in range(span):
         start, end = billing_month(on.isoformat())
         usage = await store.node_usage(start, end)
+        devs = await store.developer_usage(start, end)
         periods.append({
             "month": start[:7],
             "peak_nodes": usage["peak_nodes"],
             "peak_day": usage["peak_day"],
             "distinct_nodes": usage["distinct_nodes"],
+            # the coding-agent meter: developers whose agents reported
+            "active_developers": devs["active_developers"],
             "days": usage["days"],
             "over_ceiling": ceiling is not None and usage["peak_nodes"] > ceiling,
         })
         on = date.fromisoformat(start) - timedelta(days=1)
-    return {"governed_node_ceiling": ceiling, "months": periods}
+    seats = TIER_DEVELOPER_SEATS.get(lic.workspace_tier) if lic else None
+    return {"governed_node_ceiling": ceiling, "developer_seats": seats, "months": periods}
 
 
 @router.get("/invoice")
@@ -288,6 +293,7 @@ async def license_invoice(
     except ValueError as exc:
         raise HTTPException(400, f"month must be YYYY-MM: {exc}") from exc
     usage = await store.node_usage(start, end)
+    devs = await store.developer_usage(start, end)
     line = statement(
         month=month,
         organization=lic.organization,
@@ -295,6 +301,8 @@ async def license_invoice(
         included_nodes=lic.governed_node_ceiling,
         peak_nodes=int(usage["peak_nodes"]),
         peak_day=usage["peak_day"],
+        included_developers=TIER_DEVELOPER_SEATS.get(lic.workspace_tier, 0),
+        active_developers=int(devs["active_developers"]),
     )
     return {
         **line.as_dict(),
@@ -304,5 +312,6 @@ async def license_invoice(
         "evidence": {
             "days": usage["days"],
             "distinct_nodes": usage["distinct_nodes"],
+            "developers": devs["developers"],
         },
     }

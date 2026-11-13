@@ -133,6 +133,9 @@ _ROUTE_POLICY: tuple[tuple[str, str, str], ...] = (
     # runs (ui-spec §12.0) — so `operate` here would mean the only party that
     # HAS the snapshot is the one party that cannot post it.
     ("/v1/plane/", "/reputation", "ingest"),
+    # A node saying what it is (production agent / coding session / tree run):
+    # out-dial, about itself, on its own credential — like telemetry.
+    ("/v1/plane/", "/profile", "ingest"),
     # Influence ranking is subgraph ablation: replay with one value excised.
     # Its siblings /v1/replay and /v1/regression are `read` for exactly that
     # reason; this one inherited `ingest` from the /v1/runs/ prefix, so a
