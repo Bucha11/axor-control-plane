@@ -52,6 +52,7 @@ const TIERS: Tier[] = [
       { text: "local runner + BYOK (your keys, we never resell tokens)" },
       { text: "public Lab experiments + publish" },
       { text: "local private projects" },
+      { text: "hosted Lab runs — 1 runtime, 50 runs / month" },
       { text: "EvidenceCase capture" },
       { text: "replay + counterfactuals" },
       { text: "regression corpus (local, unlimited)" },
