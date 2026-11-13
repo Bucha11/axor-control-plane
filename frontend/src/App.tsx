@@ -180,9 +180,14 @@ export default function App() {
   if (sidebar) {
     return (
       <div style={{ minHeight: "100vh", background: C.bg, color: C.text, fontFamily: "Inter, system-ui, sans-serif", display: "flex" }}>
-        <Sidebar active={PARENT_TAB[key] ?? key} view={key === "govern" ? governView : ""} connectPage={key === "connect"} settingsPage={key === "settings"} />
-        <main style={{ flex: 1, minWidth: 0, padding: "28px 24px" }}>
-          {body}
+        <Sidebar active={PARENT_TAB[key] ?? key} view={key === "govern" ? governView : ""} />
+        <main style={{ flex: 1, minWidth: 0, paddingBottom: 28 }}>
+          <TopBar
+            section={SECTION_TITLE[PARENT_TAB[key] ?? key] ?? ""}
+            view={key === "govern" && governView !== "govern"
+              ? (GOVERN_VIEWS.find(([r]) => r === governView)?.[1] ?? "") : ""}
+            connectPage={key === "connect"} settingsPage={key === "settings"} />
+          <div style={{ padding: "0 24px" }}>{body}</div>
         </main>
         <Tour />
       </div>
@@ -204,6 +209,11 @@ const GOVERN_VIEWS: [string, string][] = [
 
 const WIDE = "(min-width: 1000px)";
 
+const SECTION_TITLE: Record<string, string> = {
+  ...Object.fromEntries(LOOP.map((l) => [l.key, l.label])),
+  home: "Home", connect: "Connect", pricing: "Pricing", settings: "Settings",
+};
+
 /** Whether the window is wide enough for the sidebar. */
 function useWide(): boolean {
   const [wide, setWide] = useState(() =>
@@ -219,9 +229,7 @@ function useWide(): boolean {
 
 /** The navigation as a sidebar: sections, Agents' views under it, and the
  * session's controls at the bottom. */
-function Sidebar({ active, view, connectPage, settingsPage }: {
-  active: string; view: string; connectPage: boolean; settingsPage: boolean;
-}) {
+function Sidebar({ active, view }: { active: string; view: string }) {
   const item = (on: boolean, indent: boolean): React.CSSProperties => ({
     display: "block", width: "100%", textAlign: "left", cursor: "pointer",
     background: on ? "rgba(127,168,204,0.10)" : "none", border: "none",
@@ -265,16 +273,33 @@ function Sidebar({ active, view, connectPage, settingsPage }: {
         ))}
       </nav>
       <div style={{ flex: 1 }} />
-      <div className="flex flex-col" style={{ gap: 10, padding: "12px 0 0 16px", borderTop: `1px solid ${C.line}` }}>
-        <ConnectionBadge onConnect={connectPage} />
-        <div className="flex items-center" style={{ gap: 8, flexWrap: "wrap" }}>
-          <LearnToggle />
-          <SettingsButton active={settingsPage} />
-        </div>
-        <AccountButton />
+      <div style={{ padding: "12px 0 0 16px" }}>
         <VersionBadge />
       </div>
     </aside>
+  );
+}
+
+/** The bar over the page beside the sidebar: where you are, and the
+ * session's controls — the header's job, without its navigation. */
+function TopBar({ section, view, connectPage, settingsPage }: {
+  section: string; view: string; connectPage: boolean; settingsPage: boolean;
+}) {
+  return (
+    <div data-testid="topbar" className="flex items-center" style={{
+      gap: 12, padding: "14px 24px", borderBottom: `1px solid ${C.line}`, marginBottom: 24,
+      position: "sticky", top: 0, background: C.bg, zIndex: 20,
+    }}>
+      <div style={{ fontFamily: MONO, fontSize: 13, color: C.text, fontWeight: 700, minWidth: 0 }}>
+        {section}
+        {view && <span style={{ color: C.dim, fontWeight: 400 }}>{"  ·  "}{view}</span>}
+      </div>
+      <div style={{ flex: 1 }} />
+      <LearnToggle />
+      <ConnectionBadge onConnect={connectPage} />
+      <SettingsButton active={settingsPage} />
+      <AccountButton />
+    </div>
   );
 }
 

@@ -44,6 +44,9 @@ test.describe("control graph lens", () => {
     // you see before Control has anything of yours on it.
     await setConnection(page, { mode: "proxy" });
     await goHash(page, "control");
+    await page.getByText(/needs the adapter/).waitFor();
+    const fold = page.getByRole("button", { name: "example agents ▾" });
+    if (await fold.isVisible()) await fold.click();
     await page.getByRole("button", { name: /load the canned tree/ }).click();
     // Seeding from here also connects in adapter mode, so Control swaps to the
     // real view — the confirmation line belongs to the screen that stays.

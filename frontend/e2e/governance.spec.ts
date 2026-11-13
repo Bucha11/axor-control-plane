@@ -11,6 +11,9 @@ test.describe.serial("governance on the example fleet", () => {
     await setConnection(page, { mode: "demo" });
     await goHash(page, "govern");
     await expect(page.getByText(/needs the adapter/)).toBeVisible();
+    // other specs may have put agents on this plane: then the examples are folded
+    const fold = page.getByRole("button", { name: "example agents ▾" });
+    if (await fold.isVisible()) await fold.click();
     await page.getByRole("button", { name: "Load an example fleet" }).first().click();
     await page.getByRole("button", { name: "graph", exact: true }).click();
     for (const n of ["tree-orch", "tree-research", "tree-writer", "tree-scraper"]) {

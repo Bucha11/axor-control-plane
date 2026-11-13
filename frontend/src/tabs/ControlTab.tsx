@@ -282,19 +282,44 @@ export default function ControlTab({ focusNode }: { focusNode?: string }) {
   // internal topology (spec section 12). That used to be a locked page with
   // nothing behind it; now the page is open, says so up front, and has an
   // example fleet to operate.
+  const hasAgents = (fleet.data ?? []).length > 0;
+  const [examples, setExamples] = useState(false);
+  const note = (
+    <>
+      live control of <span style={{ color: C.text }}>your</span> agents needs the adapter
+      (wrap the agent with axor-core — <span style={{ color: C.steel, cursor: "pointer" }}
+        onClick={() => navigate("connect")}>connect →</span>)
+    </>
+  );
   return (
     <>
-      {!isAdapter(mode) && (
+      {/* decided once the list is in: a note that unfolds and then folds
+          itself takes the button out from under the pointer */}
+      {!isAdapter(mode) && fleet.isSuccess && (hasAgents ? (
+        // agents are already on screen: one line, the example tools folded away
+        <div data-testid="adapter-note" style={{ fontFamily: MONO, fontSize: 11, color: C.mut,
+                                                  lineHeight: 1.6, marginBottom: 14 }}>
+          {note}.{" "}
+          <button onClick={() => setExamples((v) => !v)}
+            style={{ background: "none", border: "none", padding: 0, cursor: "pointer",
+                     fontFamily: MONO, fontSize: 11, color: C.steel }}>
+            {examples ? "hide example agents ▴" : "example agents ▾"}
+          </button>
+          {examples && (
+            <div style={{ border: `1px solid ${C.line}`, borderRadius: 8, padding: "10px 12px", marginTop: 8 }}>
+              {!fleetLoaded && <ExampleFleet />}
+              <SpawnGoverned switchToAdapter />
+            </div>
+          )}
+        </div>
+      ) : (
         <div style={{ maxWidth: 640, margin: "0 auto 16px", fontFamily: MONO, fontSize: 11, color: C.mut,
                       lineHeight: 1.6, border: `1px solid ${C.line}`, borderRadius: 8, padding: "10px 12px" }}>
-          live control of <span style={{ color: C.text }}>your</span> agents needs the adapter
-          (wrap the agent with axor-core — <span style={{ color: C.steel, cursor: "pointer" }}
-            onClick={() => navigate("connect")}>connect →</span>). until then, everything here
-          works on {fleetLoaded ? "the" : "an"} example fleet{fleetLoaded ? "." : ":"}
+          {note}. until then, everything here works on an example fleet:
           {!fleetLoaded && <ExampleFleet />}
           <SpawnGoverned switchToAdapter />
         </div>
-      )}
+      ))}
       <ControlBody focusNode={focusNode} testBench={testBench} />
     </>
   );
@@ -450,9 +475,6 @@ function ControlBody({ focusNode, testBench }: { focusNode?: string; testBench: 
 
   return (
     <div className="fleet-grid">
-    <aside className="fleet-side fleet-sticky" data-testid="fleet-sidebar">
-      <FleetSidebar list={list} statuses={statuses} rows={fleetRows} sel={sel} onPick={pick} />
-    </aside>
     <div style={{ minWidth: 0 }}>
       <Coach id="control" title="Control — operate governed agents live">
         Each row is a live governed agent (a node). Click one to open its panel:{" "}

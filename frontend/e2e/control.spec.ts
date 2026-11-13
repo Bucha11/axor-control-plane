@@ -7,6 +7,14 @@ import { expect, request, test } from "@playwright/test";
 import snapshotFixture from "./fixtures/reputation-snapshot.json" with { type: "json" };
 import { BACKEND, goHash, seedDegradedNode, seedNode, setConnection, uniqueNode } from "./helpers";
 
+// With agents already on the plane the example tools are folded under one
+// line; with none they are open. Either way, open them.
+async function openExamples(page: import("@playwright/test").Page): Promise<void> {
+  const fold = page.getByRole("button", { name: "example agents ▾" });
+  await page.getByText(/needs the adapter/).waitFor();
+  if (await fold.isVisible()) await fold.click();
+}
+
 test.describe("control", () => {
   test("without the adapter it is open, honest about it, and has something to operate", async ({ page }) => {
     // It used to be a locked page with nothing behind it, which made
@@ -15,6 +23,7 @@ test.describe("control", () => {
     await goHash(page, "control");
     await expect(page.getByText(/live control of/)).toBeVisible();
     await expect(page.getByText(/needs the adapter/)).toBeVisible();
+    await openExamples(page);
     await expect(page.getByRole("button", { name: "Load an example fleet" })).toBeVisible();
     await expect(page.getByRole("button", { name: /Spawn a governed demo node/ })).toBeVisible();
   });
@@ -150,6 +159,7 @@ test.describe("control", () => {
     test.setTimeout(60_000);
     await setConnection(page, { mode: "proxy" });
     await goHash(page, "control");
+    await openExamples(page);
     await page.getByRole("button", { name: /Spawn a governed demo node/ }).click();
     // The proxy runs a real axor-core IntentLoop, uploads its trace and keeps a
     // PlaneClient heartbeating; the UI switches to adapter and lists it live.

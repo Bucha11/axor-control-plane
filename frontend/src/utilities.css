@@ -69,11 +69,12 @@ html, body { margin: 0; background: #12161A; }  /* C.bg: no white beyond the app
   input, select, textarea { font-size: 16px !important; }
 }
 
-/* Agents console: fleet sidebar · main · activity feed. Narrow screens keep
-   the main column and put the feed under it; the sidebar repeats the list. */
+/* Agents console: main · activity feed (the app's sidebar is the navigation;
+   a second list of agents beside the list of agents was one too many).
+   Narrow screens put the feed under the main column. */
 .fleet-grid {
   display: grid;
-  grid-template-columns: 210px minmax(0, 1fr) 300px;
+  grid-template-columns: minmax(0, 1fr) 300px;
   gap: 20px;
   max-width: 1440px;
   margin: 0 auto;
