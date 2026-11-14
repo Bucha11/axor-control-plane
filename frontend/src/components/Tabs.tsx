@@ -5,6 +5,9 @@ import { C, MONO } from "../theme";
 export interface TabItem<T extends string> {
   id: T;
   label: string;
+  // a second line under a large tab: what is behind it, so the tab you are
+  // not on still reads as a way in rather than a greyed-out word
+  hint?: string;
   testId?: string;
 }
 
@@ -29,10 +32,15 @@ export default function Tabs<T extends string>({ items, active, onChange, size =
               background: "none", border: "none", cursor: "pointer", whiteSpace: "nowrap",
               padding: size === "lg" ? "8px 0 10px" : "6px 0 8px", marginBottom: -1,
               fontFamily: MONO, fontSize, fontWeight: on ? 700 : 400,
-              color: on ? C.text : C.dim,
+              color: on ? C.text : size === "lg" ? C.mut : C.dim,
               borderBottom: `2px solid ${on ? C.steel : "transparent"}`,
+              textAlign: "left",
             }}>
             {t.label}
+            {t.hint && (
+              <span style={{ display: "block", fontWeight: 400, fontSize: fontSize - 3, marginTop: 2,
+                             color: on ? C.mut : C.dim }}>{t.hint}</span>
+            )}
           </button>
         );
       })}

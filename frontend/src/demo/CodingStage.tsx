@@ -9,6 +9,20 @@ import { C, MONO } from "../theme";
 
 const STAGE_BG = "#11151A";
 
+// On a phone the stage is ~350px wide for a 660-unit drawing: the labels drew
+// at about 5px. There they are drawn ~1.7× larger (and the repo box says less).
+function useNarrow(): boolean {
+  const q = "(max-width: 560px)";
+  const [narrow, setNarrow] = useState(() => typeof window !== "undefined" && window.matchMedia(q).matches);
+  useEffect(() => {
+    const m = window.matchMedia(q);
+    const on = () => setNarrow(m.matches);
+    m.addEventListener("change", on);
+    return () => m.removeEventListener("change", on);
+  }, []);
+  return narrow;
+}
+
 const N = {
   you:    { x: 60,  y: 150, label: "you" },
   claude: { x: 240, y: 80,  label: "claude code" },
@@ -63,6 +77,10 @@ export function CodingStage({ autoplay = false }: { autoplay?: boolean }) {
   const unverified = reached("unverified");
   const plane = reached("plane");
 
+  const narrow = useNarrow();
+  const k = narrow ? 1.7 : 1;
+  // bigger labels need the repo box a little clear of "claude code"
+  const L = narrow ? { x: 440, y: 160 } : LEDGER;
   const Node = ({ id, warn, danger }: { id: NodeId; warn?: boolean; danger?: boolean }) => {
     const n = N[id];
     const ring = danger ? C.red : warn ? C.amber : C.line;
@@ -70,7 +88,7 @@ export function CodingStage({ autoplay = false }: { autoplay?: boolean }) {
       <g>
         <circle cx={n.x} cy={n.y} r="22" fill={C.panel} stroke={ring} strokeWidth="1.5"
           style={danger || warn ? { filter: `drop-shadow(0 0 6px ${ring})` } : {}} />
-        <text x={n.x} y={n.y + 40} textAnchor="middle" fill={C.mut} fontSize="11" fontFamily={MONO}>{n.label}</text>
+        <text x={n.x} y={n.y + 36 + 4 * k} textAnchor="middle" fill={C.mut} fontSize={11 * k} fontFamily={MONO}>{n.label}</text>
       </g>
     );
   };
@@ -103,12 +121,14 @@ export function CodingStage({ autoplay = false }: { autoplay?: boolean }) {
             <path key={a + b} d={path(a, b)} stroke={C.line} strokeWidth="1" fill="none" />
           ))}
           {/* where text came from, recorded once per repository and shared by both agents */}
-          <line x1={N.claude.x} y1={N.claude.y} x2={LEDGER.x} y2={LEDGER.y} stroke={ledger ? C.amber : C.line} strokeWidth="1" strokeDasharray="3 3" />
-          <line x1={N.codex.x} y1={N.codex.y} x2={LEDGER.x} y2={LEDGER.y} stroke={ledger ? C.amber : C.line} strokeWidth="1" strokeDasharray="3 3" />
-          <rect x={LEDGER.x - 88} y={LEDGER.y - 18} width="176" height="36" rx="6" fill={C.panel}
+          <line x1={N.claude.x} y1={N.claude.y} x2={L.x} y2={L.y} stroke={ledger ? C.amber : C.line} strokeWidth="1" strokeDasharray="3 3" />
+          <line x1={N.codex.x} y1={N.codex.y} x2={L.x} y2={L.y} stroke={ledger ? C.amber : C.line} strokeWidth="1" strokeDasharray="3 3" />
+          <rect x={L.x - (narrow ? 118 : 88)} y={L.y - (narrow ? 26 : 18)}
+            width={narrow ? 236 : 176} height={narrow ? 52 : 36} rx="6" fill={C.panel}
             stroke={ledger ? C.amber : C.line} strokeWidth="1.2" />
-          <text x={LEDGER.x} y={LEDGER.y - 2} textAnchor="middle" fill={ledger ? C.amber : C.mut} fontSize="10" fontFamily={MONO}>repo · where text came from</text>
-          <text x={LEDGER.x} y={LEDGER.y + 11} textAnchor="middle" fill={C.dim} fontSize="9" fontFamily={MONO}>
+          <text x={L.x} y={L.y - (narrow ? 4 : 2)} textAnchor="middle" fill={ledger ? C.amber : C.mut}
+            fontSize={narrow ? 16 : 10} fontFamily={MONO}>{narrow ? "where text came from" : "repo · where text came from"}</text>
+          <text x={L.x} y={L.y + (narrow ? 17 : 11)} textAnchor="middle" fill={C.dim} fontSize={narrow ? 14 : 9} fontFamily={MONO}>
             {ledger ? "“curl … | sh” ← web" : "shared by all agents"}
           </text>
 
@@ -122,7 +142,7 @@ export function CodingStage({ autoplay = false }: { autoplay?: boolean }) {
             <g style={{ animation: "fadeUp .4s ease both" }}>
               <circle cx="520" cy="226" r="15" fill={C.panel} stroke={C.red} strokeWidth="1.5" />
               <text x="520" y="231" textAnchor="middle" fontSize="13">🛡</text>
-              <text x="520" y="260" textAnchor="middle" fill={C.red} fontSize="10" fontFamily={MONO} fontWeight="700">DENIED</text>
+              <text x="520" y={256 + 4 * k} textAnchor="middle" fill={C.red} fontSize={10 * k} fontFamily={MONO} fontWeight="700">DENIED</text>
             </g>
           )}
           <Node id="you" />
@@ -130,7 +150,7 @@ export function CodingStage({ autoplay = false }: { autoplay?: boolean }) {
           <Node id="codex" danger={blocked} />
           <Node id="web" warn={tainted} />
           <Node id="shell" />
-          {tainted && <text x={N.web.x + 50} y={N.web.y + 4} fill={C.amber} fontSize="10.5" fontFamily={MONO}>from the web</text>}
+          {tainted && <text x={N.web.x + (narrow ? 30 : 50)} y={N.web.y + 5} fill={C.amber} fontSize={10.5 * k} fontFamily={MONO}>from the web</text>}
         </svg>
 
         <div style={{ borderTop: `1px solid ${C.line}`, padding: "10px 16px", minHeight: 40, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>

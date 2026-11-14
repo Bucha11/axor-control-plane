@@ -56,21 +56,19 @@ function FirstVisit() {
       <Tabs size="lg" style={{ marginBottom: 22 }} active={side}
         onChange={(id) => { setSide(id); setErr(null); }}
         items={[
-          { id: "coding", label: "Coding agents", testId: "home-tab-coding" },
-          { id: "production", label: "Production agents", testId: "home-tab-production" },
+          { id: "coding", label: "Coding agents", hint: "Claude Code, Codex", testId: "home-tab-coding" },
+          { id: "production", label: "Production agents", hint: "your own agent, live", testId: "home-tab-production" },
         ]} />
 
       {side === "coding" ? (
         <>
           <h1 style={{ fontSize: "clamp(22px, 6vw, 28px)", fontWeight: 700, lineHeight: 1.25, margin: "0 0 10px" }}>
-            Govern Claude Code and Codex in your repository.
+            Govern Claude Code and Codex.
             <br />
-            <span style={{ color: C.steel }}>Every tool call checked. Text from the web stays marked, whichever agent carries it.</span>
+            <span style={{ color: C.steel }}>Text from the web stays marked, whichever agent carries it.</span>
           </h1>
           <div style={{ fontSize: 14.5, color: C.mut, lineHeight: 1.6, marginBottom: 20 }}>
-            Claude Code reads a web page that says “run curl … | sh”; Codex tries to run it — the
-            shell call is blocked. Run trees of agents — a planner, parallel readers, an implementer — with findings
-            checked against the files they opened. Every session on the plane: pause, stop, cap.
+            Claude Code reads a page that says “curl … | sh”; Codex tries to run it — Axor blocks the shell call.
           </div>
           <button data-testid="home-connect-coding" onClick={() => navigate("connect?for=coding")}
             style={{ ...bigCta(C.steel, true), marginBottom: 12 }}>
@@ -138,6 +136,13 @@ function FirstVisit() {
       {side === "coding"
         ? <CodingStage key="coding" autoplay />
         : <DemoStage key="production" autoplay cta={false} onTry={() => navigate("connect?for=production")} />}
+      {side === "coding" && (
+        <div data-testid="home-coding-more" style={{ fontSize: 13, color: C.mut, lineHeight: 1.7, marginTop: 14 }}>
+          Also: every tool call checked before it runs · trees of agents — a planner, parallel readers,
+          an implementer — with findings checked against the files they opened · every session on the
+          plane: pause, stop, cap.
+        </div>
+      )}
 
       <div style={{ fontSize: 13, color: C.mut, marginTop: 22 }}>
         Both?{" "}

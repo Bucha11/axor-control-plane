@@ -9,7 +9,7 @@ test.describe("shell", () => {
     await goHash(page, "home");
     await expect(page.getByTestId("first-visit")).toBeVisible();
     // coding agents first: its own headline, way in, example and recording
-    await expect(page.getByText("Govern Claude Code and Codex in your repository.")).toBeVisible();
+    await expect(page.getByText("Govern Claude Code and Codex.")).toBeVisible();
     await expect(page.getByTestId("home-connect-coding")).toBeVisible();
     await expect(page.getByTestId("home-example-coding")).toBeVisible();
     await expect(page.getByTestId("coding-demo-contain")).toBeVisible({ timeout: 20_000 });
@@ -52,7 +52,7 @@ test.describe("shell", () => {
     );
     await goHash(page, "home");
     // No wall: the funnel is on screen before anyone has an account.
-    await expect(page.getByText("Govern Claude Code and Codex in your repository.")).toBeVisible();
+    await expect(page.getByText("Govern Claude Code and Codex.")).toBeVisible();
     await expect(page.getByLabel("email")).toHaveCount(0);
     // ...and signing in is not a trip to Settings.
     await page.getByRole("button", { name: "sign in", exact: true }).click();
@@ -65,7 +65,7 @@ test.describe("shell", () => {
 
   test("with auth off (a local run) there is no sign-in to offer", async ({ page }) => {
     await goHash(page, "home");
-    await expect(page.getByText("Govern Claude Code and Codex in your repository.")).toBeVisible();
+    await expect(page.getByText("Govern Claude Code and Codex.")).toBeVisible();
     await expect(page.getByRole("button", { name: "sign in", exact: true })).toHaveCount(0);
   });
 
