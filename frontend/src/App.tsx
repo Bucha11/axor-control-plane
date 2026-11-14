@@ -22,7 +22,7 @@ import { MODE_LABEL, isConnected, isGuestToken, useApp } from "./store";
 import GuestSession, { guestTimeLeft } from "./components/GuestSession";
 import { track } from "./funnel";
 import Tooltip from "./components/Tooltip";
-import { codingExampleOnly } from "./components/CodingOnboarding";
+import { codingExampleOnly, fleetExampleOnly } from "./components/CodingOnboarding";
 import Tour from "./components/Tour";
 import Home from "./tabs/Home";
 import Evidence from "./tabs/Evidence";
@@ -407,7 +407,8 @@ function ConnectionBadge({ onConnect }: { onConnect: boolean }) {
   // the coding example runs on the demo connection, but "mock tools" is the
   // production proxy's demo — for a coding visitor it is example data
   const nodes = useQuery({ queryKey: ["nodes"], queryFn: api.nodes, enabled: mode === "demo" });
-  const label = mode === "demo" && codingExampleOnly((nodes.data ?? []).map((n) => n.node_id))
+  const ids = (nodes.data ?? []).map((n) => n.node_id);
+  const label = mode === "demo" && (codingExampleOnly(ids) || fleetExampleOnly(ids))
     ? "example data" : MODE_LABEL[mode];
   // On the connect page itself a "connect" button leads where you already are.
   if (mode === "none" && onConnect) return null;

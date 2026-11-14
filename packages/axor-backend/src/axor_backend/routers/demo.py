@@ -126,7 +126,16 @@ async def seed_fleet(
     """
     from axor_backend import demo, plane
 
-    await seed_tree_run(store, cache)
+    # the canned tree run, stamped now, a second apart: the example reads as a
+    # run that just happened ("just now", in order), not the fixture's date
+    # with every event at the same midnight
+    from datetime import UTC, datetime, timedelta
+
+    start = datetime.now(UTC) - timedelta(seconds=len(demo.TREE_EVENTS))
+    await _seed(store, cache, "ex_tree", demo.TREE_ORCH, "multi-agent-demo",
+                [{**e, "ts": (start + timedelta(seconds=i)).isoformat()}
+                 for i, e in enumerate(demo.TREE_EVENTS)],
+                demo.TREE_EVIDENCE)
     nodes = [demo.TREE_ORCH, demo.TREE_RESEARCH, demo.TREE_WRITER, demo.TREE_SCRAPER]
     for node in nodes:
         # a heartbeat's worth of reported state, so each node is listed and

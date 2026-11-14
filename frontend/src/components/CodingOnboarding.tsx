@@ -34,6 +34,13 @@ export function isCodingSession(nodeId: string): boolean {
 
 /** The coding example (Home → Explore example coding agents) and nothing of a
  * production fleet: the screens then talk about coding agents, not adapters. */
+/** The production example (Home → Explore an example fleet): its four
+ * agents and nothing of the visitor's own. */
+export const FLEET_EXAMPLE = ["tree-orch", "tree-research", "tree-scraper", "tree-writer"];
+export function fleetExampleOnly(ids: string[]): boolean {
+  return ids.includes("tree-orch") && ids.every((id) => FLEET_EXAMPLE.includes(id));
+}
+
 export function codingExampleOnly(ids: string[]): boolean {
   const example = ids.some((id) => /^(claude-code|codex)-example-/.test(id));
   const production = ids.some((id) => !isCodingSession(id) && !id.startsWith("tree-"));

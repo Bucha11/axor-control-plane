@@ -12,7 +12,7 @@ import { isAdapter, useApp } from "../store";
 import { C, MONO, btn } from "../theme";
 import Coach from "../components/Coach";
 import Tooltip from "../components/Tooltip";
-import { codingExampleOnly } from "../components/CodingOnboarding";
+import { codingExampleOnly, fleetExampleOnly } from "../components/CodingOnboarding";
 
 const REFETCH_MS = 5000;
 
@@ -146,7 +146,7 @@ function attention(n: NodeInfo): { label: string; color: string; route?: string 
                route: `sentinel?node=${encodeURIComponent(n.node_id)}` });
   }
   if (n.probe?.verdict === "DRIFT_DETECTED") {
-    out.push({ label: "probe · drift", color: C.amber,
+    out.push({ label: "health · drifted", color: C.amber,
                route: `health?node=${encodeURIComponent(n.node_id)}` });
   }
   return out;
@@ -297,7 +297,8 @@ export default function ControlTab({ focusNode }: { focusNode?: string }) {
       {/* decided once the list is in: a note that unfolds and then folds
           itself takes the button out from under the pointer */}
       {!isAdapter(mode) && fleet.isSuccess
-        && !codingExampleOnly((fleet.data ?? []).map((n) => n.node_id)) && (hasAgents ? (
+        && !codingExampleOnly((fleet.data ?? []).map((n) => n.node_id))
+        && !fleetExampleOnly((fleet.data ?? []).map((n) => n.node_id)) && (hasAgents ? (
         // agents are already on screen: one line, the example tools folded away
         <div data-testid="adapter-note" style={{ fontFamily: MONO, fontSize: 11, color: C.mut,
                                                   lineHeight: 1.6, marginBottom: 14 }}>
@@ -523,6 +524,9 @@ function ControlBody({ focusNode, testBench }: { focusNode?: string; testBench: 
       </Coach>
       {codingExampleOnly(list.map((n) => n.node_id)) && (
         <CodingExampleStory list={list} treeOf={treeOf} onPick={pick} />
+      )}
+      {fleetExampleOnly(list.map((n) => n.node_id)) && (
+        <FleetExampleStory onPick={pick} onGraph={() => setLens("graph")} />
       )}
       <h1 style={{ fontSize: 22, fontWeight: 650, margin: "0 0 4px" }}>
         {needYou === 0 ? <>All agents healthy.</>
@@ -1104,6 +1108,53 @@ function StatusChips({ units, filter, setFilter }: {
   );
 }
 
+/** The production example fleet, told: an orchestrator and its helpers, a
+ * made-up answer passed up the tree and refused on its way out, a leak only
+ * visible across sessions, a context gone bad — each a link to where it is. */
+function FleetExampleStory({ onPick, onGraph }: { onPick: (id: string) => void; onGraph: () => void }) {
+  const row = (n: string, testId: string, go: () => void, text: React.ReactNode) => (
+    <button onClick={go} data-testid={testId}
+      style={{ display: "block", textAlign: "left", width: "100%", background: "none", border: "none",
+               padding: "3px 0", cursor: "pointer", fontFamily: MONO, fontSize: 11.5, color: C.mut, lineHeight: 1.6 }}>
+      <span style={{ color: C.amber }}>{n}</span> {text} <span style={{ color: C.steel }}>open →</span>
+    </button>
+  );
+  return (
+    <div data-testid="fleet-example-story" style={{ border: `1px solid ${C.line}`, borderRadius: 8,
+      padding: "12px 16px", marginBottom: 18, background: C.panel }}>
+      <div style={{ fontFamily: MONO, fontSize: 10.5, color: C.steel, letterSpacing: "0.06em", marginBottom: 4 }}>
+        EXAMPLE · A RESEARCH AGENT AND ITS HELPERS
+      </div>
+      <div style={{ fontSize: 13, color: C.text, lineHeight: 1.6, marginBottom: 6 }}>
+        <span style={{ fontFamily: MONO }}>tree-orch</span> hands the work to{" "}
+        <span style={{ fontFamily: MONO }}>tree-research</span>, which uses{" "}
+        <span style={{ fontFamily: MONO }}>tree-scraper</span> for the web and{" "}
+        <span style={{ fontFamily: MONO }}>tree-writer</span> for the text.{" "}
+        <button onClick={onGraph} data-testid="story-graph"
+          style={{ background: "none", border: "none", padding: 0, cursor: "pointer", color: C.steel, fontSize: 13 }}>
+          see it as a tree →
+        </button>
+      </div>
+      {row("①", "story-lie", () => navigate("evidence"),
+        <>web search was broken on purpose; the scraper answered “rates rose 0.25%” anyway, and the
+          orchestrator passed it on as confirmed — <span style={{ color: C.red }}>caught lie</span>.</>)}
+      {row("②", "story-denied", () => onPick("tree-orch"),
+        <>the orchestrator then tried to post it to Slack —{" "}
+          <span style={{ color: C.red }}>denied</span>: the number came from the untrusted web.</>)}
+      {row("③", "story-flagged", () => navigate("sentinel?node=tree-research"),
+        <>across sessions, a customer table was touched in 4 runs that had read untrusted input, then an
+          export was tried — <span style={{ color: C.red }}>flagged</span>.</>)}
+      {row("④", "story-drift", () => navigate("health?node=tree-scraper"),
+        <>the scraper's answers drifted; the cause is one poisoned search result —{" "}
+          <span style={{ color: C.amber }}>cut it and check again</span>.</>)}
+      <button onClick={() => navigate("connect?for=production")} data-testid="story-govern"
+        style={btn({ color: C.text, borderColor: C.steel, fontSize: 11.5, padding: "5px 12px", marginTop: 10 })}>
+        Govern my production agent →
+      </button>
+    </div>
+  );
+}
+
 /** The coding example, told: two sessions in one repository, one carrying what
  * the other read; each step opens that session. Shown only while the plane
  * holds nothing but the example. */
@@ -1393,6 +1444,16 @@ function feedLine(e: ActivityEvent): { text: string; color: string } {
     }
     case "claim": return { text: `answered: ${String(p.text ?? "").slice(0, 60)}`, color: C.mut };
     case "fault_injected": return { text: `⚡ ${tool} broken on purpose`, color: C.steel };
+    case "message_sent": {
+      const to = String(p.to ?? "");
+      if (e.verdict === "deny") return { text: `→ message to ${to} denied`, color: C.red };
+      const carried = ((p.carried as { root?: { sources?: string[] } } | undefined)?.root?.sources ?? []);
+      return carried.length
+        ? { text: `→ message to ${to} · carries untrusted (${carried.join(", ")})`, color: C.amber }
+        : { text: `→ message to ${to}`, color: C.text };
+    }
+    case "message_received": return { text: `← message from ${String(p.from ?? "")}`, color: C.text };
+    case "node_spawned": return { text: `started ${String(p.child_id ?? "an agent")}`, color: C.mut };
     case "denial": return { text: `denied ${tool}`, color: C.red };
     case "fact": return { text: `fact ${String(p.fact_type ?? "")}`, color: C.amber };
     default: {

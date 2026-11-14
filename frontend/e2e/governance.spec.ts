@@ -26,7 +26,7 @@ test.describe.serial("governance on the example fleet", () => {
     await goHash(page, "govern");
     await expect(page.getByRole("heading", { name: /agents? needs? attention\./ })).toBeVisible();
     // other specs share this backend and may leave a drifting node of their own
-    await expect(page.getByRole("button", { name: /probe · drift/ }).first()).toBeVisible();
+    await expect(page.getByRole("button", { name: /health · drifted/ }).first()).toBeVisible();
     await page.getByRole("button", { name: /reputation · 1 flagged/ }).first().click();
     await expect(page).toHaveURL(/#\/sentinel\?node=/);
   });

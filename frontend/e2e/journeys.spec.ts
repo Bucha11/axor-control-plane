@@ -271,3 +271,34 @@ test("pricing for coding: the free plan's button connects coding agents", async 
   await page.getByTestId("cta-community").click();
   await expect(page).toHaveURL(/#\/connect\?for=coding/);
 });
+
+test("Agents with only the example fleet tells its story", async ({ page, request }) => {
+  await setConnection(page, { mode: "none" });
+  await goHash(page, "home");
+  await page.getByTestId("home-tab-production").click();
+  // other specs share this plane: show this page what a visitor's plane holds
+  await page.route("**/v1/plane/nodes", async (route) => {
+    const all = await (await request.get(`${BACKEND}/v1/plane/nodes`)).json() as { node_id: string }[];
+    const fleet = ["tree-orch", "tree-research", "tree-scraper", "tree-writer"];
+    await route.fulfill({ json: all.filter((n) => fleet.includes(n.node_id)) });
+  });
+  await page.route("**/v1/plane/activity*", async (route) => {
+    const res = await (await request.get(`${BACKEND}/v1/plane/activity?limit=200`)).json() as
+      { events: { node_id: string }[] };
+    await route.fulfill({ json: { ...res, events: res.events.filter((e) => /^tree-(orch|research|scraper|writer)$/.test(e.node_id)) } });
+  });
+  await page.getByTestId("home-example-fleet").click();
+  const story = page.getByTestId("fleet-example-story");
+  await expect(story).toContainText("caught lie");
+  await expect(page.getByText(/needs the adapter/)).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "connection: example data" })).toBeVisible();
+  // the activity reads as messages between agents, not event kinds
+  await expect(page.getByTestId("fleet-activity")).toContainText("→ message to tree-research");
+  await expect(page.getByTestId("fleet-activity")).not.toContainText("message_sent");
+  await story.getByTestId("story-denied").click();
+  await expect(page.getByTestId("agent-panel")).toContainText("tree-orch");
+  await page.getByTestId("agent-panel-close").click();
+  await page.getByTestId("story-graph").click();
+  await expect(page.getByTestId("topo-node-tree-scraper")).toBeVisible();
+  await page.unrouteAll({ behavior: "ignoreErrors" });
+});
