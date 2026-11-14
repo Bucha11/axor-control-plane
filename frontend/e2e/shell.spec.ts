@@ -15,7 +15,7 @@ test.describe("shell", () => {
     await expect(page.getByTestId("coding-demo-contain")).toBeVisible({ timeout: 20_000 });
     // the production tab has its own
     await page.getByTestId("home-tab-production").click();
-    await expect(page.getByText("Decide what your production agents are allowed to do.")).toBeVisible();
+    await expect(page.getByText("Govern your production agents.")).toBeVisible();
     await expect(page.getByTestId("demo-govern")).toBeVisible({ timeout: 20_000 });
     await expect(page.getByRole("button", { name: /Explore an example fleet/ })).toBeVisible();
     await expect(page.getByRole("button", { name: /Govern my production agent/ })).toBeVisible();
@@ -35,7 +35,7 @@ test.describe("shell", () => {
 
   test("the no-code way in still catches a made-up answer", async ({ page }) => {
     await goHash(page, "home?for=production");
-    await page.getByRole("button", { name: /catch an agent making things up/ }).click();
+    await page.getByRole("button", { name: /catch a made-up answer/ }).click();
     await expect(page).toHaveURL(/#\/catch\?auto=1/);
     // the test screen belongs to Caught lies
     await expect(page.getByRole("button", { name: "Caught lies", exact: true })).toHaveAttribute("aria-current", "page");

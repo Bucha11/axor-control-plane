@@ -99,13 +99,12 @@ function FirstVisit() {
       ) : (
         <>
           <h1 style={{ fontSize: "clamp(22px, 6vw, 28px)", fontWeight: 700, lineHeight: 1.25, margin: "0 0 10px" }}>
-            Decide what your production agents are allowed to do.
+            Govern your production agents.
             <br />
-            <span style={{ color: C.steel }}>Axor enforces it where they touch your tools.</span>
+            <span style={{ color: C.steel }}>Policy decides what they may do — not the prompt.</span>
           </h1>
           <div style={{ fontSize: 14.5, color: C.mut, lineHeight: 1.6, marginBottom: 20 }}>
-            Policy — not the prompt — decides what an agent may read, send and run. Watch every
-            agent live, stop it, and repair it when its context goes bad.
+            Watch every agent live, stop it, and repair it when its context goes bad.
           </div>
           <button data-testid="home-connect-production" onClick={() => navigate("connect?for=production")}
             style={{ ...bigCta(C.steel, true), marginBottom: 12 }}>
@@ -122,9 +121,9 @@ function FirstVisit() {
             <button data-testid="home-example-fleet" onClick={() => void explore("production")} disabled={loading} style={link}>
               {loading ? "loading the example fleet…" : "Explore an example fleet →"}
             </button>
-            <br />
+            {" "}or{" "}
             <button onClick={() => { connect("demo"); navigate("catch", { auto: "1" }); }} style={link}>
-              See it catch an agent making things up when a tool breaks →
+              watch it catch a made-up answer →
             </button>
             <br />
             Your developers use Claude Code or Codex too?{" "}
@@ -133,7 +132,7 @@ function FirstVisit() {
             </button>
           </div>
           <div style={{ fontFamily: MONO, fontSize: 11, color: C.dim, marginBottom: 24 }}>
-            1 governed node free · Team from $299 / month ·{" "}
+            1 production agent free · Team from $299 / month ·{" "}
             <button onClick={() => navigate("pricing?for=production")} style={{ ...link, fontFamily: MONO, fontSize: 11 }}>pricing →</button>
           </div>
         </>

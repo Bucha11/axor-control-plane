@@ -11,7 +11,7 @@ const STAGE_BG = "#11151A";
 
 // On a phone the stage is ~350px wide for a 660-unit drawing: the labels drew
 // at about 5px. There they are drawn ~1.7× larger (and the repo box says less).
-function useNarrow(): boolean {
+export function useNarrow(): boolean {
   const q = "(max-width: 560px)";
   const [narrow, setNarrow] = useState(() => typeof window !== "undefined" && window.matchMedia(q).matches);
   useEffect(() => {
