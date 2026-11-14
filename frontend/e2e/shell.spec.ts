@@ -73,7 +73,8 @@ test.describe("shell", () => {
     await goHash(page, "home?for=production");
     await page.getByRole("button", { name: /Govern my production agent/ }).click();
     await expect(page).toHaveURL(/#\/connect\?for=production$/);
-    await expect(page.getByText(/What tools does your agent use\?/)).toBeVisible();
+    // first how: wrap it (guards) or a proxy (watches)
+    await expect(page.getByTestId("prod-way-chooser")).toBeVisible();
   });
 
   test("away from Home, an unconnected visit offers to connect in the header", async ({ page }) => {

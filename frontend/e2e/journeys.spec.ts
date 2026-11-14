@@ -67,7 +67,7 @@ test.describe("three ways in", () => {
     await expect(page.getByTestId("coding-free")).toContainText("$299 / month");
     await page.getByTestId("coding-done").click();
     await expect(page.getByTestId("both-production-intro")).toContainText("Now your production agent");
-    await expect(page.getByText("What tools does your agent use?")).toBeVisible();
+    await expect(page.getByTestId("prod-way-chooser")).toBeVisible();
     // moving on is not connecting: the header does not claim an adapter
     await expect(page.getByRole("button", { name: /connection: adapter/ })).toHaveCount(0);
     // and the first part is one click back
@@ -76,10 +76,17 @@ test.describe("three ways in", () => {
     await page.unrouteAll({ behavior: "ignoreErrors" });
   });
 
-  test("production goes straight to the proxy walkthrough", async ({ page }) => {
+  test("production starts with the choice of how, told honestly", async ({ page }) => {
     await setConnection(page, { mode: "none" });
     await goHash(page, "connect?for=production");
+    const compare = page.getByTestId("prod-way-compare");
+    await expect(compare).toContainText("refuses a dangerous call");
+    await expect(compare).toContainText("records what policy would say");
+    await page.getByTestId("prod-way-proxy").click();
     await expect(page.getByText("What tools does your agent use?")).toBeVisible();
+    await page.getByTestId("prod-way-back").click();
+    await page.getByTestId("prod-way-code").click();
+    await expect(page.getByTestId("adapter-onboarding")).toBeVisible();
   });
 
   test("pricing shows each way in with its own plans and meter", async ({ page }) => {

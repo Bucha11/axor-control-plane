@@ -6,6 +6,7 @@ import { ArrowRight, Check, Circle, Copy, Plug, RefreshCw, Zap } from "lucide-re
 import { api } from "../api";
 import { navigate, useRoute } from "../router";
 import CodingOnboarding, { isCodingSession } from "../components/CodingOnboarding";
+import AdapterOnboarding from "../components/AdapterOnboarding";
 import type { Journey } from "./Pricing";
 import { ConnectionMode, useApp } from "../store";
 import { C, MONO, btn } from "../theme";
@@ -139,13 +140,104 @@ export default function Onboarding() {
         {way === "both" && (
           <div data-testid="both-production-intro" style={{ fontSize: 13.5, color: C.mut, lineHeight: 1.6,
             marginBottom: 14 }}>
-            <span style={{ color: C.text }}>Now your production agent.</span> Two ways in: a proxy in front
-            of its tools (no code change), or an adapter that wraps it with axor-core — then you can
-            pause, stop and repair it live. You pick in step 2; first, the tools it calls.
+            <span style={{ color: C.text }}>Now your production agent.</span> First, how Axor sits with
+            it: wrapped in code (it guards the agent) or a proxy in front of its tools (it watches).
           </div>
         )}
       </div>
-      <ProductionOnboarding />
+      <ProductionOnboarding initial={route.segments[0] === "get-started" ? "proxy" : undefined} />
+    </div>
+  );
+}
+
+type ProdWay = "code" | "proxy";
+
+/** Two ways to put a production agent under Axor, and they are not the same
+ * product: the wrap governs (refuses a call, pauses, stops, repairs), the proxy
+ * only watches — it never blocks, and its addresses answer during test runs.
+ * Said before either is set up, so nobody wires a proxy expecting a guard. */
+function ProductionOnboarding({ initial }: { initial?: ProdWay }) {
+  const [way, setWay] = useState<ProdWay | null>(initial ?? null);
+  if (way === "code") {
+    return (
+      <div style={{ maxWidth: 640, margin: "0 auto" }}>
+        <WaySwitch way={way} setWay={setWay} />
+        <AdapterOnboarding />
+      </div>
+    );
+  }
+  if (way === "proxy") {
+    return (
+      <div style={{ maxWidth: 640, margin: "0 auto" }}>
+        <WaySwitch way={way} setWay={setWay} />
+        <ProxyOnboarding onWrap={() => setWay("code")} />
+      </div>
+    );
+  }
+  const yes = <span style={{ color: C.green }}>yes</span>;
+  const no = <span style={{ color: C.dim }}>no</span>;
+  const rows: [string, React.ReactNode, React.ReactNode][] = [
+    ["change to your agent", "a few lines of code", "none — swap its tool URLs"],
+    ["refuses a dangerous call", yes, <>{no} — records what policy would say</>],
+    ["pause, stop, call budget — live", yes, no],
+    ["cut a bad item from its context", <>{yes} (LangChain, Claude)</>, no],
+    ["catches a made-up answer", <>{yes} (opt-in)</>, <>{yes} — breaks a tool on purpose</>],
+    ["works with", "LangChain, Claude Agent, Python tool functions", "any tool called over HTTP or MCP"],
+    ["when it runs", "always, in production", "during test runs"],
+  ];
+  return (
+    <div style={{ maxWidth: 640, margin: "0 auto" }} data-testid="prod-way-chooser">
+      <h1 style={{ fontSize: 22, fontWeight: 650, margin: "0 0 4px" }}>How should Axor sit with your agent?</h1>
+      <div style={{ fontSize: 13.5, color: C.mut, lineHeight: 1.6, marginBottom: 14 }}>
+        To guard it in production, wrap it in code. The proxy is the no-code way to test and audit
+        it — it watches, it never blocks.
+      </div>
+      <div className="flex gap-3 flex-wrap" style={{ marginBottom: 14 }}>
+        {([
+          ["code", "Wrap it in code", "recommended for production — Axor checks every tool call and you control the agent live"],
+          ["proxy", "Put a proxy in front of its tools", "no code change — watch every tool call and test it, nothing is blocked"],
+        ] as [ProdWay, string, string][]).map(([id, title, body]) => (
+          <button key={id} onClick={() => setWay(id)} data-testid={`prod-way-${id}`}
+            style={{ flex: "1 1 260px", textAlign: "left", cursor: "pointer", background: C.panel, color: C.text,
+                     border: `1px solid ${id === "code" ? C.steel : C.line}`, borderRadius: 8, padding: "14px 16px" }}>
+            <div style={{ fontFamily: MONO, fontSize: 13.5, fontWeight: 700, marginBottom: 4 }}>{title}</div>
+            <div style={{ fontFamily: MONO, fontSize: 11, color: C.mut, lineHeight: 1.5 }}>{body}</div>
+          </button>
+        ))}
+      </div>
+      <table data-testid="prod-way-compare" style={{ width: "100%", borderCollapse: "collapse", fontFamily: MONO, fontSize: 11 }}>
+        <thead>
+          <tr style={{ color: C.dim, textAlign: "left" }}>
+            <th style={{ padding: "6px 8px", fontWeight: 400 }} />
+            <th style={{ padding: "6px 8px", fontWeight: 400 }}>wrap in code</th>
+            <th style={{ padding: "6px 8px", fontWeight: 400 }}>proxy</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map(([k, a, b]) => (
+            <tr key={k} style={{ borderTop: `1px solid ${C.line}` }}>
+              <td style={{ padding: "6px 8px", color: C.mut }}>{k}</td>
+              <td style={{ padding: "6px 8px", color: C.text }}>{a}</td>
+              <td style={{ padding: "6px 8px", color: C.text }}>{b}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <div style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim, marginTop: 12 }}>
+        1 production agent free · Team $299 / month: 10 agents ·{" "}
+        <span style={{ color: C.steel, cursor: "pointer" }} onClick={() => navigate("pricing?for=production")}>pricing →</span>
+      </div>
+    </div>
+  );
+}
+
+function WaySwitch({ way, setWay }: { way: ProdWay; setWay: (w: ProdWay | null) => void }) {
+  return (
+    <div style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim, marginBottom: 14 }}>
+      {way === "code" ? "wrapping it in code" : "a proxy in front of its tools"} ·{" "}
+      <span data-testid="prod-way-back" style={{ color: C.steel, cursor: "pointer" }} onClick={() => setWay(null)}>
+        compare the two ways
+      </span>
     </div>
   );
 }
@@ -174,7 +266,7 @@ function BothSteps({ at, onStep }: { at: 1 | 2; onStep: (n: 1 | 2) => void }) {
   );
 }
 
-function ProductionOnboarding() {
+function ProxyOnboarding({ onWrap }: { onWrap: () => void }) {
   const [step, setStep] = useState(1);
   const [tools, setTools] = useState<Tool[]>([]);
   const [copied, setCopied] = useState<string | null>(null);
@@ -227,26 +319,12 @@ function ProductionOnboarding() {
       setMcpBusy(false);
     }
   };
-  // Adapter path is chosen up front (spec section 2, Axis A): it unlocks the
-  // Control plane, taint graph and probe health. Proxy is the default depth.
-  const [depth, setDepth] = useState<Extract<ConnectionMode, "proxy" | "adapter">>("proxy");
-  // Adapter path: the node needs a scoped ingest credential to speak on the
-  // plane at all once the backend has auth on, and it should be bound to this
-  // node so it cannot speak for another. Minting it is an admin action, so it
-  // happens here rather than being left as an undocumented prerequisite.
-  const [nodeId, setNodeId] = useState("agent-1");
-  const [framework, setFramework] = useState<Framework>("langchain");
-  const [nodeKey, setNodeKey] = useState<string | null>(null);
-  const mintNodeKey = useMutation({
-    mutationFn: () => api.createKey(["ingest"], `node ${nodeId}`, nodeId),
-    onSuccess: (k) => setNodeKey(k.secret),
-  });
   const connect = useApp((s) => s.connect);
 
   const preflight = useMutation({ mutationFn: api.proxyPreflight });
 
   const finish = (): void => {
-    connect(depth, tools);
+    connect("proxy", tools);
     navigate("catch");
   };
 
@@ -301,13 +379,11 @@ function ProductionOnboarding() {
 
   return (
     <div style={{ maxWidth: 640, margin: "0 auto" }}>
-      <Coach id="onboarding" title="Get started — put the proxy in front of your agent">
-        Three steps: declare the tools your agent calls, repoint its base URLs at
-        the proxy (auth passes through byte-for-byte, nothing else changes), and
-        test each connection. Green lights mean you can run the same Eval loop on
-        your own agent — pick <span style={{ color: C.text }}>proxy</span> for
-        observe-only or <span style={{ color: C.text }}>adapter</span> for full
-        governance + Control.
+      <Coach id="onboarding" title="A proxy in front of your agent's tools">
+        Three steps: list the tools your agent calls, point it at the proxy instead
+        (its credentials pass through untouched, nothing else changes), and check each
+        one answers. Then run a test: the proxy watches every call and can break a
+        tool on purpose to see whether your agent admits it.
       </Coach>
       <div className="flex gap-6 mb-8">
         <StepDot n={1} label="tools" /><StepDot n={2} label="point agent" /><StepDot n={3} label="connection check" />
@@ -316,7 +392,7 @@ function ProductionOnboarding() {
       {step === 1 && (
         <>
           <h1 style={{ fontSize: 22, fontWeight: 650, margin: "0 0 4px" }}>What tools does your agent use?</h1>
-          <div style={{ fontFamily: MONO, fontSize: 11.5, color: C.mut, marginBottom: 14 }}>The proxy will sit in front of these. Auth passes through untouched.</div>
+          <div style={{ fontFamily: MONO, fontSize: 11.5, color: C.mut, marginBottom: 14 }}>The proxy sits in front of these. Your agent's credentials pass through untouched.</div>
 
           {/* MCP-first path: paste the client config you already have. */}
           <div className="p-3 mb-4" style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 8 }}>
@@ -400,7 +476,7 @@ function ProductionOnboarding() {
       {step === 2 && (
         <>
           <h1 style={{ fontSize: 22, fontWeight: 650, margin: "0 0 4px" }}>Point your agent at the proxy.</h1>
-          <div style={{ fontFamily: MONO, fontSize: 11.5, color: C.mut, marginBottom: 20 }}>Replace each base URL in your agent config. Nothing else changes.</div>
+          <div style={{ fontFamily: MONO, fontSize: 11.5, color: C.mut, marginBottom: 20 }}>In your agent's config, replace each tool's address with these. Nothing else changes.</div>
           <div style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 8 }}>
             {tools.map((t, i) => {
               const proxied = `${PROXY_PUBLIC_URL}/t/${t.name}/`;
@@ -421,7 +497,7 @@ function ProductionOnboarding() {
             })}
           </div>
           <div style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim, marginTop: 10 }}>
-            endpoint is armed only while a session is active — disarmed it returns 503
+            these addresses answer during a test run; outside one they return 503
           </div>
           <button onClick={() => setStep(3)} className="mt-4" style={btn({ color: C.text, borderColor: C.steel, fontSize: 12.5 })}>
             Continue <ArrowRight size={13} />
@@ -431,9 +507,9 @@ function ProductionOnboarding() {
 
       {step === 3 && (
         <>
-          <h1 style={{ fontSize: 22, fontWeight: 650, margin: "0 0 4px" }}>Prove the plumbing before it matters.</h1>
+          <h1 style={{ fontSize: 22, fontWeight: 650, margin: "0 0 4px" }}>Check every tool answers through the proxy.</h1>
           <div style={{ fontFamily: MONO, fontSize: 11.5, color: C.mut, marginBottom: 20 }}>
-            A red light here is routine. A red light mid-experiment ruins the run — so we check now.
+            A red light now is easy to fix; in the middle of a test it spoils the run.
           </div>
           <div style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 8 }}>
             {tools.map((t, i) => {
@@ -482,100 +558,25 @@ function ProductionOnboarding() {
             </div>
           )}
           <div className="flex items-center gap-3 mt-4">
-            <Tooltip content="Pings every declared tool through the proxy right now — a red light here is routine; a red light mid-experiment ruins the run.">
+            <Tooltip content="Calls every listed tool through the proxy right now.">
               <button onClick={() => preflight.mutate()} style={btn({ color: C.text, borderColor: C.steel, fontSize: 12.5 })}>
                 <RefreshCw size={13} /> {preflight.data || preflight.isError ? "Re-test all" : "Test connections"}
               </button>
             </Tooltip>
             {allGreen && (
               <button onClick={finish} style={btn({ color: C.bg, background: C.green, borderColor: C.green, fontSize: 12.5, fontWeight: 700 })}>
-                <Zap size={13} /> Run first experiment <ArrowRight size={13} />
+                <Zap size={13} /> Run a first test <ArrowRight size={13} />
               </button>
             )}
           </div>
-          <div className="flex items-center gap-3 mt-4" style={{ fontFamily: MONO, fontSize: 11, color: C.mut }}>
-            connect as
-            {(["proxy", "adapter"] as const).map((d) => (
-              <Tooltip
-                key={d}
-                content={d === "proxy"
-                  ? "Observe-only: the proxy watches tool traffic and catches discrepancies. No code change in your agent."
-                  : "Full governance: wrap your agent in an axor-core Invokable — per-value taint, budgets, and the live Control plane."}
-              >
-                <button onClick={() => setDepth(d)}
-                  style={btn({
-                    color: depth === d ? C.steel : C.dim,
-                    borderColor: depth === d ? C.steel : C.line,
-                    fontSize: 11, padding: "4px 10px",
-                  })}>
-                  {d}
-                </button>
-              </Tooltip>
-            ))}
-            <span style={{ color: C.dim }}>
-              {depth === "adapter" ? "unlocks Control, taint graph, probe health" : "Eval core — Control is greyed until you wrap"}
-            </span>
+          <div style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim, marginTop: 12, lineHeight: 1.6,
+                        border: `1px solid ${C.line}`, borderRadius: 6, padding: "8px 10px" }}>
+            the proxy sees your tool traffic to observe it; credentials pass through untouched and are never
+            stored, and only observations are kept, never raw bodies. Self-host it to keep every byte on your
+            own machines.
+            <br />want it to refuse calls, pause and stop?{" "}
+            <span data-testid="proxy-to-wrap" style={{ color: C.steel, cursor: "pointer" }} onClick={onWrap}>wrap it in code instead →</span>
           </div>
-          {depth === "adapter" && (
-            <div style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 8, marginTop: 12, overflow: "hidden" }}>
-              <div style={{ padding: "10px 14px", borderBottom: `1px solid ${C.line}`, fontFamily: MONO, fontSize: 11, color: C.mut }}>
-                the adapter is code, not a toggle — this button and snippet are the whole setup
-              </div>
-              <div className="px-4 py-3" style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-                <span style={{ fontFamily: MONO, fontSize: 11.5, color: C.mut }}>node id</span>
-                <input value={nodeId} onChange={(e) => { setNodeId(e.target.value); setNodeKey(null); }}
-                  style={{ background: C.panel2, border: `1px solid ${C.line}`, borderRadius: 5, color: C.text,
-                           fontFamily: MONO, fontSize: 12, padding: "5px 9px", width: 160 }} />
-                <Tooltip content="Mints an ingest-scoped key bound to this node. The plane refuses it for any other node, so a compromised node cannot forge a neighbour's heartbeat or health verdict.">
-                  <button onClick={() => mintNodeKey.mutate()} disabled={!nodeId.trim() || mintNodeKey.isPending}
-                    style={btn({ color: C.text, borderColor: C.steel, fontSize: 12 })}>
-                    <Plug size={12} /> {mintNodeKey.isPending ? "minting…" : "Mint node-bound key"}
-                  </button>
-                </Tooltip>
-                {mintNodeKey.isError && (
-                  <span style={{ fontFamily: MONO, fontSize: 11, color: C.red }}>
-                    {(mintNodeKey.error as Error).message} — minting needs an admin credential (operator token in Settings)
-                  </span>
-                )}
-              </div>
-              {nodeKey && (
-                <div className="px-4 pb-3" style={{ fontFamily: MONO, fontSize: 11, color: C.amber }}>
-                  shown once — copy it now, only its hash is stored
-                </div>
-              )}
-              <div className="px-4 pb-3" style={{ display: "flex", gap: 6, flexWrap: "wrap" }} data-testid="framework-picker">
-                {FRAMEWORKS.map((f) => (
-                  <button key={f.id} onClick={() => setFramework(f.id)}
-                    style={btn({
-                      color: framework === f.id ? C.steel : C.dim,
-                      borderColor: framework === f.id ? C.steel : C.line,
-                      fontSize: 11, padding: "4px 10px",
-                    })}>
-                    {f.label}
-                  </button>
-                ))}
-              </div>
-              <pre data-testid="adapter-snippet" style={{ margin: 0, padding: "12px 14px", background: C.panel2, borderTop: `1px solid ${C.line}`,
-                            fontFamily: MONO, fontSize: 11.5, color: C.text, overflowX: "auto", lineHeight: 1.7 }}>
-{adapterSnippet(framework, {
-  origin: window.location.origin,
-  nodeId: nodeId || "agent-1",
-  key: nodeKey ?? "<mint a key above>",
-  tools: tools.map((t) => t.name),
-})}
-              </pre>
-              <div className="px-4 py-3" style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim, lineHeight: 1.6, borderTop: `1px solid ${C.line}` }}>
-                {FRAMEWORKS.find((f) => f.id === framework)?.note}
-              </div>
-            </div>
-          )}
-          {depth === "proxy" && (
-            <div style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim, marginTop: 8, lineHeight: 1.6, border: `1px solid ${C.line}`, borderRadius: 6, padding: "8px 10px" }}>
-              visibility: a hosted proxy sees your tool traffic (URLs, params, results) to observe it — that is how the audit works.
-              your credentials pass through byte-for-byte and are never stored. self-host the proxy to keep every byte on your own infrastructure;
-              stored artifacts are observations and labels only, never raw request/response bodies (spec §8.3).
-            </div>
-          )}
           {allGreen && (
             <div style={{ fontFamily: MONO, fontSize: 11, color: C.dim, marginTop: 12 }}>
               optional: run a baseline health check first (23 probes, ~1 min) — gives drift comparison later
@@ -585,76 +586,4 @@ function ProductionOnboarding() {
       )}
     </div>
   );
-}
-
-type Framework = "langchain" | "claude" | "python";
-
-const FRAMEWORKS: { id: Framework; label: string; note: string }[] = [
-  {
-    id: "langchain", label: "LangChain",
-    note: "the middleware connects on its own (background thread, sync or async agent): pause / stop hold every model and "
-      + "tool call, budget caps tool calls, an excision cuts a tool result from the next model call (same thread_id), "
-      + "and every tool call and result lands in Replay with its taint. pip install 'axor-langchain[plane,security]' "
-      + "adds cross-run reputation (Sentinel); AxorMiddleware(probe=True) adds a health check after each run — it costs "
-      + "model calls — whose localizer proposes the cut in Health. [experiment] adds Test honesty: break a tool on the "
-      + "next run and catch a fabricated answer (AXOR_TEST_BENCH=1 on the agent). AXOR_PLANE_URL unset = no plane, nothing changes.",
-  },
-  {
-    id: "claude", label: "Claude (axor-claude)",
-    note: "make_session() connects on its own (background link): pause / stop hold the loop at the intent boundary, "
-      + "budget caps tool calls, an excision cuts a tool result (tool_use_id) from the conversation and the file it "
-      + "read from core's context, and every run lands in Replay. [security] adds Sentinel reputation and "
-      + "make_session(probe=True) a health check (costs model calls); [experiment] adds Test honesty "
-      + "(AXOR_TEST_BENCH=1). Excision and injection need axor-core ≥ 0.12.1.",
-  },
-  {
-    id: "python", label: "Plain Python",
-    note: "this is the posture half: pause / stop / budget reach the node and hold its tool calls. one-shot injection and "
-      + "context excision need the agent loop in axor-core — use the Claude adapter or GovernedSession with "
-      + "admission=PlaneAdmission(session).",
-  },
-];
-
-export function adapterSnippet(
-  framework: Framework,
-  o: { origin: string; nodeId: string; key: string; tools: string[] },
-): string {
-  if (framework === "langchain") {
-    return `pip install 'axor-langchain[plane]'
-
-export AXOR_PLANE_URL=${o.origin}
-export AXOR_NODE_ID=${o.nodeId}
-export AXOR_INGEST_KEY=${o.key}
-
-from langchain.agents import create_agent
-from axor_langchain import AxorMiddleware
-
-agent = create_agent(model, tools, middleware=[AxorMiddleware()])
-agent.invoke({"messages": [("user", "...")]})   # node is live on this plane`;
-  }
-  if (framework === "claude") {
-    return `pip install 'axor-claude[plane]'
-
-export AXOR_PLANE_URL=${o.origin}
-export AXOR_NODE_ID=${o.nodeId}
-export AXOR_INGEST_KEY=${o.key}
-
-import axor_claude
-
-session = axor_claude.make_session()        # node is live on this plane
-await session.run("...")`;
-  }
-  return `pip install 'axor-wrap[plane]'
-
-from axor_wrap.runtime import wrap_callables
-from axor_wrap.connect import PlaneConnector
-
-toolset = wrap_callables({${o.tools.join(", ") || "web_search"}})
-
-node = PlaneConnector(
-    "${o.origin}", "${o.nodeId}",
-    ingest_key="${o.key}",
-).connect()
-node.gate(toolset)          # pause/stop from Control now holds real tool calls
-await node.run()            # heartbeat + desired-state subscription`;
 }

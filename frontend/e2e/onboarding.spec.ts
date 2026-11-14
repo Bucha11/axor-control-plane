@@ -42,48 +42,60 @@ test.describe("onboarding", () => {
     await expect(page.getByText("http://127.0.0.1:8401/t/web_search/")).toBeVisible();
     await page.getByRole("button", { name: /Continue/ }).click();
 
-    // Step 3: the preflight, plus the depth choice and its honest upsell copy.
-    await expect(page.getByRole("heading", { name: "Prove the plumbing before it matters." })).toBeVisible();
-    await page.getByRole("button", { name: "adapter", exact: true }).click();
-    await expect(page.getByText("unlocks Control, taint graph, probe health")).toBeVisible();
+    // Step 3: the preflight — and the way to the wrap, for refusing calls.
+    await expect(page.getByRole("heading", { name: "Check every tool answers through the proxy." })).toBeVisible();
+    await page.getByTestId("proxy-to-wrap").click();
+    await expect(page.getByTestId("adapter-onboarding")).toBeVisible();
   });
 
-  test("the adapter path hands over a key and a snippet, not just a label", async ({ page }) => {
-    // Choosing `adapter` used to set a client-side flag and nothing else: it
-    // unlocked Control and left the user to discover axor-wrap, and — after the
-    // plane channel learned to authenticate — an unmentioned ingest key too.
-    await goHash(page, "get-started");
-    await page.getByRole("button", { name: /Load example tools/ }).click();
-    await page.getByRole("button", { name: /Continue/ }).click();
-    await page.getByRole("button", { name: /Continue/ }).click();
-    await page.getByRole("button", { name: "adapter", exact: true }).click();
+  test("wrapping in code: the snippet checks the tools the scanner found", async ({ page }) => {
+    await goHash(page, "connect?for=production");
+    await page.getByTestId("prod-way-code").click();
 
-    // LangChain is the default: one middleware, configured from the environment.
+    // LangChain is the default: the middleware for control, the wrapped tools for refusing calls.
     const snippet = page.getByTestId("adapter-snippet");
-    await expect(snippet).toContainText("pip install 'axor-langchain[plane]'");
+    await expect(snippet).toContainText("pip install 'axor-langchain[plane]' axor-wrap");
     await expect(snippet).toContainText("middleware=[AxorMiddleware()]");
+    await expect(snippet).toContainText("wrap_callables(");
     await expect(snippet).toContainText("AXOR_NODE_ID=agent-1");
-    await expect(snippet).toContainText("AXOR_INGEST_KEY=<mint a key above>");
 
-    // Minting binds the key to this node id and shows the secret exactly once.
-    await page.getByRole("button", { name: /Mint node-bound key/ }).click();
-    await expect(page.getByText(/shown once/)).toBeVisible();
-    await expect(snippet).not.toContainText("<mint a key above>");
-    await expect(snippet).toContainText(/AXOR_INGEST_KEY=ak_/);
+    // The scanner finds the tools; what each does is a choice, prefilled.
+    await page.getByTestId("adapter-files").setInputFiles({
+      name: "agent.py", mimeType: "text/x-python", buffer: Buffer.from(AGENT_PY),
+    });
+    const tools = page.getByTestId("adapter-tools");
+    const missing = page.getByText(/scanner is not installed/);
+    await expect(tools.or(missing)).toBeVisible({ timeout: 15_000 });
+    if (await missing.isVisible()) return;
+    await expect(page.getByLabel("what send_email does")).toHaveValue("EXPORT");
+    await page.getByTestId("adapter-tool-read_inbox").getByText("brings in outside text").click();
+    await page.getByTestId("adapter-download").click();
+    await expect(page.getByTestId("adapter-download")).toContainText("saved axor.manifests.json");
+    await expect(snippet).toContainText('json.load(open("axor.manifests.json"))');
+    await expect(snippet).toContainText('"send_email": send_email');
 
-    // Claude: the same one line — make_session reads the plane from the env.
-    await page.getByRole("button", { name: "Claude (axor-claude)" }).click();
-    await expect(snippet).toContainText("pip install 'axor-claude[plane]'");
-    await expect(snippet).toContainText("session = axor_claude.make_session()");
-    await expect(snippet).toContainText(/AXOR_INGEST_KEY=ak_/);
-
-    // Plain Python: the wrapped toolset and the gate, naming the declared tools.
+    // Plain Python: a toolset and the gate, with the same tools.
     await page.getByRole("button", { name: "Plain Python" }).click();
-    await expect(snippet).toContainText("pip install 'axor-wrap[plane]'");
+    await expect(snippet).toContainText("WrappedToolset(");
     await expect(snippet).toContainText("node.gate(toolset)");
-    await expect(snippet).toContainText("web_search");
-
-    // The honest boundary is stated where the user chooses, not only in a docstring.
-    await expect(page.getByText(/one-shot injection and context excision need the agent loop/)).toBeVisible();
+    // Claude: its own tools run on axor-core — no scan step.
+    await page.getByRole("button", { name: /Claude Agent/ }).click();
+    await expect(snippet).toContainText("session = axor_claude.make_session()");
+    await expect(page.getByTestId("adapter-files")).toHaveCount(0);
   });
 });
+
+const AGENT_PY = [
+  "from langchain_core.tools import tool",
+  "",
+  "@tool",
+  "def read_inbox(folder: str) -> str:",
+  '    """Read the user\'s email inbox."""',
+  "    return folder",
+  "",
+  "@tool",
+  "def send_email(to: str, body: str) -> str:",
+  '    """Send an email to a recipient."""',
+  "    return to",
+  "",
+].join("\n");

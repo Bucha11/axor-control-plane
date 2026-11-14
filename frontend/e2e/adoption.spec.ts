@@ -49,7 +49,7 @@ test.describe("adoption", () => {
     });
     const cases: [string, string | RegExp][] = [
       ["config-builder", "consequence class"],
-      ["get-started", "byte-for-byte"],
+      ["get-started", "credentials pass through untouched"],
       ["health", "localizer blames"],
       ["settings", "dead-letter"],
       ["pricing", "one ladder"],

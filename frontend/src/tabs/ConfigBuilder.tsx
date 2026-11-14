@@ -207,7 +207,7 @@ async function filesFromDrop(dt: DataTransfer): Promise<PickedFile[]> {
   return out;
 }
 
-async function filesFromList(picked: FileList | File[] | null): Promise<PickedFile[]> {
+export async function filesFromList(picked: FileList | File[] | null): Promise<PickedFile[]> {
   const out: PickedFile[] = [];
   for (const f of Array.from(picked ?? [])) {
     if (!f.name.endsWith(".py")) continue;
