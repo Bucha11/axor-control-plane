@@ -18,6 +18,16 @@ byte-for-byte — never parsed, never stored, never logged. Exports and share
 pages are built from observations, labels and verdicts; body-shaped fields are
 scrubbed again at export time (`share._scrub`).
 
+**Guard mode** (`axor-proxy --guard --manifests …`) makes the proxy a gate:
+each call is decided before it reaches the tool — refused by policy (403, or a
+JSON-RPC error for MCP), held while the agent is paused or stopped from the
+plane (503), refused past the plane's call budget (429). To decide, it reads
+the call's arguments and the text of each answer **in memory**; neither is
+persisted, and the trace it ships to the plane names arguments with sizes and
+hashes, never values. The decision is local: a plane outage removes pause /
+stop / budget, not the policy. The proxy itself is in the path — if it is down,
+the agent's tools are unreachable — so run it beside the agent.
+
 **What the backend stores.** Kernel-schema trace events, plane state
 (desired/reported), append-only facts, EvidenceCases, pins, hashed API keys
 (SHA-256, secret shown once), share tokens. SQLite for dev, Postgres for real
@@ -53,8 +63,10 @@ phone-home; expiry degrades EE features to read-only and **never disables
 safety features**.
 
 **Known non-goals (current release).**
-- The proxy is not a sandbox: it observes and injects test-bench faults; it
-  does not block traffic (enforcement is the adapter's job).
+- The proxy is not a sandbox. By default it observes and injects test-bench
+  faults and does not block traffic; in guard mode it refuses tool calls by
+  policy, but it sees only the tool boundary — not the model, its context, or
+  tools the agent runs in-process (that is the adapter's side).
 - Single-instance backend; no HA story yet.
 - stdio MCP servers are proxied via a local gateway: the proxy *spawns the
   server process from operator-supplied config*. Registration is accepted

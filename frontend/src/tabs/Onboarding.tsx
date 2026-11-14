@@ -7,6 +7,7 @@ import { api } from "../api";
 import { navigate, useRoute } from "../router";
 import CodingOnboarding, { isCodingSession } from "../components/CodingOnboarding";
 import AdapterOnboarding from "../components/AdapterOnboarding";
+import GuardOnboarding from "../components/GuardOnboarding";
 import type { Journey } from "./Pricing";
 import { ConnectionMode, useApp } from "../store";
 import { C, MONO, btn } from "../theme";
@@ -170,32 +171,33 @@ function ProductionOnboarding({ initial }: { initial?: ProdWay }) {
     return (
       <div style={{ maxWidth: 640, margin: "0 auto" }}>
         <WaySwitch way={way} setWay={setWay} />
-        <ProxyOnboarding onWrap={() => setWay("code")} />
+        <ProxyModes onWrap={() => setWay("code")} initial={initial === "proxy" ? "test" : "guard"} />
       </div>
     );
   }
   const yes = <span style={{ color: C.green }}>yes</span>;
   const no = <span style={{ color: C.dim }}>no</span>;
   const rows: [string, React.ReactNode, React.ReactNode][] = [
+    ["sits", "inside the agent", "in front of its tools, beside the agent"],
     ["change to your agent", "a few lines of code", "none — swap its tool URLs"],
-    ["refuses a dangerous call", yes, <>{no} — records what policy would say</>],
-    ["pause, stop, call budget — live", yes, no],
-    ["cut a bad item from its context", <>{yes} (LangChain, Claude)</>, no],
-    ["catches a made-up answer", <>{yes} (opt-in)</>, <>{yes} — breaks a tool on purpose</>],
-    ["works with", "LangChain, Claude Agent, Python tool functions", "any tool called over HTTP or MCP"],
-    ["when it runs", "always, in production", "during test runs"],
+    ["refuses a dangerous tool call", yes, yes],
+    ["pause, stop, call budget — live", <>{yes} — the whole agent</>, <>{yes} — its tool calls; the agent still talks</>],
+    ["sees the model: cut a bad item from its context", <>{yes} (LangChain, Claude)</>, no],
+    ["tools inside the agent (functions, files, shell)", yes, <>{no} — only calls over HTTP or MCP</>],
+    ["catches a made-up answer", <>{yes} (opt-in)</>, <>{yes} — in test runs, it breaks a tool on purpose</>],
+    ["works with", "Python: LangChain, Claude Agent, tool functions", "any language or platform"],
   ];
   return (
     <div style={{ maxWidth: 640, margin: "0 auto" }} data-testid="prod-way-chooser">
       <h1 style={{ fontSize: 22, fontWeight: 650, margin: "0 0 4px" }}>How should Axor sit with your agent?</h1>
       <div style={{ fontSize: 13.5, color: C.mut, lineHeight: 1.6, marginBottom: 14 }}>
-        To guard it in production, wrap it in code. The proxy is the no-code way to test and audit
-        it — it watches, it never blocks.
+        Both can refuse a dangerous tool call. The wrap sits inside the agent and also reaches the
+        model; the proxy sits in front of its tools — no code change, any language.
       </div>
       <div className="flex gap-3 flex-wrap" style={{ marginBottom: 14 }}>
         {([
-          ["code", "Wrap it in code", "recommended for production — Axor checks every tool call and you control the agent live"],
-          ["proxy", "Put a proxy in front of its tools", "no code change — watch every tool call and test it, nothing is blocked"],
+          ["code", "Wrap it in code", "the deepest control: every tool call checked, and the agent itself paused, stopped and repaired live"],
+          ["proxy", "Put a proxy in front of its tools", "no code change, any language: tool calls checked and held — or, in a test run, only watched"],
         ] as [ProdWay, string, string][]).map(([id, title, body]) => (
           <button key={id} onClick={() => setWay(id)} data-testid={`prod-way-${id}`}
             style={{ flex: "1 1 260px", textAlign: "left", cursor: "pointer", background: C.panel, color: C.text,
@@ -228,6 +230,34 @@ function ProductionOnboarding({ initial }: { initial?: ProdWay }) {
         <span style={{ color: C.steel, cursor: "pointer" }} onClick={() => navigate("pricing?for=production")}>pricing →</span>
       </div>
     </div>
+  );
+}
+
+type ProxyMode = "guard" | "test";
+
+/** The proxy has two jobs: guard the agent's tools (blocks), or a test run
+ * (watches, and can break a tool on purpose to catch a made-up answer). */
+function ProxyModes({ onWrap, initial }: { onWrap: () => void; initial: ProxyMode }) {
+  const [mode, setMode] = useState<ProxyMode>(initial);
+  return (
+    <>
+      <div className="flex gap-2 flex-wrap" style={{ marginBottom: 16 }} data-testid="proxy-modes">
+        {([
+          ["guard", "Guard", "blocks — always on, in production"],
+          ["test", "Test run", "watches — and breaks a tool on purpose"],
+        ] as [ProxyMode, string, string][]).map(([id, title, body]) => (
+          <button key={id} onClick={() => setMode(id)} data-testid={`proxy-mode-${id}`}
+            aria-pressed={mode === id}
+            style={{ flex: "1 1 200px", textAlign: "left", cursor: "pointer", background: mode === id ? C.panel : "none",
+                     color: C.text, border: `1px solid ${mode === id ? C.steel : C.line}`, borderRadius: 8,
+                     padding: "8px 12px", fontFamily: MONO }}>
+            <span style={{ fontSize: 12.5, fontWeight: 700 }}>{title}</span>
+            <span style={{ fontSize: 10.5, color: C.mut, marginLeft: 8 }}>{body}</span>
+          </button>
+        ))}
+      </div>
+      {mode === "guard" ? <GuardOnboarding /> : <ProxyOnboarding onWrap={onWrap} />}
+    </>
   );
 }
 
@@ -574,8 +604,8 @@ function ProxyOnboarding({ onWrap }: { onWrap: () => void }) {
             the proxy sees your tool traffic to observe it; credentials pass through untouched and are never
             stored, and only observations are kept, never raw bodies. Self-host it to keep every byte on your
             own machines.
-            <br />want it to refuse calls, pause and stop?{" "}
-            <span data-testid="proxy-to-wrap" style={{ color: C.steel, cursor: "pointer" }} onClick={onWrap}>wrap it in code instead →</span>
+            <br />a test run only watches. To refuse calls, pick Guard above — or, to reach the model too,{" "}
+            <span data-testid="proxy-to-wrap" style={{ color: C.steel, cursor: "pointer" }} onClick={onWrap}>wrap it in code →</span>
           </div>
           {allGreen && (
             <div style={{ fontFamily: MONO, fontSize: 11, color: C.dim, marginTop: 12 }}>

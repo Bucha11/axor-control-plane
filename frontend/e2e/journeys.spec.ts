@@ -80,9 +80,12 @@ test.describe("three ways in", () => {
     await setConnection(page, { mode: "none" });
     await goHash(page, "connect?for=production");
     const compare = page.getByTestId("prod-way-compare");
-    await expect(compare).toContainText("refuses a dangerous call");
-    await expect(compare).toContainText("records what policy would say");
+    await expect(compare).toContainText("refuses a dangerous tool call");
+    await expect(compare).toContainText("its tool calls; the agent still talks");
     await page.getByTestId("prod-way-proxy").click();
+    // the proxy guards by default; a test run is the other mode
+    await expect(page.getByTestId("guard-onboarding")).toBeVisible();
+    await page.getByTestId("proxy-mode-test").click();
     await expect(page.getByText("What tools does your agent use?")).toBeVisible();
     await page.getByTestId("prod-way-back").click();
     await page.getByTestId("prod-way-code").click();

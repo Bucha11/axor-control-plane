@@ -48,6 +48,24 @@ test.describe("onboarding", () => {
     await expect(page.getByTestId("adapter-onboarding")).toBeVisible();
   });
 
+  test("the proxy as a guard: two files, the command, the addresses", async ({ page }) => {
+    await goHash(page, "connect?for=production");
+    await page.getByTestId("prod-way-proxy").click();
+    await page.getByTestId("guard-example").click();
+    await expect(page.getByLabel("what send_report does")).toHaveValue("EXPORT");
+    const [manifests] = await Promise.all([
+      page.waitForEvent("download"), page.getByTestId("guard-save-manifests").click(),
+    ]);
+    expect(manifests.suggestedFilename()).toBe("axor.manifests.json");
+    const bundle = JSON.parse(await (await import("node:fs/promises")).readFile(await manifests.path(), "utf8"));
+    const ids = bundle.manifests.map((m: { id: string }) => m.id).sort();
+    expect(ids).toEqual(["run_query", "send_report", "web_search"]);
+    await expect(page.getByTestId("guard-run"))
+      .toContainText("axor-proxy --guard --config tools.json --manifests axor.manifests.json --node-id agent-1");
+    await expect(page.getByTestId("guard-urls")).toContainText("http://localhost:8401/t/web_search/");
+    await expect(page.getByTestId("guard-live")).toContainText("waiting for agent-1");
+  });
+
   test("wrapping in code: the snippet checks the tools the scanner found", async ({ page }) => {
     await goHash(page, "connect?for=production");
     await page.getByTestId("prod-way-code").click();

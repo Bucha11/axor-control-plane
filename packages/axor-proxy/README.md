@@ -1,6 +1,7 @@
 # axor-proxy
 
-Observe-only tool proxy (Starlette + httpx). Sits in front of the agent's tools;
+Tool proxy (Starlette + httpx), observe-only unless started in guard mode
+(below). Sits in front of the agent's tools;
 forwards auth byte-for-byte, and only ever does two things: inject a declared
 fault (armed scenario), record an observation (status/sizes/hashes — never raw
 bodies). It never blocks the agent.
@@ -14,6 +15,29 @@ the one integration that is not that flag on a `WrappedToolset`: an HTTP
 boundary has no callable to wrap. Without manifests nothing is governed, and the
 trace keeps the shape it had — a tool's effect class is the operator's
 declaration, never guessed from its name.
+
+## Guard mode — block, not only watch
+
+```
+axor-proxy --guard --config tools.json --manifests axor.manifests.json --node-id support-agent
+```
+
+Every call that reaches `/t/{tool}` without an armed test run is decided
+first, by the same `ToolCallGovernor` a `WrappedToolset` runs, built from the
+same manifests (the Config Builder's `axor.manifests.json`, or a directory from
+`axor-wrap manifest`; a manifest's `id` is the proxy's tool name, or an MCP
+tool's name). Denied by policy → 403 (MCP `tools/call` → a JSON-RPC error);
+paused / stopped from the Control Plane → 503; over the plane's call budget →
+429. The upstream is never called for a refused call. An answer's text is
+registered in the session's per-value ledger — a JSON answer as its string
+leaves, so a value lifted out of it (an address, a command) is recognised when
+it drives a later call. `X-Axor-Session` keeps one conversation's untrusted
+text out of another's calls (default: one session, ended after 15 idle
+minutes). With `AXOR_PLANE_URL` (or `--backend-url`) and `AXOR_INGEST_KEY` the
+guard is a node on the plane: pause / stop / budget reach it and its calls show
+in Agents — arguments as names and sizes, never values. What it cannot do:
+anything on the model's side (cut context, hold the model), or tools the agent
+runs in-process — that is the wrap.
 
 Run: `uv run axor-proxy --demo --backend-url http://127.0.0.1:8400`
 (`--demo` registers mock broken tools, zero creds; `--backend-url` auto-uploads

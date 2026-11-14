@@ -49,10 +49,12 @@ The honest version of "what do I actually get" per rung:
 | Depth | Axor sees | Can prove | Can control |
 |---|---|---|---|
 | **demo** | our scripted agent + mock tools | a full EvidenceCase, end to end | — (showcase) |
-| **proxy** | your tools' I/O | tool faults immediately; a full EvidenceCase once the agent's final claim is submitted (a one-line hook — see `examples/`) | — (observe-only) |
+| **proxy** | your tools' I/O | tool faults immediately; a full EvidenceCase once the agent's final claim is submitted (a one-line hook — see `examples/`) | — (observe-only); in **guard mode**: refuse tool calls by policy, hold them while paused / stopped, a call budget |
 | **adapter** | agent trajectory + per-value provenance | full causal reconstruction | pause / stop / replan / cascade — the live Control plane |
 
-The proxy is genuinely observe-only: it sees the tool boundary. Matching a tool
+By default the proxy is observe-only: it sees the tool boundary. Started with
+`--guard` it also gates that boundary (see `packages/axor-proxy`) — still
+without the model's side, which only the adapter has. Matching a tool
 result against the agent's later *claim* needs that claim — the demo's scripted
 agent submits it for you; on your own agent an `examples/` recipe does it in a
 few lines. We call this out rather than imply a transparent proxy magically

@@ -53,6 +53,17 @@ def cli() -> None:
                              "routes (arm runs, inject faults, read traces). "
                              "Unset = open, which is fine on loopback and not "
                              "on a published port.")
+    parser.add_argument("--guard", action="store_true",
+                        default=os.environ.get("AXOR_PROXY_GUARD", "") == "1",
+                        help="block, not only watch: every call is decided first "
+                             "(needs --manifests)")
+    parser.add_argument("--manifests", type=Path,
+                        default=(Path(os.environ["AXOR_MANIFESTS"])
+                                 if os.environ.get("AXOR_MANIFESTS") else None),
+                        help="the tools' manifests: axor.manifests.json from the "
+                             "Config Builder, or a directory from `axor-wrap manifest`")
+    parser.add_argument("--node-id", default=os.environ.get("AXOR_NODE_ID", "proxy-guard"),
+                        help="the agent's name on the Control Plane (guard mode)")
     args = parser.parse_args()
 
     # The self-dial host (scripted agent + demo mock upstream) must be a routable
@@ -74,7 +85,17 @@ def cli() -> None:
 
     args.trace_dir.mkdir(parents=True, exist_ok=True)
     self_base = f"http://{self_host}:{args.port}"
-    state = ProxyState(tools=tools, trace_dir=args.trace_dir,
+    guard = None
+    if args.guard:
+        from axor_proxy.guard import Guard, load_manifests
+
+        if args.manifests is None:
+            parser.error("--guard needs --manifests (axor.manifests.json, or a "
+                         "directory written by `axor-wrap manifest`)")
+        guard = Guard(load_manifests(args.manifests), args.node_id,
+                      plane_url=os.environ.get("AXOR_PLANE_URL") or args.backend_url,
+                      ingest_key=os.environ.get("AXOR_INGEST_KEY"))
+    state = ProxyState(tools=tools, trace_dir=args.trace_dir, guard=guard,
                        backend_url=args.backend_url,
                        self_base_url=self_base,
                        ingest_key=os.environ.get("AXOR_INGEST_KEY"),

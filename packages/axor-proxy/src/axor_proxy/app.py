@@ -10,7 +10,10 @@ Rules, in order of importance:
   reasoning and the bounds.
 - Exactly two intervention points: inject fault (armed scenario), record
   observation. Everything else is clean passthrough.
-- Observe-only: the proxy never blocks the agent. A run armed WITH tool
+- Observe-only by default: the proxy never blocks the agent — unless it was
+  started in guard mode (`--guard`, axor_proxy.guard), where every call with
+  no armed test run of its own is decided first and a denied one never
+  reaches the upstream. A run armed WITH tool
   manifests additionally carries an `axor_core.governor.ToolCallGovernor`, so
   each call it can see the arguments of is evaluated and its verdict recorded —
   the posture axor-wrap spells `enforcement="off"`, and the same governor. The
@@ -21,7 +24,7 @@ Rules, in order of importance:
 - No raw bodies persisted: observations carry status, sizes and hashes only.
   Call arguments go to the governor and never to the trace; the verdict does.
 - Disarmed endpoints return 503 (decision #1): traffic flows only while a run
-  is armed.
+  is armed — or, in guard mode, always, through the gate.
 """
 from __future__ import annotations
 
@@ -180,6 +183,7 @@ class ProxyState:
         control_token: str | None = None,
         vault: CredentialVault | None = None,
         vault_tool_names: frozenset[str] | None = None,
+        guard: Any = None,  # noqa: ANN401 - axor_proxy.guard.Guard
     ) -> None:
         import os as _os
 
@@ -194,6 +198,10 @@ class ProxyState:
             control_token or _os.environ.get("AXOR_PROXY_TOKEN") or None
         )
 
+        # Guard mode (axor_proxy.guard): when set, a call with no armed run of
+        # its own is decided — paused / stopped / over budget / denied by
+        # policy — before anything reaches the upstream.
+        self.guard = guard
         # tool name -> upstream: an HTTP base url, or a live StdioMcpServer
         # (the stdio-MCP gateway) registered via /axor/mcp/discover.
         self.tools: dict[str, str | StdioMcpServer] = dict(tools)
@@ -326,6 +334,115 @@ async def _stdio_dispatch(
     return Response(payload, media_type="application/json")
 
 
+def _call_args(
+    body: bytes, query: Any,  # noqa: ANN401 - starlette QueryParams
+) -> tuple[dict[str, Any] | None, dict[str, Any] | None, str | None]:
+    """(args, rpc message, inner tool) for a guarded call.
+
+    An MCP ``tools/call`` names its tool and arguments; any other JSON-RPC
+    message (initialize, tools/list, …) is protocol, not a tool call — None
+    args, and it passes. A JSON object body is the call's arguments, the query
+    string adds to them."""
+    parsed: Any = None
+    if body[:1] == b"{":
+        try:
+            parsed = json.loads(body)
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            parsed = None
+    if isinstance(parsed, dict) and parsed.get("jsonrpc") == "2.0":
+        if parsed.get("method") != "tools/call":
+            return None, parsed, None
+        params = parsed.get("params") if isinstance(parsed.get("params"), dict) else {}
+        inner = params.get("name") if isinstance(params.get("name"), str) else None
+        args = params.get("arguments") if isinstance(params.get("arguments"), dict) else {}
+        return dict(args), parsed, inner
+    args: dict[str, Any] = dict(query) if query else {}
+    if isinstance(parsed, dict):
+        args.update(parsed)
+    elif body and parsed is None:
+        try:
+            args["body"] = body.decode()
+        except UnicodeDecodeError:
+            pass
+    return args, None, None
+
+
+async def _guarded_call(state: ProxyState, request: Request, tool: str, path: str) -> Response:
+    """One call through guard mode: decided first, forwarded only if allowed,
+    its answer folded into the session's ledger (axor_proxy.guard)."""
+    guard = state.guard
+    upstream_base = state.tools.get(tool)
+    if upstream_base is None:
+        return JSONResponse({"error": "unknown_tool", "tool": tool}, status_code=404)
+    body = await request.body()
+    args, rpc, inner = _call_args(body, request.query_params)
+    if args is None:  # MCP protocol traffic: not a tool call
+        return await _forward_plain(state, request, upstream_base, path, body, rpc)
+    name = inner or tool
+    session = guard.session(request.headers.get("x-axor-session"))
+    decision, refusal = guard.check(session, name, args)
+    if refusal is not None:
+        if rpc is not None:
+            return JSONResponse({"jsonrpc": "2.0", "id": rpc.get("id"),
+                                 "error": {"code": -32001,
+                                           "message": f"axor: {refusal.detail}",
+                                           "data": {"error": refusal.error,
+                                                    "category": refusal.category}}})
+        return JSONResponse({"error": refusal.error, "tool": name, "detail": refusal.detail,
+                             "category": refusal.category}, status_code=refusal.status)
+    if isinstance(upstream_base, StdioMcpServer):
+        try:
+            result = await upstream_base.rpc(rpc if rpc is not None else {})
+        except McpError as exc:
+            guard.done(session, name, args, decision, None, None)
+            return JSONResponse({"error": "upstream_unreachable", "tool": tool,
+                                 "detail": str(exc)}, status_code=502)
+        guard.done(session, name, args, decision, _rpc_value(result), 200)
+        return JSONResponse(result) if result is not None else Response(status_code=202)
+    url = upstream_base.rstrip("/") + "/" + path if path else upstream_base
+    try:
+        upstream = await state.client.request(
+            request.method, url, params=request.query_params,
+            headers=_forward_headers(request.headers), content=body,
+        )
+    except httpx.HTTPError as exc:
+        guard.done(session, name, args, decision, None, None)
+        return JSONResponse({"error": "upstream_unreachable", "tool": tool, "detail": str(exc)},
+                            status_code=502)
+    try:
+        answer: Any = _rpc_value(upstream.json())
+    except (json.JSONDecodeError, ValueError):
+        answer = upstream.text
+    guard.done(session, name, args, decision, answer, upstream.status_code)
+    headers = {k: v for k, v in upstream.headers.items() if k.lower() not in _HOP_BY_HOP}
+    return Response(upstream.content, status_code=upstream.status_code, headers=headers)
+
+
+async def _forward_plain(
+    state: ProxyState, request: Request,
+    upstream_base: Any,  # noqa: ANN401 - url or StdioMcpServer
+    path: str, body: bytes, rpc: dict[str, Any] | None,
+) -> Response:
+    if isinstance(upstream_base, StdioMcpServer):
+        try:
+            result = await upstream_base.rpc(rpc or {})
+        except McpError as exc:
+            return JSONResponse({"error": "upstream_unreachable", "detail": str(exc)},
+                                status_code=502)
+        return JSONResponse(result) if result is not None else Response(status_code=202)
+    url = upstream_base.rstrip("/") + "/" + path if path else upstream_base
+    try:
+        upstream = await state.client.request(
+            request.method, url, params=request.query_params,
+            headers=_forward_headers(request.headers), content=body,
+        )
+    except httpx.HTTPError as exc:
+        return JSONResponse({"error": "upstream_unreachable", "detail": str(exc)},
+                            status_code=502)
+    headers = {k: v for k, v in upstream.headers.items() if k.lower() not in _HOP_BY_HOP}
+    return Response(upstream.content, status_code=upstream.status_code, headers=headers)
+
+
 def create_app(state: ProxyState) -> Starlette:
     def authorized(request: Request) -> bool:
         """Bearer check for the control surface. Open when no token is set."""
@@ -359,6 +476,8 @@ def create_app(state: ProxyState) -> Starlette:
         # Concurrent runs: X-Axor-Run names this caller's armed run; without it
         # the most recently armed run applies (single-user compat).
         run = state.runs.active_for(request.headers.get("x-axor-run"))
+        if run is None and state.guard is not None:
+            return await _guarded_call(state, request, tool, path)
         if run is None:
             return JSONResponse(
                 {"error": "proxy_disarmed",
@@ -882,7 +1001,10 @@ def create_app(state: ProxyState) -> Starlette:
         })
 
     async def healthz(request: Request) -> Response:
-        return JSONResponse({"ok": True, "armed": state.runs.active is not None})
+        out: dict[str, Any] = {"ok": True, "armed": state.runs.active is not None}
+        if state.guard is not None:
+            out["guard"] = state.guard.describe()
+        return JSONResponse(out)
 
     @asynccontextmanager
     async def lifespan(_app: Starlette) -> Any:  # noqa: ANN401 - CM protocol
