@@ -97,7 +97,8 @@ export default function CodingOnboarding({ then }: { then?: () => void }) {
     `export AXOR_PLANE_URL=${PLANE_URL}`,
     needsKey ? `export AXOR_INGEST_KEY=${key ?? "<the key — create it below>"}` : null,
   ].filter(Boolean).join("\n");
-  const goAgents = () => { connect("adapter", []); if (then) then(); else navigate("govern"); };
+  // on to the next part of "both" is not a connection: nothing reported yet
+  const goAgents = () => { if (then) { then(); return; } connect("adapter", []); navigate("govern"); };
 
   return (
     <div data-testid="coding-onboarding">
@@ -109,11 +110,20 @@ export default function CodingOnboarding({ then }: { then?: () => void }) {
       </div>
       <div data-testid="coding-free" style={{ fontFamily: MONO, fontSize: 11, color: C.mut, lineHeight: 1.7,
         border: `1px solid ${C.line}`, borderRadius: 6, padding: "8px 12px", marginBottom: 18 }}>
-        <span style={{ color: C.green }}>free for 1 developer and 1 agent</span> — Claude Code or
-        Codex, with hooks, agent trees and pause / stop / cap. Any number of repositories and sessions.
-        <br />both agents together (one writes, the other reviews) or a second developer: $25 per
-        developer per month.{" "}
-        <button onClick={() => navigate("pricing?for=coding")} data-testid="coding-pricing"
+        {then ? (
+          <>
+            <span style={{ color: C.green }}>free: 1 developer, 1 agent family and 1 production agent</span>.
+            <br />Team, $299 / month: 10 production agents and 5 developers — more developers $25 each.{" "}
+          </>
+        ) : (
+          <>
+            <span style={{ color: C.green }}>free for 1 developer and 1 agent</span> — Claude Code or
+            Codex, with hooks, agent trees and pause / stop / cap. Any number of repositories and sessions.
+            <br />both agents together (one writes, the other reviews) or a second developer: $25 per
+            developer per month.{" "}
+          </>
+        )}
+        <button onClick={() => navigate(then ? "pricing?for=both" : "pricing?for=coding")} data-testid="coding-pricing"
           style={{ background: "none", border: "none", padding: 0, cursor: "pointer",
                    fontFamily: MONO, fontSize: 11, color: C.steel }}>pricing →</button>
       </div>

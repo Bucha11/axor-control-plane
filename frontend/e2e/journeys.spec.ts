@@ -58,10 +58,22 @@ test.describe("three ways in", () => {
   test("both walks the coding path, then the production one", async ({ page }) => {
     await setConnection(page, { mode: "none" });
     await goHash(page, "connect");
+    // a plane with nothing on it yet (other specs share this one)
+    await page.route("**/v1/plane/nodes", (route) => route.fulfill({ json: [] }));
     await page.getByTestId("way-both").click();
     await expect(page.getByTestId("coding-onboarding")).toBeVisible();
+    // one way in, in two parts — said, with the price of having both
+    await expect(page.getByTestId("both-step-1")).toHaveAttribute("aria-current", "step");
+    await expect(page.getByTestId("coding-free")).toContainText("$299 / month");
     await page.getByTestId("coding-done").click();
+    await expect(page.getByTestId("both-production-intro")).toContainText("Now your production agent");
     await expect(page.getByText("What tools does your agent use?")).toBeVisible();
+    // moving on is not connecting: the header does not claim an adapter
+    await expect(page.getByRole("button", { name: /connection: adapter/ })).toHaveCount(0);
+    // and the first part is one click back
+    await page.getByTestId("both-step-1").click();
+    await expect(page.getByTestId("coding-onboarding")).toBeVisible();
+    await page.unrouteAll({ behavior: "ignoreErrors" });
   });
 
   test("production goes straight to the proxy walkthrough", async ({ page }) => {

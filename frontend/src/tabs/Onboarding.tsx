@@ -1,11 +1,11 @@
 // Get started: tools → point agent → connection check (onboarding mockup).
 // Step 3 is wired to the real proxy preflight endpoint via react-query.
 import { useState } from "react";
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { ArrowRight, Check, Circle, Copy, Plug, RefreshCw, Zap } from "lucide-react";
 import { api } from "../api";
 import { navigate, useRoute } from "../router";
-import CodingOnboarding from "../components/CodingOnboarding";
+import CodingOnboarding, { isCodingSession } from "../components/CodingOnboarding";
 import type { Journey } from "./Pricing";
 import { ConnectionMode, useApp } from "../store";
 import { C, MONO, btn } from "../theme";
@@ -119,18 +119,57 @@ export default function Onboarding() {
       ← choose another way in
     </button>
   );
+  const steps = way === "both" && (
+    <BothSteps at={codingDone ? 2 : 1} onStep={(n) => setCodingDone(n === 2)} />
+  );
   if (way === "coding" || (way === "both" && !codingDone)) {
     return (
       <div style={{ maxWidth: 640, margin: "0 auto" }}>
         {back}
+        {steps}
         <CodingOnboarding then={way === "both" ? () => setCodingDone(true) : undefined} />
       </div>
     );
   }
   return (
     <div>
-      <div style={{ maxWidth: 640, margin: "0 auto" }}>{back}</div>
+      <div style={{ maxWidth: 640, margin: "0 auto" }}>
+        {back}
+        {steps}
+        {way === "both" && (
+          <div data-testid="both-production-intro" style={{ fontSize: 13.5, color: C.mut, lineHeight: 1.6,
+            marginBottom: 14 }}>
+            <span style={{ color: C.text }}>Now your production agent.</span> Two ways in: a proxy in front
+            of its tools (no code change), or an adapter that wraps it with axor-core — then you can
+            pause, stop and repair it live. You pick in step 2; first, the tools it calls.
+          </div>
+        )}
+      </div>
       <ProductionOnboarding />
+    </div>
+  );
+}
+
+/** "Both" is one way in walked in two parts: say so, and let either be reopened. */
+function BothSteps({ at, onStep }: { at: 1 | 2; onStep: (n: 1 | 2) => void }) {
+  const nodes = useQuery({ queryKey: ["nodes"], queryFn: api.nodes, refetchInterval: 3000 });
+  const codingIn = (nodes.data ?? []).some((n) => isCodingSession(n.node_id) && !/-example-/.test(n.node_id));
+  const step = (n: 1 | 2, label: string, done: boolean) => (
+    <button key={n} onClick={() => onStep(n)} data-testid={`both-step-${n}`} aria-current={at === n ? "step" : undefined}
+      style={{ background: "none", border: "none", padding: 0, cursor: "pointer", display: "flex", alignItems: "center",
+               gap: 8, fontFamily: MONO, fontSize: 12, color: at === n ? C.text : C.mut }}>
+      <span style={{ width: 22, height: 22, borderRadius: 11, display: "inline-flex", alignItems: "center",
+                     justifyContent: "center", fontSize: 11,
+                     border: `1px solid ${done ? C.green : at === n ? C.steel : C.line}`,
+                     color: done ? C.green : at === n ? C.steel : C.dim }}>{done ? "✓" : n}</span>
+      {label}
+    </button>
+  );
+  return (
+    <div data-testid="both-steps" className="flex items-center gap-3 flex-wrap" style={{ marginBottom: 18 }}>
+      {step(1, "Coding agents", codingIn)}
+      <span style={{ color: C.dim, fontFamily: MONO }}>→</span>
+      {step(2, "Production agent", false)}
     </div>
   );
 }
