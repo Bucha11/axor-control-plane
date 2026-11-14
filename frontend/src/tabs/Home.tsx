@@ -111,7 +111,7 @@ function FirstVisit() {
             <span>
               <span style={{ display: "block", fontWeight: 700 }}>Govern my production agent</span>
               <span style={{ display: "block", fontSize: 12, opacity: 0.85, marginTop: 2 }}>
-                proxy in front of its tools, or wrap it with an adapter · pause, cap, stop, repair live
+                wrap it in code to guard it live · or watch it through a proxy, no code change
               </span>
             </span>
             <ArrowRight size={18} />
