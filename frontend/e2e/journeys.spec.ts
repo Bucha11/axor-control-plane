@@ -208,3 +208,28 @@ test("the paid-plan notice folds, and a locked session stays out of the activity
   await page.getByTestId("plan-lock-fold").click();
   await expect(page.getByTestId("plan-lock-card")).toContainText("still protected");
 });
+
+test("Agents with only the coding example tells its story, in coding words", async ({ page, request }) => {
+  await setConnection(page, { mode: "none" });
+  await goHash(page, "home");
+  await page.getByTestId("home-example-coding").click();
+  await expect(page).toHaveURL(/#\/trees\/tree-example-coding/);
+  // other specs share this plane: show this page what a visitor's plane holds
+  await page.route("**/v1/plane/nodes", async (route) => {
+    const all = await (await request.get(`${BACKEND}/v1/plane/nodes`)).json() as { node_id: string }[];
+    await route.fulfill({
+      json: all.filter((n) => /^(claude-code|codex)-example-|^tree-example/.test(n.node_id)) });
+  });
+  await page.getByTestId("example-agents").click();
+  const story = page.getByTestId("coding-example-story");
+  await expect(story).toContainText("denied at the shell");
+  // no adapter talk for a coding visitor, and the badge says what this is
+  await expect(page.getByTestId("adapter-note")).toHaveCount(0);
+  await expect(page.getByText(/needs the adapter/)).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "connection: example data" })).toBeVisible();
+  await page.getByTestId("story-codex").click();
+  await expect(page.getByTestId("agent-panel")).toContainText(/codex-example-/);
+  await story.getByTestId("story-connect").click();
+  await expect(page).toHaveURL(/#\/connect\?for=coding/);
+  await page.unrouteAll({ behavior: "ignoreErrors" });
+});

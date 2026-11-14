@@ -32,6 +32,14 @@ export function isCodingSession(nodeId: string): boolean {
   return nodeId.startsWith("claude-code-") || nodeId.startsWith("codex-");
 }
 
+/** The coding example (Home → Explore example coding agents) and nothing of a
+ * production fleet: the screens then talk about coding agents, not adapters. */
+export function codingExampleOnly(ids: string[]): boolean {
+  const example = ids.some((id) => /^(claude-code|codex)-example-/.test(id));
+  const production = ids.some((id) => !isCodingSession(id) && !id.startsWith("tree-"));
+  return example && !production;
+}
+
 function Block({ text, id, copied, onCopy }: {
   text: string; id: string; copied: string | null; onCopy: (id: string, text: string) => void;
 }) {

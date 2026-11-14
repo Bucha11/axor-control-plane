@@ -13,6 +13,7 @@
 // the machinery instead of the job, and hid the first step (get started) and a
 // static mock (expert) behind the same "more".
 import { useEffect, useRef, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { Circle, GraduationCap, Plug, Settings as SettingsIcon } from "lucide-react";
 import { api } from "./api";
 import { C, MONO } from "./theme";
@@ -21,6 +22,7 @@ import { MODE_LABEL, isConnected, isGuestToken, useApp } from "./store";
 import GuestSession, { guestTimeLeft } from "./components/GuestSession";
 import { track } from "./funnel";
 import Tooltip from "./components/Tooltip";
+import { codingExampleOnly } from "./components/CodingOnboarding";
 import Tour from "./components/Tour";
 import Home from "./tabs/Home";
 import Evidence from "./tabs/Evidence";
@@ -402,6 +404,11 @@ function VersionBadge() {
 
 function ConnectionBadge({ onConnect }: { onConnect: boolean }) {
   const { mode } = useApp((s) => s.connection);
+  // the coding example runs on the demo connection, but "mock tools" is the
+  // production proxy's demo — for a coding visitor it is example data
+  const nodes = useQuery({ queryKey: ["nodes"], queryFn: api.nodes, enabled: mode === "demo" });
+  const label = mode === "demo" && codingExampleOnly((nodes.data ?? []).map((n) => n.node_id))
+    ? "example data" : MODE_LABEL[mode];
   // On the connect page itself a "connect" button leads where you already are.
   if (mode === "none" && onConnect) return null;
   if (mode === "none") {
@@ -424,13 +431,13 @@ function ConnectionBadge({ onConnect }: { onConnect: boolean }) {
   return (
     <button
       onClick={() => navigate("connect")}
-      title={`connection: ${MODE_LABEL[mode]}`}
-      aria-label={`connection: ${MODE_LABEL[mode]}`}
+      title={`connection: ${label}`}
+      aria-label={`connection: ${label}`}
       style={{ display: "flex", alignItems: "center", gap: 6, background: "none", border: `1px solid ${C.line}`, borderRadius: 20, padding: "6px 10px", cursor: "pointer" }}
     >
       <Circle size={7} fill={color} color={color} />
       {/* on a phone the dot alone: the full mode is one tap away, on Connect */}
-      <span className="hide-narrow" style={{ fontFamily: MONO, fontSize: 10.5, color: C.mut, whiteSpace: "nowrap" }}>{MODE_LABEL[mode]}</span>
+      <span className="hide-narrow" style={{ fontFamily: MONO, fontSize: 10.5, color: C.mut, whiteSpace: "nowrap" }}>{label}</span>
     </button>
   );
 }

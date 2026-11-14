@@ -12,6 +12,7 @@ import { isAdapter, useApp } from "../store";
 import { C, MONO, btn } from "../theme";
 import Coach from "../components/Coach";
 import Tooltip from "../components/Tooltip";
+import { codingExampleOnly } from "../components/CodingOnboarding";
 
 const REFETCH_MS = 5000;
 
@@ -295,7 +296,8 @@ export default function ControlTab({ focusNode }: { focusNode?: string }) {
     <>
       {/* decided once the list is in: a note that unfolds and then folds
           itself takes the button out from under the pointer */}
-      {!isAdapter(mode) && fleet.isSuccess && (hasAgents ? (
+      {!isAdapter(mode) && fleet.isSuccess
+        && !codingExampleOnly((fleet.data ?? []).map((n) => n.node_id)) && (hasAgents ? (
         // agents are already on screen: one line, the example tools folded away
         <div data-testid="adapter-note" style={{ fontFamily: MONO, fontSize: 11, color: C.mut,
                                                   lineHeight: 1.6, marginBottom: 14 }}>
@@ -519,13 +521,18 @@ function ControlBody({ focusNode, testBench }: { focusNode?: string; testBench: 
         a gap means a command is still in flight. Pause, cap its budget, or stop it;
         interventions travel over the plane and the node obeys on its next turn.
       </Coach>
+      {codingExampleOnly(list.map((n) => n.node_id)) && (
+        <CodingExampleStory list={list} treeOf={treeOf} onPick={pick} />
+      )}
       <h1 style={{ fontSize: 22, fontWeight: 650, margin: "0 0 4px" }}>
         {needYou === 0 ? <>All agents healthy.</>
           : needYou === 1 ? <>One agent needs attention.</>
           : <>{needYou} agents need attention.</>}
       </h1>
       <StatusChips units={units} filter={filter} setFilter={setFilter} />
-      {fleetQ.data && <FleetTotals totals={fleetQ.data.totals} />}
+      {/* "running now" counts what the list counts: a running tree is one */}
+      {fleetQ.data && <FleetTotals totals={{ ...fleetQ.data.totals,
+        active: Math.max(fleetQ.data.totals.active, units.filter((st) => st.includes("running")).length) }} />}
       <div className="flex items-center gap-4" style={{ fontFamily: MONO, fontSize: 11, color: C.mut, marginBottom: 20 }}>
         <span data-testid="fleet-count">
           {looseCount} agent{looseCount === 1 ? "" : "s"}
@@ -1093,6 +1100,51 @@ function StatusChips({ units, filter, setFilter }: {
       {chip("all", "all", units.length, C.text)}
       {(["needs_you", "running", "paused", "stopped", "idle"] as Status[]).map((s) =>
         chip(s, STATUS_LABEL[s], count(s), STATUS_COLOR[s]))}
+    </div>
+  );
+}
+
+/** The coding example, told: two sessions in one repository, one carrying what
+ * the other read; each step opens that session. Shown only while the plane
+ * holds nothing but the example. */
+function CodingExampleStory({ list, treeOf, onPick }: {
+  list: NodeInfo[]; treeOf: Map<string, TreeSummary>; onPick: (id: string) => void;
+}) {
+  const loose = list.filter((n) => !treeOf.has(n.node_id));
+  const claude = loose.find((n) => n.node_id.startsWith("claude-code-example-"));
+  const codex = loose.find((n) => n.node_id.startsWith("codex-example-"));
+  const tree = [...new Set(treeOf.values())][0];
+  const step = (id: string | undefined, n: string, text: React.ReactNode, testId: string) => id && (
+    <button onClick={() => onPick(id)} data-testid={testId}
+      style={{ display: "block", textAlign: "left", width: "100%", background: "none", border: "none",
+               padding: "3px 0", cursor: "pointer", fontFamily: MONO, fontSize: 11.5, color: C.mut, lineHeight: 1.6 }}>
+      <span style={{ color: C.amber }}>{n}</span> {text} <span style={{ color: C.steel }}>open →</span>
+    </button>
+  );
+  return (
+    <div data-testid="coding-example-story" style={{ border: `1px solid ${C.line}`, borderRadius: 8,
+      padding: "12px 16px", marginBottom: 18, background: C.panel }}>
+      <div style={{ fontFamily: MONO, fontSize: 10.5, color: C.steel, letterSpacing: "0.06em", marginBottom: 4 }}>
+        EXAMPLE · TWO SESSIONS IN ONE REPOSITORY
+      </div>
+      {step(claude?.node_id, "①",
+        <>Claude Code read a docs page — what it brought back is marked as{" "}
+          <span style={{ color: C.amber }}>from the web</span>.</>, "story-claude")}
+      {step(codex?.node_id, "②",
+        <>Codex tried to run the <span style={{ color: C.text }}>curl … | sh</span> from it —{" "}
+          <span style={{ color: C.red }}>denied at the shell</span>, though Codex never saw the page.</>, "story-codex")}
+      {tree && (
+        <button onClick={() => navigate(`trees/${encodeURIComponent(tree.tree_run)}`)} data-testid="story-tree"
+          style={{ display: "block", textAlign: "left", width: "100%", background: "none", border: "none",
+                   padding: "3px 0", cursor: "pointer", fontFamily: MONO, fontSize: 11.5, color: C.mut, lineHeight: 1.6 }}>
+          <span style={{ color: C.amber }}>③</span> and a tree on the same task — a planner, five readers,
+          an implementer — folded into one row below. <span style={{ color: C.steel }}>open tree →</span>
+        </button>
+      )}
+      <button onClick={() => navigate("connect?for=coding")} data-testid="story-connect"
+        style={btn({ color: C.text, borderColor: C.steel, fontSize: 11.5, padding: "5px 12px", marginTop: 10 })}>
+        Connect your coding agents →
+      </button>
     </div>
   );
 }
