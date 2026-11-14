@@ -740,7 +740,25 @@ async def _close_heals(ctx: Any, node_id: str, verdict: str) -> list[dict]:  # n
 
 
 _ACTIVE_WINDOW_S = 30.0
-_WORK_KINDS = ("tool_call", "tool_result", "claim")
+# messages between agents are work too: in a multi-agent run an agent may
+# only delegate and relay, and it did something in that run all the same
+_WORK_KINDS = ("tool_call", "tool_result", "claim", "message_sent", "message_received")
+
+
+def _by_agent(run: dict, lines: list[dict]) -> dict[str, tuple[dict, list[dict]]]:
+    """A run's lines per agent that wrote them. A multi-agent run is recorded
+    once, under the node that started it, but each line names its own node:
+    counting the whole run for its owner left every other agent in it at
+    0 runs / 0 calls beside a feed full of their work. The run's evidence (a
+    caught lie is a verdict on the run's answer) stays with the owner."""
+    owner = run["node_id"]
+    groups: dict[str, list[dict]] = {}
+    for ln in lines:
+        groups.setdefault(str(ln.get("node_id") or owner), []).append(ln)
+    # the run is over for every agent in it once the run has answered
+    answered = any(ln.get("kind") == "claim" for ln in lines)
+    return {nid: (run if nid == owner else {**run, "evidence": [], "_answered": answered}, part)
+            for nid, part in groups.items()}
 
 
 def _run_summary(run: dict, lines: list[dict], probes: dict, now_dt: Any) -> dict | None:  # noqa: ANN401
@@ -762,7 +780,7 @@ def _run_summary(run: dict, lines: list[dict], probes: dict, now_dt: Any) -> dic
         age = (now_dt - datetime.fromisoformat(str(last))).total_seconds()
     except (TypeError, ValueError):
         age = None
-    active = (age is not None and age < _ACTIVE_WINDOW_S
+    active = (age is not None and age < _ACTIVE_WINDOW_S and not run.get("_answered")
               and not any(ln.get("kind") == "claim" for ln in lines))
     answered = {str((ln.get("payload") or {}).get("value_ref") or "") for ln in results}
     waiting = [ln for ln in calls if ln.get("verdict") != "deny"
@@ -802,7 +820,7 @@ async def node_runs(node_id: str, request: Request, limit: int = 20) -> dict:
     last 30 s and no answer yet. Read-only; commands still go through the
     node's one door.
     """
-    from datetime import UTC, datetime
+    from datetime import UTC, datetime, timedelta
 
     ctx = _ctx(request)
     limit = max(1, min(int(limit), 100))
@@ -813,10 +831,17 @@ async def node_runs(node_id: str, request: Request, limit: int = 20) -> dict:
     }
     now_dt = datetime.now(UTC)
     out: list[dict] = []
+    # a run another node started counts here when this node did work in it;
+    # reading every run's lines is bounded to the fleet's own 24 h window
+    since = (now_dt - timedelta(hours=24)).isoformat()
     for run in await ctx.store.list_runs():
-        if run["node_id"] != node_id:
+        recent = str(run.get("created_ts") or "") >= since
+        if run["node_id"] != node_id and not recent:
             continue
-        summary = _run_summary(run, await ctx.store.run_events(run["run_id"]), probes, now_dt)
+        mine = _by_agent(run, await ctx.store.run_events(run["run_id"])).get(node_id)
+        if mine is None:
+            continue
+        summary = _run_summary(mine[0], mine[1], probes, now_dt)
         if summary is None:
             continue
         out.append(summary)
@@ -846,27 +871,33 @@ async def fleet(request: Request) -> dict:
     stats = {nid: {"node_id": nid, "active_run": None, "current_tool": None, "last_ts": None,
                    "runs": 0, "calls": 0, "tainted": 0, "denied": 0, "lies": 0}
              for nid in nodes}
+    seen_runs: set[str] = set()
     for run in await ctx.store.list_runs():   # newest first
         if str(run.get("created_ts") or "") < since:
             break
-        st = stats.get(run["node_id"])
-        if st is None:
-            continue
-        summary = _run_summary(run, await ctx.store.run_events(run["run_id"]), probes, now_dt)
-        if summary is None:
-            continue
-        st["runs"] += 1
-        st["calls"] += summary["tool_calls"]
-        st["tainted"] += len(summary["tainted_refs"])
-        st["denied"] += summary["denied"]
-        st["lies"] += len(summary["evidence"])
-        if summary["active"] and st["active_run"] is None:
-            st["active_run"] = summary["run_id"]
-            st["current_tool"] = summary["current_tool"]
-        if st["last_ts"] is None or str(summary["last_ts"]) > str(st["last_ts"]):
-            st["last_ts"] = summary["last_ts"]
+        lines = await ctx.store.run_events(run["run_id"])
+        for nid, (part_run, part) in _by_agent(run, lines).items():
+            st = stats.get(nid)
+            if st is None:
+                continue
+            summary = _run_summary(part_run, part, probes, now_dt)
+            if summary is None:
+                continue
+            st["runs"] += 1
+            seen_runs.add(summary["run_id"])
+            st["calls"] += summary["tool_calls"]
+            st["tainted"] += len(summary["tainted_refs"])
+            st["denied"] += summary["denied"]
+            st["lies"] += len(summary["evidence"])
+            if summary["active"] and st["active_run"] is None:
+                st["active_run"] = summary["run_id"]
+                st["current_tool"] = summary["current_tool"]
+            if st["last_ts"] is None or str(summary["last_ts"]) > str(st["last_ts"]):
+                st["last_ts"] = summary["last_ts"]
     rows = list(stats.values())
-    totals = {k: sum(r[k] for r in rows) for k in ("runs", "calls", "tainted", "denied", "lies")}
+    totals = {k: sum(r[k] for r in rows) for k in ("calls", "tainted", "denied", "lies")}
+    # a run several agents worked in is one run, though each of them counts it
+    totals["runs"] = len(seen_runs)
     totals["active"] = sum(1 for r in rows if r["active_run"])
     return {"nodes": rows, "totals": totals, "since": since}
 

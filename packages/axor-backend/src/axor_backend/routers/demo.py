@@ -124,13 +124,13 @@ async def seed_fleet(
     battery keeps it — re-seeding must not pile a second drift report onto a
     node whose operator has since cut the context and re-probed.
     """
+    from datetime import UTC, datetime, timedelta
+
     from axor_backend import demo, plane
 
     # the canned tree run, stamped now, a second apart: the example reads as a
     # run that just happened ("just now", in order), not the fixture's date
     # with every event at the same midnight
-    from datetime import UTC, datetime, timedelta
-
     start = datetime.now(UTC) - timedelta(seconds=len(demo.TREE_EVENTS))
     await _seed(store, cache, "ex_tree", demo.TREE_ORCH, "multi-agent-demo",
                 [{**e, "ts": (start + timedelta(seconds=i)).isoformat()}
