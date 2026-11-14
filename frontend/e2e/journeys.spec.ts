@@ -125,9 +125,12 @@ test("home: a coding tab and a production tab, and the coding example opens a tr
   await expect(page).toHaveURL(/#\/connect\?for=coding/);
 });
 
-test("home: both is one link away", async ({ page }) => {
+test("home: both is one link away, on the first screen of either tab", async ({ page }) => {
   await setConnection(page, { mode: "none" });
   await goHash(page, "home");
+  await expect(page.getByTestId("home-both")).toBeInViewport();
+  await page.getByTestId("home-tab-production").click();
+  await expect(page.getByTestId("home-both")).toBeInViewport();
   await page.getByTestId("home-both").click();
   await expect(page).toHaveURL(/#\/connect\?for=both/);
 });

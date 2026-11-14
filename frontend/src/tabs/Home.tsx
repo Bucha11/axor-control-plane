@@ -85,6 +85,11 @@ function FirstVisit() {
             <button data-testid="home-example-coding" onClick={() => void explore("coding")} disabled={loading} style={link}>
               {loading ? "loading the example…" : "Explore example coding agents →"}
             </button>
+            <br />
+            Also run your own agent in production?{" "}
+            <button data-testid="home-both" onClick={() => navigate("connect?for=both")} style={link}>
+              Govern both on one plane →
+            </button>
           </div>
           <div style={{ fontFamily: MONO, fontSize: 11, color: C.dim, marginBottom: 24 }}>
             free for 1 developer and 1 agent · mixing agents or a team: $25 / developer / month ·{" "}
@@ -121,6 +126,11 @@ function FirstVisit() {
             <button onClick={() => { connect("demo"); navigate("catch", { auto: "1" }); }} style={link}>
               See it catch an agent making things up when a tool breaks →
             </button>
+            <br />
+            Your developers use Claude Code or Codex too?{" "}
+            <button data-testid="home-both" onClick={() => navigate("connect?for=both")} style={link}>
+              Govern both on one plane →
+            </button>
           </div>
           <div style={{ fontFamily: MONO, fontSize: 11, color: C.dim, marginBottom: 24 }}>
             1 governed node free · Team from $299 / month ·{" "}
@@ -144,13 +154,7 @@ function FirstVisit() {
         </div>
       )}
 
-      <div style={{ fontSize: 13, color: C.mut, marginTop: 22 }}>
-        Both?{" "}
-        <button data-testid="home-both" onClick={() => navigate("connect?for=both")} style={link}>
-          One plane for your production fleet and your developers' coding agents →
-        </button>
-      </div>
-      <div style={{ fontFamily: MONO, fontSize: 11, color: C.dim, marginTop: 14 }}>
+      <div style={{ fontFamily: MONO, fontSize: 11, color: C.dim, marginTop: 22 }}>
         open source ·{" "}
         <button onClick={startTour} style={{ background: "none", border: "none", padding: 0, color: C.steel, cursor: "pointer", fontFamily: MONO, fontSize: 11 }}>
           Take the tour
