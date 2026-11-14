@@ -87,8 +87,14 @@ test.describe("three ways in", () => {
     await goHash(page, "pricing?for=coding");
     await expect(page.getByTestId("tier-coding")).toContainText("$25 / developer / mo");
     await expect(page.getByTestId("tier-team")).toHaveCount(0);
+    // the coding tab talks coding: what is free, what is paid, and no Lab lines
+    await expect(page.getByTestId("tier-community")).toContainText("Claude Code or Codex — one agent family");
+    await expect(page.getByTestId("tier-community")).not.toContainText("EvidenceCase");
+    await expect(page.getByTestId("tier-coding")).toContainText("one writes, the other reviews");
+    await expect(page.getByText("Axor Security Platform")).toHaveCount(0);
     await page.getByTestId("journey-production").click();
     await expect(page.getByTestId("tier-coding")).toHaveCount(0);
+    await expect(page.getByText("Axor Security Platform")).toBeVisible();
     await expect(page.getByTestId("tier-team")).toContainText("$299 / mo");
     await page.getByTestId("journey-both").click();
     await expect(page.getByTestId("tier-team")).toContainText("5 developer seats included");
@@ -247,4 +253,11 @@ test("Agents with only the coding example tells its story, in coding words", asy
   await story.getByTestId("story-connect").click();
   await expect(page).toHaveURL(/#\/connect\?for=coding/);
   await page.unrouteAll({ behavior: "ignoreErrors" });
+});
+
+test("pricing for coding: the free plan's button connects coding agents", async ({ page }) => {
+  await setConnection(page, { mode: "none" });
+  await goHash(page, "pricing?for=coding");
+  await page.getByTestId("cta-community").click();
+  await expect(page).toHaveURL(/#\/connect\?for=coding/);
 });

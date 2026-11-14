@@ -53,6 +53,10 @@ interface Tier {
   highlight?: boolean;
   journeys: Journey[]; // which ways in show this plan
   highlightFor?: Journey[];
+  // what this plan says on one way in, where its general card would talk past
+  // the reader (Community's Lab lines mean nothing to someone with Claude Code)
+  on?: Partial<Record<Journey, Partial<Pick<Tier, "module" | "who" | "features" | "note">>
+    & { cta?: { label: string; route: string } }>>;
 }
 
 // Badge colour + label per kind (matches the theme's four-colour taxonomy).
@@ -87,6 +91,23 @@ const TIERS: Tier[] = [
     kind: "free",
     note: "free forever — safety never checks a license, at any scale",
     journeys: ["coding", "production", "both"],
+    on: {
+      coding: {
+        module: "Coding agents",
+        who: "one developer, one agent family",
+        features: [
+          { text: "Claude Code or Codex — one agent family" },
+          { text: "every tool call checked before it runs; the dangerous ones blocked" },
+          { text: "text from the web stays marked, whichever session carries it" },
+          { text: "agent trees of that family — a planner, read-only readers, an implementer" },
+          { text: "findings checked against the files their agent opened" },
+          { text: "every session on the Control Plane: pause, stop, cap" },
+          { text: "any number of repositories and sessions" },
+        ],
+        note: "free forever — what gets blocked never depends on the plan",
+        cta: { label: "Connect your coding agents", route: "connect?for=coding" },
+      },
+    },
   },
   {
     name: "Coding",
@@ -95,15 +116,12 @@ const TIERS: Tier[] = [
     module: "Coding agents + Control Plane",
     who: "teams governing Claude Code and Codex · no production runtime needed",
     features: [
-      { text: "everything in Community, for every developer on the team:", plus: true },
+      { text: "everything free, plus what you pay for:", plus: true },
       { text: "Claude Code and Codex together — one writes, the other reviews, in one tree" },
-      { text: "where text came from is tracked across every agent in a repository" },
-      { text: "agent trees — planner → parallel readers → implementer, any agent / model" },
-      { text: "read-only readers, findings checked against the files they opened" },
-      { text: "ranked, budgeted context between agents · cut from the Control Plane" },
-      { text: "every session on the Control Plane: pause, stop, call budget" },
-      { text: "reputation per agent and model, across sessions" },
-      { text: "a developer = someone whose agents reported that month, not a session" },
+      { text: "the whole team in one workspace — every developer's sessions in one place" },
+      { text: "one policy for everyone · stop anyone's session, cap its budget" },
+      { text: "reputation per agent and model, across the team's sessions" },
+      { text: "billed per developer whose agents ran that month — not per session, repo or tree" },
     ],
     kind: "paid",
     note: "paid — coding agents only; add production agents with Team",
@@ -186,6 +204,22 @@ const TIERS: Tier[] = [
     kind: "contract",
     note: "contracted — the top rung of the same ladder, not a separate product",
     journeys: ["coding", "production", "both"],
+    on: {
+      coding: {
+        module: "Coding agents, org-wide",
+        who: "the whole engineering org · SSO · self-hosted",
+        features: [
+          { text: "everything in Coding, plus:", plus: true },
+          { text: "SSO / SAML / SCIM", roadmap: true },
+          { text: "RBAC", roadmap: true },
+          { text: "self-hosted backend (Postgres / SQLite)" },
+          { text: "VPC / air-gapped deployment", roadmap: true },
+          { text: "negotiated developer seats" },
+          { text: "audit + retention policies · compliance exports", roadmap: true },
+          { text: "SLA + support", roadmap: true },
+        ],
+      },
+    },
   },
 ];
 
@@ -235,10 +269,11 @@ export default function Pricing() {
         Pricing
       </h1>
       <div style={{ fontFamily: MONO, fontSize: 11.5, color: C.dim, marginBottom: 20, lineHeight: 1.6 }}>
-        Line 1 — anything that makes an agent safer is free forever.
+        Protection is free on every plan — a license never decides what gets blocked.
         <br />
-        Line 2 — you pay for capabilities, organizational maturity and fleet size,
-        never for how much you run.
+        {journey === "coding"
+          ? "You pay for a team, and for mixing agents."
+          : "You pay for capabilities, organizational maturity and fleet size, never for how much you run."}
       </div>
 
       <div style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim, marginBottom: 6, letterSpacing: "0.06em" }}>
@@ -251,14 +286,16 @@ export default function Pricing() {
         {JOURNEYS.find((j) => j.id === journey)!.blurb}
         <br />
         {journey === "coding"
-          ? "A developer is counted once a month, however many sessions, agents or trees they ran. One developer is free."
+          ? "Free: one developer and one agent family. A developer is counted once a month, however many sessions, agents or trees they ran."
           : journey === "production"
             ? "Community → Team Workspace → Security Workspace → Enterprise Platform. What grows with the rung is the governed fleet, not the feature matrix."
             : "Team and Security include developer seats, so one plan covers the fleet and the coding agents. Only coding agents? The Coding plan is cheaper."}
       </div>
 
       <div className="flex gap-4" style={{ flexWrap: "wrap" }}>
-        {shown.map((t) => {
+        {shown.map((base) => {
+          const { cta, ...over } = base.on?.[journey] ?? {};
+          const t: Tier = { ...base, ...over };
           const highlight = t.highlightFor?.includes(journey) ?? false;
           const meta = KIND_META[t.kind];
           return (
@@ -349,8 +386,10 @@ export default function Pricing() {
                 {t.note}
               </div>
               <a
-                href={ctaHref(t)}
-                target={t.kind === "free" ? "_blank" : undefined}
+                href={cta ? `#/${cta.route}` : ctaHref(t)}
+                onClick={cta ? (e) => { e.preventDefault(); navigate(cta.route); } : undefined}
+                data-testid={`cta-${t.name.split(" ")[0].toLowerCase()}`}
+                target={t.kind === "free" && !cta ? "_blank" : undefined}
                 rel="noreferrer"
                 style={{
                   marginTop: 10,
@@ -365,7 +404,7 @@ export default function Pricing() {
                   color: meta.color,
                 }}
               >
-                {ctaLabel(t)}
+                {cta ? cta.label : ctaLabel(t)}
               </a>
             </div>
           );
@@ -373,7 +412,9 @@ export default function Pricing() {
       </div>
 
       {/* The Enterprise floor, itemized — so $30k is a concrete product, not a
-          number from the air (axor-packaging.md §5). */}
+          number from the air (axor-packaging.md §5). Production-side: a coding
+          team has nothing to read in it. */}
+      {journey !== "coding" && (<>
       <div
         className="mt-6 p-4"
         style={{ background: C.panel2, border: `1px solid ${C.line}`, borderRadius: 10 }}
@@ -407,8 +448,10 @@ export default function Pricing() {
           100% of the pilot is credited toward a first annual contract ≥ $25k signed within 60 days.
         </div>
       </div>
+      </>)}
 
       <div style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim, marginTop: 20, lineHeight: 1.7 }}>
+        {journey !== "coding" && (<>
         Hosted plans meter an included <span style={{ color: C.mut }}>hosted-trial allowance</span> as
         cost-control, never the headline — EvidenceCases are included, and inference is BYOK (we don't resell
         tokens). Self-hosted is an annual license with unlimited local execution within the purchased tier —
@@ -416,12 +459,12 @@ export default function Pricing() {
         evidence workspace and production enforcement together, with an included governed-node count and a
         per-node rate above it.
         <br />
+        </>)}
         Items marked{" "}
         <span style={{ border: `1px solid ${C.line}`, borderRadius: 20, padding: "1px 6px", fontSize: 8.5 }}>
           planned
         </span>{" "}
-        are on the roadmap, not yet shipped — everything else runs today. Canonical packaging, tiers, and
-        prices are defined in axor-packaging.md; if this page conflicts with it, that document wins.
+        are on the roadmap, not yet shipped — everything else runs today.
       </div>
     </div>
   );

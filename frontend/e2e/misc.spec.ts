@@ -9,10 +9,10 @@ test.describe("secondary surfaces", () => {
     await goHash(page, "pricing");
     await expect(page.getByRole("heading", { name: "Pricing" })).toBeVisible();
     await expect(
-      page.getByText("anything that makes an agent safer is free forever", { exact: false }),
+      page.getByText("Protection is free on every plan", { exact: false }),
     ).toBeVisible();
     await expect(
-      page.getByText("you pay for capabilities, organizational maturity and fleet size", {
+      page.getByText("You pay for capabilities, organizational maturity and fleet size", {
         exact: false,
       }),
     ).toBeVisible();
