@@ -158,5 +158,10 @@ test.describe("one record of what the tools do", () => {
     const sim = await request.post(`http://127.0.0.1:8401/axor/runs/${run_id}/simulate`, { data: {} });
     expect(sim.status()).toBe(200);
     await expect(page.getByTestId("would-refuse")).toBeVisible({ timeout: 20_000 });
+    // it already was their own agent: the next step is guarding it, not testing one
+    await expect(page.getByTestId("catch-guard")).toBeVisible({ timeout: 20_000 });
+    await expect(page.getByTestId("catch-own")).toHaveCount(0);
+    await page.getByTestId("catch-guard").click();
+    await expect(page.getByTestId("guard-tool-web_search")).toBeVisible();
   });
 });

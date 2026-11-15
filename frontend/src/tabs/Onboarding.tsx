@@ -157,8 +157,10 @@ export default function Onboarding() {
           </div>
         )}
       </div>
-      <ProductionOnboarding initial={route.segments[0] === "get-started" || route.query.how === "test"
-        ? "proxy" : route.query.how === "code" ? "code" : undefined} />
+      <ProductionOnboarding
+        initial={route.segments[0] === "get-started" || route.query.how === "test" || route.query.how === "guard"
+          ? "proxy" : route.query.how === "code" ? "code" : undefined}
+        proxyMode={route.query.how === "guard" ? "guard" : undefined} />
     </div>
   );
 }
@@ -169,7 +171,7 @@ type ProdWay = "code" | "proxy";
  * product: the wrap governs (refuses a call, pauses, stops, repairs), the proxy
  * only watches — it never blocks, and its addresses answer during test runs.
  * Said before either is set up, so nobody wires a proxy expecting a guard. */
-function ProductionOnboarding({ initial }: { initial?: ProdWay }) {
+function ProductionOnboarding({ initial, proxyMode }: { initial?: ProdWay; proxyMode?: ProxyMode }) {
   const [way, setWay] = useState<ProdWay | null>(initial ?? null);
   if (way === "code") {
     return (
@@ -183,7 +185,7 @@ function ProductionOnboarding({ initial }: { initial?: ProdWay }) {
     return (
       <div style={{ maxWidth: 640, margin: "0 auto" }}>
         <WaySwitch way={way} setWay={setWay} />
-        <ProxyModes onWrap={() => setWay("code")} initial={initial === "proxy" ? "test" : "guard"} />
+        <ProxyModes onWrap={() => setWay("code")} initial={proxyMode ?? (initial === "proxy" ? "test" : "guard")} />
       </div>
     );
   }

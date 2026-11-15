@@ -8,7 +8,7 @@
 //  - proxy/adapter: the run is armed and the user points THEIR agent at the
 //    proxy; we render the live colour-coded event stream and the receipt when a
 //    claim lands. (The agent is theirs — we observe, we don't fabricate it.)
-import { useEffect, useRef, useState } from "react";
+import { type CSSProperties, useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Circle, Loader2, Zap } from "lucide-react";
 import {
@@ -37,6 +37,11 @@ const FAULT_MODES = [
 
 /** What the tool really returned, in words — the receipt below keeps the
  * observed record verbatim; this is its reading. */
+const linkBtn: CSSProperties = {
+  background: "none", border: "none", padding: 0, cursor: "pointer", fontFamily: MONO,
+  fontSize: 11.5, color: C.steel,
+};
+
 function observedInWords(v: unknown): string {
   if (v && typeof v === "object" && !Array.isArray(v)) {
     const o = v as Record<string, unknown>;
@@ -350,15 +355,32 @@ export default function Experiment({ runId, autostart }: { runId?: string; autos
                 replayStep={caught.anchor?.seq} replayNode={caught.anchor?.node_id} />
               <div data-testid="catch-next" className="mt-4 flex gap-3 flex-wrap items-center"
                 style={{ fontFamily: MONO, fontSize: 11.5 }}>
-                <button onClick={() => navigate("connect?for=production&how=test")} data-testid="catch-own"
-                  style={btn({ color: C.text, borderColor: C.steel, fontSize: 12, padding: "6px 14px" })}>
-                  Test your own agent this way →
-                </button>
-                <button onClick={() => navigate("connect?for=production")}
-                  style={{ background: "none", border: "none", padding: 0, cursor: "pointer", fontFamily: MONO,
-                           fontSize: 11.5, color: C.steel }}>
-                  guard it in production →
-                </button>
+                {mode === "demo" ? (
+                  <>
+                    <button onClick={() => navigate("connect?for=production&how=test")} data-testid="catch-own"
+                      style={btn({ color: C.text, borderColor: C.steel, fontSize: 12, padding: "6px 14px" })}>
+                      Test your own agent this way →
+                    </button>
+                    <button onClick={() => navigate("connect?for=production")} style={linkBtn}>
+                      guard it in production →
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    {/* this already was the person's own agent: the next step is
+                        keeping it from doing this in production — same tools,
+                        same record of what they do */}
+                    <button onClick={() => navigate("connect?for=production&how=guard")} data-testid="catch-guard"
+                      style={btn({ color: C.text, borderColor: C.steel, fontSize: 12, padding: "6px 14px" })}>
+                      Guard this agent in production →
+                    </button>
+                    <span style={{ color: C.dim }}>same tools, now with refusals ·</span>
+                    <button onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })}
+                      data-testid="catch-again" style={linkBtn}>
+                      break another tool ↑
+                    </button>
+                  </>
+                )}
               </div>
               {caught.anchor && (
                 <TwoTreeContainment runId={focusRun.run_id} anchor={caught.anchor} />
