@@ -30,6 +30,9 @@ interface Sink {
   type: SinkType;
   critical: boolean;
   args: ArgAllow[];
+  // brings in outside text (web, email, documents): what it returns is what
+  // a later send / write / run is checked against
+  outside: boolean;
   // The scanner's effect guess (shown under the name): heuristic, never final.
   guess?: { confidence: string; reason: string };
 }
@@ -47,6 +50,22 @@ interface PeerDecl {
 }
 
 type Stage = "entry" | "analyzing" | "build" | "preview";
+
+// what each class means, in the words the rest of the app uses (Connect)
+const TYPE_LABEL: Record<ToolType, string> = {
+  READ: "reads", WRITE: "writes", EXPORT: "sends out", EXEC: "runs code",
+};
+
+/** The scanner's reason, in words: "name token 'send' + carrier arg 'to' →
+ * EXPORT" reads as "guessed from 'send' in the name, 'to' says where". */
+export function plainGuess(reason: string, confidence: string): string {
+  const name = /name token '([^']+)'/.exec(reason)?.[1];
+  const arg = /carrier arg '([^']+)'/.exec(reason)?.[1];
+  const said = name
+    ? `guessed from '${name}' in the name${arg ? `, '${arg}' says where it goes` : ""}`
+    : `guessed: ${reason.replace(/\s*→\s*[A-Z?]+\s*$/, "")}`;
+  return confidence === "low" ? `${said} — unsure, check it` : said;
+}
 
 const TYPE_COLOR: Record<SinkType, string> = {
   READ: C.green, WRITE: C.amber, EXPORT: C.red, EXEC: C.red, "?": C.amber,
@@ -77,6 +96,7 @@ const toSink = (t: WrapTool): Sink => ({
   type: t.guess.default_class === "UNKNOWN" ? "?" : t.guess.default_class,
   critical: false,
   args: t.guess.driving_args.map((a) => ({ arg: a, set: [] })),
+  outside: t.guess.untrusted_fields.length > 0,
   guess: { confidence: t.guess.confidence, reason: t.guess.reason },
 });
 
@@ -117,10 +137,11 @@ function ArgEditor({ sink, update }: { sink: Sink; update: (p: Partial<Sink>) =>
 
   return (
     <div className="flex flex-col gap-2">
-      <div style={{ fontFamily: MONO, fontSize: 10, color: C.dim, letterSpacing: "0.08em" }}>ARGUMENT ALLOWLISTS</div>
+      <div style={{ fontFamily: MONO, fontSize: 10, color: C.dim, letterSpacing: "0.08em" }}>VALUES THAT ARE ALWAYS FINE</div>
       {sink.args.length === 0 && (
         <div style={{ fontFamily: MONO, fontSize: 11.5, color: C.dim }}>
-          None declared — every argument stays under full taint (safe default).
+          None — anything that came from outside text is refused (the safe default).
+          Add an argument and its values, e.g. to ∈ boss@corp.example, to let those through.
         </div>
       )}
       {sink.args.map((a) => (
@@ -136,8 +157,8 @@ function ArgEditor({ sink, update }: { sink: Sink; update: (p: Partial<Sink>) =>
             onKeyDown={(e) => e.key === "Enter" && addVal(a.arg)} placeholder="+ value ⏎"
             style={{ width: 90, background: "none", border: "none", borderBottom: `1px solid ${C.line}`, color: C.text, fontFamily: MONO, fontSize: 11, padding: "2px 4px", outline: "none" }} />
           <span onClick={() => rmArg(a.arg)} style={{ fontFamily: MONO, fontSize: 10, color: C.dim, cursor: "pointer" }}>remove</span>
-          {a.set.length > 0 && <span style={{ fontFamily: MONO, fontSize: 10, color: C.dim }}>— supersession enabled for this argument</span>}
-          {a.set.length === 0 && <span style={{ fontFamily: MONO, fontSize: 10, color: C.amber }}>— empty set: still fully tainted</span>}
+          {a.set.length > 0 && <span style={{ fontFamily: MONO, fontSize: 10, color: C.dim }}>— these pass even if they came from outside text</span>}
+          {a.set.length === 0 && <span style={{ fontFamily: MONO, fontSize: 10, color: C.amber }}>— no values yet: still refused if from outside text</span>}
         </div>
       ))}
       {addingArg ? (
@@ -149,7 +170,7 @@ function ArgEditor({ sink, update }: { sink: Sink; update: (p: Partial<Sink>) =>
         </div>
       ) : (
         <button onClick={() => setAddingArg(true)} style={{ background: "none", border: "none", color: C.steel, fontFamily: MONO, fontSize: 11.5, cursor: "pointer", padding: 0, textAlign: "left" }}>
-          + declare argument
+          + add an argument
         </button>
       )}
     </div>
@@ -264,9 +285,9 @@ export default function ConfigBuilder() {
       setSinks(scan.tools.map((t) => {
         const sink = toSink(t);
         const known = policy[t.id];
-        if (known) return { ...sink, type: known.klass };
+        if (known) return { ...sink, type: known.klass, outside: known.outside };
         if (sink.type !== "?") {
-          setToolClass(t.id, { klass: sink.type, outside: t.guess.untrusted_fields.length > 0,
+          setToolClass(t.id, { klass: sink.type, outside: sink.outside,
                                source: t.source, args_schema: t.args_schema, driving: t.guess.driving_args });
         }
         return sink;
@@ -282,14 +303,13 @@ export default function ConfigBuilder() {
   };
   const patch = (i: number, p: Partial<Sink>) => {
     setSinks(sinks.map((s, j) => (j === i ? { ...s, ...p } : s)));
-    if (p.type && p.type !== "?") setToolClass(sinks[i].name, { klass: p.type });
+    const next = { ...sinks[i], ...p };
+    if (next.type !== "?" && (p.type || p.outside !== undefined)) {
+      setToolClass(next.name, { klass: next.type, outside: next.outside });
+    }
   };
   const unclassified = sinks.filter((s) => s.type === "?").length;
   const fromCode = sinks.some((s) => s.src);
-  // The files the scanner actually read (tool sources are "path:line").
-  const scannedFiles = Array.from(new Set(
-    wrapTools.map((t) => t.source.replace(/:\d+$/, "")).filter(Boolean),
-  ));
 
   const config = {
     version: "axor-config/1",
@@ -338,12 +358,13 @@ export default function ConfigBuilder() {
               // the allowlist editor's argument keys are the carrier args the
               // gate checks — exactly the manifest's driving_args
               driving_args: s.args.map((a) => a.arg),
-              untrusted_fields: t?.guess.untrusted_fields ?? [],
+              untrusted_fields: s.outside ? (t?.guess.untrusted_fields.length ? t.guess.untrusted_fields : ["result.*"]) : [],
             },
           };
         }),
       );
-      saveBlob("manifests.json", JSON.stringify(bundle, null, 2));
+      // the name the guard and the wrap snippet on Connect load
+      saveBlob("axor.manifests.json", JSON.stringify(bundle, null, 2));
       setManifestsSaved(true);
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
@@ -355,17 +376,17 @@ export default function ConfigBuilder() {
   if (stage === "entry" || stage === "analyzing") {
     return (
       <Container>
-        <Coach id="config-builder" title="Config Builder — declare what your agent may touch">
-          Governance starts from a config: every tool is a{" "}
-          <span style={{ color: C.text }}>sink</span> with a consequence class
-          (READ / WRITE / EXPORT / EXEC); anything undeclared is denied. Drop your
-          agent's code to auto-detect its tools, classify each, and download a
-          replayable <span style={{ color: C.text }}>axor.config.json</span> — the
-          same file Replay and Regression evaluate against.
+        <Coach id="config-builder" title="Policy — what your agent's tools may do">
+          Every tool gets a kind — reads, writes, sends out, runs code — and a
+          mark if what it returns is outside text (web, email, documents). A
+          send, write or command driven by outside text is refused; a tool not
+          listed is refused. The same record drives the guard on Connect, the
+          wrap in code, and Replay and Safe to ship?.
         </Coach>
-        <h1 style={{ fontSize: 22, fontWeight: 650, margin: "0 0 4px" }}>Bring your agent. Leave governed.</h1>
-        <div style={{ fontFamily: MONO, fontSize: 11.5, color: C.mut, marginBottom: 24 }}>
-          Drop the code — we find its tools, you tell us what they can do, you download the wrapped package.
+        <h1 style={{ fontSize: 22, fontWeight: 650, margin: "0 0 4px" }}>What each of your agent's tools may do</h1>
+        <div style={{ fontFamily: MONO, fontSize: 11.5, color: C.mut, marginBottom: 24, lineHeight: 1.6 }}>
+          Drop its code — we find the tools and guess what each one does; you correct the guess.
+          This is what gets refused, not what the prompt asks.
         </div>
         <input ref={fileInput} data-testid="wrap-files" type="file" multiple accept=".py" style={{ display: "none" }}
           onChange={(e) => { void filesFromList(e.target.files).then(analyze); e.target.value = ""; }} />
@@ -389,8 +410,8 @@ export default function ConfigBuilder() {
           style={{ background: C.panel, border: `1px dashed ${stage === "analyzing" ? C.steel : C.line}`, borderRadius: 8, cursor: stage === "entry" ? "pointer" : "default" }}>
           {stage === "analyzing" ? (
             <><FileCode size={22} color={C.steel} />
-              <span style={{ fontFamily: MONO, fontSize: 12, color: C.steel }}>analyzing — the wrap engine is extracting tool signatures…</span>
-              <span style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim }}>static scan (nothing is executed) — classes are yours to assign</span></>
+              <span style={{ fontFamily: MONO, fontSize: 12, color: C.steel }}>reading the code for tools…</span>
+              <span style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim }}>nothing is run — only read</span></>
           ) : (
             <><Upload size={22} color={C.mut} />
               <span style={{ fontFamily: MONO, fontSize: 12.5, color: C.text }}>Drop your agent folder or tools file</span>
@@ -398,12 +419,12 @@ export default function ConfigBuilder() {
           )}
         </div>
         {stage === "entry" && (
-          <Tooltip content="Picking individual files gives the browser no directory, so two files named tools.py collide and the upload is refused. A folder keeps each file's real path.">
+          <div><Tooltip content="Picking individual files gives the browser no directory, so two files named tools.py collide and the upload is refused. A folder keeps each file's real path.">
             <button onClick={() => folderInput.current?.click()} className="mt-2"
               style={{ background: "none", border: "none", color: C.mut, fontFamily: MONO, fontSize: 11, cursor: "pointer", padding: 0 }}>
               or choose a whole folder (keeps each file's path)
             </button>
-          </Tooltip>
+          </Tooltip></div>
         )}
         {stage === "entry" && wrapMissing && (
           <div className="flex items-start gap-2 mt-4 p-3" style={{ background: C.panel2, border: `1px solid ${C.amber}`, borderRadius: 6 }}>
@@ -411,7 +432,7 @@ export default function ConfigBuilder() {
             <div style={{ fontFamily: MONO, fontSize: 11, color: C.mut, lineHeight: 1.6 }}>
               wrap engine not installed on the backend — the scan needs the{" "}
               <span style={{ color: C.text }}>axor-backend[wrap]</span> extra (axor-wrap).
-              Install it and restart, or declare sinks by hand below.
+              Install it and restart, or add the tools by hand below.
             </div>
           </div>
         )}
@@ -424,7 +445,7 @@ export default function ConfigBuilder() {
           <button data-testid="policy-from-connect" className="mt-4"
             onClick={() => {
               setSinks(fromConnect.map(([name, c]) => ({
-                name, src: c.source ?? c.url, type: c.klass, critical: false,
+                name, src: c.source ?? c.url, type: c.klass, critical: false, outside: c.outside,
                 args: (c.driving ?? []).map((a) => ({ arg: a, set: [] })),
               })));
               setStage("build");
@@ -436,11 +457,11 @@ export default function ConfigBuilder() {
         )}
         {stage === "entry" && (
           <>
-            <Tooltip content="Skip detection: start from an empty sink list and add each tool by name yourself.">
+            <div><Tooltip content="Skip the scan: start from an empty list and add each tool by name yourself.">
               <button onClick={() => { setSinks([]); setStage("build"); }} className="mt-4" style={{ background: "none", border: "none", color: C.mut, fontFamily: MONO, fontSize: 11.5, cursor: "pointer", padding: 0 }}>
-                declare sinks by hand instead
+                add the tools by hand instead
               </button>
-            </Tooltip>
+            </Tooltip></div>
             <div className="flex items-start gap-2 mt-6 p-3" style={{ background: C.panel2, border: `1px solid ${C.line}`, borderRadius: 6 }}>
               <Terminal size={13} color={C.dim} style={{ marginTop: 1 }} />
               <div style={{ fontFamily: MONO, fontSize: 11, color: C.dim, lineHeight: 1.6 }}>
@@ -460,12 +481,12 @@ export default function ConfigBuilder() {
     return (
       <Container>
         <h1 style={{ fontSize: 22, fontWeight: 650, margin: "0 0 4px" }}>
-          {fromCode ? <>Found {sinks.length} tools. What is each allowed to be?</> : <>What can your agent touch?</>}
+          {fromCode ? <>Found {sinks.length} tools. What does each one do?</> : <>What can your agent touch?</>}
         </h1>
         <div style={{ fontFamily: MONO, fontSize: 11.5, color: C.mut, marginBottom: 20 }}>
           {fromCode
-            ? <>Detection reads names, never intent — <span style={{ color: C.amber }}>you assign the class</span>. Unclassified stays denied.</>
-            : <>Declare its tools as sinks. Everything you don't declare will be denied.</>}
+            ? <>Guessed from the names — <span style={{ color: C.amber }}>check each one</span>. A tool left on “pick one” is refused.</>
+            : <>Add each of its tools. A tool not listed is refused.</>}
         </div>
         {skipped.length > 0 && (
           <div className="flex items-start gap-2 mb-5 p-3" style={{ background: C.panel2, border: `1px solid ${C.amber}`, borderRadius: 6 }}>
@@ -486,47 +507,49 @@ export default function ConfigBuilder() {
         <div style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 8 }}>
           {sinks.map((s, i) => (
             <div key={s.name}>
-              <div onClick={() => setSel(sel === i ? null : i)} className="flex items-center gap-3 px-4 py-3"
-                style={{ cursor: "pointer", borderTop: i ? `1px solid ${C.line}` : "none" }}>
-                {s.type === "?" ? (
-                  <div className="flex gap-1" style={{ width: 168 }} onClick={(e) => e.stopPropagation()}>
-                    {TYPES.map((t) => (
-                      <button key={t} onClick={() => patch(i, { type: t })}
-                        style={{ background: "none", border: `1px solid ${C.line}`, borderRadius: 3, color: typeColor(t), fontFamily: MONO, fontSize: 9, fontWeight: 700, padding: "3px 5px", cursor: "pointer" }}>{t}</button>
-                    ))}
-                  </div>
-                ) : (
-                  <span onClick={(e) => { e.stopPropagation(); patch(i, { type: "?" }); }}
-                    style={{ fontFamily: MONO, fontSize: 10, fontWeight: 700, color: typeColor(s.type), width: 168 }}>{s.type}</span>
-                )}
-                <span className="flex flex-col" style={{ minWidth: 0 }}>
-                  <span style={{ fontFamily: MONO, fontSize: 13, color: s.type === "?" ? C.amber : C.text }}>{s.name}</span>
-                  {s.guess && (
-                    <span style={{ fontFamily: MONO, fontSize: 9.5, color: C.dim }}>
-                      guess · {s.guess.confidence} — {s.guess.reason}
-                    </span>
-                  )}
-                </span>
-                {s.critical && <AlertTriangle size={12} color={C.red} />}
-                <span style={{ flex: 1 }} />
-                {s.args.some((a) => a.set.length) && <span style={{ fontFamily: MONO, fontSize: 10, color: C.green }}>{s.args.filter((a) => a.set.length).length} allowlist</span>}
-                {s.src && <span style={{ fontFamily: MONO, fontSize: 10, color: C.dim }}>{s.src}</span>}
-                <X size={13} color={C.dim} style={{ cursor: "pointer" }} onClick={(e) => { e.stopPropagation(); setSinks(sinks.filter((_, j) => j !== i)); setSel(null); }} />
+              <div data-testid={`policy-tool-${s.name}`} className="flex items-center gap-3 px-4 py-3 flex-wrap"
+                style={{ borderTop: i ? `1px solid ${C.line}` : "none" }}>
+                <select aria-label={`what ${s.name} does`} value={s.type}
+                  onChange={(e) => patch(i, { type: e.target.value as SinkType })}
+                  style={{ width: 120, background: C.bg, border: `1px solid ${s.type === "?" ? C.amber : C.line}`, borderRadius: 4,
+                           color: typeColor(s.type), fontFamily: MONO, fontSize: 11.5, padding: "5px 6px", cursor: "pointer" }}>
+                  {s.type === "?" && <option value="?">pick one…</option>}
+                  {TYPES.map((t) => <option key={t} value={t}>{TYPE_LABEL[t]}</option>)}
+                </select>
+                <button onClick={() => setSel(sel === i ? null : i)} className="flex flex-col"
+                  title="more: importance, values that are always fine"
+                  style={{ minWidth: 0, flex: "1 1 200px", background: "none", border: "none", padding: 0, textAlign: "left", cursor: "pointer" }}>
+                  <span style={{ fontFamily: MONO, fontSize: 13, color: s.type === "?" ? C.amber : C.text }}>
+                    {s.name} {s.critical && <AlertTriangle size={11} color={C.red} style={{ display: "inline" }} />}
+                    <span style={{ color: C.dim, fontSize: 10 }}> {sel === i ? "▴" : "▾"}</span>
+                  </span>
+                  <span style={{ fontFamily: MONO, fontSize: 10, color: C.dim, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                    {s.guess ? plainGuess(s.guess.reason, s.guess.confidence) : (s.src ?? "added by hand")}
+                    {s.args.some((a) => a.set.length) ? ` · ${s.args.filter((a) => a.set.length).length} always-fine list` : ""}
+                  </span>
+                </button>
+                <label className="flex items-center gap-1.5" style={{ fontFamily: MONO, fontSize: 11, color: s.outside ? C.amber : C.dim, cursor: "pointer", whiteSpace: "nowrap" }}>
+                  <input type="checkbox" checked={s.outside} onChange={(e) => patch(i, { outside: e.target.checked })}
+                    aria-label={`${s.name} brings in outside text`} />
+                  outside text
+                </label>
+                <X size={13} color={C.dim} style={{ cursor: "pointer" }} aria-label={`remove ${s.name}`}
+                  onClick={() => { setSinks(sinks.filter((_, j) => j !== i)); setSel(null); }} />
               </div>
               {sel === i && (
-                <div className="px-4 pb-4 flex flex-col gap-3" style={{ paddingLeft: 184 }}>
-                  <div style={{ fontFamily: MONO, fontSize: 11, color: C.dim }}>{s.endpoint || "no endpoint"}</div>
+                <div className="px-4 pb-4 flex flex-col gap-3" style={{ paddingLeft: 148 }}>
+                  {s.src && <div style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim }}>found at {s.src}</div>}
                   {/* criticality */}
                   <div className="flex items-center gap-2">
-                    <span style={{ fontFamily: MONO, fontSize: 10, color: C.dim, letterSpacing: "0.08em" }}>CRITICALITY</span>
+                    <span style={{ fontFamily: MONO, fontSize: 10, color: C.dim, letterSpacing: "0.08em" }}>IMPORTANCE</span>
                     {(["standard", "critical"] as const).map((c) => (
                       <button key={c} onClick={() => patch(i, { critical: c === "critical" })}
                         style={{ background: (s.critical ? "critical" : "standard") === c ? "rgba(127,168,204,0.1)" : "none", border: `1px solid ${(s.critical ? "critical" : "standard") === c ? (c === "critical" ? C.red : C.steel) : C.line}`, borderRadius: 4, color: (s.critical ? "critical" : "standard") === c ? (c === "critical" ? C.red : C.steel) : C.dim, fontFamily: MONO, fontSize: 10.5, padding: "4px 10px", cursor: "pointer" }}>
-                        {c}
+                        {c === "standard" ? "normal" : "critical"}
                       </button>
                     ))}
                     <span style={{ fontFamily: MONO, fontSize: 10, color: C.dim }}>
-                      {s.critical ? "denials here escalate degradation immediately; evidence ranked first" : "amplifier only — standard never relaxes anything"}
+                      {s.critical ? "a refusal here is shown first and puts the agent on a shorter leash at once" : "nothing extra"}
                     </span>
                   </div>
                   {/* allowlists */}
@@ -539,13 +562,14 @@ export default function ConfigBuilder() {
             <div className="flex items-center gap-2 px-4 py-3" style={{ borderTop: `1px solid ${C.line}` }}>
               <select value={draft.type} onChange={(e) => setDraft({ ...draft, type: e.target.value as ToolType })}
                 style={{ background: C.bg, border: `1px solid ${C.line}`, borderRadius: 4, color: typeColor(draft.type), fontFamily: MONO, fontSize: 11, padding: "5px 6px" }}>
-                {TYPES.map((t) => <option key={t}>{t}</option>)}
+                {TYPES.map((t) => <option key={t} value={t}>{TYPE_LABEL[t]}</option>)}
               </select>
               <input autoFocus placeholder="tool name ⏎" value={draft.name} onChange={(e) => setDraft({ ...draft, name: e.target.value })}
                 onKeyDown={(e) => {
                   if (e.key === "Enter" && draft.name.trim()
                       && !sinks.some((x) => x.name === draft.name.trim())) {
-                    setSinks([...sinks, { name: draft.name.trim(), type: draft.type, critical: false, args: [] }]);
+                    setSinks([...sinks, { name: draft.name.trim(), type: draft.type, critical: false, args: [], outside: false }]);
+                    setToolClass(draft.name.trim(), { klass: draft.type, outside: false });
                     setDraft({ name: "", type: "READ" });
                     setAdding(false);
                   }
@@ -561,7 +585,7 @@ export default function ConfigBuilder() {
         </div>
 
         <div className="mt-2">
-          <Fold label="budgets (optional)">
+          <Fold label="limit tool calls (optional)">
             <div className="flex items-center gap-2 flex-wrap">
               <span style={{ fontFamily: MONO, fontSize: 11.5, color: C.text }}>max tool calls per run</span>
               <input type="number" min={1} value={budgetCapCalls ?? ""} placeholder="unlimited"
@@ -572,12 +596,12 @@ export default function ConfigBuilder() {
                 style={{ width: 100, background: C.bg, border: `1px solid ${C.line}`, borderRadius: 4, color: C.text, fontFamily: MONO, fontSize: 11.5, padding: "5px 8px", outline: "none" }} />
               <span style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim }}>
                 {budgetCapCalls !== null
-                  ? "enforced at the loop boundary — exhaustion is a typed denial, never a silent overrun"
-                  : "empty = unlimited — budgets are opt-in limits, not fail-closed defaults"}
+                  ? "past this, every call in the run is refused"
+                  : "empty = no limit"}
               </span>
             </div>
           </Fold>
-          <Fold label="inter-federation peers (A2A, optional)">
+          <Fold label="advanced: other agents this one talks to (A2A, optional)">
             <div style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim, marginBottom: 8 }}>
               declared like sinks: identity (pubkey) · trust level · message classes.
               undeclared = L0 (full taint in, untrusted export destination out).
@@ -640,81 +664,108 @@ export default function ConfigBuilder() {
 
         <div className="mt-4 flex items-center gap-3">
           <Tooltip content={unclassified > 0
-            ? "Assign a consequence class to every tool first — unclassified tools stay denied, so the config isn't ready."
-            : "See the config in plain words (what's allowed, what's denied, what's capped) before you download it."}>
+            ? "Pick what every tool does first — a tool left on “pick one” is refused."
+            : "See, tool by tool, what is let through and what is refused."}>
             <button onClick={() => unclassified === 0 && sinks.length > 0 && setStage("preview")} disabled={unclassified > 0 || sinks.length === 0}
               style={btn({ color: unclassified || !sinks.length ? C.dim : C.text, borderColor: unclassified || !sinks.length ? C.line : C.steel, padding: "9px 18px", fontSize: 12.5, opacity: unclassified || !sinks.length ? 0.6 : 1, cursor: unclassified || !sinks.length ? "default" : "pointer" })}>
-              Preview config <ArrowRight size={13} />
+              See what gets refused <ArrowRight size={13} />
             </button>
           </Tooltip>
-          {unclassified > 0 && <span style={{ fontFamily: MONO, fontSize: 11.5, color: C.amber }}>{unclassified} unclassified — still denied</span>}
+          {unclassified > 0 && <span style={{ fontFamily: MONO, fontSize: 11.5, color: C.amber }}>{unclassified} not picked yet — refused until you pick</span>}
         </div>
       </Container>
     );
   }
 
-  // preview
-  const readings: React.ReactNode[] = [
-    ...sinks.filter((s) => s.critical).map((s) => <span key={`crit-${s.name}`}><b style={{ color: C.red }}>{s.name}</b> is critical — a denial there escalates degradation immediately and its evidence is shown first.</span>),
-    ...sinks.filter((s) => s.type === "EXPORT").map((s) => <span key={`exp-${s.name}`}>Exports through <b style={{ color: C.text }}>{s.name}</b> require untainted values{s.args.some((a) => a.set.length) ? <> or membership in {s.args.filter((a) => a.set.length).map((a) => a.arg).join(", ")}</> : null}.</span>),
-    ...sinks.filter((s) => s.type === "EXEC").map((s) => <span key={`exec-${s.name}`}><b style={{ color: C.text }}>{s.name}</b> after an external read is denied.</span>),
-    ...peers.map((p) => <span key={`peer-${p.peer_id}`}>Peer <b style={{ color: C.text }}>{p.peer_id}</b> is {p.level}{p.attested ? " (governance-attested)" : ""} — {p.level === "L2" ? `signed assertions get a bounded discount on ${p.classes || "no"} classes; critical sinks ignore it` : p.level === "L1" ? "identity verified, inbound taint unchanged (attribution, not trust)" : "full taint inbound, untrusted export destination outbound"}. Any peer NOT declared here is L0.</span>),
-    ...sinks.filter((s) => s.type === "WRITE").map((s) => <span key={`write-${s.name}`}><b style={{ color: C.text }}>{s.name}</b> writes are gated on value provenance.</span>),
-    budgetCapCalls !== null
-      ? <span key="budget">Budget: at most <b style={{ color: C.text }}>{budgetCapCalls}</b> tool calls per run — the cap is enforced at the loop boundary, and the same ceiling the replay kernel checks, so a run and its counterfactual agree on exhaustion.</span>
-      : <span key="budget">No budget declared — unlimited (budgets are opt-in limits, unlike sinks).</span>,
-  ];
+  // preview: the policy, tool by tool, in the words of the rest of the app
+  const always = (x: Sink) => x.args.filter((a) => a.set.length);
+  const drivenBy = (x: Sink, what: string) =>
+    x.args.length ? `its ${x.args.map((a) => `“${a.arg}”`).join(" or ")}` : what;
+  const except = (x: Sink) => always(x).length
+    ? <> — except {always(x).map((a) => `${a.arg} ${a.set.join(" / ")}`).join("; ")}</>
+    : null;
+  const sayTool = (x: Sink): React.ReactNode => {
+    const name = <b style={{ color: C.text }}>{x.name}</b>;
+    const crit = x.critical ? <span style={{ color: C.red }}> Critical: a refusal here is shown first.</span> : null;
+    const marks = x.outside ? <> What it returns is marked as outside text.</> : null;
+    if (x.type === "READ") return <>{name} — allowed.{marks}{crit}</>;
+    if (x.type === "EXPORT") return <>{name} — refused if {drivenBy(x, "what it sends")} came from outside text{except(x)}.{marks}{crit}</>;
+    if (x.type === "WRITE") return <>{name} — refused if {drivenBy(x, "what it writes")} came from outside text{except(x)}.{marks}{crit}</>;
+    return <>{name} — refused once the agent has read outside text{except(x)}.{marks}{crit}</>;
+  };
+  const noOutside = !sinks.some((x) => x.outside);
 
   return (
     <Container>
-      <button onClick={() => { setStage("build"); setEmitted(false); }} style={{ background: "none", border: "none", color: C.dim, fontFamily: MONO, fontSize: 11.5, cursor: "pointer", padding: 0, marginBottom: 12 }}>← back to sinks</button>
-      <h1 style={{ fontSize: 22, fontWeight: 650, margin: "0 0 20px" }}>Here's what this config means.</h1>
-      <div className="p-4 flex flex-col gap-2" style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 8 }}>
-        {readings.map((r, i) => <div key={i} style={{ fontFamily: MONO, fontSize: 12.5, color: C.mut, lineHeight: 1.6 }}>{r}</div>)}
-        <div className="mt-1 pt-3 flex items-center gap-2" style={{ borderTop: `1px solid ${C.line}` }}>
-          <span style={{ fontFamily: MONO, fontSize: 12.5, color: C.red, fontWeight: 700 }}>Anything not listed above is denied.</span>
-          <span style={{ fontFamily: MONO, fontSize: 11, color: C.dim }}>— fail-closed; you are confirming this, not discovering it later</span>
+      <button onClick={() => { setStage("build"); setEmitted(false); }} style={{ background: "none", border: "none", color: C.dim, fontFamily: MONO, fontSize: 11.5, cursor: "pointer", padding: 0, marginBottom: 12 }}>← back to the tools</button>
+      <h1 style={{ fontSize: 22, fontWeight: 650, margin: "0 0 20px" }}>What gets let through, and what is refused</h1>
+      <div data-testid="policy-reading" className="p-4 flex flex-col gap-2" style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 8 }}>
+        {sinks.map((x) => (
+          <div key={x.name} style={{ fontFamily: MONO, fontSize: 12.5, color: C.mut, lineHeight: 1.6 }}>{sayTool(x)}</div>
+        ))}
+        <div style={{ fontFamily: MONO, fontSize: 12.5, color: C.mut, lineHeight: 1.6 }}>
+          {budgetCapCalls !== null
+            ? <>At most <b style={{ color: C.text }}>{budgetCapCalls}</b> tool calls per run; past that, every call is refused.</>
+            : <>No limit on the number of calls.</>}
+        </div>
+        {peers.map((p) => (
+          <div key={`peer-${p.peer_id}`} style={{ fontFamily: MONO, fontSize: 12, color: C.mut, lineHeight: 1.6 }}>
+            Peer <b style={{ color: C.text }}>{p.peer_id}</b> is {p.level}{p.attested ? " (governance-attested)" : ""} — {p.level === "L2" ? `signed assertions get a bounded discount on ${p.classes || "no"} classes; critical sinks ignore it` : p.level === "L1" ? "identity verified, inbound taint unchanged (attribution, not trust)" : "full taint inbound, untrusted export destination outbound"}. Any peer NOT declared here is L0.
+          </div>
+        ))}
+        {noOutside && (
+          <div data-testid="policy-no-outside" style={{ fontFamily: MONO, fontSize: 11.5, color: C.amber, lineHeight: 1.6 }}>
+            No tool is marked as bringing in outside text, so nothing is ever refused for where it came
+            from. Web search, email, file and page readers usually do —{" "}
+            <button onClick={() => setStage("build")} style={{ background: "none", border: "none", padding: 0, color: C.steel, cursor: "pointer", fontFamily: MONO, fontSize: 11.5 }}>mark them →</button>
+          </div>
+        )}
+        <div className="mt-1 pt-3 flex items-center gap-2 flex-wrap" style={{ borderTop: `1px solid ${C.line}` }}>
+          <span style={{ fontFamily: MONO, fontSize: 12.5, color: C.red, fontWeight: 700 }}>Any other tool — refused.</span>
+          <span style={{ fontFamily: MONO, fontSize: 11, color: C.dim }}>you are confirming this now, not finding out later</span>
         </div>
       </div>
-      {fromCode && (
-        <Fold label="your agent — code untouched, config and manifests added beside it" openDefault>
-          <div style={{ background: C.panel2, border: `1px solid ${C.line}`, borderRadius: 6, padding: 12, fontFamily: MONO, fontSize: 11.5, lineHeight: 1.8 }}>
-            <div style={{ color: C.dim }}>your agent/</div>
-            <div style={{ color: C.dim, paddingLeft: 16 }}>
-              {scannedFiles.join(" · ") || "scanned sources"} <span style={{ fontSize: 10 }}>— unchanged</span>
-            </div>
-            <div style={{ color: C.green, paddingLeft: 16 }}>+ axor.config.json <span style={{ color: C.dim, fontSize: 10 }}>(download config)</span></div>
-            <div style={{ color: C.green, paddingLeft: 16 }}>+ manifests.json <span style={{ color: C.dim, fontSize: 10 }}>(download tool manifests)</span></div>
-            <div style={{ color: C.dim, paddingLeft: 16, fontSize: 10.5 }}>
-              wrap the tools at startup with axor_wrap.runtime.wrap_callables — see Get started → adapter
-            </div>
+
+      <div data-testid="policy-next" className="mt-6">
+        <div style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim, letterSpacing: "0.1em", marginBottom: 8 }}>PUT IT TO WORK</div>
+        <div className="flex gap-3 flex-wrap items-center">
+          <button onClick={() => navigate("connect?for=production&how=code")} data-testid="policy-to-wrap"
+            style={btn({ color: C.text, borderColor: C.steel, padding: "9px 18px", fontSize: 12.5 })}>
+            Wrap it in code <ArrowRight size={13} />
+          </button>
+          <button onClick={() => navigate("connect?for=production&how=guard")} data-testid="policy-to-guard"
+            style={btn({ color: C.text, padding: "9px 18px", fontSize: 12.5 })}>
+            Put a proxy in front as a guard <ArrowRight size={13} />
+          </button>
+        </div>
+        <div style={{ fontFamily: MONO, fontSize: 11, color: C.dim, marginTop: 8 }}>
+          both start from these tools — nothing to describe twice
+        </div>
+      </div>
+
+      <div className="mt-5">
+        <Fold label="or download the files">
+          <div className="flex items-center gap-3 flex-wrap">
+            <Tooltip content="axor.manifests.json — what each tool does, in the form the guard and the wrap in code load.">
+              <button onClick={() => void downloadManifests()} style={btn({ color: C.text, padding: "7px 14px", fontSize: 12 })}>
+                <Download size={13} /> axor.manifests.json
+              </button>
+            </Tooltip>
+            <Tooltip content="axor.config.json — the same policy as one file; Replay's “what if…” and Safe to ship? check against it.">
+              <button onClick={download} style={btn({ color: C.text, padding: "7px 14px", fontSize: 12 })}>
+                <Download size={13} /> axor.config.json
+              </button>
+            </Tooltip>
+            {(emitted || (manifestsSaved && !wrapMissing && !manifestsErr)) && (
+              <span style={{ fontFamily: MONO, fontSize: 12, color: C.green, display: "flex", alignItems: "center", gap: 6 }}>
+                <Check size={13} /> saved
+              </span>
+            )}
           </div>
+          <Fold label="what is in axor.config.json">
+            <pre style={{ background: C.panel2, border: `1px solid ${C.line}`, borderRadius: 6, padding: 12, fontFamily: MONO, fontSize: 11, color: C.mut, overflow: "auto", margin: 0 }}>{JSON.stringify(config, null, 2)}</pre>
+          </Fold>
         </Fold>
-      )}
-      <Fold label="generated config (axor.config.json)">
-        <pre style={{ background: C.panel2, border: `1px solid ${C.line}`, borderRadius: 6, padding: 12, fontFamily: MONO, fontSize: 11, color: C.mut, overflow: "auto", margin: 0 }}>{JSON.stringify(config, null, 2)}</pre>
-      </Fold>
-      <div className="flex items-center gap-3 mt-5 flex-wrap">
-        <Tooltip content="Downloads axor.config.json — drop it next to your agent and run it governed. Replay counterfactuals and Regression read its sinks, trusted sets and budget; criticality and peers are enforced on the node only.">
-          <button onClick={download} style={btn({ color: C.text, borderColor: C.steel, padding: "9px 18px", fontSize: 12.5 })}>
-            <Download size={14} /> Download config (axor.config.json)
-          </button>
-        </Tooltip>
-        <Tooltip content="Downloads manifests.json — tool-manifest/v1 per classified tool plus the compiled governance YAML, built by the backend wrap engine.">
-          <button onClick={() => void downloadManifests()} style={btn({ color: C.text, padding: "9px 18px", fontSize: 12.5 })}>
-            <Download size={14} /> download tool manifests
-          </button>
-        </Tooltip>
-        {emitted && (
-          <span style={{ fontFamily: MONO, fontSize: 12, color: C.green, display: "flex", alignItems: "center", gap: 6 }}>
-            <Check size={13} /> saved · <span style={{ color: C.steel, cursor: "pointer" }} onClick={() => navigate("catch")}>run first governed experiment →</span>
-          </span>
-        )}
-        {manifestsSaved && !wrapMissing && !manifestsErr && (
-          <span style={{ fontFamily: MONO, fontSize: 12, color: C.green, display: "flex", alignItems: "center", gap: 6 }}>
-            <Check size={13} /> manifests saved
-          </span>
-        )}
       </div>
       {wrapMissing && (
         <div className="flex items-start gap-2 mt-3 p-3" style={{ background: C.panel2, border: `1px solid ${C.amber}`, borderRadius: 6 }}>
@@ -722,7 +773,7 @@ export default function ConfigBuilder() {
           <div style={{ fontFamily: MONO, fontSize: 11, color: C.mut, lineHeight: 1.6 }}>
             wrap engine not installed on the backend — tool manifests need the{" "}
             <span style={{ color: C.text }}>axor-backend[wrap]</span> extra (axor-wrap).
-            The config download above still works.
+            The config download still works.
           </div>
         </div>
       )}

@@ -144,7 +144,7 @@ test.describe("shell", () => {
     await setConnection(page, { mode: "adapter" });
     const cases: [string, RegExp][] = [
       ["get-started", /What tools does your agent use\?/],
-      ["config-builder", /Bring your agent\. Leave governed\./],
+      ["config-builder", /What each of your agent's tools may do/],
       ["regression", /candidate/],
       ["settings", /Settings/],
       ["pricing", /Pricing/],

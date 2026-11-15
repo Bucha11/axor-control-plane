@@ -131,7 +131,21 @@ const hint = { fontFamily: MONO, fontSize: 10.5, color: C.dim, lineHeight: 1.6 }
 
 export default function AdapterOnboarding() {
   const [framework, setFramework] = useState<Framework>("langchain");
-  const [rows, setRows] = useState<Row[]>([]);
+  // what Policy (or an earlier scan) already found starts here: the same
+  // record, nothing to scan or classify twice
+  const [rows, setRows] = useState<Row[]>(() =>
+    Object.entries(useApp.getState().toolPolicy)
+      .filter(([, c]) => c.source && c.args_schema)
+      .map(([id, c]) => ({
+        tool: {
+          id, source: c.source ?? "", description: "", args_schema: c.args_schema ?? { type: "object" },
+          framework: "", schema_confidence: "",
+          guess: { default_class: c.klass, driving_args: c.driving ?? [],
+                   untrusted_fields: c.outside ? ["result.*"] : [], confidence: "high", reason: "" },
+        },
+        klass: c.klass,
+        outside: c.outside,
+      })));
   const [scanErr, setScanErr] = useState<string | null>(null);
   const [scanning, setScanning] = useState(false);
   const [saved, setSaved] = useState(false);

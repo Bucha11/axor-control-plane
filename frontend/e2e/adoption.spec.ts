@@ -45,7 +45,7 @@ test.describe("adoption", () => {
       localStorage.setItem("axor-app", JSON.stringify(data));
     });
     const cases: [string, string | RegExp][] = [
-      ["config-builder", "consequence class"],
+      ["config-builder", "outside text"],
       ["get-started", "credentials pass through untouched"],
       ["health", "localizer blames"],
       ["settings", "dead-letter"],

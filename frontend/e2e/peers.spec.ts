@@ -33,14 +33,12 @@ test.describe("inter-federation peers", () => {
       buffer: Buffer.from(AGENT_PY),
     });
     await expect(page.getByRole("heading", { name: /Found \d+ tools/ })).toBeVisible({ timeout: 15_000 });
-    for (let i = 0; i < 6; i++) {
-      const readBtn = page.getByRole("button", { name: "READ", exact: true }).first();
-      if (!(await readBtn.isVisible().catch(() => false))) break;
-      await readBtn.click();
+    for (const pick of await page.getByLabel(/^what .* does$/).all()) {
+      if ((await pick.inputValue()) === "?") await pick.selectOption("READ");
     }
 
     // declare an L2 peer with a discount class
-    await page.getByText("inter-federation peers (A2A, optional)").click();
+    await page.getByText(/other agents this one talks to/).click();
     await page.getByRole("button", { name: /Declare a peer/ }).click();
     await page.getByPlaceholder("peer id").fill("partner-agent");
     await page.getByPlaceholder("ed25519 pubkey (hex)").fill("ab".repeat(32));
@@ -50,7 +48,7 @@ test.describe("inter-federation peers", () => {
     await expect(page.getByText("partner-agent")).toBeVisible();
 
     // the preview spells out the trust ceiling, not just the declaration
-    await page.getByRole("button", { name: /Preview config/ }).click();
+    await page.getByRole("button", { name: /See what gets refused/ }).click();
     await expect(page.getByText(/signed assertions get a bounded discount/)).toBeVisible();
     await expect(page.getByText(/critical sinks ignore it/)).toBeVisible();
     await expect(page.getByText(/Any peer NOT declared here is L0/)).toBeVisible();

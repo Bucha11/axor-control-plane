@@ -159,7 +159,7 @@ test.describe("config builder", () => {
 
   test("scans uploaded code, classifies tools, and previews the config", async ({ page }) => {
     await goHash(page, "config-builder");
-    await expect(page.getByRole("heading", { name: "Bring your agent. Leave governed." })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "What each of your agent's tools may do" })).toBeVisible();
 
     // Real upload: feed a .py file into the hidden picker → /v1/wrap/scan.
     await page.getByTestId("wrap-files").setInputFiles({
@@ -179,24 +179,39 @@ test.describe("config builder", () => {
       return;
     }
 
-    await expect(page.getByText("read_inbox", { exact: true })).toBeVisible();
-    await expect(page.getByText("send_email", { exact: true })).toBeVisible();
+    await expect(page.getByTestId("policy-tool-read_inbox")).toBeVisible();
+    await expect(page.getByTestId("policy-tool-send_email")).toBeVisible();
 
-    // The scanner pre-classifies confident guesses; anything left "?" gets a
-    // class by hand until the preview unlocks (unclassified → 0).
-    for (let i = 0; i < 6; i++) {
-      const readBtn = page.getByRole("button", { name: "READ", exact: true }).first();
-      if (!(await readBtn.isVisible().catch(() => false))) break;
-      await readBtn.click();
+    // The scanner's guesses arrive in words, each one a choice to correct;
+    // what it returns being outside text is a mark of its own, as on Connect.
+    await expect(page.getByLabel("what send_email does")).toHaveValue("EXPORT");
+    await expect(page.getByTestId("policy-tool-send_email")).toContainText("guessed from 'send' in the name");
+    const inbox = page.getByLabel("read_inbox brings in outside text");
+    if (!(await inbox.isChecked())) await inbox.check();
+    for (const pick of await page.getByLabel(/^what .* does$/).all()) {
+      if ((await pick.inputValue()) === "?") await pick.selectOption("READ");
     }
-    await page.getByRole("button", { name: /Preview config/ }).click();
-    await expect(page.getByRole("heading", { name: "Here's what this config means." })).toBeVisible();
-    // The second real artifact: tool manifests via POST /v1/wrap/manifests.
-    await expect(page.getByRole("button", { name: /download tool manifests/ })).toBeVisible();
+    await page.getByRole("button", { name: /See what gets refused/ }).click();
+    await expect(page.getByRole("heading", { name: "What gets let through, and what is refused" })).toBeVisible();
+    const reading = page.getByTestId("policy-reading");
+    await expect(reading).toContainText("read_inbox — allowed. What it returns is marked as outside text.");
+    await expect(reading).toContainText("send_email — refused if its “to” came from outside text");
+    await expect(reading).toContainText("Any other tool — refused.");
+    // the files are there for whoever wants them, under the names Connect loads
+    await page.getByText("or download the files").click();
+    const [file] = await Promise.all([
+      page.waitForEvent("download"),
+      page.getByRole("button", { name: /axor\.manifests\.json/ }).click(),
+    ]);
+    expect(file.suggestedFilename()).toBe("axor.manifests.json");
+    // and the next step starts from the same tools
+    await page.getByTestId("policy-to-wrap").click();
+    await expect(page).toHaveURL(/#\/connect\?for=production&how=code$/);
+    await expect(page.getByLabel("what send_email does")).toHaveValue("EXPORT");
   });
 
   test("offers a hand-declared path too", async ({ page }) => {
     await goHash(page, "config-builder");
-    await expect(page.getByRole("button", { name: /declare sinks by hand instead/ })).toBeVisible();
+    await expect(page.getByRole("button", { name: /add the tools by hand instead/ })).toBeVisible();
   });
 });
