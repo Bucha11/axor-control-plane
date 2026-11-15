@@ -1116,14 +1116,17 @@ export const api = {
     af("/axor/healthz").then((r) => j<{ ok: boolean; armed: boolean }>(r)),
 
   // ── experiment loop (proxy) ────────────────────────────────────────────────
-  startRun: (scenario: string, faults: { tool: string; mode: string }[], nodeId = "proxy") =>
+  startRun: (scenario: string, faults: { tool: string; mode: string }[], nodeId = "proxy",
+             manifests?: Record<string, unknown>[]) =>
     af("/axor/runs", {
       method: "POST",
       // whose run this is: the proxy uploads it with this credential, so it
       // lands in the guest's or user's own org rather than the proxy's
       headers: { "content-type": "application/json",
                  ...(apiToken() ? { "X-Axor-Upload-Token": apiToken() } : {}) },
-      body: JSON.stringify({ scenario, faults, node_id: nodeId }),
+      // with manifests the proxy evaluates every call it can read and records
+      // what policy would have said — the run still only watches
+      body: JSON.stringify({ scenario, faults, node_id: nodeId, ...(manifests ? { manifests } : {}) }),
     }).then((r) => j<StartRunResult>(r)),
   simulate: (runId: string, body: Record<string, unknown> = {}) =>
     af(`/axor/runs/${encodeURIComponent(runId)}/simulate`, {

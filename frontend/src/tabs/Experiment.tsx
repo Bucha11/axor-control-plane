@@ -112,8 +112,32 @@ export default function Experiment({ runId, autostart }: { runId?: string; autos
     ? ["web_search", "mcp"]
     : tools.map((t) => t.name);
 
+  // what each tool does (store.toolPolicy, written on Connect and in Policy):
+  // a test run on the person's own agent is armed with it, so it also says
+  // which calls policy would have refused
+  const policy = useApp((s) => s.toolPolicy);
+  const classified = mode === "demo" ? [] : tools.filter((t) => policy[t.name]);
   const start = useMutation({
-    mutationFn: () => api.startRun("tool-deprivation", [{ tool, mode: faultMode }]),
+    mutationFn: async () => {
+      let manifests: Record<string, unknown>[] | undefined;
+      if (classified.length) {
+        try {
+          const bundle = await api.wrapManifests(classified.map((t) => {
+            const c = policy[t.name];
+            return {
+              id: t.name, source: c.source ?? t.url, description: "",
+              args_schema: c.args_schema ?? { type: "object" },
+              effect: { default_class: c.klass, driving_args: c.driving ?? [],
+                        untrusted_fields: c.klass === "READ" && c.outside ? ["result.*"] : [] },
+            };
+          }));
+          manifests = bundle.manifests;
+        } catch {
+          manifests = undefined;   // no engine: the test still runs, without verdicts
+        }
+      }
+      return api.startRun("tool-deprivation", [{ tool, mode: faultMode }], "proxy", manifests);
+    },
     onSuccess: (r: StartRunResult) => {
       setActiveRun(r.run_id);
       setLiveEvents([]);
@@ -226,6 +250,15 @@ export default function Experiment({ runId, autostart }: { runId?: string; autos
         <div style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim, marginBottom: 12 }}>
           {FAULT_MODES.find((m) => m.id === faultMode)?.blurb}
         </div>
+        {mode !== "demo" && (
+          <div data-testid="test-policy-note" style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim, marginBottom: 12 }}>
+            {classified.length
+              ? `knows what ${classified.length} of its tools do — the test also says which calls policy would refuse`
+              : <>it does not know what the tools do yet —{" "}
+                <span style={{ color: C.steel, cursor: "pointer" }} onClick={() => navigate("connect?for=production&how=test")}>
+                  say it on Connect</span> and the test also says which calls policy would refuse</>}
+          </div>
+        )}
         <Tooltip
           content={mode === "demo"
             ? "Runs the whole loop through the proxy: arm the scenario, our scripted agent acts, and the receipt appears below."
@@ -290,6 +323,7 @@ export default function Experiment({ runId, autostart }: { runId?: string; autos
                 ? <>No discrepancies caught in this run.</>
                 : <>Run in progress.</>}
           </h1>
+          <WouldRefuse runId={focusRun.run_id} />
           {caught && (
             <>
               <div data-testid="caught-in-words" className="mb-4 p-4"
@@ -339,6 +373,33 @@ export default function Experiment({ runId, autostart }: { runId?: string; autos
             No runs yet — configure a scenario above and run one.
           </div>
         </Center>
+      )}
+    </div>
+  );
+}
+
+/** What policy would have said about the run's calls — when the run was armed
+ * with what the tools do. The test only watched; the guard would have refused. */
+function WouldRefuse({ runId }: { runId: string }) {
+  const events = useQuery({ queryKey: ["run-events", runId], queryFn: () => api.runEvents(runId) });
+  const calls = (events.data ?? []).filter((e) => e.kind === "tool_call");
+  const governed = calls.filter((e) => (e.payload.governance as { governed?: boolean } | undefined)?.governed);
+  if (governed.length === 0) return null;
+  const refused = governed.filter((e) => e.verdict === "deny");
+  const names = [...new Set(refused.map((e) => String(e.payload.tool ?? "")))].filter(Boolean);
+  return (
+    <div data-testid="would-refuse" className="mb-4 p-3" style={{ background: C.panel, borderRadius: 8,
+      border: `1px solid ${refused.length ? C.amber : C.line}`, fontFamily: MONO, fontSize: 11.5, color: C.mut, lineHeight: 1.6 }}>
+      {refused.length ? (
+        <>
+          <span style={{ color: C.amber }}>policy would have refused {refused.length} of its {governed.length} checked calls</span>
+          {names.length > 0 && <> ({names.join(", ")})</>} — this test only watched.{" "}
+          <span style={{ color: C.steel, cursor: "pointer" }} onClick={() => navigate("connect?for=production")}>
+            Guard blocks them →
+          </span>
+        </>
+      ) : (
+        <>policy would have let {governed.length === 1 ? "the one checked call" : `all ${governed.length} checked calls`} through.</>
       )}
     </div>
   );

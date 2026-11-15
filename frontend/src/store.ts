@@ -57,6 +57,11 @@ interface AppState {
   // folded to one line — the user has read them and wants the room back.
   planNoticesFolded: boolean;
   setPlanNoticesFolded: (v: boolean) => void;
+  // What each of the agent's tools does — one record, written wherever it is
+  // decided (the wrap's and the proxy's onboarding, Policy) and read by all of
+  // them and by a test run, so nobody classifies the same tools twice.
+  toolPolicy: Record<string, ToolClass>;
+  setToolClass: (name: string, patch: Partial<ToolClass>) => void;
   // Guided tour position: index into TOUR (components/Tour.tsx), null = not
   // running. Persisted, so a mid-tour reload resumes where the user was.
   tourStep: number | null;
@@ -83,6 +88,16 @@ interface AppState {
 
 export const isAdapter = (mode: ConnectionMode): boolean => mode === "adapter";
 export const isConnected = (mode: ConnectionMode): boolean => mode !== "none";
+
+export type ToolKlass = "READ" | "WRITE" | "EXPORT" | "EXEC";
+export interface ToolClass {
+  klass: ToolKlass;
+  outside: boolean;            // brings in outside text (web, email, documents)
+  url?: string;                // where it lives, for the proxy
+  source?: string;             // where the scanner found it (file:line)
+  args_schema?: Record<string, unknown>;
+  driving?: string[];          // the arguments that decide where it acts
+}
 
 export const MODE_LABEL: Record<ConnectionMode, string> = {
   none: "not connected",
@@ -187,6 +202,10 @@ export const useApp = create<AppState>()(
       coachDismissed: [],
       planNoticesFolded: false,
       setPlanNoticesFolded: (v) => set({ planNoticesFolded: v }),
+      toolPolicy: {},
+      setToolClass: (name, patch) =>
+        set((s) => ({ toolPolicy: { ...s.toolPolicy,
+          [name]: { ...({ klass: "READ", outside: false } as ToolClass), ...s.toolPolicy[name], ...patch } } })),
       tourStep: null,
       connect: (mode, tools) =>
         set((s) => ({

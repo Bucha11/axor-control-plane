@@ -139,6 +139,10 @@ export default function AdapterOnboarding() {
   const [key, setKey] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const connect = useApp((s) => s.connect);
+  // the shared record of the agent's tools: a choice made here shows in
+  // Policy, in the proxy's onboarding and in a test run
+  const policy = useApp((s) => s.toolPolicy);
+  const setToolClass = useApp((s) => s.setToolClass);
   const email = useApp((s) => s.identityEmail);
   const token = useApp((s) => s.apiToken);
   const auth = useQuery({ queryKey: ["auth-status"], queryFn: api.authStatus, staleTime: 60_000 });
@@ -179,11 +183,17 @@ export default function AdapterOnboarding() {
     setScanning(true);
     try {
       const res = await api.wrapScan(picked);
-      setRows(res.tools.map((t) => ({
+      const next = res.tools.map((t) => ({
         tool: t,
-        klass: t.guess.default_class === "UNKNOWN" ? "READ" : t.guess.default_class,
-        outside: t.guess.untrusted_fields.length > 0,
-      })));
+        // a tool already classified (here, in Policy, for the proxy) keeps that call
+        klass: policy[t.id]?.klass ?? (t.guess.default_class === "UNKNOWN" ? "READ" : t.guess.default_class),
+        outside: policy[t.id]?.outside ?? t.guess.untrusted_fields.length > 0,
+      }));
+      setRows(next);
+      for (const r of next) {
+        setToolClass(r.tool.id, { klass: r.klass, outside: r.outside, source: r.tool.source,
+                                  args_schema: r.tool.args_schema, driving: r.tool.guess.driving_args });
+      }
       if (res.tools.length === 0) setScanErr("no tools found in those files");
     } catch (e) {
       const msg = (e as Error).message;
@@ -195,7 +205,9 @@ export default function AdapterOnboarding() {
     }
   };
   const patch = (i: number, p: Partial<Row>) => {
-    setRows(rows.map((r, j) => (j === i ? { ...r, ...p } : r)));
+    const next = rows.map((r, j) => (j === i ? { ...r, ...p } : r));
+    setRows(next);
+    setToolClass(next[i].tool.id, { klass: next[i].klass, outside: next[i].outside });
     setSaved(false);
   };
 

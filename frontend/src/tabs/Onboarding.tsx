@@ -8,8 +8,9 @@ import { navigate, useRoute } from "../router";
 import CodingOnboarding, { isCodingSession } from "../components/CodingOnboarding";
 import AdapterOnboarding from "../components/AdapterOnboarding";
 import GuardOnboarding from "../components/GuardOnboarding";
+import ScanTools from "../components/ScanTools";
 import type { Journey } from "./Pricing";
-import { ConnectionMode, useApp } from "../store";
+import { ConnectionMode, useApp, type ToolKlass } from "../store";
 import { C, MONO, btn } from "../theme";
 import Coach from "../components/Coach";
 import Tooltip from "../components/Tooltip";
@@ -23,6 +24,16 @@ const TOOLS: Tool[] = [
   { name: "web_search", url: "https://api.search.example/v1" },
   { name: "send_report", url: "https://slack.example/api/post" },
   { name: "run_query", url: "https://db.internal.example/query" },
+];
+// what the example tools do — the same reading the scanner would give them
+const TOOL_CLASSES: Record<string, { klass: ToolKlass; outside: boolean }> = {
+  web_search: { klass: "READ", outside: true },
+  send_report: { klass: "EXPORT", outside: false },
+  run_query: { klass: "READ", outside: false },
+};
+const KLASS_LABEL: { id: ToolKlass; label: string }[] = [
+  { id: "READ", label: "reads" }, { id: "WRITE", label: "changes something" },
+  { id: "EXPORT", label: "sends out" }, { id: "EXEC", label: "runs code" },
 ];
 
 // What `axor-proxy --demo` registers: preflight answers for these out of the box.
@@ -351,6 +362,15 @@ function ProxyOnboarding({ onWrap }: { onWrap: () => void }) {
     }
   };
   const connect = useApp((s) => s.connect);
+  // what each tool does — the shared record (store.toolPolicy): the test run
+  // is armed with it, so it says which calls policy would have refused
+  const policy = useApp((s) => s.toolPolicy);
+  const setToolClass = useApp((s) => s.setToolClass);
+  const loadExample = (set: Tool[]) => {
+    setTools(set);
+    for (const t of set) setToolClass(t.name, { url: t.url, ...(TOOL_CLASSES[t.name] ?? {}) });
+  };
+  const missingUrl = tools.some((t) => !t.url);
 
   const preflight = useMutation({ mutationFn: api.proxyPreflight });
 
@@ -365,6 +385,7 @@ function ProxyOnboarding({ onWrap }: { onWrap: () => void }) {
     if (!name || !url) return;
     if (tools.some((t) => t.name === name)) return;
     setTools([...tools, { name, url }]);
+    setToolClass(name, { url });
     setDraftName("");
     setDraftUrl("");
   };
@@ -432,15 +453,18 @@ function ProxyOnboarding({ onWrap }: { onWrap: () => void }) {
           {tools.length === 0 ? (
             <div className="p-8 flex flex-col items-center gap-3" style={{ background: C.panel, border: `1px dashed ${C.line}`, borderRadius: 8 }}>
               <Tooltip content="Fills in a realistic 3-tool sample (search / report / query) so you can walk the flow without typing endpoints.">
-                <button onClick={() => setTools(TOOLS)} style={btn({ color: C.steel, borderColor: C.steel, fontSize: 12 })}>
+                <button onClick={() => loadExample(TOOLS)} style={btn({ color: C.steel, borderColor: C.steel, fontSize: 12 })}>
                   <Plug size={13} /> Load example tools
                 </button>
               </Tooltip>
+              <ScanTools testId="proxy-scan" onFound={(found) => setTools((prev) => [
+                ...prev, ...found.filter((f) => !prev.some((t) => t.name === f.id))
+                  .map((f) => ({ name: f.id, url: policy[f.id]?.url ?? "" }))])} />
               <span style={{ fontFamily: MONO, fontSize: 11, color: C.dim }}>
-                loads a sample set · or add each tool by hand below · or paste an MCP config further down · or{" "}
+                loads a sample set · or find them in your agent's code · or add each tool by hand below · or paste an MCP config further down · or{" "}
                 <span
                   role="button"
-                  onClick={() => setTools(MOCK_TOOLS)}
+                  onClick={() => loadExample(MOCK_TOOLS)}
                   style={{ color: C.steel, cursor: "pointer" }}
                 >
                   use our mock tools (zero creds)
@@ -455,7 +479,34 @@ function ProxyOnboarding({ onWrap }: { onWrap: () => void }) {
                   <div key={t.name} className="px-4 py-3" style={{ borderTop: i ? `1px solid ${C.line}` : "none" }}>
                     <div className="flex items-center gap-3">
                       <span style={{ fontFamily: MONO, fontSize: 13, color: C.text, width: 130 }}>{t.name}</span>
-                      <span style={{ fontFamily: MONO, fontSize: 11, color: C.dim, flex: 1 }}>{t.url}</span>
+                      {t.url ? (
+                        <span style={{ fontFamily: MONO, fontSize: 11, color: C.dim, flex: 1 }}>{t.url}</span>
+                      ) : (
+                        <input placeholder="where it lives: https://… ⏎" aria-label={`where ${t.name} lives`}
+                          onKeyDown={(e) => {
+                            const v = e.currentTarget.value.trim();
+                            if (e.key === "Enter" && v) {
+                              setTools(tools.map((x) => (x.name === t.name ? { ...x, url: v } : x)));
+                              setToolClass(t.name, { url: v });
+                            }
+                          }}
+                          style={{ flex: 1, background: C.bg, border: `1px solid ${C.amber}`, borderRadius: 4, color: C.text,
+                                   fontFamily: MONO, fontSize: 11.5, padding: "5px 8px", outline: "none" }} />
+                      )}
+                      <select value={policy[t.name]?.klass ?? "READ"} aria-label={`what ${t.name} does`}
+                        onChange={(e) => setToolClass(t.name, { klass: e.target.value as ToolKlass })}
+                        style={{ background: C.bg, color: C.text, border: `1px solid ${C.line}`, borderRadius: 4,
+                                 fontFamily: MONO, fontSize: 11, padding: "3px 6px" }}>
+                        {KLASS_LABEL.map((k) => <option key={k.id} value={k.id}>{k.label}</option>)}
+                      </select>
+                      {(policy[t.name]?.klass ?? "READ") === "READ" && (
+                        <label title="brings in outside text (web, email, documents)"
+                          style={{ fontFamily: MONO, fontSize: 10.5, color: C.mut, display: "flex", alignItems: "center", gap: 4, cursor: "pointer" }}>
+                          <input type="checkbox" checked={policy[t.name]?.outside ?? false}
+                            onChange={(e) => setToolClass(t.name, { outside: e.target.checked })} />
+                          outside text
+                        </label>
+                      )}
                       {mcpTools[t.name] && (
                         <span style={{ fontFamily: MONO, fontSize: 10, color: C.steel }}>MCP</span>
                       )}
@@ -469,8 +520,14 @@ function ProxyOnboarding({ onWrap }: { onWrap: () => void }) {
                 ))}
                 <div className="px-4 py-3" style={{ borderTop: `1px solid ${C.line}` }}>{addRow}</div>
               </div>
-              <button onClick={() => setStep(2)} className="mt-4" style={btn({ color: C.text, borderColor: C.steel, fontSize: 12.5 })}>
-                Continue <ArrowRight size={13} />
+              <div style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim, marginTop: 8, lineHeight: 1.6 }}>
+                what each tool does lets the test say which calls policy would have refused · <ScanTools testId="proxy-scan-more" label="find more in your code" onFound={(found) => setTools((prev) => [
+                  ...prev, ...found.filter((f) => !prev.some((t) => t.name === f.id))
+                    .map((f) => ({ name: f.id, url: policy[f.id]?.url ?? "" }))])} />
+              </div>
+              <button onClick={() => setStep(2)} disabled={missingUrl} className="mt-4"
+                style={btn({ color: missingUrl ? C.dim : C.text, borderColor: missingUrl ? C.line : C.steel, fontSize: 12.5 })}>
+                {missingUrl ? "add where each tool lives first" : <>Continue <ArrowRight size={13} /></>}
               </button>
             </>
           )}

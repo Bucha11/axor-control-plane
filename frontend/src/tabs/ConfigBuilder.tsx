@@ -9,6 +9,7 @@ import { useRef, useState } from "react";
 import { Plus, ChevronDown, ChevronRight, Download, Check, X, ArrowRight, Upload, FileCode, Terminal, AlertTriangle } from "lucide-react";
 import { api, WrapTool } from "../api";
 import { navigate } from "../router";
+import { useApp } from "../store";
 import { C, MONO, btn } from "../theme";
 import Coach from "../components/Coach";
 import Tooltip from "../components/Tooltip";
@@ -223,6 +224,11 @@ export async function filesFromList(picked: FileList | File[] | null): Promise<P
 
 export default function ConfigBuilder() {
   const [stage, setStage] = useState<Stage>("entry");
+  // the shared record of what each tool does (store.toolPolicy): what was
+  // decided on Connect starts here, and what is decided here goes back
+  const policy = useApp((s) => s.toolPolicy);
+  const setToolClass = useApp((s) => s.setToolClass);
+  const fromConnect = Object.entries(policy);
   const [sinks, setSinks] = useState<Sink[]>([]);
   const [adding, setAdding] = useState(false);
   const [draft, setDraft] = useState<{ name: string; type: ToolType }>({ name: "", type: "READ" });
@@ -255,7 +261,16 @@ export default function ConfigBuilder() {
     try {
       const scan = await api.wrapScan(files);
       setWrapTools(scan.tools);
-      setSinks(scan.tools.map(toSink));
+      setSinks(scan.tools.map((t) => {
+        const sink = toSink(t);
+        const known = policy[t.id];
+        if (known) return { ...sink, type: known.klass };
+        if (sink.type !== "?") {
+          setToolClass(t.id, { klass: sink.type, outside: t.guess.untrusted_fields.length > 0,
+                               source: t.source, args_schema: t.args_schema, driving: t.guess.driving_args });
+        }
+        return sink;
+      }));
       setSkipped(scan.skipped ?? []);
       setStage("build");
     } catch (e) {
@@ -265,7 +280,10 @@ export default function ConfigBuilder() {
       setStage("entry");
     }
   };
-  const patch = (i: number, p: Partial<Sink>) => setSinks(sinks.map((s, j) => (j === i ? { ...s, ...p } : s)));
+  const patch = (i: number, p: Partial<Sink>) => {
+    setSinks(sinks.map((s, j) => (j === i ? { ...s, ...p } : s)));
+    if (p.type && p.type !== "?") setToolClass(sinks[i].name, { klass: p.type });
+  };
   const unclassified = sinks.filter((s) => s.type === "?").length;
   const fromCode = sinks.some((s) => s.src);
   // The files the scanner actually read (tool sources are "path:line").
@@ -401,6 +419,20 @@ export default function ConfigBuilder() {
           <div className="mt-4 p-3" style={{ background: C.panel2, border: `1px solid ${C.red}`, borderRadius: 6, fontFamily: MONO, fontSize: 11, color: C.mut, lineHeight: 1.6 }}>
             scan failed: {scanError}
           </div>
+        )}
+        {stage === "entry" && fromConnect.length > 0 && (
+          <button data-testid="policy-from-connect" className="mt-4"
+            onClick={() => {
+              setSinks(fromConnect.map(([name, c]) => ({
+                name, src: c.source ?? c.url, type: c.klass, critical: false,
+                args: (c.driving ?? []).map((a) => ({ arg: a, set: [] })),
+              })));
+              setStage("build");
+            }}
+            style={btn({ color: C.text, borderColor: C.steel, fontSize: 12, padding: "6px 14px" })}>
+            start from the {fromConnect.length} tool{fromConnect.length === 1 ? "" : "s"} you described on Connect
+            ({fromConnect.slice(0, 3).map(([n]) => n).join(", ")}{fromConnect.length > 3 ? ", …" : ""}) →
+          </button>
         )}
         {stage === "entry" && (
           <>

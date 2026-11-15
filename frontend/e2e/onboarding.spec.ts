@@ -117,3 +117,46 @@ const AGENT_PY = [
   "    return to",
   "",
 ].join("\n");
+
+test.describe("one record of what the tools do", () => {
+  test("the guard finds the tools in your code and asks where each lives", async ({ page }) => {
+    await goHash(page, "connect?for=production");
+    await page.getByTestId("prod-way-proxy").click();
+    await page.getByTestId("guard-scan").setInputFiles({
+      name: "agent.py", mimeType: "text/x-python", buffer: Buffer.from(AGENT_PY),
+    });
+    const row = page.getByTestId("guard-tool-send_email");
+    const missing = page.getByText(/scanner is not installed/);
+    await expect(row.or(missing)).toBeVisible({ timeout: 15_000 });
+    if (await missing.isVisible()) return;
+    await expect(page.getByLabel("what send_email does")).toHaveValue("EXPORT");
+    await expect(page.getByText(/found the tools, not where they live/)).toBeVisible();
+    await page.getByLabel("where send_email lives").fill("https://mail.example/send");
+    await page.getByLabel("where send_email lives").press("Enter");
+    await expect(row).toContainText("https://mail.example/send");
+    // the same record shows in Policy
+    await goHash(page, "policy");
+    await expect(page.getByTestId("policy-from-connect")).toContainText("send_email");
+  });
+
+  test("a test run on your own agent is armed with it, and says what policy would refuse", async ({ page, request }) => {
+    await goHash(page, "connect?for=production&how=test");
+    await page.getByText("use our mock tools (zero creds)").click();
+    await expect(page.getByLabel("what web_search does")).toHaveValue("READ");
+    await page.getByRole("button", { name: /Continue/ }).click();
+    await page.getByRole("button", { name: /Continue/ }).click();
+    await page.getByRole("button", { name: /Test connections/ }).click();
+    await page.getByRole("button", { name: /Run a first test/ }).click();
+    await expect(page.getByTestId("test-policy-note")).toContainText("knows what 2 of its tools do");
+    // arm it, then play the agent through the proxy (the scripted one)
+    const [armed] = await Promise.all([
+      page.waitForResponse((r) => r.url().endsWith("/axor/runs") && r.request().method() === "POST"),
+      page.getByRole("button", { name: /Start the test/ }).click(),
+    ]);
+    expect(armed.request().postDataJSON().manifests?.length).toBe(2);
+    const { run_id } = await armed.json();
+    const sim = await request.post(`http://127.0.0.1:8401/axor/runs/${run_id}/simulate`, { data: {} });
+    expect(sim.status()).toBe(200);
+    await expect(page.getByTestId("would-refuse")).toBeVisible({ timeout: 20_000 });
+  });
+});

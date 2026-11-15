@@ -9,11 +9,12 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import { Check, Copy, Download, Plug } from "lucide-react";
 import { api } from "../api";
 import { navigate } from "../router";
-import { isGuestToken, useApp } from "../store";
+import { isGuestToken, useApp, type ToolKlass } from "../store";
+import ScanTools from "./ScanTools";
 import { C, MONO, btn } from "../theme";
 import { IdentityLogin } from "../tabs/Settings";
 
-type Klass = "READ" | "WRITE" | "EXPORT" | "EXEC";
+type Klass = ToolKlass;
 interface GuardTool { name: string; url: string; klass: Klass; outside: boolean }
 
 const CLASSES: { id: Klass; label: string }[] = [
@@ -64,7 +65,12 @@ function Block({ text, id }: { text: string; id: string }) {
 }
 
 export default function GuardOnboarding() {
-  const [tools, setTools] = useState<GuardTool[]>([]);
+  // the shared record of the agent's tools (store.toolPolicy): what was
+  // classified here shows in Policy and in a test run, and the other way round
+  const policy = useApp((s) => s.toolPolicy);
+  const setToolClass = useApp((s) => s.setToolClass);
+  const tools: GuardTool[] = Object.entries(policy).map(([name, c]) =>
+    ({ name, url: c.url ?? "", klass: c.klass, outside: c.outside }));
   const [draft, setDraft] = useState({ name: "", url: "" });
   const [savedManifests, setSavedManifests] = useState(false);
   const [nodeId, setNodeId] = useState("agent-1");
@@ -85,9 +91,11 @@ export default function GuardOnboarding() {
   });
   const manifests = useMutation({
     mutationFn: () => api.wrapManifests(tools.map((t) => ({
-      id: t.name, source: t.url, description: "", args_schema: { type: "object" },
-      // no named driving argument: at the HTTP boundary every argument can drive
-      effect: { default_class: t.klass, driving_args: [],
+      id: t.name, source: policy[t.name]?.source ?? t.url, description: "",
+      args_schema: policy[t.name]?.args_schema ?? { type: "object" },
+      // with no named driving argument every argument can drive — the safe
+      // reading at an HTTP boundary; a scanned tool keeps the ones it found
+      effect: { default_class: t.klass, driving_args: policy[t.name]?.driving ?? [],
                 untrusted_fields: t.klass === "READ" && t.outside ? ["result.*"] : [] },
     }))),
     onSuccess: (bundle) => { save("axor.manifests.json", bundle); setSavedManifests(true); },
@@ -97,14 +105,16 @@ export default function GuardOnboarding() {
     const name = draft.name.trim();
     const url = draft.url.trim();
     if (!name || !url || tools.some((t) => t.name === name)) return;
-    setTools([...tools, { name, url, klass: "READ", outside: false }]);
+    setToolClass(name, { url });
     setDraft({ name: "", url: "" });
     setSavedManifests(false);
   };
   const patch = (i: number, p: Partial<GuardTool>) => {
-    setTools(tools.map((t, j) => (j === i ? { ...t, ...p } : t)));
+    const { name, ...rest } = { ...tools[i], ...p };
+    setToolClass(name, rest);
     setSavedManifests(false);
   };
+  const missingUrl = tools.filter((t) => !t.url).map((t) => t.name);
 
   const run = [
     "uv tool install axor-proxy        # or: pipx install axor-proxy",
@@ -125,18 +135,29 @@ export default function GuardOnboarding() {
       </div>
 
       {step(1, "YOUR AGENT'S TOOLS — AND WHAT EACH ONE DOES")}
-      {tools.length === 0 && (
-        <button onClick={() => { setTools(EXAMPLE); setSavedManifests(false); }} data-testid="guard-example"
-          style={btn({ color: C.steel, borderColor: C.steel, fontSize: 11.5, padding: "5px 12px", marginBottom: 8 })}>
-          <Plug size={12} /> Load example tools
-        </button>
-      )}
+      <div className="flex gap-2 flex-wrap items-center" style={{ marginBottom: 8 }}>
+        <ScanTools testId="guard-scan" />
+        {tools.length === 0 && (
+          <button onClick={() => { for (const t of EXAMPLE) setToolClass(t.name, t); setSavedManifests(false); }}
+            data-testid="guard-example"
+            style={btn({ color: C.steel, borderColor: C.line, fontSize: 11.5, padding: "5px 12px" })}>
+            <Plug size={12} /> Load example tools
+          </button>
+        )}
+      </div>
       <div style={{ border: `1px solid ${C.line}`, borderRadius: 8 }} data-testid="guard-tools">
         {tools.map((t, i) => (
           <div key={t.name} className="px-3 py-2 flex items-center gap-3 flex-wrap" data-testid={`guard-tool-${t.name}`}
             style={{ borderTop: i ? `1px solid ${C.line}` : "none", fontFamily: MONO, fontSize: 11.5 }}>
             <span style={{ color: C.text, minWidth: 110 }}>{t.name}</span>
-            <span style={{ color: C.dim, flex: 1, minWidth: 160, overflow: "hidden", textOverflow: "ellipsis" }}>{t.url}</span>
+            {t.url ? (
+              <span style={{ color: C.dim, flex: 1, minWidth: 160, overflow: "hidden", textOverflow: "ellipsis" }}>{t.url}</span>
+            ) : (
+              <input placeholder="where it lives: https://… ⏎" aria-label={`where ${t.name} lives`}
+                onKeyDown={(e) => { if (e.key === "Enter" && e.currentTarget.value.trim()) patch(i, { url: e.currentTarget.value.trim() }); }}
+                onBlur={(e) => { if (e.currentTarget.value.trim()) patch(i, { url: e.currentTarget.value.trim() }); }}
+                style={{ ...input, flex: 1, minWidth: 160, borderColor: C.amber }} />
+            )}
             <select value={t.klass} onChange={(e) => patch(i, { klass: e.target.value as Klass })}
               aria-label={`what ${t.name} does`} style={{ ...input, fontSize: 11, padding: "3px 6px" }}>
               {CLASSES.map((c) => <option key={c.id} value={c.id}>{c.label}</option>)}
@@ -158,11 +179,15 @@ export default function GuardOnboarding() {
       </div>
       <div style={{ ...hint, marginTop: 6 }}>
         an MCP server is one tool here (its URL); its own tools are named by what the agent calls.
+        {missingUrl.length > 0 && (
+          <span style={{ color: C.amber }}> · the scanner found the tools, not where they live: add the address
+            of {missingUrl.join(", ")}.</span>
+        )}
       </div>
 
       {step(2, "SAVE TWO FILES — NEXT TO THE PROXY")}
       <div className="flex gap-2 flex-wrap">
-        <button onClick={() => save("tools.json", { tools: Object.fromEntries(tools.map((t) => [t.name, t.url])) })}
+        <button onClick={() => save("tools.json", { tools: Object.fromEntries(tools.filter((t) => t.url).map((t) => [t.name, t.url])) })}
           disabled={tools.length === 0} data-testid="guard-save-tools"
           style={btn({ color: C.text, borderColor: C.steel, fontSize: 11.5, padding: "5px 12px" })}>
           <Download size={12} /> tools.json
