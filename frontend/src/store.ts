@@ -69,6 +69,8 @@ interface AppState {
   // Guided tour position: index into TOUR (components/Tour.tsx), null = not
   // running. Persisted, so a mid-tour reload resumes where the user was.
   tourStep: number | null;
+  // which tour: the kind of agent the visitor was looking at on Home
+  tourSide: "coding" | "production";
   connect: (mode: ConnectionMode, tools?: { name: string; url: string }[]) => void;
   disconnect: () => void;
   setTestBench: (v: boolean) => void;
@@ -88,6 +90,7 @@ interface AppState {
   dismissCoach: (id: string) => void;
   resetCoach: () => void;
   setTourStep: (step: number | null) => void;
+  setTourSide: (side: "coding" | "production") => void;
 }
 
 export const isAdapter = (mode: ConnectionMode): boolean => mode === "adapter";
@@ -213,6 +216,7 @@ export const useApp = create<AppState>()(
         set((s) => ({ toolPolicy: { ...s.toolPolicy,
           [name]: { ...({ klass: "READ", outside: false } as ToolClass), ...s.toolPolicy[name], ...patch } } })),
       tourStep: null,
+      tourSide: "production",
       connect: (mode, tools) =>
         set((s) => ({
           connection: {
@@ -250,6 +254,7 @@ export const useApp = create<AppState>()(
         })),
       resetCoach: () => set({ coachDismissed: [] }),
       setTourStep: (step) => set({ tourStep: step }),
+      setTourSide: (side) => set({ tourSide: side }),
     }),
     {
       name: "axor-app",

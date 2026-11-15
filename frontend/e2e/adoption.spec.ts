@@ -19,13 +19,10 @@ test.describe("adoption", () => {
     await expect(page.getByRole("note")).toHaveCount(0);
   });
 
-  test("the first-visit nudge turns Learn mode on and reveals coach notes", async ({ page }) => {
-    // Connected (so the deep surfaces render) but learn not yet seen, so the
-    // Home nudge is still offered. setConnection must run before the first load.
+  test("the header's learn toggle turns Learn mode on and reveals coach notes", async ({ page }) => {
     await setConnection(page, { mode: "adapter" });
     await goHash(page, "home");
-    await expect(page.getByText("New here?", { exact: false })).toBeVisible();
-    await page.getByRole("button", { name: "Learn mode", exact: true }).click();
+    await page.getByRole("button", { name: "toggle learn mode" }).click();
 
     // Now every primary surface carries its coach note (hash nav keeps the
     // in-memory store, so learn stays on).

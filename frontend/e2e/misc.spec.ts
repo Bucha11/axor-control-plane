@@ -150,45 +150,21 @@ test.describe("demo landing", () => {
   });
 });
 
-// On Home the demo is an accordion, not a link to another page: it opens in
-// place, plays on its own, and its call to action stays inside the app.
-test.describe("home demo accordion", () => {
-  // the recording is ~25 seconds end to end
+// Once something is connected, Home stays the two ways in — not another page —
+// with a line back to what is connected, and the recording still plays there.
+test.describe("connected home", () => {
   test.describe.configure({ timeout: 60_000 });
-
-  // the accordion is the connected Home's; a first visit plays the recording
-  // without asking (see shell.spec)
   test.beforeEach(async ({ page }) => {
     await setConnection(page, { mode: "demo" });
   });
 
-  test("opens in place, plays to the receipt, and closes again", async ({ page }) => {
-    await page.goto("/#/home");
-    const toggle = page.getByRole("button", { name: /Watch the demo/ });
-    await expect(toggle).toHaveAttribute("aria-expanded", "false");
-    await expect(page.locator("#home-demo")).toHaveCount(0);
-
-    await toggle.click();
-    await expect(toggle).toHaveAttribute("aria-expanded", "true");
-    // still on Home — nothing navigated away
-    await expect(page).toHaveURL(/#\/home$/);
-    // autoplay: no "Run the recording" click needed. It walks the whole loop,
-    // in order, and each step leaves its card behind.
+  test("the same Home, a line back to the example, the recording plays to the receipt", async ({ page }) => {
+    await page.goto("/#/home?for=production");
+    await expect(page.getByTestId("first-visit")).toBeVisible();
+    await expect(page.getByText("pick a depth")).toHaveCount(0);
     await expect(page.getByTestId("demo-govern")).toContainText("DENIED", { timeout: 15_000 });
-    await expect(page.getByTestId("demo-watch")).toContainText("flagged", { timeout: 10_000 });
-    await expect(page.getByTestId("demo-repair")).toContainText("healthy", { timeout: 12_000 });
-    await expect(page.getByTestId("demo-catch")).toContainText("FABRICATED TOOL RESULT", { timeout: 15_000 });
-
-    await toggle.click();
-    await expect(toggle).toHaveAttribute("aria-expanded", "false");
-    await expect(page.locator("#home-demo")).toHaveCount(0);
-  });
-
-  test("the receipt's call to action goes to connect, inside the app", async ({ page }) => {
-    await page.goto("/#/home");
-    await page.getByRole("button", { name: /Watch the demo/ }).click();
-    await page.getByRole("button", { name: /Govern your agent/ }).click({ timeout: 40_000 });
-    await expect(page).toHaveURL(/#\/connect$/);
+    await expect(page.getByTestId("demo-catch")).toContainText("FABRICATED TOOL RESULT", { timeout: 40_000 });
+    await page.getByTestId("home-back").getByRole("button").click();
+    await expect(page).toHaveURL(/#\/govern$/);
   });
 });
-

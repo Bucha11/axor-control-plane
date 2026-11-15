@@ -1,57 +1,67 @@
-// The guided tour: a spotlight walkthrough that navigates the funnel itself
-// (Home → Eval → Replay → Control → Regression → back to the learn toggle).
-// Starting it connects demo-mode and seeds example data so every stop is real.
+// The guided tour: one per kind of agent on Home, on that side's example data,
+// ending at its way in. Starting it never swaps Home for another page.
 import { expect, test } from "@playwright/test";
 import { goHash } from "./helpers";
 
 test.describe("tour", () => {
-  test("walks the whole funnel and finishes", async ({ page }) => {
-    // Fresh store: the Home nudge offers the tour.
+  test("production: the example fleet, policy, caught lies, replay, safe to ship — then the way in", async ({ page }) => {
+    await goHash(page, "home?for=production");
+    await page.getByRole("button", { name: "Take the tour" }).click();
+    const dialog = page.getByRole("dialog", { name: "guided tour" });
+    const next = dialog.getByRole("button", { name: "next →" });
+
+    await expect(dialog.getByText("Your agents, live")).toBeVisible({ timeout: 15_000 });
+    await expect(dialog.getByText("1 / 7")).toBeVisible();
+    await expect(page).toHaveURL(/#\/govern$/);
+    // (the fleet's story shows when only the example is on the plane; this
+    // suite's plane is shared, so the card may center instead)
+    for (const [title, url] of [
+      ["Pause, stop, cap", /#\/govern$/],
+      ["Policy: what each tool may do", /#\/policy$/],
+      ["Caught lies", /#\/evidence$/],
+      ["Replay: how it happened", /#\/explain/],
+      ["Safe to ship?", /#\/prevent$/],
+      ["Now yours", /#\/home\?for=production$/],
+    ] as const) {
+      await next.click();
+      await expect(dialog.getByText(title, { exact: true })).toBeVisible();
+      await expect(page).toHaveURL(url);
+    }
+    // Home is still the two ways in, with a line back to the example
+    await expect(page.getByTestId("first-visit")).toBeVisible();
+    await expect(page.getByTestId("home-back")).toBeVisible();
+    await dialog.getByRole("button", { name: /Govern my production agent/ }).click();
+    await expect(page).toHaveURL(/#\/connect\?for=production$/);
+    await expect(page.getByRole("dialog", { name: "guided tour" })).toHaveCount(0);
+  });
+
+  test("coding: the example sessions and the tree — then connect", async ({ page }) => {
     await goHash(page, "home");
     await page.getByRole("button", { name: "Take the tour" }).click();
-
     const dialog = page.getByRole("dialog", { name: "guided tour" });
-    await expect(dialog.getByText("The 60-second tour")).toBeVisible();
-    await expect(dialog.getByText("1 / 7")).toBeVisible();
-
     const next = dialog.getByRole("button", { name: "next →" });
+    await expect(dialog.getByText("Your coding agents, on one plane")).toBeVisible({ timeout: 15_000 });
+    await expect(dialog.getByText("1 / 5")).toBeVisible();
     await next.click();
-    await expect(dialog.getByText("Three ways in")).toBeVisible();
-
     await next.click();
-    await expect(dialog.getByText(/break a tool, catch the lie/)).toBeVisible();
-    await expect(page).toHaveURL(/#\/catch/);
-
+    await expect(dialog.getByText("A team on one task")).toBeVisible();
+    await expect(page).toHaveURL(/#\/trees\/tree-example-coding$/);
     await next.click();
-    await expect(dialog.getByText("Replay — question any run")).toBeVisible();
-    await expect(page).toHaveURL(/#\/explain/);
-
     await next.click();
-    await expect(dialog.getByText("Agents — operate them live")).toBeVisible();
-    await expect(page).toHaveURL(/#\/govern/);
-
-    await next.click();
-    await expect(dialog.getByText(/safe to ship\?/i).first()).toBeVisible();
-    await expect(page).toHaveURL(/#\/prevent/);
-
-    await next.click();
-    await expect(dialog.getByText("Learn as you go")).toBeVisible();
-    await expect(dialog.getByText("7 / 7")).toBeVisible();
-
+    await expect(dialog.getByText("Now yours")).toBeVisible();
     await dialog.getByRole("button", { name: "done" }).click();
     await expect(page.getByRole("dialog", { name: "guided tour" })).toHaveCount(0);
   });
 
   test("back steps backwards and skip exits at any point", async ({ page }) => {
-    await goHash(page, "home");
+    await goHash(page, "home?for=production");
     await page.getByRole("button", { name: "Take the tour" }).click();
     const dialog = page.getByRole("dialog", { name: "guided tour" });
-
+    await expect(dialog.getByText("Your agents, live")).toBeVisible({ timeout: 15_000 });
     await dialog.getByRole("button", { name: "next →" }).click();
-    await expect(dialog.getByText("Three ways in")).toBeVisible();
+    await expect(dialog.getByText("Pause, stop, cap")).toBeVisible();
     await dialog.getByRole("button", { name: "back" }).click();
-    await expect(dialog.getByText("The 60-second tour")).toBeVisible();
-
+    await expect(dialog.getByText("Your agents, live")).toBeVisible();
     await dialog.getByRole("button", { name: "skip tour" }).click();
     await expect(page.getByRole("dialog", { name: "guided tour" })).toHaveCount(0);
   });
@@ -59,10 +69,8 @@ test.describe("tour", () => {
   test("is restartable from Settings → LEARN MODE", async ({ page }) => {
     await goHash(page, "settings");
     await page.getByRole("button", { name: "start tour", exact: true }).click();
-    // The tour takes over and returns to Home for step 1.
     const dialog = page.getByRole("dialog", { name: "guided tour" });
-    await expect(dialog.getByText("The 60-second tour")).toBeVisible();
-    await expect(page).toHaveURL(/#\/home/);
+    await expect(dialog.getByText("Your agents, live")).toBeVisible({ timeout: 15_000 });
     await dialog.getByRole("button", { name: "skip tour" }).click();
   });
 });

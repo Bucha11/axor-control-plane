@@ -1,79 +1,122 @@
-// Guided tour — a spotlight walkthrough of the whole funnel (catch → replay →
-// govern → regress). Hand-rolled like the rest of the UI: a dimmed backdrop with
-// a cut-out over the current target (found by its data-tour attribute), a card
-// with the story, back / next / skip. Steps navigate the hash router themselves,
-// so the tour walks across tabs. If a target isn't on screen (e.g. state
-// differs), the card centers and the story still reads.
+// Guided tour — a spotlight walkthrough of the product on example data. Two
+// tours, one per kind of agent on Home (coding agents, production agents): the
+// visitor picked one by the tab they were on, and a tour of the other would
+// talk about things they did not come for. Hand-rolled like the rest of the
+// UI: a dimmed backdrop with a cut-out over the current target (a CSS
+// selector), a card with the story in plain words, back / next / skip. Steps
+// navigate the hash router themselves; if a target isn't on screen the card
+// centers and the story still reads. The last step hands over to the way in.
 //
-// Starting the tour connects demo-mode (if not connected) and seeds the example
-// adapter runs — the same one-click data the UI offers everywhere — so every
-// stop shows real content. The step index is persisted: a reload resumes.
+// Starting it loads that side's example data first — the same one-click data
+// Home offers — so no stop is an empty page. The step is persisted: a reload
+// resumes.
 import { useCallback, useEffect, useState } from "react";
 import { X } from "lucide-react";
 import { api } from "../api";
 import { navigate } from "../router";
-import { isConnected, useApp } from "../store";
+import { useApp } from "../store";
 import { C, MONO } from "../theme";
+
+export type TourSide = "coding" | "production";
 
 interface TourStep {
   route: string;         // hash route this step lives on
-  target: string | null; // [data-tour=…] to spotlight; null = centered card
+  target: string | null; // CSS selector to spotlight; null = centered card
   title: string;
   body: string;
+  cta?: { label: string; route: string }; // the last step: the way in
 }
 
-export const TOUR: TourStep[] = [
-  {
-    route: "home", target: null, title: "The 60-second tour",
-    body: "Axor catches agents lying when their tools fail, replays any run deterministically, and operates governed agents live. We've connected demo-mode and loaded example data, so every stop on this tour is real — and none of it touches your infrastructure.",
-  },
-  {
-    route: "home", target: "ladder", title: "Three ways in",
-    body: "Demo-mode: our scripted agent, mock tools, zero credentials. Proxy: we sit in front of YOUR tools, observe-only, no code change. Adapter: your agent wrapped in axor-core for full governance — that's what lets you govern your own agents live.",
-  },
-  {
-    route: "catch", target: "eval-config", title: "Caught lies — break a tool, catch the lie",
-    body: "Pick a tool to deprive and how. The agent runs; we compare what actually happened against what it claimed. The mismatch becomes an EvidenceCase — a reproducible receipt (not a score) that you can replay, share, and export.",
-  },
-  {
-    route: "explain/ex_block", target: "replay-picker", title: "Replay — question any run",
-    body: "Every recorded step, scrubbable, coloured by verdict. 'What if…' forks a counterfactual: edit the policy and the recorded trace re-gates deterministically, showing the first step where the outcome diverges. No model call involved.",
-  },
-  {
-    route: "govern", target: "spawn", title: "Agents — operate them live",
-    body: "Adapter-connected agents appear here as live nodes: pause them, cap their budgets (decrease-only), stop a whole subtree in one command. Try this button — it spawns a REAL governed node that heartbeats and obeys.",
-  },
-  {
-    route: "prevent", target: "regression-run", title: "Safe to ship? — check before you change",
-    body: "Pin runs into a two-sided corpus: attacks that must stay blocked, legit flows that must keep passing. Replay the corpus under a candidate config and get a deterministic verdict — governance CI.",
-  },
-  {
-    route: "home", target: "learn", title: "Learn as you go",
-    body: "Hover any action for a tooltip. This toggle turns on Learn mode — one short note per screen, dismissible, restorable in Settings → LEARN MODE. That's the tour: break something, read the receipt.",
-  },
-];
+const sel = (testId: string) => `[data-testid="${testId}"]`;
 
-// Shared launcher: normalise state so every stop has content, then start.
-export function useStartTour(): () => void {
-  const { mode } = useApp((s) => s.connection);
+const LEARN = "Lost later? “learn” at the top puts a short note on every screen.";
+
+export const TOURS: Record<TourSide, TourStep[]> = {
+  coding: [
+    {
+      route: "govern", target: sel("coding-example-story"), title: "Your coding agents, on one plane",
+      body: "Example data: Claude Code and Codex in one repository. Claude Code read a docs page — what it brought back stays marked “from the web”. Codex then tried to run the “curl … | sh” from that page and was refused at the shell, though Codex never saw the page itself.",
+    },
+    {
+      route: "govern", target: '[data-tour="spawn"]', title: "Every session, live",
+      body: "Each session shows up here as it runs. Pause it, stop it, or cap how many more tool calls it may make — it obeys on its next call.",
+    },
+    {
+      route: "trees/tree-example-coding", target: sel("example-intro"), title: "A team on one task",
+      body: "Claude Code writes a plan, five Codex readers look through the code, Claude Code does the work. Axor checks what each passes on: a finding about a file its reader never opened is marked unverified, and an instruction found in a web page never reaches the one that writes code.",
+    },
+    {
+      route: "trees/tree-example-coding", target: sel("tree-items"), title: "What each step passed on",
+      body: "Every plan line and finding, with where it came from. Cut one, and no later step sees it.",
+    },
+    {
+      route: "home?for=coding", target: sel("home-connect-coding"), title: "Now yours",
+      body: `One install, no code change: every session shows up here. Free for 1 developer and one kind of agent — only Claude Code, or only Codex. ${LEARN}`,
+      cta: { label: "Connect your coding agents →", route: "connect?for=coding" },
+    },
+  ],
+  production: [
+    {
+      route: "govern", target: sel("fleet-example-story"), title: "Your agents, live",
+      body: "Example data: four production agents. Read what happened to each and what Axor did about it — every line opens that agent.",
+    },
+    {
+      route: "govern", target: '[data-tour="spawn"]', title: "Pause, stop, cap",
+      body: "Every tool call an agent makes is checked before it runs. From here you pause an agent, stop it, or cap how many more calls it may make — it obeys on its next call.",
+    },
+    {
+      route: "policy", target: sel("wrap-dropzone"), title: "Policy: what each tool may do",
+      body: "Drop your agent's code: we find its tools and guess what each one does — reads, writes, sends something out. You correct the guess. That is what gets enforced, not the prompt.",
+    },
+    {
+      route: "evidence", target: sel("evidence-list"), title: "Caught lies",
+      body: "When an agent says a tool worked and it didn't — or tries to send out text it read on the web — it lands here: what really happened, next to what the agent said.",
+    },
+    {
+      route: "explain/ex_block", target: '[data-tour="replay-picker"]', title: "Replay: how it happened",
+      body: "Any run, step by step: each tool call, what was let through, what was refused and why. “What if…” replays the same run under different rules — no model is called.",
+    },
+    {
+      route: "prevent", target: '[data-tour="regression-run"]', title: "Safe to ship?",
+      body: "Before you change the rules, every case you kept is replayed under the new ones: attacks must stay blocked, normal work must keep passing.",
+    },
+    {
+      route: "home?for=production", target: sel("home-connect-production"), title: "Now yours",
+      body: `Wrap your agent in code, or put a proxy in front of its tools — free for one agent. ${LEARN}`,
+      cta: { label: "Govern my production agent →", route: "connect?for=production" },
+    },
+  ],
+};
+
+// Shared launcher: load the side's example data, then start on its first stop.
+export function useStartTour(): (side?: TourSide) => void {
   const connect = useApp((s) => s.connect);
   const setTourStep = useApp((s) => s.setTourStep);
+  const setTourSide = useApp((s) => s.setTourSide);
+  const stored = useApp((s) => s.tourSide);
   const markLearnSeen = useApp((s) => s.markLearnSeen);
-  return useCallback(() => {
-    if (!isConnected(mode)) connect("demo");
-    void api.seedAdapterRuns().catch(() => undefined); // idempotent example data
+  return useCallback((side?: TourSide) => {
+    const which = side ?? stored;
     markLearnSeen();
-    navigate("home");
-    setTourStep(0);
-  }, [mode, connect, setTourStep, markLearnSeen]);
+    setTourSide(which);
+    const seeds = which === "coding"
+      ? [api.seedCoding()]
+      : [api.seedFleet(), api.seedAdapterRuns()];
+    // example data is idempotent; a failed seed still leaves a readable tour
+    void Promise.allSettled(seeds).then(() => {
+      connect("demo");
+      setTourStep(0);
+    });
+  }, [stored, connect, setTourStep, setTourSide, markLearnSeen]);
 }
 
-const CARD_W = 300;
+const CARD_W = 340;
 const CARD_H_GUESS = 190; // for above/below placement only
 
 export default function Tour() {
   const stepIdx = useApp((s) => s.tourStep);
   const setTourStep = useApp((s) => s.setTourStep);
+  const TOUR = TOURS[useApp((s) => s.tourSide)];
   const step = stepIdx == null ? TOUR[0] : TOUR[Math.min(stepIdx, TOUR.length - 1)];
   const active = stepIdx != null;
   const [rect, setRect] = useState<DOMRect | null>(null);
@@ -94,12 +137,13 @@ export default function Tour() {
   useEffect(() => {
     if (!active) return;
     setRect(null);
-    if (!step.target) return;
+    const target = step.target;
+    if (!target) return;
     let tries = 0;
     let timer = 0;
     let found = false;
     const measure = () => {
-      const el = document.querySelector(`[data-tour="${step.target}"]`);
+      const el = document.querySelector(target);
       if (el) {
         if (!found) {
           found = true;
@@ -112,7 +156,7 @@ export default function Tour() {
     };
     measure();
     const remeasure = () => {
-      const el = document.querySelector(`[data-tour="${step.target}"]`);
+      const el = document.querySelector(target);
       if (el) setRect(el.getBoundingClientRect());
     };
     window.addEventListener("resize", remeasure);
@@ -188,6 +232,14 @@ export default function Tour() {
         <div style={{ fontFamily: MONO, fontSize: 11.5, color: C.mut, lineHeight: 1.65, marginBottom: 12 }}>
           {step.body}
         </div>
+        {step.cta && (
+          <button
+            onClick={() => { const r = step.cta!.route; end(); navigate(r); }}
+            style={{ width: "100%", marginBottom: 10, background: C.steel, border: `1px solid ${C.steel}`, borderRadius: 5, color: C.bg, fontFamily: MONO, fontSize: 11.5, fontWeight: 700, padding: "7px 14px", cursor: "pointer" }}
+          >
+            {step.cta.label}
+          </button>
+        )}
         <div className="flex items-center justify-between">
           <span style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim }}>
             {stepIdx + 1} / {TOUR.length}
@@ -203,7 +255,9 @@ export default function Tour() {
             )}
             <button
               onClick={() => (last ? end() : setTourStep(stepIdx + 1))}
-              style={{ background: C.steel, border: `1px solid ${C.steel}`, borderRadius: 5, color: C.bg, fontFamily: MONO, fontSize: 11, fontWeight: 700, padding: "5px 14px", cursor: "pointer" }}
+              style={step.cta
+                ? { background: "none", border: `1px solid ${C.line}`, borderRadius: 5, color: C.mut, fontFamily: MONO, fontSize: 11, padding: "5px 12px", cursor: "pointer" }
+                : { background: C.steel, border: `1px solid ${C.steel}`, borderRadius: 5, color: C.bg, fontFamily: MONO, fontSize: 11, fontWeight: 700, padding: "5px 14px", cursor: "pointer" }}
             >
               {last ? "done" : "next →"}
             </button>

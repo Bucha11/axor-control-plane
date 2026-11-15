@@ -395,7 +395,7 @@ export default function Settings() {
           </span>
           <div className="flex items-center gap-2">
             <button
-              onClick={startTour}
+              onClick={() => startTour()}
               title="a 7-stop spotlight walkthrough of the whole funnel"
               style={btn({ color: C.steel, borderColor: C.steel, fontSize: 11, padding: "4px 12px" })}
             >
