@@ -13,6 +13,7 @@ import { C, MONO, btn } from "../theme";
 import Coach from "../components/Coach";
 import Tooltip from "../components/Tooltip";
 import { codingExampleOnly, fleetExampleOnly } from "../components/CodingOnboarding";
+import { AlertMe, KeepAsTest, SignUpForYourAgent } from "../components/AccountAction";
 
 const REFETCH_MS = 5000;
 
@@ -1112,12 +1113,14 @@ function StatusChips({ units, filter, setFilter }: {
  * made-up answer passed up the tree and refused on its way out, a leak only
  * visible across sessions, a context gone bad — each a link to where it is. */
 function FleetExampleStory({ onPick, onGraph }: { onPick: (id: string) => void; onGraph: () => void }) {
-  const row = (n: string, testId: string, go: () => void, text: React.ReactNode) => (
-    <button onClick={go} data-testid={testId}
-      style={{ display: "block", textAlign: "left", width: "100%", background: "none", border: "none",
-               padding: "3px 0", cursor: "pointer", fontFamily: MONO, fontSize: 11.5, color: C.mut, lineHeight: 1.6 }}>
-      <span style={{ color: C.amber }}>{n}</span> {text} <span style={{ color: C.steel }}>open →</span>
-    </button>
+  const row = (n: string, testId: string, go: () => void, text: React.ReactNode, act?: React.ReactNode) => (
+    <div style={{ padding: "3px 0", fontFamily: MONO, fontSize: 11.5, color: C.mut, lineHeight: 1.6 }}>
+      <span style={{ color: C.amber }}>{n}</span> {text}{" "}
+      <button onClick={go} data-testid={testId}
+        style={{ background: "none", border: "none", padding: 0, cursor: "pointer", fontFamily: MONO,
+                 fontSize: 11.5, color: C.steel }}>open →</button>
+      {act && <>{" · "}{act}</>}
+    </div>
   );
   return (
     <div data-testid="fleet-example-story" style={{ border: `1px solid ${C.line}`, borderRadius: 8,
@@ -1137,7 +1140,8 @@ function FleetExampleStory({ onPick, onGraph }: { onPick: (id: string) => void; 
       </div>
       {row("①", "story-lie", () => navigate("evidence"),
         <>web search was broken on purpose; the scraper answered “rates rose 0.25%” anyway, and the
-          orchestrator passed it on as confirmed — <span style={{ color: C.red }}>caught lie</span>.</>)}
+          orchestrator passed it on as confirmed — <span style={{ color: C.red }}>caught lie</span>.</>,
+        <KeepAsTest runId="ex_tree" testId="story-keep" />)}
       {row("②", "story-denied", () => onPick("tree-orch"),
         <>the orchestrator then tried to post it to Slack —{" "}
           <span style={{ color: C.red }}>denied</span>: the number came from the untrusted web.</>)}
@@ -1146,11 +1150,13 @@ function FleetExampleStory({ onPick, onGraph }: { onPick: (id: string) => void; 
           export was tried — <span style={{ color: C.red }}>flagged</span>.</>)}
       {row("④", "story-drift", () => navigate("health?node=tree-scraper"),
         <>the scraper's answers drifted; the cause is one poisoned search result —{" "}
-          <span style={{ color: C.amber }}>cut it and check again</span>.</>)}
+          <span style={{ color: C.amber }}>cut it and check again</span>.</>,
+        <AlertMe testId="story-alert" label="email me when my agent drifts →" />)}
       <button onClick={() => navigate("connect?for=production")} data-testid="story-govern"
         style={btn({ color: C.text, borderColor: C.steel, fontSize: 11.5, padding: "5px 12px", marginTop: 10 })}>
         Govern my production agent →
       </button>
+      <SignUpForYourAgent />
     </div>
   );
 }

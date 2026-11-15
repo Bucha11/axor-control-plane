@@ -302,3 +302,49 @@ test("Agents with only the example fleet tells its story", async ({ page, reques
   await expect(page.getByTestId("topo-node-tree-scraper")).toBeVisible();
   await page.unrouteAll({ behavior: "ignoreErrors" });
 });
+
+test("the example asks a guest to sign up where it pays off, and does it for anyone else", async ({ page, request }) => {
+  await page.route("**/v1/plane/nodes", async (route) => {
+    const all = await (await request.get(`${BACKEND}/v1/plane/nodes`)).json() as { node_id: string }[];
+    const fleet = ["tree-orch", "tree-research", "tree-scraper", "tree-writer"];
+    await route.fulfill({ json: all.filter((n) => fleet.includes(n.node_id)) });
+  });
+  // a guest: keeping the caught lie as a test is what an account is for
+  await setConnection(page, { mode: "none", apiToken: "gs_e2e_guest" });
+  await goHash(page, "home");
+  await page.getByTestId("home-tab-production").click();
+  await page.getByTestId("home-example-fleet").click();
+  await expect(page.getByTestId("signup-own-agent")).toContainText("1 production agent");
+  await page.getByTestId("story-keep").getByRole("button").click();
+  const ask = page.getByTestId("account-required");
+  await expect(ask).toContainText("Keep it as a test");
+  await expect(ask).toContainText("before it ships");
+  await ask.click({ position: { x: 5, y: 5 } });
+  await page.getByTestId("story-alert").getByRole("button").click();
+  await expect(page.getByTestId("account-required")).toContainText("Get an email when your agent goes wrong");
+  await page.unrouteAll({ behavior: "ignoreErrors" });
+});
+
+test("not a guest: keeping a caught lie as a test just keeps it", async ({ page, request }) => {
+  await request.post(`${BACKEND}/v1/demo/seed-fleet`);
+  await setConnection(page, { mode: "demo" });
+  await goHash(page, "govern");
+  await page.route("**/v1/plane/nodes", async (route) => {
+    const all = await (await request.get(`${BACKEND}/v1/plane/nodes`)).json() as { node_id: string }[];
+    const fleet = ["tree-orch", "tree-research", "tree-scraper", "tree-writer"];
+    await route.fulfill({ json: all.filter((n) => fleet.includes(n.node_id)) });
+  });
+  // the regression corpus is shared by every spec: answer the pin here rather
+  // than add an escaped exfil to everyone else's counts
+  let pinned: unknown = null;
+  await page.route("**/v1/pins/ex_tree", async (route) => {
+    pinned = route.request().postDataJSON();
+    await route.fulfill({ json: { pinned: "ex_tree" } });
+  });
+  await page.reload();
+  await expect(page.getByTestId("signup-own-agent")).toHaveCount(0);
+  await page.getByTestId("story-keep").getByRole("button").click();
+  await expect(page.getByTestId("story-keep")).toContainText("kept as a test");
+  expect(pinned).toMatchObject({ side: "must_block" });
+  await page.unrouteAll({ behavior: "ignoreErrors" });
+});

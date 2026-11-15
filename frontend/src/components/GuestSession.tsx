@@ -33,6 +33,7 @@ export default function GuestSession() {
   const refreshToken = useApp((s) => s.refreshToken);
   const guestTokens = useApp((s) => s.guestTokens);
   const [ask, setAsk] = useState<string | null>(null);
+  const [askText, setAskText] = useState<{ title?: string; why?: string }>({});
   const [moved, setMoved] = useState<string | null>(null);
 
   useEffect(() => {
@@ -75,9 +76,10 @@ export default function GuestSession() {
   // a guest reached an account-only feature
   useEffect(() => {
     const on = (e: Event) => {
-      const detail = (e as CustomEvent<{ feature?: string }>).detail;
+      const detail = (e as CustomEvent<{ feature?: string; title?: string; why?: string }>).detail;
       if (isGuestToken(useApp.getState().apiToken)) {
         setAsk(detail?.feature ?? "this");
+        setAskText({ title: detail?.title, why: detail?.why });
         track("signup_prompt_shown", detail?.feature ?? "");
       }
     };
@@ -105,8 +107,11 @@ export default function GuestSession() {
             style={{ width: 340, maxWidth: "100%", background: C.bg, border: `1px solid ${C.line}`,
                      borderRadius: 10, padding: 16 }}>
             <div style={{ fontSize: 16, fontWeight: 650, marginBottom: 6 }}>
-              {ask.charAt(0).toUpperCase() + ask.slice(1)} need an account
+              {askText.title ?? `${ask.charAt(0).toUpperCase() + ask.slice(1)} need an account`}
             </div>
+            {askText.why && (
+              <div style={{ fontSize: 13, color: C.text, lineHeight: 1.5, marginBottom: 8 }}>{askText.why}</div>
+            )}
             <div style={{ fontFamily: MONO, fontSize: 11, color: C.mut, lineHeight: 1.6, marginBottom: 12 }}>
               Free, one minute. Everything you did as a guest — runs, agents, caught lies —
               moves into the new workspace.

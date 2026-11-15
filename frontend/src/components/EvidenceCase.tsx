@@ -6,6 +6,7 @@
 import { useState } from "react";
 import { useMutation } from "@tanstack/react-query";
 import { Check, ExternalLink, FlaskConical, Play, Share2 } from "lucide-react";
+import { KeepAsTest } from "./AccountAction";
 import { api, EvidenceCaseDto } from "../api";
 import CausalSubgraph from "./CausalSubgraph";
 import { navigate } from "../router";
@@ -161,6 +162,7 @@ export default function EvidenceCase({
               <Play size={11} /> Replay this moment
             </button>
           </Tooltip>
+          <KeepAsTest runId={runId} testId="case-keep" />
           <Tooltip content="Copy a revocable permalink to just this case — one page, scoped token, no access to the rest of the workspace. Revoke it any time.">
             <button onClick={() => share.mutate()} style={action(copied ? C.green : C.mut)}>
               {copied ? <Check size={11} /> : <Share2 size={11} />} {copied ? "link copied" : "Share"}
