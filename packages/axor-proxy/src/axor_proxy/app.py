@@ -107,8 +107,8 @@ def _govern(
     if args is None:
         payload["governance"] = {
             "governed": False,
-            "reason": "arguments not observable at the HTTP boundary: only an "
-                      "MCP tools/call body names them",
+            "reason": "arguments not observable at the HTTP boundary: the call "
+                      "carried no JSON object body, query string or MCP tools/call",
         }
         return None, None, None
     decision = run.governor.evaluate(tool, args)  # type: ignore[attr-defined]
@@ -161,7 +161,11 @@ def _register(run: Run, decision: object | None, output: object) -> dict[str, An
         return {}
     if decision is None:
         return {"registered": False, "reason": "call was not governed"}
-    run.governor.register_output(decision, output)  # type: ignore[attr-defined]
+    from axor_proxy.guard import answer_text
+
+    # as text: the ledger matches fragments inside a string and takes any
+    # other object whole (axor_proxy.guard explains the case)
+    run.governor.register_output(decision, answer_text(output))  # type: ignore[attr-defined]
     for event in run.governor.drain_trace_events():  # type: ignore[attr-defined]
         ref = (getattr(event, "payload", None) or {}).get("value_ref")
         if ref:
@@ -511,6 +515,15 @@ def create_app(state: ProxyState) -> Starlette:
             call_payload["rpc"] = {k: v for k, v in rpc.items() if k != "arguments"}
             if rpc.get("tool"):
                 call_payload["tool"] = f"{tool}:{rpc['tool']}"
+        elif run.governor is not None:
+            # a plain HTTP tool's arguments are its JSON object body and query
+            # string — the same reading guard mode gates on, so a test run
+            # says what the guard would have done
+            http_args, rpc_msg, _ = _call_args(body, request.query_params)
+            # nothing to read (no body, no query) stays ungoverned: a verdict
+            # on {} would be a pass that means nothing
+            if rpc_msg is None and http_args:
+                governed_args = http_args
         # ── vault mode (§14.2), opt-in per tool: fetch the credential now and
         # inject it at the sink, so the agent never holds it. Fail closed —
         # every refusal ends the call here, before any upstream request. ──

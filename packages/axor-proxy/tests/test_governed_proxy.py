@@ -182,3 +182,16 @@ class TestWhatItRefusesToGuess:
         r = await arm(proxy, manifests="web_search")
         assert r.status_code == 400
         assert "tool-manifest/v1" in r.json()["detail"]
+
+
+class TestAPlainHttpToolIsReadToo:
+    async def test_a_json_body_is_the_calls_arguments(
+        self, proxy: httpx.AsyncClient, tmp_path: Path,
+    ) -> None:
+        """A test run reads a plain HTTP tool's JSON body as its arguments — the
+        same reading guard mode gates on — so it says what the guard would do."""
+        run_id = (await arm(proxy, manifests=MANIFESTS)).json()["run_id"]
+        await proxy.post("/t/plain/", json={"q": "hello there"})
+        call = next(e for e in trace(tmp_path, run_id) if e["kind"] == "tool_call")
+        assert call["payload"]["governance"]["governed"] is True
+        assert call["verdict"] is not None
