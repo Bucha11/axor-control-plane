@@ -132,11 +132,17 @@ export default function Experiment({ runId, autostart }: { runId?: string; autos
   });
 
   // Demo-mode "one click": Home hands off with ?auto=1 → run immediately.
+  // Fired on the next tick and cancelled on unmount: a mount that is torn
+  // down at once (React's StrictMode does exactly that) must not start the run
+  // on an observer nobody renders, or the button spins forever beside the
+  // result.
   useEffect(() => {
-    if (autostart && !autoFired.current && isConnected(mode)) {
+    if (!autostart || autoFired.current || !isConnected(mode)) return;
+    const t = window.setTimeout(() => {
       autoFired.current = true;
       start.mutate();
-    }
+    }, 0);
+    return () => window.clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [autostart, mode]);
 
