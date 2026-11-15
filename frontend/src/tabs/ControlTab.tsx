@@ -280,17 +280,17 @@ export default function ControlTab({ focusNode }: { focusNode?: string }) {
   const fleet = useQuery({ queryKey: ["nodes"], queryFn: api.nodes });
   // once the example fleet is on the plane, offering to load it again is noise
   const fleetLoaded = (fleet.data ?? []).some((n) => n.node_id === "tree-orch");
-  // Live control of YOUR agents needs the adapter — the proxy has no handle on
-  // internal topology (spec section 12). That used to be a locked page with
+  // Live control of YOUR agents needs them on the plane: wrapped in code, or
+  // behind the proxy in guard mode (which holds their tool calls, not the agent). That used to be a locked page with
   // nothing behind it; now the page is open, says so up front, and has an
   // example fleet to operate.
   const hasAgents = (fleet.data ?? []).length > 0;
   const [examples, setExamples] = useState(false);
   const note = (
     <>
-      live control of <span style={{ color: C.text }}>your</span> agents needs the adapter
-      (wrap the agent with axor-core — <span style={{ color: C.steel, cursor: "pointer" }}
-        onClick={() => navigate("connect")}>connect →</span>)
+      live control of <span style={{ color: C.text }}>your</span> agents needs them wrapped in code
+      or behind the proxy as a guard (<span style={{ color: C.steel, cursor: "pointer" }}
+        onClick={() => navigate("connect?for=production")}>connect →</span>)
     </>
   );
   return (

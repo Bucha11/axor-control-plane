@@ -11,7 +11,7 @@ import { BACKEND, goHash, seedDegradedNode, seedNode, setConnection, uniqueNode 
 // line; with none they are open. Either way, open them.
 async function openExamples(page: import("@playwright/test").Page): Promise<void> {
   const fold = page.getByRole("button", { name: "example agents ▾" });
-  await page.getByText(/needs the adapter/).waitFor();
+  await page.getByText(/needs them wrapped in code/).waitFor();
   if (await fold.isVisible()) await fold.click();
 }
 
@@ -22,7 +22,7 @@ test.describe("control", () => {
     await setConnection(page, { mode: "proxy" });
     await goHash(page, "control");
     await expect(page.getByText(/live control of/)).toBeVisible();
-    await expect(page.getByText(/needs the adapter/)).toBeVisible();
+    await expect(page.getByText(/needs them wrapped in code/)).toBeVisible();
     await openExamples(page);
     await expect(page.getByRole("button", { name: "Load an example fleet" })).toBeVisible();
     await expect(page.getByRole("button", { name: /Spawn a governed demo node/ })).toBeVisible();

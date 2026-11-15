@@ -44,7 +44,7 @@ test.describe("control graph lens", () => {
     // you see before Control has anything of yours on it.
     await setConnection(page, { mode: "proxy" });
     await goHash(page, "control");
-    await page.getByText(/needs the adapter/).waitFor();
+    await page.getByText(/needs them wrapped in code/).waitFor();
     const fold = page.getByRole("button", { name: "example agents ▾" });
     if (await fold.isVisible()) await fold.click();
     await page.getByRole("button", { name: /load the canned tree/ }).click();

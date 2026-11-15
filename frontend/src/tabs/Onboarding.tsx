@@ -89,7 +89,7 @@ export const WAYS: { id: Journey; title: string; body: string }[] = [
   { id: "coding", title: "Coding agents",
     body: "Claude Code and Codex, through their hooks. Two commands; every session shows up here." },
   { id: "production", title: "My production agent",
-    body: "Your own agent in production: put the proxy in front of its tools, or wrap it with an adapter." },
+    body: "Your own agent in production: wrap it in code, or put a proxy in front of its tools — either one refuses a dangerous call." },
   { id: "both", title: "Both",
     body: "Your developers' coding agents and your production fleet, on one plane." },
 ];
@@ -153,7 +153,8 @@ export default function Onboarding() {
           <div data-testid="both-production-intro" style={{ fontSize: 13.5, color: C.mut, lineHeight: 1.6,
             marginBottom: 14 }}>
             <span style={{ color: C.text }}>Now your production agent.</span> First, how Axor sits with
-            it: wrapped in code (it guards the agent) or a proxy in front of its tools (it watches).
+            it: wrapped in code (inside the agent — it also sees the model) or a proxy in front of its
+            tools (no code change). Both refuse a dangerous call.
           </div>
         )}
       </div>
@@ -168,8 +169,10 @@ export default function Onboarding() {
 type ProdWay = "code" | "proxy";
 
 /** Two ways to put a production agent under Axor, and they are not the same
- * product: the wrap governs (refuses a call, pauses, stops, repairs), the proxy
- * only watches — it never blocks, and its addresses answer during test runs.
+ * product: both refuse a dangerous call, pause, stop and cap; the wrap is inside
+ * the agent and also sees the model (it can cut an item from its context), the
+ * proxy needs no code change but holds only tool calls over HTTP / MCP — and its
+ * test runs watch instead of blocking.
  * Said before either is set up, so nobody wires a proxy expecting a guard. */
 function ProductionOnboarding({ initial, proxyMode }: { initial?: ProdWay; proxyMode?: ProxyMode }) {
   const [way, setWay] = useState<ProdWay | null>(initial ?? null);

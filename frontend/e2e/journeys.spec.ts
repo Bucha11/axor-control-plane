@@ -256,7 +256,7 @@ test("Agents with only the coding example tells its story, in coding words", asy
   await expect(story).toContainText("denied at the shell");
   // no adapter talk for a coding visitor, and the badge says what this is
   await expect(page.getByTestId("adapter-note")).toHaveCount(0);
-  await expect(page.getByText(/needs the adapter/)).toHaveCount(0);
+  await expect(page.getByText(/needs them wrapped in code/)).toHaveCount(0);
   await expect(page.getByRole("button", { name: "connection: example data" })).toBeVisible();
   await page.getByTestId("story-codex").click();
   await expect(page.getByTestId("agent-panel")).toContainText(/codex-example-/);
@@ -290,7 +290,7 @@ test("Agents with only the example fleet tells its story", async ({ page, reques
   await page.getByTestId("home-example-fleet").click();
   const story = page.getByTestId("fleet-example-story");
   await expect(story).toContainText("caught lie");
-  await expect(page.getByText(/needs the adapter/)).toHaveCount(0);
+  await expect(page.getByText(/needs them wrapped in code/)).toHaveCount(0);
   await expect(page.getByRole("button", { name: "connection: example data" })).toBeVisible();
   // the activity reads as messages between agents, not event kinds
   await expect(page.getByTestId("fleet-activity")).toContainText("→ message to tree-research");

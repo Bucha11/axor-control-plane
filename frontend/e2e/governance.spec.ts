@@ -10,7 +10,7 @@ test.describe.serial("governance on the example fleet", () => {
   test("Agents is open without an adapter, and loads an example fleet", async ({ page }) => {
     await setConnection(page, { mode: "demo" });
     await goHash(page, "govern");
-    await expect(page.getByText(/needs the adapter/)).toBeVisible();
+    await expect(page.getByText(/needs them wrapped in code/)).toBeVisible();
     // other specs may have put agents on this plane: then the examples are folded
     const fold = page.getByRole("button", { name: "example agents ▾" });
     if (await fold.isVisible()) await fold.click();
