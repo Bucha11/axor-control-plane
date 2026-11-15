@@ -11,6 +11,7 @@ import { useState } from "react";
 import { C, MONO, btn } from "../theme";
 import Coach from "../components/Coach";
 import Tabs from "../components/Tabs";
+import { LAB_SHIPPED } from "../flags";
 import { navigate, useRoute } from "../router";
 
 // A feature is either shipping today or on the roadmap. We mark the difference
@@ -251,17 +252,27 @@ function initialJourney(query: Record<string, string>): Journey {
   return want === "coding" || want === "production" || want === "both" ? want : "both";
 }
 
+// Lab is not shipping yet (flags.LAB_SHIPPED): its lines come off the ladder
+// and the module reads as the Control Plane alone.
+const shownTier = (t: Tier): Tier => LAB_SHIPPED ? t : {
+  ...t,
+  module: t.module.replace("Private Lab + ", ""),
+  features: t.features.filter((f) => !/\bLab\b/.test(f.text)),
+};
+
 export default function Pricing() {
   const route = useRoute();
   const [journey, setJourney] = useState<Journey>(() => initialJourney(route.query));
-  const shown = TIERS.filter((t) => t.journeys.includes(journey));
+  const shown = TIERS.filter((t) => t.journeys.includes(journey)).map(shownTier);
   return (
     <div style={{ maxWidth: 1040, margin: "0 auto" }}>
       <Coach id="pricing" title="Pricing — one ladder">
-        Private Lab and Control Plane are one product on one ladder: a rung gives
-        you the evidence workspace and production enforcement together. They used
-        to be a rung plus a separately-licensed add-on, which asked every buyer a
-        question they could not answer before trying the thing. Features marked{" "}
+        {LAB_SHIPPED
+          ? <>Private Lab and Control Plane are one product on one ladder: a rung gives
+            you the evidence workspace and production enforcement together. </>
+          : <>Each rung includes everything below it — no separately-licensed add-ons.
+            What gets blocked never depends on the rung. </>}
+        Features marked{" "}
         <span style={{ color: C.text }}>planned</span> don't exist yet — the page
         refuses to over-claim.
       </Coach>

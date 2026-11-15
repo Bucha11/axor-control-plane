@@ -1,84 +1,57 @@
-// Config regression: replay the pinned corpus under a candidate config
-// (regression-report mockup). Wired to /v1/regression — deterministic replay,
-// no model calls.
+// Safe to ship? — every kept case (the pinned corpus) replayed under the rules
+// about to ship: attacks must stay blocked, normal work must keep passing.
+// Wired to /v1/regression — deterministic replay, no model calls. The rules
+// come from Policy (the shared record), the example, or JSON by hand.
 import { useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { CalendarClock, ChevronDown, ChevronRight, Circle, ExternalLink, FlaskConical, Loader2, Lock, Play, Upload } from "lucide-react";
+import { CalendarClock, ChevronDown, ChevronRight, Circle, FlaskConical, Loader2, Lock, Play, Upload } from "lucide-react";
 import { api, LabDeployResult, RegressionReport, RegressionRow } from "../api";
 import { C, MONO, btn } from "../theme";
 import { navigate } from "../router";
 import Coach from "../components/Coach";
+import { useApp } from "../store";
+import { LAB_SHIPPED } from "../flags";
 import Tooltip from "../components/Tooltip";
 
-const DEFAULT_CONFIG = JSON.stringify(
-  { allowed_tools: [], egress_sinks: [] },
-  null,
-  2,
-);
+// The example corpus's runs (backend demo.DEMO_RUN_IDS) and what each one is,
+// in words: their pins all carry the scenario as label, which tells two apart
+// by nothing.
+const DEMO_CASES: Record<string, string> = {
+  ex_block: "an email hides an instruction; its summary is posted to Slack",
+  ex_pass: "read notes, write notes",
+  ex_tree: "a research tree passes a made-up number upward",
+  ex_coding_claude: "Claude Code reads a docs page",
+  ex_coding_codex: "Codex tries the page's “curl … | sh”",
+};
+const caseName = (runId: string, label: string): string =>
+  DEMO_CASES[runId] ?? (label || runId);
 
-function dot(res: RegressionRow["result"]): string {
-  if (res === "regressed") return C.red;
-  if (res === "escaped") return C.amber; // an attack no longer blocked — red-level severity, no design yet
-  if (res === "unanchored") return C.amber;
-  return C.green;
-}
+const STATUS: Record<RegressionRow["result"], { text: string; color: string }> = {
+  held: { text: "still blocked", color: C.green },
+  passed: { text: "still passes", color: C.green },
+  escaped: { text: "NOW GETS THROUGH", color: C.red },
+  regressed: { text: "NOW REFUSED", color: C.red },
+  unanchored: { text: "can't be checked", color: C.amber },
+};
 
-function label(res: RegressionRow["result"]): string {
-  switch (res) {
-    case "held": return "still blocked";
-    case "passed": return "still passes";
-    case "regressed": return "REGRESSED";
-    case "escaped": return "ESCAPED";
-    case "unanchored": return "NOT CHECKED";
-  }
-}
+const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
 
-function headline(report: RegressionReport): React.ReactNode {
-  if (report.safe_to_ship) {
-    return <>Safe to ship: every attack still blocked, every legitimate flow still passes.</>;
+type RulesFrom = "policy" | "example" | "json";
+type Variant = "as-is" | "looser" | "stricter";
+
+/** The example's rules, loosened or tightened so the check has something to
+ * catch: a looser rule lets the exfil's text through (an always-fine value on
+ * slack_post), a stricter one takes away the tool the normal flow needs. */
+function exampleVariant(rules: Record<string, unknown>, v: Variant): Record<string, unknown> {
+  if (v === "looser") {
+    return { ...rules, driving_args: { slack_post: ["text"] },
+             value_policies: { slack_post: [{ arg: "text", kind: "enum", allowed: ["…"] }] } };
   }
-  const parts: string[] = [];
-  if (report.regressed > 0) {
-    parts.push(`${report.regressed} regression${report.regressed === 1 ? "" : "s"}`);
+  if (v === "stricter") {
+    const tools = (rules.allowed_tools as string[] | undefined) ?? [];
+    return { ...rules, allowed_tools: tools.filter((t) => t !== "notes_write") };
   }
-  if (report.escaped > 0) {
-    parts.push(`${report.escaped} escape${report.escaped === 1 ? "" : "s"}`);
-  }
-  if (report.unanchored > 0) {
-    parts.push(`${report.unanchored} unchecked pin${report.unanchored === 1 ? "" : "s"}`);
-  }
-  if (report.skipped.length > 0) {
-    parts.push(`${report.skipped.length} unreadable pin${report.skipped.length === 1 ? "" : "s"}`);
-  }
-  // A corpus whose only pins are the canned demo runs has rows and no failures,
-  // and still cannot say the sentence: those pins are evidence about the demo.
-  if (parts.length === 0 && report.own_rows === 0 && report.demo_rows > 0) {
-    return (
-      <>
-        <span style={{ color: C.amber }}>
-          {report.demo_rows} demo pin{report.demo_rows === 1 ? "" : "s"}, none of
-          your own
-        </span>
-        {" "}— the canned runs check the shipped kernel against the shipped
-        attack. Pin one of your own runs to check yours.
-      </>
-    );
-  }
-  // A corpus with rows but no failures cannot reach here; one with NO rows can,
-  // and "v2 changes governed behavior" would be the wrong reason for it.
-  if (report.rows.length === 0) {
-    return (
-      <>
-        <span style={{ color: C.red }}>{parts.join(" + ") || "Nothing was checked"}</span>
-        {" "}— the corpus verified nothing, so it cannot say every attack is still blocked.
-      </>
-    );
-  }
-  return (
-    <>
-      <span style={{ color: C.red }}>{parts.join(" + ") || "Failure"}</span> — v2 changes governed behavior.
-    </>
-  );
+  return rules;
 }
 
 // Org layer (EE): schedule the corpus + browse run history. Rendered locked
@@ -98,7 +71,7 @@ function ScheduleAndHistory({ parseConfig }: { parseConfig: () => Record<string,
       // Turning the schedule off must not depend on the editor holding a valid
       // config; the stored one is inert once disabled.
       const config = enabled ? parseConfig() : {};
-      if (config === null) throw new Error("config above must be valid JSON");
+      if (config === null) throw new Error("the rules above must be valid JSON");
       return api.putRegressionSchedule(enabled, Number(hours) || 24, config);
     },
     onSuccess: () => {
@@ -110,7 +83,7 @@ function ScheduleAndHistory({ parseConfig }: { parseConfig: () => Record<string,
   return (
     <div className="mb-8">
       <div style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim, letterSpacing: "0.08em", marginBottom: 8 }}>
-        SCHEDULED CI · HISTORY
+        SCHEDULED CHECKS · HISTORY
         <span style={{ marginLeft: 8, border: `1px solid ${C.line}`, borderRadius: 20, padding: "1px 6px", fontSize: 8.5 }}>
           Team
         </span>
@@ -119,8 +92,8 @@ function ScheduleAndHistory({ parseConfig }: { parseConfig: () => Record<string,
         <div className="flex items-center gap-2 p-4" style={{ background: C.panel, border: `1px dashed ${C.line}`, borderRadius: 8 }}>
           <Lock size={13} color={C.dim} />
           <span style={{ fontFamily: MONO, fontSize: 11.5, color: C.dim }}>
-            scheduled corpus runs + history are org features — add a license in
-            Settings · manual runs stay free forever
+            checks on a schedule, and their history, come with Team — add a
+            license in Settings · checking by hand stays free forever
           </span>
         </div>
       ) : (
@@ -144,7 +117,7 @@ function ScheduleAndHistory({ parseConfig }: { parseConfig: () => Record<string,
             <span style={{ fontFamily: MONO, fontSize: 11, color: C.mut }}>h</span>
             <button onClick={() => save.mutate(true)} disabled={save.isPending}
               style={btn({ color: C.steel, fontSize: 11, padding: "6px 10px" })}>
-              <CalendarClock size={12} /> Schedule with config above
+              <CalendarClock size={12} /> Schedule with the rules above
             </button>
             {schedule.data.enabled && (
               <button onClick={() => save.mutate(false)} disabled={save.isPending}
@@ -168,8 +141,8 @@ function ScheduleAndHistory({ parseConfig }: { parseConfig: () => Record<string,
                   <span style={{ color: C.dim, width: 72 }}>{h.source}</span>
                   <span style={{ color: h.safe_to_ship ? C.mut : C.text, flex: 1 }}>
                     {h.safe_to_ship
-                      ? `safe — ${h.total} rows`
-                      : `${h.regressed} regressed · ${h.escaped} escaped${h.unanchored ? ` · ${h.unanchored} not checked` : ""}${h.skipped ? ` · ${h.skipped} unreadable` : ""} of ${h.total}`}
+                      ? `safe — ${h.total} cases`
+                      : `${h.escaped} got through · ${h.regressed} now refused${h.unanchored ? ` · ${h.unanchored} not checked` : ""}${h.skipped ? ` · ${h.skipped} unreadable` : ""} of ${h.total}`}
                   </span>
                 </div>
               ))}
@@ -184,7 +157,7 @@ function ScheduleAndHistory({ parseConfig }: { parseConfig: () => Record<string,
 // Lab → CP: accept a cp-deploy.json produced by `axor-lab export-cp`. The
 // package's validated regression pins fold into THIS corpus (source-labelled
 // lab:{package_id}); the list below is the record of every accepted handoff.
-function LabDeploys() {
+export function LabDeploys() {
   const qc = useQueryClient();
   const fileRef = useRef<HTMLInputElement | null>(null);
   const [result, setResult] = useState<LabDeployResult | { ok: false; reasons: string[] } | null>(null);
@@ -308,255 +281,316 @@ function LabDeploys() {
   );
 }
 
-export default function Regression({ initialConfig }: { initialConfig?: string } = {}) {
-  const [raw, setRaw] = useState(initialConfig ?? DEFAULT_CONFIG);
+export default function Regression() {
+  const qc = useQueryClient();
+  const policy = useApp((s) => s.toolPolicy);
+  const policyTools = Object.keys(policy);
+  const corpus = useQuery({ queryKey: ["pins"], queryFn: api.getPins });
+  const pins = corpus.data?.pins ?? [];
+  const ownPins = pins.filter((p) => !(p.run_id in DEMO_CASES));
+
+  const [chosen, setChosen] = useState<RulesFrom | null>(null);
+  // until the person picks: their own cases are checked against their Policy;
+  // the example's cases against the example's rules
+  const rulesFrom: RulesFrom = chosen
+    ?? (ownPins.length > 0 && policyTools.length > 0 ? "policy"
+      : pins.length > 0 || policyTools.length === 0 ? "example" : "policy");
+  const [variant, setVariant] = useState<Variant>("as-is");
+  const [raw, setRaw] = useState("");
   const [parseError, setParseError] = useState<string | null>(null);
   const [open, setOpen] = useState<string | null>(null);
-  const qc = useQueryClient();
 
-  const regression = useMutation({
-    mutationFn: (config: Record<string, unknown>) => api.regression(config),
-    // Every run is recorded server-side, so the history list is now stale.
-    onSuccess: () => void qc.invalidateQueries({ queryKey: ["regression-history"] }),
-  });
-
-  // The North-star: how many caught EvidenceCases the operator committed to
-  // permanent checks. A growing corpus is the signal the loop closed — Axor's
-  // findings were trusted enough to guard against forever.
-  const corpus = useQuery({ queryKey: ["pins"], queryFn: api.getPins });
-
-  // Seed a two-sided corpus (must-block attack + must-pass legit flow) and drop
-  // its matching config into the editor, so a fresh install can demonstrate the
-  // regression CI with real data instead of an empty corpus.
-  const seed = useMutation({
-    mutationFn: () => api.seedAdapterRuns(),
-    onSuccess: (r) => {
-      setRaw(JSON.stringify(r.config, null, 2));
+  // the example's rules come with its cases (seeding is idempotent)
+  const example = useQuery({
+    queryKey: ["example-rules"],
+    queryFn: async () => {
+      const r = await api.seedAdapterRuns();
       void qc.invalidateQueries({ queryKey: ["pins"] });
+      return r.config;
     },
+    // loaded on a click, or when the example's cases are already kept —
+    // opening the page never writes into someone's corpus
+    enabled: rulesFrom === "example" && (chosen === "example" || pins.some((p) => p.run_id in DEMO_CASES)),
+    staleTime: Infinity,
   });
 
-  const run = () => {
-    setParseError(null);
-    setOpen(null);
-    let config: Record<string, unknown>;
+  const policyRules: Record<string, unknown> = {
+    version: "axor-config/1",
+    sinks: Object.fromEntries(Object.entries(policy).map(([name, c]) => [name, { consequence_class: c.klass }])),
+    default: "DENY",
+  };
+  const rules = (): Record<string, unknown> | null => {
+    if (rulesFrom === "policy") return policyRules;
+    if (rulesFrom === "example") return example.data ? exampleVariant(example.data, variant) : null;
     try {
       const parsed: unknown = JSON.parse(raw);
       if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
-        throw new Error("config must be a JSON object");
+        throw new Error("the rules must be a JSON object");
       }
-      config = parsed as Record<string, unknown>;
+      return parsed as Record<string, unknown>;
     } catch (e) {
       setParseError(e instanceof Error ? e.message : String(e));
-      return;
+      return null;
     }
-    regression.mutate(config);
+  };
+  const pick = (from: RulesFrom) => {
+    if (from === "json") {
+      const current = rulesFrom === "policy" ? policyRules
+        : example.data ? exampleVariant(example.data, variant) : {};
+      setRaw(JSON.stringify(current, null, 2));
+    }
+    setChosen(from);
+    setParseError(null);
+    check.reset();
   };
 
-  const report = regression.data;
-  const held = report?.rows.filter((r) => r.result === "held").length ?? 0;
-  const passed = report?.rows.filter((r) => r.result === "passed").length ?? 0;
+  const check = useMutation({
+    mutationFn: (config: Record<string, unknown>) => api.regression(config),
+    // every run is recorded server-side, so the history list is now stale
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ["regression-history"] }),
+  });
+  const run = () => {
+    setParseError(null);
+    setOpen(null);
+    const config = rules();
+    if (config) check.mutate(config);
+  };
+  const tryVariant = (v: Variant) => {
+    setVariant(v);
+    setOpen(null);
+    if (example.data) check.mutate(exampleVariant(example.data, v));
+  };
+
+  const report = check.data;
+  const chip = (on: boolean): React.CSSProperties => ({
+    background: on ? "rgba(127,168,204,0.12)" : "none", border: `1px solid ${on ? C.steel : C.line}`,
+    borderRadius: 20, padding: "4px 12px", cursor: "pointer", fontFamily: MONO, fontSize: 11.5,
+    color: on ? C.text : C.mut,
+  });
+  const link: React.CSSProperties = {
+    background: "none", border: "none", padding: 0, cursor: "pointer", fontFamily: MONO, fontSize: 11.5, color: C.steel,
+  };
 
   return (
     <div style={{ maxWidth: 640, margin: "0 auto" }}>
-      <Coach id="regression" title="Regression — is this config safe to ship?">
-        Replay a candidate config against your pinned corpus. It's two-sided:
-        every <span style={{ color: C.text }}>must-block</span> attack should stay
-        blocked and every <span style={{ color: C.text }}>must-pass</span> flow should
-        keep passing. A config that blocks everything would pass a one-sided check —
-        this catches that. Load the example corpus to see it work.
+      <Coach id="regression" title="Safe to ship? — check a rule change before it goes out">
+        Every case you kept is replayed under the rules you are about to ship. Two
+        sides: attacks must stay blocked, and normal work must keep passing — rules
+        that refuse everything would pass a one-sided check, this catches that.
       </Coach>
-      <div style={{ fontFamily: MONO, fontSize: 11, color: C.mut, marginBottom: 6 }}>
-        axor.config <span style={{ color: C.text }}>candidate</span> vs pinned corpus · deterministic replay, no model calls
+      <h1 style={{ fontSize: 22, fontWeight: 650, margin: "0 0 6px" }}>Safe to ship?</h1>
+      <div style={{ fontSize: 14, color: C.mut, lineHeight: 1.6, marginBottom: 22 }}>
+        Change the rules, and every case you kept is replayed under them: attacks must stay
+        blocked, normal work must keep passing. No model is called — same answer every time.
       </div>
-      {corpus.data && (
-        <div style={{ fontFamily: MONO, fontSize: 11, marginBottom: 10 }}>
-          <span style={{ color: corpus.data.total ? C.green : C.dim }}>
-            corpus: {corpus.data.total} case{corpus.data.total === 1 ? "" : "s"} pinned
-          </span>
-          <span style={{ color: C.dim }}>
-            {" "}· {corpus.data.must_block} must-block · {corpus.data.must_pass} must-pass
-          </span>
-        </div>
-      )}
 
-      <textarea
-        value={raw}
-        onChange={(e) => setRaw(e.target.value)}
-        rows={6}
-        spellCheck={false}
-        className="w-full"
-        style={{
-          background: C.panel2, border: `1px solid ${C.line}`, borderRadius: 6,
-          color: C.text, fontFamily: MONO, fontSize: 12, padding: 10,
-          resize: "vertical", outline: "none",
-        }}
-      />
-      {parseError && (
-        <div className="mt-1" style={{ fontFamily: MONO, fontSize: 11, color: C.red }}>
-          {parseError}
-        </div>
-      )}
-
-      <div data-tour="regression-run" className="flex items-center gap-3 mt-2 mb-8">
-        <Tooltip content="Replay every pinned run under the config above and report which attacks stayed blocked and which legit flows still pass.">
-          <button onClick={run} disabled={regression.isPending} style={btn({ color: C.steel, fontSize: 12, padding: "8px 14px" })}>
-            {regression.isPending ? <Loader2 size={13} className="animate-spin" /> : <Play size={13} />} Run regression
-          </button>
-        </Tooltip>
-        <Tooltip content="Pins a must-block attack and a must-pass legit flow (adapter-fidelity) so the corpus has both sides to check against.">
-          <button
-            onClick={() => seed.mutate()}
-            disabled={seed.isPending}
-            style={btn({ color: C.mut, fontSize: 11, padding: "7px 12px" })}
-          >
-            {seed.isPending ? "seeding…" : "load example corpus"}
-          </button>
-        </Tooltip>
-        {regression.isError && (
-          <span style={{ fontFamily: MONO, fontSize: 11, color: C.red }}>
-            {(regression.error as Error).message}
-          </span>
+      {/* the cases */}
+      <div style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim, letterSpacing: "0.1em", marginBottom: 6 }}>THE CASES</div>
+      <div data-testid="cases" style={{ fontFamily: MONO, fontSize: 12, color: C.mut, lineHeight: 1.7, marginBottom: 20 }}>
+        {pins.length === 0 ? (
+          <>No cases kept yet. On a caught case, <span style={{ color: C.text }}>keep it as a test</span> adds
+            it here — or{" "}
+            <button onClick={() => pick("example")} style={link}>load the example →</button></>
+        ) : (
+          <>
+            <span style={{ color: C.text }}>{plural(corpus.data?.must_block ?? 0, "attack", "attacks")}</span> that
+            must stay blocked · <span style={{ color: C.text }}>{plural(corpus.data?.must_pass ?? 0, "normal flow", "normal flows")}</span> that
+            must keep passing
+            {ownPins.length === 0 && <span style={{ color: C.dim }}> · all from the example</span>}
+            <div style={{ color: C.dim, fontSize: 11 }}>
+              more: “keep it as a test” on a caught case, or pin a run in Replay
+            </div>
+          </>
         )}
       </div>
 
-      <LabDeploys />
-
-      <ScheduleAndHistory
-        parseConfig={() => {
-          try {
-            const parsed: unknown = JSON.parse(raw);
-            return parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)
-              ? (parsed as Record<string, unknown>)
-              : null;
-          } catch {
-            return null;
-          }
-        }}
-      />
-
-      {report && (
-        // Only when there is genuinely nothing pinned. Pins that exist but could
-        // not be read also produce zero rows, and telling the operator to run an
-        // experiment would send them after a problem they do not have.
-        report.rows.length === 0 && report.skipped.length === 0 ? (
-          <div style={{ fontFamily: MONO, fontSize: 12.5, color: C.mut }}>
-            No pinned traces. Run an experiment (Eval) — discrepancy-bearing traces auto-pin the must-block side; add legitimate flows as must-pass.
-          </div>
-        ) : (
-          <>
-            <h1 style={{ fontSize: 22, fontWeight: 650, lineHeight: 1.3, margin: "0 0 6px" }}>
-              {headline(report)}
-            </h1>
-            <div style={{ fontFamily: MONO, fontSize: 12, color: C.mut, marginBottom: 20 }}>
-              {held} attacks still blocked · {passed} legitimate flows still pass ·{" "}
-              {report.regressed} regressed · {report.escaped} escaped
-              {report.unanchored > 0 ? ` · ${report.unanchored} not checked` : ""}
-              {report.skipped.length > 0 ? ` · ${report.skipped.length} unreadable` : ""}
-            </div>
-
-            {report.skipped.length > 0 && (
-              <div style={{ marginBottom: 20, fontFamily: MONO, fontSize: 11.5 }}>
-                <div style={{ color: C.amber, marginBottom: 6 }}>
-                  Pinned, but the trace could not be read — these were not checked:
-                </div>
-                <div style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 8 }}>
-                  {report.skipped.map((p, i) => (
-                    <div key={p.run_id} className="px-4 py-2"
-                      style={{ borderTop: i ? `1px solid ${C.line}` : "none" }}>
-                      <span style={{ color: C.text }}>{p.run_id}</span>
-                      <span style={{ color: C.dim }}> · {p.side}</span>
-                      {p.label ? <span style={{ color: C.dim }}> · {p.label}</span> : null}
-                      <div style={{ color: C.mut, marginTop: 2 }}>{p.reason}</div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            <div style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 8 }}>
-              {report.rows.map((r, i) => {
-                const hot = r.result !== "held" && r.result !== "passed";
-                const expandable =
-                  r.escaped_denials.length > 0 || r.result === "unanchored"
-                  || r.new_denial != null || r.first_divergence != null;
-                const isOpen = open === r.run_id;
-                return (
-                  <div key={r.run_id} style={{ borderTop: i ? `1px solid ${C.line}` : "none" }}>
-                    <div
-                      onClick={() => setOpen(isOpen ? null : r.run_id)}
-                      className="flex items-center gap-3 px-4 py-3"
-                      style={{ cursor: expandable ? "pointer" : "default" }}
-                    >
-                      <Circle size={9} fill={dot(r.result)} color={dot(r.result)} />
-                      <span style={{ fontFamily: MONO, fontSize: 10, color: C.dim, width: 74 }}>
-                        {r.side.replaceAll("_", "-")}
-                      </span>
-                      <span style={{ fontFamily: MONO, fontSize: 12.5, color: hot ? C.text : C.mut, flex: 1 }}>
-                        {r.label || r.run_id}
-                      </span>
-                      <span style={{
-                        fontFamily: MONO, fontSize: 10.5,
-                        fontWeight: hot ? 700 : 400,
-                        color: r.result === "regressed" ? C.red
-                          : r.result === "escaped" || r.result === "unanchored" ? C.amber
-                          : C.dim,
-                      }}>
-                        {label(r.result)}
-                      </span>
-                      {expandable
-                        ? (isOpen ? <ChevronDown size={13} color={C.dim} /> : <ChevronRight size={13} color={C.dim} />)
-                        : <span style={{ width: 13 }} />}
-                    </div>
-                    {isOpen && expandable && (
-                      <div className="px-4 pb-3 flex flex-col gap-2" style={{ paddingLeft: 40 }}>
-                        <span style={{ fontFamily: MONO, fontSize: 11.5, color: C.mut, lineHeight: 1.6 }}>
-                          {r.escaped_denials.length > 0 ? (
-                            <span style={{ color: C.amber }}>
-                              ESCAPED: {r.escaped_denials.map((d) => `${d.tool || "step"} @ ${d.node_id}:${d.seq}`).join(", ")}
-                              {" "}— recorded DENY, this config lets it through
-                              {" "}({r.escaped_denials.length} of {r.pinned_denials} pinned denial{r.pinned_denials === 1 ? "" : "s"})
-                            </span>
-                          ) : r.result === "unanchored" ? (
-                            <span style={{ color: C.amber }}>
-                              this trace recorded no denial, so there is nothing in it to
-                              check the config against — pin a run recorded under enforcement
-                            </span>
-                          ) : r.new_denial ? (
-                            <>NEW denial at step {r.new_denial.seq}: {r.new_denial.reason} ({r.new_denial.category})</>
-                          ) : (
-                            <>first divergence at step {r.first_divergence}</>
-                          )}
-                          {" · "}{r.run_id}
-                        </span>
-                        <div className="flex items-center gap-2">
-                          <button
-                            onClick={() =>
-                              navigate(`explain/${r.run_id}`, {
-                                seq: r.escaped_denials[0]?.seq
-                                  ?? r.new_denial?.seq ?? r.first_divergence ?? undefined,
-                                node: r.escaped_denials[0]?.node_id,
-                              })
-                            }
-                            style={btn({ color: C.steel, fontSize: 11, padding: "5px 10px" })}
-                          >
-                            <Play size={11} /> explain at divergence
-                          </button>
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-
-            <div style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim, marginTop: 14, lineHeight: 1.7 }}>
-              must-block = auto-pinned traces containing an EvidenceCase · must-pass = manually pinned legitimate flows.
-              A corpus needs both sides — a config that blocks everything would pass a one-sided CI.
-            </div>
-          </>
-        )
+      {/* the rules */}
+      <div style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim, letterSpacing: "0.1em", marginBottom: 6 }}>THE RULES TO CHECK</div>
+      <div className="flex gap-2 flex-wrap mb-2">
+        <button data-testid="rules-policy" onClick={() => pick("policy")} style={chip(rulesFrom === "policy")}
+          disabled={policyTools.length === 0}>
+          from Policy{policyTools.length ? ` (${plural(policyTools.length, "tool", "tools")})` : " — none yet"}
+        </button>
+        <button data-testid="rules-example" onClick={() => pick("example")} style={chip(rulesFrom === "example")}>
+          the example's
+        </button>
+        <button data-testid="rules-json" onClick={() => pick("json")} style={chip(rulesFrom === "json")}>
+          edit as JSON
+        </button>
+      </div>
+      <div style={{ fontFamily: MONO, fontSize: 11, color: C.dim, lineHeight: 1.6, marginBottom: 10 }}>
+        {rulesFrom === "policy" && (policyTools.length
+          ? <>{policyTools.slice(0, 5).map((t) => `${t} — ${policy[t].klass.toLowerCase()}`).join(" · ")}
+              {policyTools.length > 5 ? " · …" : ""} · any other tool refused ·{" "}
+              <button onClick={() => navigate("policy")} style={{ ...link, fontSize: 11 }}>change in Policy →</button></>
+          : <>no tools described yet — <button onClick={() => navigate("policy")} style={{ ...link, fontSize: 11 }}>describe them in Policy →</button></>)}
+        {rulesFrom === "example" && (
+          <span data-testid="example-variant">
+            {variant === "as-is" && "the example agent's rules, as they are"}
+            {variant === "looser" && <span style={{ color: C.amber }}>looser: slack_post may post this text even when it came from outside</span>}
+            {variant === "stricter" && <span style={{ color: C.amber }}>stricter: notes_write taken away</span>}
+          </span>
+        )}
+      </div>
+      {rulesFrom === "json" && (
+        <>
+          <textarea value={raw} onChange={(e) => setRaw(e.target.value)} rows={8} spellCheck={false}
+            aria-label="rules as JSON" className="w-full"
+            style={{ background: C.panel2, border: `1px solid ${C.line}`, borderRadius: 6, color: C.text,
+                     fontFamily: MONO, fontSize: 12, padding: 10, resize: "vertical", outline: "none" }} />
+          {parseError && <div className="mt-1" style={{ fontFamily: MONO, fontSize: 11, color: C.red }}>{parseError}</div>}
+        </>
       )}
+
+      <div data-tour="regression-run" className="flex items-center gap-3 flex-wrap" style={{ marginTop: 12, marginBottom: 22 }}>
+        <button onClick={run} disabled={check.isPending || (rulesFrom === "example" && !example.data)
+            || (rulesFrom === "policy" && policyTools.length === 0)}
+          style={btn({ color: C.text, borderColor: C.steel, fontSize: 12.5, padding: "8px 16px" })}>
+          {check.isPending ? <Loader2 size={13} className="animate-spin" /> : <Play size={13} />} Check these rules
+        </button>
+        {rulesFrom === "example" && example.data && (
+          <span style={{ fontFamily: MONO, fontSize: 11.5, color: C.dim }}>
+            see it fail:{" "}
+            <button data-testid="try-looser" onClick={() => tryVariant("looser")} style={link}>a looser rule</button>
+            {" · "}
+            <button data-testid="try-stricter" onClick={() => tryVariant("stricter")} style={link}>a stricter rule</button>
+            {variant !== "as-is" && <>{" · "}<button onClick={() => tryVariant("as-is")} style={link}>back to as is</button></>}
+          </span>
+        )}
+        {check.isError && (
+          <span style={{ fontFamily: MONO, fontSize: 11, color: C.red }}>{(check.error as Error).message}</span>
+        )}
+      </div>
+
+      {report && <Report report={report} open={open} setOpen={setOpen} />}
+
+      <div style={{ marginTop: 28 }}>
+        <Fold label="run this check on a schedule (Team)">
+          <ScheduleAndHistory parseConfig={() => rules()} />
+        </Fold>
+        {LAB_SHIPPED && <LabDeploys />}
+      </div>
+    </div>
+  );
+}
+
+function Fold({ label, children }: { label: string; children: React.ReactNode }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div>
+      <button onClick={() => setOpen(!open)} style={{ background: "none", border: "none", color: C.mut, fontSize: 12,
+        fontFamily: MONO, cursor: "pointer", display: "flex", alignItems: "center", gap: 6, padding: "8px 0" }}>
+        {open ? <ChevronDown size={13} /> : <ChevronRight size={13} />} {label}
+      </button>
+      {open && <div className="pt-2">{children}</div>}
+    </div>
+  );
+}
+
+function Report({ report, open, setOpen }: {
+  report: RegressionReport; open: string | null; setOpen: (v: string | null) => void;
+}) {
+  const broken: string[] = [];
+  if (report.escaped) broken.push(`${plural(report.escaped, "attack", "attacks")} now ${report.escaped === 1 ? "gets" : "get"} through`);
+  if (report.regressed) broken.push(`${plural(report.regressed, "normal flow is", "normal flows are")} now refused`);
+  if (report.unanchored) broken.push(`${plural(report.unanchored, "case", "cases")} can't be checked`);
+  if (report.skipped.length) broken.push(`${plural(report.skipped.length, "case", "cases")} could not be read`);
+  const onlyExample = report.own_rows === 0 && report.demo_rows > 0;
+
+  if (report.rows.length === 0 && report.skipped.length === 0) {
+    return <div style={{ fontFamily: MONO, fontSize: 12.5, color: C.mut }}>No cases kept yet — nothing to check.</div>;
+  }
+  return (
+    <div data-testid="check-result">
+      <div style={{ fontSize: 20, fontWeight: 650, lineHeight: 1.35, marginBottom: 6 }}>
+        {broken.length > 0 ? (
+          <><span style={{ color: C.red }}>Not safe to ship:</span> {broken.join(", ")}.</>
+        ) : onlyExample ? (
+          <><span style={{ color: C.green }}>The example holds:</span> its attack is still blocked, its normal flow still passes.</>
+        ) : (
+          <><span style={{ color: C.green }}>Safe to ship:</span> every attack still blocked, every normal flow still passes.</>
+        )}
+      </div>
+      {onlyExample && (
+        <div style={{ fontFamily: MONO, fontSize: 11.5, color: C.dim, marginBottom: 14 }}>
+          these are the example's cases, not your agent's — keep cases of your own to check yours
+        </div>
+      )}
+
+      {report.skipped.length > 0 && (
+        <div style={{ marginBottom: 14, fontFamily: MONO, fontSize: 11.5 }}>
+          <div style={{ color: C.amber, marginBottom: 6 }}>Kept, but the run could not be read — not checked:</div>
+          <div style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 8 }}>
+            {report.skipped.map((p, i) => (
+              <div key={p.run_id} className="px-4 py-2" style={{ borderTop: i ? `1px solid ${C.line}` : "none" }}>
+                <span style={{ color: C.text }}>{caseName(p.run_id, p.label)}</span>
+                <div style={{ color: C.mut, marginTop: 2 }}>{p.reason}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <div className="mt-3" style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 8 }}>
+        {report.rows.map((r, i) => {
+          const st = STATUS[r.result];
+          const hot = r.result !== "held" && r.result !== "passed";
+          const isOpen = open === r.run_id;
+          return (
+            <div key={r.run_id} data-testid={`case-${r.run_id}`} style={{ borderTop: i ? `1px solid ${C.line}` : "none" }}>
+              <div onClick={() => setOpen(isOpen ? null : r.run_id)} className="flex items-center gap-3 px-4 py-3"
+                style={{ cursor: "pointer" }}>
+                <Circle size={9} fill={st.color} color={st.color} />
+                <span style={{ fontFamily: MONO, fontSize: 10, color: C.dim, width: 52 }}>
+                  {r.side === "must_block" ? "attack" : "normal"}
+                </span>
+                <span style={{ fontSize: 13, color: hot ? C.text : C.mut, flex: 1 }}>{caseName(r.run_id, r.label)}</span>
+                <span style={{ fontFamily: MONO, fontSize: 10.5, fontWeight: hot ? 700 : 400, color: hot ? st.color : C.dim }}>
+                  {st.text}
+                </span>
+                {isOpen ? <ChevronDown size={13} color={C.dim} /> : <ChevronRight size={13} color={C.dim} />}
+              </div>
+              {isOpen && (
+                <div className="px-4 pb-3 flex flex-col gap-2" style={{ paddingLeft: 40 }}>
+                  <span style={{ fontFamily: MONO, fontSize: 11.5, color: C.mut, lineHeight: 1.6 }}>
+                    {r.escaped_denials.length > 0 ? (
+                      <span style={{ color: C.red }}>
+                        was refused at {r.escaped_denials.map((d) => `${d.tool || "a step"} (step ${d.seq})`).join(", ")} —
+                        these rules let it through
+                      </span>
+                    ) : r.result === "unanchored" ? (
+                      <span style={{ color: C.amber }}>
+                        nothing was refused in this run, so there is nothing to check — keep a run where
+                        something was refused
+                      </span>
+                    ) : r.new_denial ? (
+                      <span style={{ color: r.result === "regressed" ? C.red : C.mut }}>
+                        now refused at step {r.new_denial.seq}: {r.new_denial.reason}
+                      </span>
+                    ) : r.first_divergence != null ? (
+                      <>goes differently from step {r.first_divergence}</>
+                    ) : r.side === "must_block" ? (
+                      <>refused at the same step as when it was kept</>
+                    ) : (
+                      <>every step goes as it did when it was kept</>
+                    )}
+                  </span>
+                  <div>
+                    <button
+                      onClick={() => navigate(`explain/${r.run_id}`, {
+                        seq: r.escaped_denials[0]?.seq ?? r.new_denial?.seq ?? r.first_divergence ?? undefined,
+                        node: r.escaped_denials[0]?.node_id,
+                      })}
+                      style={btn({ color: C.steel, fontSize: 11, padding: "5px 10px" })}>
+                      <Play size={11} /> show where
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }

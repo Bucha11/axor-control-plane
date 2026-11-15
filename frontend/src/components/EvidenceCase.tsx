@@ -7,6 +7,7 @@ import { useState } from "react";
 import { useMutation } from "@tanstack/react-query";
 import { Check, ExternalLink, FlaskConical, Play, Share2 } from "lucide-react";
 import { KeepAsTest } from "./AccountAction";
+import { LAB_SHIPPED } from "../flags";
 import { api, EvidenceCaseDto } from "../api";
 import CausalSubgraph from "./CausalSubgraph";
 import { navigate } from "../router";
@@ -188,6 +189,7 @@ export default function EvidenceCase({
               PDF
             </a>
           </Tooltip>
+{LAB_SHIPPED && (
           <Tooltip content="Download this run as an axor-lab-incident/v1 package (trace + scenario + manifests + recorded condition) — import it with `axor-lab import-incident` to replay, pin and test policies against the incident.">
             <button
               onClick={() => labExport.mutate()}
@@ -198,8 +200,9 @@ export default function EvidenceCase({
               {labExport.isPending ? "exporting…" : labExported ? "exported" : "Axor Lab package"}
             </button>
           </Tooltip>
+          )}
           </>)}
-          {LAB_URL && (
+          {LAB_SHIPPED && LAB_URL && (
             <a
               href={`${LAB_URL.replace(/\/$/, "")}/#/import`}
               target="_blank"

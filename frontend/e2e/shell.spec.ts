@@ -145,7 +145,7 @@ test.describe("shell", () => {
     const cases: [string, RegExp][] = [
       ["get-started", /What tools does your agent use\?/],
       ["config-builder", /What each of your agent's tools may do/],
-      ["regression", /candidate/],
+      ["regression", /every case you kept is replayed/],
       ["settings", /Settings/],
       ["pricing", /Pricing/],
     ];

@@ -1,139 +1,113 @@
-// Regression — two-sided, deterministic CI (Regression.tsx). The pinned corpus
-// (a must-block attack + a must-pass legit flow) is replayed under a candidate
-// config: a good config is safe to ship; a config that breaks the legit flow
-// regresses. Deterministic replay, no model calls.
+// Safe to ship? — every kept case replayed under the rules about to ship
+// (Regression.tsx). Two-sided: an attack must stay blocked, a normal flow must
+// keep passing. Deterministic replay, no model calls. The corpus is shared by
+// every spec in the run, so these assert on the example's own rows.
 import { expect, test } from "@playwright/test";
 import { goHash, seedAdapterRuns, setConnection } from "./helpers";
 
-test.describe("regression", () => {
+test.describe("safe to ship", () => {
   test.beforeEach(async ({ page, request }) => {
     await seedAdapterRuns(request);
     await setConnection(page, { mode: "adapter" });
   });
 
-  test("both sides of the seeded corpus hold", async ({ page }) => {
+  test("the example's rules hold both sides, in words", async ({ page }) => {
     await goHash(page, "regression");
-    await page.getByRole("button", { name: /load example corpus/ }).click();
-    // The seed drops its matching config into the editor.
-    await expect(page.locator("textarea")).toContainText("allowed_tools");
-    // North-star surface: the seeded corpus is counted in the header.
-    await expect(page.getByText(/corpus: \d+ cases? pinned/)).toBeVisible();
-    await expect(page.getByText(/must-block · .*must-pass/)).toBeVisible();
-    await page.getByRole("button", { name: /Run regression/ }).click();
-
-    await expect(page.getByText("still blocked").first()).toBeVisible();
-    await expect(page.getByText("still passes").first()).toBeVisible();
+    await page.getByTestId("rules-example").click();
+    await expect(page.getByTestId("cases")).toContainText("must stay blocked");
+    await page.getByRole("button", { name: /Check these rules/ }).click();
+    await expect(page.getByTestId("case-ex_block")).toContainText("an email hides an instruction");
+    await expect(page.getByTestId("case-ex_block")).toContainText("still blocked");
+    await expect(page.getByTestId("case-ex_pass")).toContainText("still passes");
   });
 
-  test("a corpus of only canned pins cannot say it is safe", async ({ page }) => {
-    // Stubbed, not seeded: the e2e stack shares one backend and other specs pin
-    // runs of their own into the same corpus, so "none of your own" is not a
-    // state this test can hold. What it owns is the rendering.
-    //
-    // This headline exists because the demo seed was measured doing what an
-    // empty corpus used to: turning "nothing about this deployment was
-    // verified" into a green verdict. The rule itself is pinned backend-side.
-    await page.route("**/v1/regression", (route) =>
-      route.fulfill({
-        status: 200,
-        contentType: "application/json",
-        body: JSON.stringify({
-          rows: [
-            { run_id: "ex_block", side: "must_block", label: "adapter-demo",
-              result: "held", first_divergence: null, new_denial: null,
-              pinned_denials: 1, escaped_denials: [], demo: true },
-            { run_id: "ex_pass", side: "must_pass", label: "adapter-demo",
-              result: "passed", first_divergence: null, new_denial: null,
-              pinned_denials: 0, escaped_denials: [], demo: true },
-          ],
-          regressed: 0, escaped: 0, unanchored: 0, skipped: [],
-          own_rows: 0, demo_rows: 2, safe_to_ship: false,
-        }),
-      }),
-    );
-    await goHash(page, "regression");
-    await page.getByRole("button", { name: /load example corpus/ }).click();
-    await page.getByRole("button", { name: /Run regression/ }).click();
-
-    await expect(page.getByText(/Safe to ship:/)).toHaveCount(0);
-    await expect(page.getByText(/2 demo pins, none of your own/)).toBeVisible();
-    await expect(page.getByText(/Pin one of your own runs/)).toBeVisible();
-  });
-
-  test("a config that breaks the legit flow regresses (the CI has teeth)", async ({ page }) => {
-    await goHash(page, "regression");
-    // Drop notes_write — the must-pass flow needs it, so it now blocks: a
-    // regression the one-sided view would miss.
-    await page.locator("textarea").fill(
-      JSON.stringify(
-        {
-          allowed_tools: ["email_read", "bash", "summarize", "slack_post", "notes_read"],
-          egress_sinks: ["slack_post"],
-        },
-        null,
-        2,
-      ),
-    );
-    await page.getByRole("button", { name: /Run regression/ }).click();
-    await expect(page.getByText(/changes governed behavior/)).toBeVisible();
-    await expect(page.getByText("REGRESSED").first()).toBeVisible();
-    await expect(page.getByText(/Safe to ship:/)).toHaveCount(0);
-  });
-
-  test("a config that lets the pinned exfil through escapes, and the row names it", async ({ page }) => {
-    await goHash(page, "regression");
-    // Two edits at once, both plausible: a trusted set on slack_post's driving
-    // argument (which supersedes the integrity axis, so the exfil the trace
-    // recorded as DENY now goes through), and bash dropped from the capability
-    // table (an unrelated benign call that now denies). The report used to
-    // answer "still blocked" for exactly this — it asked whether the config
-    // denies ANYTHING in the trace, and bash obliged.
-    await page.locator("textarea").fill(
-      JSON.stringify(
-        {
-          allowed_tools: ["email_read", "summarize", "slack_post", "notes_read", "notes_write"],
-          egress_sinks: ["slack_post"],
-          driving_args: { slack_post: ["text"] },
-          value_policies: {
-            slack_post: [{ arg: "text", kind: "enum", allowed: ["…"] }],
-          },
-        },
-        null,
-        2,
-      ),
-    );
-    await page.getByRole("button", { name: /Run regression/ }).click();
-
-    await expect(page.getByText("ESCAPED", { exact: true })).toBeVisible();
-    await expect(page.getByText(/Safe to ship:/)).toHaveCount(0);
-    // Counts only for the escape itself: the corpus is shared with whatever
-    // other specs in this run have pinned, so "how many held" is not this
-    // test's to assert.
-    await expect(page.getByText(/1 escape/).first()).toBeVisible();
-    // The row opens onto the step that escaped — named, not a count.
-    await page.getByText("ESCAPED", { exact: true }).click();
-    await expect(
-      page.getByText(/slack_post @ adapter-demo-block:6.*recorded DENY/),
-    ).toBeVisible();
-  });
-
-  // A pin whose trace cannot be read is stubbed rather than seeded: the backend
-  // now refuses such a line at ingest (limits.check_batch), which is the point —
-  // the state only arises from rows stored before that door, or a kernel upgrade
-  // that drops a major it once read. The suite also shares one backend and one
-  // tenant, so a poisoned pin would leak into every other regression test.
-  test("a pin the corpus could not read is named, and withholds the verdict", async ({ page }) => {
+  test("a corpus of only the example's cases does not say safe to ship", async ({ page }) => {
+    // Stubbed: the shared corpus holds other specs' pins. What this owns is
+    // the rendering — the example proves the example, not this deployment.
     await page.route("**/v1/regression", (route) =>
       route.fulfill({
         json: {
-          rows: [],
-          regressed: 0,
-          escaped: 0,
-          unanchored: 0,
+          rows: [
+            { run_id: "ex_block", side: "must_block", label: "adapter-demo", result: "held",
+              first_divergence: null, new_denial: null, pinned_denials: 1, escaped_denials: [], demo: true },
+            { run_id: "ex_pass", side: "must_pass", label: "adapter-demo", result: "passed",
+              first_divergence: null, new_denial: null, pinned_denials: 0, escaped_denials: [], demo: true },
+          ],
+          regressed: 0, escaped: 0, unanchored: 0, skipped: [], own_rows: 0, demo_rows: 2, safe_to_ship: false,
+        },
+      }),
+    );
+    await goHash(page, "regression");
+    await page.getByTestId("rules-example").click();
+    await page.getByRole("button", { name: /Check these rules/ }).click();
+    await expect(page.getByText(/Safe to ship:/)).toHaveCount(0);
+    await expect(page.getByText("The example holds:")).toBeVisible();
+    await expect(page.getByText(/keep cases of your own to check yours/)).toBeVisible();
+  });
+
+  test("a stricter rule breaks the normal flow (the check has teeth)", async ({ page }) => {
+    await goHash(page, "regression");
+    await page.getByTestId("rules-example").click();
+    await page.getByTestId("try-stricter").click();
+    await expect(page.getByTestId("example-variant")).toContainText("notes_write taken away");
+    await expect(page.getByTestId("case-ex_pass")).toContainText("NOW REFUSED");
+    await expect(page.getByText("Not safe to ship:")).toBeVisible();
+  });
+
+  test("a looser rule lets the attack through, and the row says where", async ({ page }) => {
+    await goHash(page, "regression");
+    await page.getByTestId("rules-example").click();
+    await page.getByTestId("try-looser").click();
+    const row = page.getByTestId("case-ex_block");
+    await expect(row).toContainText("NOW GETS THROUGH");
+    await expect(page.getByText(/1 attack now gets through/)).toBeVisible();
+    await row.getByText("NOW GETS THROUGH").click();
+    await expect(row).toContainText("was refused at slack_post (step 6)");
+  });
+
+  test("rules by hand: an escape through JSON is named too", async ({ page }) => {
+    await goHash(page, "regression");
+    await page.getByTestId("rules-json").click();
+    // a trusted set on slack_post's driving argument (the exfil now goes
+    // through) and bash dropped (an unrelated call that now refuses): the
+    // check must still name the escape, not answer "still blocked" because
+    // something else in the run was refused
+    await page.getByLabel("rules as JSON").fill(JSON.stringify({
+      allowed_tools: ["email_read", "summarize", "slack_post", "notes_read", "notes_write"],
+      egress_sinks: ["slack_post"],
+      driving_args: { slack_post: ["text"] },
+      value_policies: { slack_post: [{ arg: "text", kind: "enum", allowed: ["…"] }] },
+    }));
+    await page.getByRole("button", { name: /Check these rules/ }).click();
+    await expect(page.getByTestId("case-ex_block")).toContainText("NOW GETS THROUGH");
+    await expect(page.getByText(/Safe to ship:/)).toHaveCount(0);
+  });
+
+  test("the rules from Policy are checked by default once there are cases of your own", async ({ page }) => {
+    await page.addInitScript(() => {
+      const raw = localStorage.getItem("axor-app");
+      const data = raw ? JSON.parse(raw) : { state: {}, version: 0 };
+      data.state.toolPolicy = { web_search: { klass: "READ", outside: true }, send_email: { klass: "EXPORT", outside: false } };
+      localStorage.setItem("axor-app", JSON.stringify(data));
+    });
+    await goHash(page, "regression");
+    await expect(page.getByTestId("rules-policy")).toContainText("2 tools");
+    await page.getByTestId("rules-policy").click();
+    await expect(page.getByText(/send_email — export/)).toBeVisible();
+    const [sent] = await Promise.all([
+      page.waitForRequest((r) => r.url().endsWith("/v1/regression")),
+      page.getByRole("button", { name: /Check these rules/ }).click(),
+    ]);
+    expect(sent.postDataJSON().config.sinks.send_email).toEqual({ consequence_class: "EXPORT" });
+  });
+
+  test("a case that could not be read is named, and withholds the verdict", async ({ page }) => {
+    await page.route("**/v1/regression", (route) =>
+      route.fulfill({
+        json: {
+          rows: [], regressed: 0, escaped: 0, unanchored: 0, own_rows: 0, demo_rows: 0,
           skipped: [{
-            run_id: "adapter-demo-block",
-            side: "must_block",
-            label: "the exfil",
+            run_id: "adapter-demo-block", side: "must_block", label: "the exfil",
             reason: "run adapter-demo-block is not a replayable kernel trace: "
               + "event schema '9.9' has unknown major; kernel is 1.0",
           }],
@@ -142,24 +116,19 @@ test.describe("regression", () => {
       }),
     );
     await goHash(page, "regression");
-    await page.getByRole("button", { name: /Run regression/ }).click();
-
-    // Not "Safe to ship", and not "No pinned traces" either — something IS
-    // pinned, and telling the operator to go run an experiment would send them
-    // after a problem they do not have.
+    await page.getByTestId("rules-example").click();
+    await page.getByRole("button", { name: /Check these rules/ }).click();
     await expect(page.getByText(/Safe to ship:/)).toHaveCount(0);
-    await expect(page.getByText(/No pinned traces/)).toHaveCount(0);
-    await expect(page.getByText(/1 unreadable pin/).first()).toBeVisible();
-    // The pin, and the reason — "1 skipped" alone leaves no next move.
-    await expect(page.getByText(/Pinned, but the trace could not be read/)).toBeVisible();
+    await expect(page.getByText(/1 case could not be read/)).toBeVisible();
     await expect(page.getByText(/unknown major; kernel is 1\.0/)).toBeVisible();
   });
 
-  test("the org layer (schedule + history) renders locked without a license", async ({ page }) => {
+  test("checks on a schedule are Team's, folded, and say so", async ({ page }) => {
     await goHash(page, "regression");
-    await expect(page.getByText("SCHEDULED CI · HISTORY")).toBeVisible();
-    // Honest upsell: the lock names the tier and what stays free.
-    await expect(page.getByText(/scheduled corpus runs \+ history are org features/)).toBeVisible();
-    await expect(page.getByText(/manual runs stay free forever/)).toBeVisible();
+    await page.getByText("run this check on a schedule (Team)").click();
+    await expect(page.getByText(/come with Team/)).toBeVisible();
+    await expect(page.getByText(/checking by hand stays free forever/)).toBeVisible();
+    // Lab is not shipping: no hand-off from it here
+    await expect(page.getByText(/cp-deploy/)).toHaveCount(0);
   });
 });
