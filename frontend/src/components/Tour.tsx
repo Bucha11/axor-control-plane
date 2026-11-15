@@ -50,6 +50,10 @@ export const TOURS: Record<TourSide, TourStep[]> = {
       body: "Every plan line and finding, with where it came from. Cut one, and no later step sees it.",
     },
     {
+      route: "skills", target: sel("skill-example"), title: "Before you install a skill",
+      body: "A skill is read by the agent as its own instructions, so Axor lets what it says run. Check one first: what it asks the agent to do — downloads it runs, secrets it reads, what it sends out — and then a dry run of an agent using it on a copy, with what Axor would have refused marked.",
+    },
+    {
       route: "home?for=coding", target: sel("home-connect-coding"), title: "Now yours",
       body: `One install, no code change: every session shows up here. Free for 1 developer and one kind of agent — only Claude Code, or only Codex. ${LEARN}`,
       cta: { label: "Connect your coding agents →", route: "connect?for=coding" },
@@ -95,10 +99,12 @@ export function useStartTour(): (side?: TourSide) => void {
   const setTourSide = useApp((s) => s.setTourSide);
   const stored = useApp((s) => s.tourSide);
   const markLearnSeen = useApp((s) => s.markLearnSeen);
+  const setJourney = useApp((s) => s.setJourney);
   return useCallback((side?: TourSide) => {
     const which = side ?? stored;
     markLearnSeen();
     setTourSide(which);
+    setJourney(which);
     const seeds = which === "coding"
       ? [api.seedCoding()]
       : [api.seedFleet(), api.seedAdapterRuns()];
@@ -107,7 +113,7 @@ export function useStartTour(): (side?: TourSide) => void {
       connect("demo");
       setTourStep(0);
     });
-  }, [stored, connect, setTourStep, setTourSide, markLearnSeen]);
+  }, [stored, connect, setTourStep, setTourSide, markLearnSeen, setJourney]);
 }
 
 const CARD_W = 340;

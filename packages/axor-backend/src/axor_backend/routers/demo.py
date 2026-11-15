@@ -201,6 +201,22 @@ async def seed_coding(store: StoreDep, cache: SubgraphCacheDep) -> dict:
             "tree_run": demo.CODING_TREE, "runs": ["ex_coding_claude", "ex_coding_codex"]}
 
 
+@router.post("/seed-skill-try")
+async def seed_skill_try(store: StoreDep, cache: SubgraphCacheDep) -> dict:
+    """An example `axor-wrap skill try`: one Claude Code session with a skill,
+    enforcement off, one call marked as what Axor would have refused."""
+    from axor_backend import demo
+
+    stamp = now()
+    await _seed(store, cache, "ex_skill_try", demo.SKILL_TRY, "skill-demo",
+                [{**e, "ts": stamp} for e in demo.SKILL_TRY_EVENTS], [])
+    if await store.get_reported(demo.SKILL_TRY) is None:
+        await store.upsert_reported(demo.SKILL_TRY, applied_version=0, level="NORMAL",
+                                    budget_remaining=None, ts=stamp)
+    await store.put_node_profile(demo.SKILL_TRY, "coding", "claude-code", "dev-example-ada", stamp)
+    return {"node": demo.SKILL_TRY, "run": "ex_skill_try"}
+
+
 @router.post("/fleet-reprobe", status_code=201)
 async def fleet_reprobe(request: Request, store: StoreDep) -> dict:
     """Play the example scraper's half of a heal: take the cut it was sent,

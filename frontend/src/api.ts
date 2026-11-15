@@ -456,6 +456,27 @@ export interface WrapGuess {
   untrusted_fields: string[];
 }
 
+export interface SkillFinding {
+  kind: string;
+  severity: "danger" | "warn" | "info";
+  what: string;
+  where: string;
+  snippet: string;
+  axor: string;
+}
+
+export interface SkillReport {
+  name: string;
+  description: string;
+  skill_file: string;
+  files: string[];
+  allowed_tools: string[];
+  commands: string[];
+  urls: string[];
+  findings: SkillFinding[];
+  summary: { danger: number; warn: number; info: number };
+}
+
 export interface WrapTool {
   id: string;
   source: string;
@@ -1136,6 +1157,15 @@ export const api = {
     }).then((r) => j<SimulateResult>(r)),
 
   // ── wrap engine: scan uploaded code, compile tool manifests ───────────────
+  // What a skill folder asks a coding agent to do (axor_wrap.agents.skills).
+  skillCheck: (files: { path: string; content: string }[]) =>
+    af("/v1/wrap/skill-check", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ files }),
+    }).then((r) => j<SkillReport>(r)),
+  seedSkillTry: () =>
+    af("/v1/demo/seed-skill-try", { method: "POST" }).then((r) => j<{ node: string; run: string }>(r)),
   wrapScan: (files: { path: string; content: string }[]) =>
     af("/v1/wrap/scan", {
       method: "POST",

@@ -27,7 +27,7 @@ test.describe("shell", () => {
   });
 
   test("looking around first: a section opens with the menu, and Home keeps it", async ({ page }) => {
-    await goHash(page, "home");
+    await goHash(page, "home?for=production");
     await page.getByTestId("look-policy").click();
     await expect(page).toHaveURL(/#\/policy$/);
     const menu = page.getByTestId("sidebar").or(page.locator(".app-nav"));

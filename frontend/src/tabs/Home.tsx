@@ -27,7 +27,9 @@ function FirstVisit() {
   const [side, setSide] = useState<Side>(route.query.for === "production" ? "production" : "coding");
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const setJourney = useApp((s) => s.setJourney);
   const explore = async (which: Side) => {
+    setJourney(which);
     setLoading(true);
     setErr(null);
     try {
@@ -49,7 +51,7 @@ function FirstVisit() {
     <div style={{ maxWidth: 640, margin: "0 auto" }} data-testid="first-visit">
       <BackToIt />
       <Tabs size="lg" style={{ marginBottom: 22 }} active={side}
-        onChange={(id) => { setSide(id); setErr(null); }}
+        onChange={(id) => { setSide(id); setJourney(id); setErr(null); }}
         items={[
           { id: "coding", label: "Coding agents", hint: "Claude Code, Codex", testId: "home-tab-coding" },
           { id: "production", label: "Production agents", hint: "your own agent, live", testId: "home-tab-production" },
@@ -148,7 +150,7 @@ function FirstVisit() {
         </div>
       )}
 
-      <LookAround />
+      <LookAround side={side} />
 
       <div style={{ fontFamily: MONO, fontSize: 11, color: C.dim, marginTop: 10 }}>
         open source ·{" "}
@@ -163,12 +165,14 @@ function FirstVisit() {
 
 /** For someone who wants to see the product before connecting anything: the
  * sections, one click each — the menu itself is kept off a first visit. */
-const SECTIONS: [string, string][] = [
-  ["govern", "Agents"], ["policy", "Policy"], ["evidence", "Caught lies"],
-  ["explain", "Replay"], ["prevent", "Safe to ship?"],
-];
+const SECTIONS: Record<Side, [string, string][]> = {
+  coding: [["govern", "Agents"], ["explain", "Replay"], ["skills", "Try a skill"]],
+  production: [["govern", "Agents"], ["policy", "Policy"], ["evidence", "Caught lies"],
+               ["explain", "Replay"], ["prevent", "Safe to ship?"]],
+};
 
-function LookAround() {
+function LookAround({ side }: { side: Side }) {
+  const setJourney = useApp((s) => s.setJourney);
   // once the menu is there (a section was opened), this line is said twice
   const lookedAround = useApp((s) => s.lookedAround);
   const { mode } = useApp((s) => s.connection);
@@ -177,10 +181,10 @@ function LookAround() {
     <div data-testid="home-look-around" style={{ fontFamily: MONO, fontSize: 11.5, color: C.mut, marginTop: 22,
       lineHeight: 1.8 }}>
       or look around first:{" "}
-      {SECTIONS.map(([key, label], i) => (
+      {SECTIONS[side].map(([key, label], i) => (
         <span key={key}>
           {i > 0 && <span style={{ color: C.dim }}> · </span>}
-          <button onClick={() => navigate(key)} data-testid={`look-${key}`}
+          <button onClick={() => { setJourney(side); navigate(key); }} data-testid={`look-${key}`}
             style={{ background: "none", border: "none", padding: 0, color: C.steel, cursor: "pointer",
                      fontFamily: MONO, fontSize: 11.5 }}>
             {label}

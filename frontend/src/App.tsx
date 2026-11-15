@@ -40,16 +40,48 @@ import Settings, { IdentityLogin } from "./tabs/Settings";
 import AuthReturn from "./components/AuthReturn";
 import Tabs from "./components/Tabs";
 import Pricing from "./tabs/Pricing";
+import Skills from "./tabs/Skills";
 
 // Governance first: the product is the policy membrane between an agent and its
 // tools. "Caught lies" is the proof it works, not the product.
-const LOOP = [
-  { key: "govern", label: "Agents", hint: "Your governed agents as a graph: pause, cap, stop — what sentinel sees across sessions, what probe says about their health." },
-  { key: "policy", label: "Policy", hint: "What each agent may read, send and run — the rules enforced at the tool boundary." },
-  { key: "evidence", label: "Caught lies", hint: "Every time an agent claimed something its tools never gave it — and the test that keeps it caught." },
-  { key: "explain", label: "Replay", hint: "Step through any run and see exactly what crossed the boundary, and why." },
-  { key: "prevent", label: "Safe to ship?", hint: "Check a policy change against every case you've caught, before it ships." },
-] as const;
+type Journey = "coding" | "production" | "both";
+// `for`: which journeys a section belongs to. Coding agents come with their
+// rules built in (what Bash or WebFetch does is known), so describing tools,
+// catching made-up tool results and checking a rule change are production's;
+// a coding team's question before trusting a skill is coding's.
+const LOOP: { key: string; label: string; hint: string; for: Journey[] }[] = [
+  { key: "govern", label: "Agents", hint: "Your governed agents as a graph: pause, cap, stop — what sentinel sees across sessions, what probe says about their health.", for: ["coding", "production", "both"] },
+  { key: "policy", label: "Policy", hint: "What each agent may read, send and run — the rules enforced at the tool boundary.", for: ["production", "both"] },
+  { key: "evidence", label: "Caught lies", hint: "Every time an agent claimed something its tools never gave it — and the test that keeps it caught.", for: ["production", "both"] },
+  { key: "explain", label: "Replay", hint: "Step through any run and see exactly what crossed the boundary, and why.", for: ["coding", "production", "both"] },
+  { key: "prevent", label: "Safe to ship?", hint: "Check a policy change against every case you've caught, before it ships.", for: ["production", "both"] },
+  { key: "skills", label: "Try a skill", hint: "Before installing a skill for Claude Code or Codex: what it asks the agent to do, and what an agent actually does with it.", for: ["coding", "both"] },
+];
+
+/** The sections this person's menu shows: their journey's, or all of them
+ * when no journey was chosen or they asked for everything. */
+function useMenu(): { items: typeof LOOP; journey: Journey | null; all: boolean } {
+  const journey = useApp((s) => s.journey);
+  const all = useApp((s) => s.menuAll);
+  const items = journey && !all ? LOOP.filter((l) => l.for.includes(journey)) : LOOP;
+  return { items, journey, all };
+}
+
+/** Under a journey's menu: which one it is, and the way to everything else. */
+function MenuScope() {
+  const { journey, all } = useMenu();
+  const setAll = useApp((s) => s.setMenuAll);
+  if (!journey || journey === "both") return null;
+  return (
+    <div data-testid="menu-scope" style={{ padding: "14px 0 0 16px", fontFamily: MONO, fontSize: 10.5, color: C.dim }}>
+      {journey === "coding" ? "coding agents" : "production agents"} ·{" "}
+      <button onClick={() => setAll(!all)} style={{ background: "none", border: "none", padding: 0,
+        cursor: "pointer", fontFamily: MONO, fontSize: 10.5, color: C.steel }}>
+        {all ? "show fewer" : "show everything"}
+      </button>
+    </div>
+  );
+}
 
 /** Screens without a tab of their own light up the tab they belong to. */
 const PARENT_TAB: Record<string, string> = { catch: "evidence" };
@@ -66,7 +98,7 @@ const ALIAS: Record<string, string> = {
   "get-started": "connect",
   "config-builder": "policy",
 };
-const KNOWN = ["home", "evidence", "catch", "explain", "prevent", "govern", "policy", "connect", "pricing", "settings"];
+const KNOWN = ["home", "evidence", "catch", "explain", "prevent", "govern", "policy", "skills", "connect", "pricing", "settings"];
 
 function NavLink({ id, label, hint, active }: { id: string; label: string; hint: string; active: boolean }) {
   return (
@@ -92,6 +124,7 @@ function routeKey(segments: string[]): string {
 }
 
 export default function App() {
+  const menu = useMenu();
   const route = useRoute();
   const { mode } = useApp((s) => s.connection);
   const key = routeKey(route.segments);
@@ -135,7 +168,7 @@ export default function App() {
           AXOR<span className="hide-narrow hide-medium" style={{ color: C.steel }}> CONTROL PLANE</span>
         </button>
         {!firstVisit && <nav className="app-nav">
-          {LOOP.map((l) => (
+          {menu.items.map((l) => (
             <NavLink key={l.key} id={l.key} label={l.label} hint={l.hint}
               active={(PARENT_TAB[key] ?? key) === l.key} />
           ))}
@@ -174,6 +207,7 @@ export default function App() {
         </>
       )}
       {key === "policy" && <ConfigBuilder />}
+      {key === "skills" && <Skills />}
       {key === "connect" && <Onboarding />}
       {key === "pricing" && <Pricing />}
       {key === "settings" && <Settings />}
@@ -239,6 +273,7 @@ function useWide(): boolean {
 /** The navigation as a sidebar: sections, Agents' views under it, and the
  * session's controls at the bottom. */
 function Sidebar({ active, view }: { active: string; view: string }) {
+  const menu = useMenu();
   const item = (on: boolean, indent: boolean): React.CSSProperties => ({
     display: "block", width: "100%", textAlign: "left", cursor: "pointer",
     background: on ? "rgba(127,168,204,0.10)" : "none", border: "none",
@@ -260,7 +295,7 @@ function Sidebar({ active, view }: { active: string; view: string }) {
         AXOR<span style={{ color: C.steel }}> CONTROL PLANE</span>
       </button>
       <nav className="flex flex-col" style={{ gap: 2 }}>
-        {LOOP.map((l) => (
+        {menu.items.map((l) => (
           <div key={l.key}>
             <button title={l.hint} onClick={() => navigate(l.key)}
               aria-current={active === l.key ? "page" : undefined}
@@ -281,6 +316,7 @@ function Sidebar({ active, view }: { active: string; view: string }) {
           </div>
         ))}
       </nav>
+      <MenuScope />
       <div style={{ flex: 1 }} />
       <div style={{ padding: "12px 0 0 16px" }}>
         <VersionBadge />

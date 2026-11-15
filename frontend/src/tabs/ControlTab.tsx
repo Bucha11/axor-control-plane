@@ -338,7 +338,9 @@ function ControlBody({ focusNode, testBench }: { focusNode?: string; testBench: 
   });
   const [sel, setSel] = useState<string | null>(focusNode ?? null);
   const [lens, setLens] = useState<"list" | "graph">("list");
-  const list = nodes.data ?? [];
+  // a skill's dry run (axor-wrap skill try) is not an agent to operate: it
+  // lives on Try a skill
+  const list = (nodes.data ?? []).filter((n) => !n.node_id.startsWith("skill-try."));
   const topo = useQuery({
     queryKey: ["topology"],
     queryFn: api.topology,

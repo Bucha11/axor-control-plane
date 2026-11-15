@@ -1,6 +1,6 @@
 // Get started: tools → point agent → connection check (onboarding mockup).
 // Step 3 is wired to the real proxy preflight endpoint via react-query.
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { ArrowRight, Check, Circle, Copy, Plug, RefreshCw, Zap } from "lucide-react";
 import { api } from "../api";
@@ -102,6 +102,9 @@ export default function Onboarding() {
     initial === "coding" || initial === "production" || initial === "both" ? initial : null);
   const [codingDone, setCodingDone] = useState(false);
   const choose = (j: Journey) => { setWay(j); setCodingDone(false); navigate(`connect?for=${j}`); };
+  // the way in is the menu's journey too
+  const setJourney = useApp((s) => s.setJourney);
+  useEffect(() => { if (way) setJourney(way); }, [way, setJourney]);
 
   if (way === null) {
     return (

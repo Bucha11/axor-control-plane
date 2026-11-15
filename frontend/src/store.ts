@@ -61,6 +61,13 @@ interface AppState {
   // menu too — someone looking around should not lose the way back in.
   lookedAround: boolean;
   setLookedAround: (v: boolean) => void;
+  // which way in the person took (Home's tab, Connect, an example, the tour):
+  // the menu shows that journey's sections; null = not chosen, show them all
+  journey: "coding" | "production" | "both" | null;
+  setJourney: (j: "coding" | "production" | "both") => void;
+  // "show everything" from a journey's menu
+  menuAll: boolean;
+  setMenuAll: (v: boolean) => void;
   // What each of the agent's tools does — one record, written wherever it is
   // decided (the wrap's and the proxy's onboarding, Policy) and read by all of
   // them and by a test run, so nobody classifies the same tools twice.
@@ -211,6 +218,10 @@ export const useApp = create<AppState>()(
       setPlanNoticesFolded: (v) => set({ planNoticesFolded: v }),
       lookedAround: false,
       setLookedAround: (v) => set({ lookedAround: v }),
+      journey: null,
+      setJourney: (j) => set({ journey: j }),
+      menuAll: false,
+      setMenuAll: (v) => set({ menuAll: v }),
       toolPolicy: {},
       setToolClass: (name, patch) =>
         set((s) => ({ toolPolicy: { ...s.toolPolicy,

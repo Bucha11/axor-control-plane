@@ -41,12 +41,15 @@ test.describe("tour", () => {
     const dialog = page.getByRole("dialog", { name: "guided tour" });
     const next = dialog.getByRole("button", { name: "next →" });
     await expect(dialog.getByText("Your coding agents, on one plane")).toBeVisible({ timeout: 15_000 });
-    await expect(dialog.getByText("1 / 5")).toBeVisible();
+    await expect(dialog.getByText("1 / 6")).toBeVisible();
     await next.click();
     await next.click();
     await expect(dialog.getByText("A team on one task")).toBeVisible();
     await expect(page).toHaveURL(/#\/trees\/tree-example-coding$/);
     await next.click();
+    await next.click();
+    await expect(dialog.getByText("Before you install a skill")).toBeVisible();
+    await expect(page).toHaveURL(/#\/skills$/);
     await next.click();
     await expect(dialog.getByText("Now yours")).toBeVisible();
     await dialog.getByRole("button", { name: "done" }).click();

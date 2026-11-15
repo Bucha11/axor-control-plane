@@ -4,6 +4,10 @@ POST /v1/wrap/scan       {files: [{path, content}]} → detected tools + effect
                          guesses. Files are written to a throwaway temp dir and
                          statically scanned by axor-wrap (stdlib ``ast``, the
                          uploaded code is never imported or executed).
+POST /v1/wrap/skill-check {files: [{path, content}]} → what a skill folder
+                         (SKILL.md + scripts) asks a coding agent to do, and
+                         what Axor does about each (axor_wrap.agents.skills —
+                         a static read, nothing run).
 POST /v1/wrap/manifests  classified tools → tool-manifest/v1 files, the
                          compiled governance YAML, and a wrap.json-style
                          sidecar (same artifacts as ``axor-wrap manifest``).
@@ -50,7 +54,12 @@ def _engine() -> ModuleType:
     return axor_wrap
 
 
-def _safe_relpath(raw: object) -> PurePosixPath:
+# what a skill folder holds that is worth reading: instructions and scripts
+SKILL_SUFFIXES = (".md", ".markdown", ".txt", ".sh", ".bash", ".zsh", ".ps1", ".py",
+                  ".js", ".mjs", ".ts", ".json", ".yaml", ".yml", ".toml")
+
+
+def _safe_relpath(raw: object, suffixes: tuple[str, ...] = (".py",)) -> PurePosixPath:
     """Normalize an uploaded path; absolute paths and ``..`` escapes are 400."""
     if not isinstance(raw, str) or not raw.strip():
         raise HTTPException(400, "each file needs a non-empty string `path`")
@@ -62,12 +71,14 @@ def _safe_relpath(raw: object) -> PurePosixPath:
         or any(part in ("..", "") for part in path.parts)
     ):
         raise HTTPException(400, f"path must be relative and stay inside the upload root: {raw!r}")
-    if path.suffix != ".py":
-        raise HTTPException(400, f"only .py files are scanned: {raw!r}")
+    if path.suffix not in suffixes:
+        raise HTTPException(400, f"only {', '.join(suffixes)} files are read here: {raw!r}")
     return path
 
 
-def _validated_files(body: dict) -> list[tuple[PurePosixPath, str]]:
+def _validated_files(
+    body: dict, suffixes: tuple[str, ...] = (".py",),
+) -> list[tuple[PurePosixPath, str]]:
     files = body.get("files")
     if not isinstance(files, list) or not files:
         raise HTTPException(400, "body must be {files: [{path, content}, ...]} (non-empty)")
@@ -82,7 +93,7 @@ def _validated_files(body: dict) -> list[tuple[PurePosixPath, str]]:
     for item in files:
         if not isinstance(item, dict):
             raise HTTPException(400, "each file must be an object {path, content}")
-        rel = _safe_relpath(item.get("path"))
+        rel = _safe_relpath(item.get("path"), suffixes)
         # Two uploads under one path used to overwrite each other in the temp
         # tree, and the tools of whichever lost simply were not in the answer —
         # a scan that reports "1 tool" for an agent that has two. The browser's
@@ -180,6 +191,23 @@ async def wrap_scan(body: dict) -> dict:
     entries = _validated_files(body)
     tools, skipped = await asyncio.to_thread(_scan_and_skips, engine, entries)
     return {"tools": tools, "skipped": skipped}
+
+
+@router.post("/skill-check")
+async def skill_check(body: dict) -> dict:
+    """What a skill asks an agent to do. Needs an axor-wrap with skills
+    (``axor_wrap.agents.skills``); an older one answers 501 by name."""
+    _engine()
+    try:
+        from axor_wrap.agents.skills import check
+    except ImportError as exc:
+        raise HTTPException(
+            501, "this backend's axor-wrap has no skill check — upgrade the "
+                 "axor-backend[wrap] extra to an axor-wrap with `axor-wrap skill`",
+        ) from exc
+    entries = _validated_files(body, SKILL_SUFFIXES)
+    report = await asyncio.to_thread(check, [(str(p), c) for p, c in entries])
+    return report.as_dict()
 
 
 def _scan_and_skips(
