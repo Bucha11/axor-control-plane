@@ -63,7 +63,7 @@ test.describe("guest", () => {
     await setConnection(page, { mode: "demo" });
     await goHash(page, "eval");
     await expect(page.getByRole("button", { name: /save your work · guest/ })).toBeVisible();
-    await page.getByRole("button", { name: /Run experiment/ }).click();
+    await page.getByRole("button", { name: /Run the test/ }).click();
     await expect(page.getByText("fabricated a tool result").first()).toBeVisible({ timeout: 20_000 });
     await page.getByRole("button", { name: /Share/ }).first().click();
 

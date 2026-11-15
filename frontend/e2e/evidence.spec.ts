@@ -7,7 +7,7 @@ test.describe("evidence", () => {
   test("a case caught by a fault test is listed, and opens in Replay", async ({ page }) => {
     await setConnection(page, { mode: "demo" });
     await goHash(page, "catch");
-    await page.getByRole("button", { name: /Run experiment/ }).click();
+    await page.getByRole("button", { name: /Run the test/ }).click();
     await expect(page.getByText("fabricated a tool result").first()).toBeVisible({ timeout: 20_000 });
 
     await page.getByRole("button", { name: "Caught lies", exact: true }).click();

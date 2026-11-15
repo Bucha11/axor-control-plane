@@ -16,7 +16,7 @@ test.describe("size-1 golden receipt", () => {
   test("the canonical fabrication case renders the exact v0.13 receipt", async ({ page }) => {
     await setConnection(page, { mode: "demo" });
     await goHash(page, "eval");
-    await page.getByRole("button", { name: /Run experiment/ }).click();
+    await page.getByRole("button", { name: /Run the test/ }).click();
 
     // Golden strings, byte-aligned with tests/golden/size1/evidence.json:
     // deviation=fabricated_tool_result, verdict_source=deterministic,
@@ -51,7 +51,8 @@ test.describe("size-1 golden receipt", () => {
 
     // The receipt is a navigation hub: replay link + export surfaces present.
     await expect(page.getByRole("button", { name: /Replay this moment/ })).toBeVisible();
-    await expect(page.getByRole("link", { name: /Export/ })).toBeVisible();
-    await expect(page.getByRole("link", { name: /PDF/ })).toBeVisible();
+    await page.getByTestId("case-export").first().click();
+    await expect(page.getByRole("link", { name: "HTML" }).first()).toBeVisible();
+    await expect(page.getByRole("link", { name: "PDF" }).first()).toBeVisible();
   });
 });

@@ -42,7 +42,7 @@ test.describe("shell", () => {
     // the run lands, and the button that started it is ready again — it used
     // to spin forever beside the result (an auto-start on a torn-down mount)
     await expect(page.getByText(/FABRICATED TOOL RESULT/).first()).toBeVisible({ timeout: 15_000 });
-    await expect(page.getByRole("button", { name: /Run experiment/ })).toBeEnabled();
+    await expect(page.getByRole("button", { name: /Run the test/ })).toBeEnabled();
   });
 
   test("the product is visible first; sign-in is one click from the header", async ({ page }) => {

@@ -9,7 +9,7 @@ test.describe("adoption", () => {
     await setConnection(page, { mode: "demo" });
     await goHash(page, "eval");
     await expect(page.getByRole("tooltip")).toHaveCount(0);
-    await page.getByRole("button", { name: /Run experiment/ }).hover();
+    await page.getByRole("button", { name: /Run the test/ }).hover();
     await expect(page.getByRole("tooltip")).toContainText("arm the scenario", { ignoreCase: true });
   });
 

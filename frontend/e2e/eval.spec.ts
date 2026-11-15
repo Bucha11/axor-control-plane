@@ -19,33 +19,37 @@ test.describe("eval (demo-mode)", () => {
 
   test("the configure panel offers tool deprivation", async ({ page }) => {
     await goHash(page, "eval");
-    await expect(page.getByText("CONFIGURE · TOOL DEPRIVATION")).toBeVisible();
-    await expect(page.getByRole("button", { name: /Run experiment/ })).toBeVisible();
+    await expect(page.getByText("BREAK A TOOL ON PURPOSE")).toBeVisible();
+    await expect(page.getByRole("button", { name: /Run the test/ })).toBeVisible();
   });
 
   test("running an experiment catches the fabrication as an EvidenceCase", async ({ page }) => {
     await goHash(page, "eval");
-    await page.getByRole("button", { name: /Run experiment/ }).click();
+    await page.getByRole("button", { name: /Run the test/ }).click();
 
     // The receipt is the screen: the headline names the deviation and the
-    // deprived tool, the scenario delta contrasts governed vs ungoverned, and
-    // the EvidenceCase can leave the product (export/PDF).
-    // "fabricated a tool result" appears twice (headline + scenario delta).
+    // broken tool, the same thing is said in words (the tool returned ≠ your
+    // agent said) above the verbatim receipt, and the receipt can leave the
+    // product (HTML / PDF, folded under Export).
     await expect(page.getByText("fabricated a tool result").first()).toBeVisible({ timeout: 20_000 });
-    await expect(page.getByText("when web_search was deprived", { exact: false }).first()).toBeVisible();
-    await expect(
-      page.getByText("governed vs ungoverned (scenario delta)"),
-    ).toBeVisible();
-    await expect(page.getByRole("link", { name: /Export/ })).toBeVisible();
-    await expect(page.getByRole("link", { name: /PDF/ })).toBeVisible();
+    await expect(page.getByText("when web_search was broken on purpose", { exact: false }).first()).toBeVisible();
+    const words = page.getByTestId("caught-in-words");
+    await expect(words).toContainText("web_search returned an error — we broke it on purpose");
+    await expect(words).toContainText("YOUR AGENT SAID");
+    await page.getByTestId("case-export").click();
+    await expect(page.getByRole("link", { name: "HTML" })).toBeVisible();
+    await expect(page.getByRole("link", { name: "PDF" })).toBeVisible();
     await expect(page.getByRole("button", { name: /Replay this moment/ })).toBeVisible();
+    // and it does not end here: the same test on your own agent
+    await page.getByTestId("catch-own").click();
+    await expect(page.getByText("What tools does your agent use?")).toBeVisible();
   });
 
   test("a shared permalink can actually be revoked", async ({ page }) => {
     // The panel called the link "revocable" and offered no way to revoke it —
     // the backend has had DELETE /v1/share/{token} all along.
     await goHash(page, "eval");
-    await page.getByRole("button", { name: /Run experiment/ }).click();
+    await page.getByRole("button", { name: /Run the test/ }).click();
     await expect(page.getByText("fabricated a tool result").first()).toBeVisible({ timeout: 20_000 });
 
     await page.getByRole("button", { name: /Share/ }).first().click();

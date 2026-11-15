@@ -146,7 +146,8 @@ export default function Onboarding() {
           </div>
         )}
       </div>
-      <ProductionOnboarding initial={route.segments[0] === "get-started" ? "proxy" : undefined} />
+      <ProductionOnboarding initial={route.segments[0] === "get-started" || route.query.how === "test"
+        ? "proxy" : route.query.how === "code" ? "code" : undefined} />
     </div>
   );
 }

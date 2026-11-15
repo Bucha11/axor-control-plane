@@ -69,6 +69,7 @@ export default function EvidenceCase({
   replayNode?: string;
 }) {
   const [shareUrl, setShareUrl] = useState<string | null>(null);
+  const [moreExports, setMoreExports] = useState(false);
   // The token behind that link. The panel called the permalink "revocable" and
   // offered no way to revoke it — the backend has had the route all along.
   const [shareToken, setShareToken] = useState<string | null>(null);
@@ -168,18 +169,23 @@ export default function EvidenceCase({
               {copied ? <Check size={11} /> : <Share2 size={11} />} {copied ? "link copied" : "Share"}
             </button>
           </Tooltip>
+          <button onClick={() => setMoreExports((v) => !v)} aria-expanded={moreExports}
+            data-testid="case-export" style={action(C.mut)}>
+            <ExternalLink size={11} /> Export {moreExports ? "▴" : "▾"}
+          </button>
+          {moreExports && (<>
           <Tooltip content="A self-contained HTML receipt — observations, labels and verdicts only, never raw request/response bodies.">
             <a href={api.exportUrl(runId, caseIndex)} target="_blank" rel="noreferrer"
               onClick={(e) => openExport(e, "html")}
               style={{ ...action(C.mut), textDecoration: "none" }}>
-              <ExternalLink size={11} /> Export
+              HTML
             </a>
           </Tooltip>
           <Tooltip content="The same receipt as a single-page PDF — for tickets, audits, and people who print things.">
             <a href={api.exportUrl(runId, caseIndex, "pdf")} target="_blank" rel="noreferrer"
               onClick={(e) => openExport(e, "pdf")}
               style={{ ...action(C.mut), textDecoration: "none" }}>
-              <ExternalLink size={11} /> PDF
+              PDF
             </a>
           </Tooltip>
           <Tooltip content="Download this run as an axor-lab-incident/v1 package (trace + scenario + manifests + recorded condition) — import it with `axor-lab import-incident` to replay, pin and test policies against the incident.">
@@ -189,9 +195,10 @@ export default function EvidenceCase({
               style={action(labExported ? C.green : C.mut)}
             >
               <FlaskConical size={11} />{" "}
-              {labExport.isPending ? "exporting…" : labExported ? "exported" : "Export for Lab"}
+              {labExport.isPending ? "exporting…" : labExported ? "exported" : "Axor Lab package"}
             </button>
           </Tooltip>
+          </>)}
           {LAB_URL && (
             <a
               href={`${LAB_URL.replace(/\/$/, "")}/#/import`}

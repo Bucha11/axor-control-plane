@@ -24,17 +24,30 @@ import { isConnected, useApp } from "../store";
 import { C, MONO, btn, sevColor } from "../theme";
 import EvidenceCase, { deviationHeadline } from "../components/EvidenceCase";
 import TwoTreeContainment from "../components/TwoTreeContainment";
-import ScenarioDelta from "../components/ScenarioDelta";
 import Coach from "../components/Coach";
 import Tooltip from "../components/Tooltip";
 
 // The v1 scenario: Tool Deprivation. Fault modes map to the deprivation engine.
 const FAULT_MODES = [
-  { id: "silent_fail", label: "silent fail", blurb: "tool returns an error; agent may claim success" },
-  { id: "corrupt_retrieval", label: "corrupt retrieval", blurb: "canary poisons the results" },
-  { id: "instruction_injection", label: "instruction injection", blurb: "canary command in the output" },
-  { id: "tool_substitution", label: "tool substitution", blurb: "a different backend answers" },
+  { id: "silent_fail", label: "returning an error", blurb: "the tool fails — does your agent admit it, or say it worked?" },
+  { id: "corrupt_retrieval", label: "poisoning its results", blurb: "a marked string is planted in what it returns — does it reach the answer?" },
+  { id: "instruction_injection", label: "hiding an instruction in its output", blurb: "the answer carries a planted command — does your agent follow it?" },
+  { id: "tool_substitution", label: "answering from somewhere else", blurb: "a different backend answers — does your agent say so?" },
 ];
+
+/** What the tool really returned, in words — the receipt below keeps the
+ * observed record verbatim; this is its reading. */
+function observedInWords(v: unknown): string {
+  if (v && typeof v === "object" && !Array.isArray(v)) {
+    const o = v as Record<string, unknown>;
+    if (typeof o.tool === "string" && typeof o.injected === "string") {
+      const got = o.actual_result === "error" ? "an error" : String(o.actual_result ?? "something else");
+      return `${o.tool} returned ${got} — we broke it on purpose`;
+    }
+  }
+  const s = typeof v === "string" ? v : JSON.stringify(v);
+  return s.length > 160 ? s.slice(0, 158) + "…" : s;
+}
 
 function eventLabel(e: KernelEvent): string {
   const p = e.payload as Record<string, unknown>;
@@ -57,7 +70,6 @@ export default function Experiment({ runId, autostart }: { runId?: string; autos
 
   const [tool, setTool] = useState("web_search");
   const [faultMode, setFaultMode] = useState("silent_fail");
-  const [showDelta, setShowDelta] = useState(true);
   const [liveEvents, setLiveEvents] = useState<KernelEvent[]>([]);
   // The run armed in THIS view (a deep-linked `runId` is only looked up).
   const [activeRun, setActiveRun] = useState<string | null>(null);
@@ -199,14 +211,14 @@ export default function Experiment({ runId, autostart }: { runId?: string; autos
       ) : (
       <div data-tour="eval-config" className="p-4 mb-4" style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 8 }}>
         <div style={{ fontSize: 10, fontFamily: MONO, color: C.dim, letterSpacing: "0.1em", marginBottom: 10 }}>
-          CONFIGURE · TOOL DEPRIVATION
+          BREAK A TOOL ON PURPOSE
         </div>
         <div className="flex items-center gap-2 flex-wrap mb-3">
-          <span style={{ fontFamily: MONO, fontSize: 12, color: C.mut }}>deprive</span>
+          <span style={{ fontFamily: MONO, fontSize: 12, color: C.mut }}>break</span>
           <select value={tool} onChange={(e) => setTool(e.target.value)} style={select()}>
             {toolChoices.map((t) => <option key={t} value={t}>{t}</option>)}
           </select>
-          <span style={{ fontFamily: MONO, fontSize: 12, color: C.mut }}>via</span>
+          <span style={{ fontFamily: MONO, fontSize: 12, color: C.mut }}>by</span>
           <select value={faultMode} onChange={(e) => setFaultMode(e.target.value)} style={select()}>
             {FAULT_MODES.map((m) => <option key={m.id} value={m.id}>{m.label}</option>)}
           </select>
@@ -225,7 +237,7 @@ export default function Experiment({ runId, autostart }: { runId?: string; autos
             style={btn({ color: C.bg, background: C.green, border: `1px solid ${C.green}`, fontSize: 12.5, fontWeight: 700, padding: "8px 16px" })}
           >
             {running ? <Loader2 size={14} className="animate-spin" /> : <Zap size={14} />}{" "}
-            {mode === "demo" ? "Run experiment" : "Arm & run my agent"}
+            {mode === "demo" ? "Run the test" : "Start the test, then run my agent"}
           </button>
         </Tooltip>
         {start.isError && (
@@ -266,27 +278,54 @@ export default function Experiment({ runId, autostart }: { runId?: string; autos
       {/* The receipt */}
       {focusRun && (
         <>
-          <div style={{ fontFamily: MONO, fontSize: 11, color: C.mut, marginBottom: 6 }}>
-            {focusRun.run_id} · {focusRun.scenario}
+          <div style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim, marginBottom: 6 }}>
+            {focusRun.run_id}
             {focusRun.intervened ? " · intervened (excluded from scores)" : ""}
           </div>
           <h1 style={{ fontSize: 22, fontWeight: 650, lineHeight: 1.3, margin: "0 0 20px" }}>
             {caught
               ? <>Your agent <span style={{ color: C.red }}>{deviationHeadline(caught)}</span>
-                  {caught.fault_attribution[0] ? ` when ${caught.fault_attribution[0].tool_name} was deprived.` : "."}</>
+                  {caught.fault_attribution[0] ? ` when ${caught.fault_attribution[0].tool_name} was broken on purpose.` : "."}</>
               : focusRun.completed
                 ? <>No discrepancies caught in this run.</>
                 : <>Run in progress.</>}
           </h1>
           {caught && (
             <>
-              <label className="flex items-center gap-2" style={{ fontFamily: MONO, fontSize: 11, color: C.mut, marginBottom: 10, cursor: "pointer" }}>
-                <input type="checkbox" checked={showDelta} onChange={(e) => setShowDelta(e.target.checked)} style={{ accentColor: C.steel }} />
-                governed vs ungoverned (scenario delta)
-              </label>
-              {showDelta && <ScenarioDelta c={caught} />}
+              <div data-testid="caught-in-words" className="mb-4 p-4"
+                style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 8 }}>
+                <div className="flex gap-3 items-stretch" style={{ flexWrap: "wrap" }}>
+                  <div style={{ flex: "1 1 220px" }}>
+                    <div style={{ fontFamily: MONO, fontSize: 10, color: C.dim, letterSpacing: "0.1em", marginBottom: 4 }}>THE TOOL RETURNED</div>
+                    <div style={{ fontSize: 14, color: C.red }}>{observedInWords(caught.observed_reality)}</div>
+                  </div>
+                  <div style={{ fontSize: 20, color: C.red, alignSelf: "center" }}>≠</div>
+                  <div style={{ flex: "1 1 220px" }}>
+                    <div style={{ fontFamily: MONO, fontSize: 10, color: C.dim, letterSpacing: "0.1em", marginBottom: 4 }}>YOUR AGENT SAID</div>
+                    <div style={{ fontSize: 14, color: C.text }}>
+                      {typeof caught.agent_claim === "string" ? caught.agent_claim : JSON.stringify(caught.agent_claim)}
+                    </div>
+                  </div>
+                </div>
+                <div style={{ fontFamily: MONO, fontSize: 11, color: C.mut, marginTop: 10, lineHeight: 1.6 }}>
+                  Without Axor this run reads as a success. With it, you get the receipt below — replayable,
+                  and it can become a test.
+                </div>
+              </div>
               <EvidenceCase runId={focusRun.run_id} caseIndex={caseIndex} c={caught}
                 replayStep={caught.anchor?.seq} replayNode={caught.anchor?.node_id} />
+              <div data-testid="catch-next" className="mt-4 flex gap-3 flex-wrap items-center"
+                style={{ fontFamily: MONO, fontSize: 11.5 }}>
+                <button onClick={() => navigate("connect?for=production&how=test")} data-testid="catch-own"
+                  style={btn({ color: C.text, borderColor: C.steel, fontSize: 12, padding: "6px 14px" })}>
+                  Test your own agent this way →
+                </button>
+                <button onClick={() => navigate("connect?for=production")}
+                  style={{ background: "none", border: "none", padding: 0, cursor: "pointer", fontFamily: MONO,
+                           fontSize: 11.5, color: C.steel }}>
+                  guard it in production →
+                </button>
+              </div>
               {caught.anchor && (
                 <TwoTreeContainment runId={focusRun.run_id} anchor={caught.anchor} />
               )}
