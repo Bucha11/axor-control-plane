@@ -163,7 +163,7 @@ export default function GuardOnboarding() {
               {CLASSES.map((c) => <option key={c.id} value={c.id}>{c.label}</option>)}
             </select>
             {t.klass === "READ" && (
-              <label style={{ color: C.mut, display: "flex", alignItems: "center", gap: 5, cursor: "pointer" }}>
+              <label title="its answers come from outside (web, email, files): they cannot drive a send, write or run" style={{ color: C.mut, display: "flex", alignItems: "center", gap: 5, cursor: "pointer" }}>
                 <input type="checkbox" checked={t.outside} onChange={(e) => patch(i, { outside: e.target.checked })} />
                 brings in outside text
               </label>

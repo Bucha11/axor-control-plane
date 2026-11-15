@@ -188,6 +188,9 @@ test.describe("config builder", () => {
     await expect(page.getByTestId("policy-tool-send_email")).toContainText("guessed from 'send' in the name");
     const inbox = page.getByLabel("read_inbox brings in outside text");
     if (!(await inbox.isChecked())) await inbox.check();
+    // what the mark does is said where it is set: the legend, and per tool
+    await expect(page.getByTestId("outside-legend")).toContainText("that call is refused");
+    await expect(page.getByTestId("outside-effect-read_inbox")).toContainText("what it returns can't drive send_email");
     for (const pick of await page.getByLabel(/^what .* does$/).all()) {
       if ((await pick.inputValue()) === "?") await pick.selectOption("READ");
     }

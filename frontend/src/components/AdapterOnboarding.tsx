@@ -13,7 +13,7 @@ import { navigate } from "../router";
 import { isGuestToken, useApp } from "../store";
 import { C, MONO, btn } from "../theme";
 import { IdentityLogin } from "../tabs/Settings";
-import { filesFromList } from "../tabs/ConfigBuilder";
+import { filesFromList, plainGuess } from "../tabs/ConfigBuilder";
 
 export type Framework = "langchain" | "claude" | "python";
 type Klass = "READ" | "WRITE" | "EXPORT" | "EXEC";
@@ -283,13 +283,13 @@ export default function AdapterOnboarding() {
                       {CLASSES.map((c) => <option key={c.id} value={c.id}>{c.label}</option>)}
                     </select>
                     {r.klass === "READ" && (
-                      <label style={{ color: C.mut, display: "flex", alignItems: "center", gap: 5, cursor: "pointer" }}>
+                      <label title="its answers come from outside (web, email, files): they cannot drive a send, write or run" style={{ color: C.mut, display: "flex", alignItems: "center", gap: 5, cursor: "pointer" }}>
                         <input type="checkbox" checked={r.outside} onChange={(e) => patch(i, { outside: e.target.checked })} />
                         brings in outside text
                       </label>
                     )}
                   </div>
-                  <div style={{ ...hint, marginTop: 2 }}>guess: {r.tool.guess.reason} · {r.tool.source}</div>
+                  <div style={{ ...hint, marginTop: 2 }}>{r.tool.guess.reason ? plainGuess(r.tool.guess.reason, r.tool.guess.confidence) : "from Policy"} · {r.tool.source}</div>
                 </div>
               ))}
               <div className="px-3 py-2" style={{ borderTop: `1px solid ${C.line}` }}>

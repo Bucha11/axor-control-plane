@@ -505,7 +505,7 @@ function ProxyOnboarding({ onWrap }: { onWrap: () => void }) {
                         {KLASS_LABEL.map((k) => <option key={k.id} value={k.id}>{k.label}</option>)}
                       </select>
                       {(policy[t.name]?.klass ?? "READ") === "READ" && (
-                        <label title="brings in outside text (web, email, documents)"
+                        <label title="its answers come from outside (web, email, files): they cannot drive a send, write or run"
                           style={{ fontFamily: MONO, fontSize: 10.5, color: C.mut, display: "flex", alignItems: "center", gap: 4, cursor: "pointer" }}>
                           <input type="checkbox" checked={policy[t.name]?.outside ?? false}
                             onChange={(e) => setToolClass(t.name, { outside: e.target.checked })} />
