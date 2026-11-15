@@ -118,6 +118,17 @@ async def test_account_features_ask_for_a_sign_up(client: httpx.AsyncClient) -> 
         assert r.json()["feature"]
 
 
+async def test_opening_agents_does_not_ask_a_guest_to_sign_up(client: httpx.AsyncClient) -> None:
+    # Agents reads what the plan locks on every load; that read is the guest's
+    # own and must not raise the sign-up dialog
+    g = _bearer((await client.post("/v1/auth/guest")).json()["token"])
+    r = await client.get("/v1/license/entitlements", headers=g)
+    assert r.status_code == 200 and r.json()["free"] is True
+    # licences themselves stay an account's business
+    r = await client.post("/v1/license/verify", headers=g, json={})
+    assert r.json()["error"] == "account_required"
+
+
 async def test_signing_up_claims_the_guest_work(client: httpx.AsyncClient, priv) -> None:  # noqa: ANN001
     guest = (await client.post("/v1/auth/guest")).json()
     g = _bearer(guest["token"])

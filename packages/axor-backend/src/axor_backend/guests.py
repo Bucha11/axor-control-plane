@@ -48,7 +48,17 @@ def hash_token(token: str) -> str:
     return hashlib.sha256(token.encode()).hexdigest()
 
 
+# Reads a guest's own screens need on every visit. What the plan locks is one:
+# Agents asks for it on load, and under the blanket /v1/license rule a guest
+# was asked to sign up merely for opening the page.
+GUEST_READABLE: tuple[tuple[str, str], ...] = (
+    ("GET", "/v1/license/entitlements"),
+)
+
+
 def account_only(method: str, path: str) -> str | None:
+    if (method, path) in GUEST_READABLE:
+        return None
     for m, prefix, suffix, feature in ACCOUNT_ONLY:
         if (m == "*" or m == method) and path.startswith(prefix) and path.endswith(suffix):
             return feature
