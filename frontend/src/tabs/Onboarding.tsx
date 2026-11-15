@@ -416,8 +416,12 @@ function ProxyOnboarding({ onWrap }: { onWrap: () => void }) {
         one answers. Then run a test: the proxy watches every call and can break a
         tool on purpose to see whether your agent admits it.
       </Coach>
+      <div data-testid="test-run-intro" style={{ fontSize: 13.5, color: C.mut, lineHeight: 1.6, marginBottom: 14 }}>
+        <span style={{ color: C.text }}>The same test, on your agent.</span> List its tools, point it at the
+        proxy, then we break one on purpose and check what your agent says about it.
+      </div>
       <div className="flex gap-6 mb-8">
-        <StepDot n={1} label="tools" /><StepDot n={2} label="point agent" /><StepDot n={3} label="connection check" />
+        <StepDot n={1} label="its tools" /><StepDot n={2} label="point it here" /><StepDot n={3} label="check, then test" />
       </div>
 
       {step === 1 && (
@@ -425,37 +429,6 @@ function ProxyOnboarding({ onWrap }: { onWrap: () => void }) {
           <h1 style={{ fontSize: 22, fontWeight: 650, margin: "0 0 4px" }}>What tools does your agent use?</h1>
           <div style={{ fontFamily: MONO, fontSize: 11.5, color: C.mut, marginBottom: 14 }}>The proxy sits in front of these. Your agent's credentials pass through untouched.</div>
 
-          {/* MCP-first path: paste the client config you already have. */}
-          <div className="p-3 mb-4" style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 8 }}>
-            <div style={{ fontSize: 10, fontFamily: MONO, color: C.dim, letterSpacing: "0.1em", marginBottom: 8 }}>
-              MCP · PASTE YOUR CLIENT CONFIG
-            </div>
-            <textarea
-              value={mcpRaw}
-              onChange={(e) => setMcpRaw(e.target.value)}
-              rows={3}
-              spellCheck={false}
-              placeholder={'{"mcpServers": {"docs": {"url": "https://mcp.example/sse"}, "fs": {"command": "npx", "args": ["-y", "@modelcontextprotocol/server-filesystem"]}}}  ·  or a bare url / command line'}
-              className="w-full mb-2"
-              style={{ background: C.bg, border: `1px solid ${C.line}`, borderRadius: 5, color: C.text, fontFamily: MONO, fontSize: 11, padding: 8, resize: "vertical", outline: "none" }}
-            />
-            <div className="flex items-center gap-3">
-              <Tooltip content="We handshake with each MCP server (initialize → tools/list), list its tools, and register it as a proxied endpoint — your agent then points at /t/{server}/ instead. HTTP servers are dialed directly; stdio servers (command:) are spawned locally by the proxy's gateway.">
-                <button
-                  onClick={() => void discoverMcp()}
-                  disabled={mcpBusy || !mcpRaw.trim()}
-                  style={btn({ color: mcpRaw.trim() ? C.steel : C.dim, borderColor: mcpRaw.trim() ? C.steel : C.line, fontSize: 12 })}
-                >
-                  <Plug size={13} /> {mcpBusy ? "discovering…" : "Discover MCP tools"}
-                </button>
-              </Tooltip>
-              {mcpNote && (
-                <span style={{ fontFamily: MONO, fontSize: 11, color: mcpNote.kind === "ok" ? C.green : C.red }}>
-                  {mcpNote.text}
-                </span>
-              )}
-            </div>
-          </div>
           {tools.length === 0 ? (
             <div className="p-8 flex flex-col items-center gap-3" style={{ background: C.panel, border: `1px dashed ${C.line}`, borderRadius: 8 }}>
               <Tooltip content="Fills in a realistic 3-tool sample (search / report / query) so you can walk the flow without typing endpoints.">
@@ -464,7 +437,7 @@ function ProxyOnboarding({ onWrap }: { onWrap: () => void }) {
                 </button>
               </Tooltip>
               <span style={{ fontFamily: MONO, fontSize: 11, color: C.dim }}>
-                loads a sample set · or paste your MCP config above (http + stdio both work) · or add endpoints by hand · or{" "}
+                loads a sample set · or add each tool by hand below · or paste an MCP config further down · or{" "}
                 <span
                   role="button"
                   onClick={() => setTools(MOCK_TOOLS)}
@@ -501,6 +474,37 @@ function ProxyOnboarding({ onWrap }: { onWrap: () => void }) {
               </button>
             </>
           )}
+          {/* MCP, second: most agents' tools are not an MCP server, and the ones that are come with a config to paste. */}
+          <div className="p-3 mt-4" style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 8 }}>
+            <div style={{ fontSize: 10, fontFamily: MONO, color: C.dim, letterSpacing: "0.1em", marginBottom: 8 }}>
+              OR PASTE AN MCP CLIENT CONFIG
+            </div>
+            <textarea
+              value={mcpRaw}
+              onChange={(e) => setMcpRaw(e.target.value)}
+              rows={3}
+              spellCheck={false}
+              placeholder={'{"mcpServers": {"docs": {"url": "https://mcp.example/sse"}, "fs": {"command": "npx", "args": ["-y", "@modelcontextprotocol/server-filesystem"]}}}  ·  or a bare url / command line'}
+              className="w-full mb-2"
+              style={{ background: C.bg, border: `1px solid ${C.line}`, borderRadius: 5, color: C.text, fontFamily: MONO, fontSize: 11, padding: 8, resize: "vertical", outline: "none" }}
+            />
+            <div className="flex items-center gap-3">
+              <Tooltip content="We handshake with each MCP server (initialize → tools/list), list its tools, and register it as a proxied endpoint — your agent then points at /t/{server}/ instead. HTTP servers are dialed directly; stdio servers (command:) are spawned locally by the proxy's gateway.">
+                <button
+                  onClick={() => void discoverMcp()}
+                  disabled={mcpBusy || !mcpRaw.trim()}
+                  style={btn({ color: mcpRaw.trim() ? C.steel : C.dim, borderColor: mcpRaw.trim() ? C.steel : C.line, fontSize: 12 })}
+                >
+                  <Plug size={13} /> {mcpBusy ? "discovering…" : "Discover MCP tools"}
+                </button>
+              </Tooltip>
+              {mcpNote && (
+                <span style={{ fontFamily: MONO, fontSize: 11, color: mcpNote.kind === "ok" ? C.green : C.red }}>
+                  {mcpNote.text}
+                </span>
+              )}
+            </div>
+          </div>
         </>
       )}
 
