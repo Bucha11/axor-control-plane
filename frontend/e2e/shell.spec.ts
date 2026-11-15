@@ -19,11 +19,23 @@ test.describe("shell", () => {
     await expect(page.getByTestId("demo-govern")).toBeVisible({ timeout: 20_000 });
     await expect(page.getByRole("button", { name: /Explore an example fleet/ })).toBeVisible();
     await expect(page.getByRole("button", { name: /Govern my production agent/ })).toBeVisible();
-    // none of the product's vocabulary before there is something in it
-    for (const label of ["Agents", "Policy", "Caught lies", "Replay", "Safe to ship?"]) {
-      await expect(page.getByRole("button", { name: label, exact: true })).toHaveCount(0);
-    }
+    // no menu before there is something in it — only a quiet way to look around
+    await expect(page.getByTestId("sidebar")).toHaveCount(0);
+    await expect(page.locator(".app-nav")).toHaveCount(0);
     await expect(page.getByRole("button", { name: "settings" })).toHaveCount(0);
+    await expect(page.getByTestId("home-look-around")).toContainText("Safe to ship?");
+  });
+
+  test("looking around first: a section opens with the menu, and Home keeps it", async ({ page }) => {
+    await goHash(page, "home");
+    await page.getByTestId("look-policy").click();
+    await expect(page).toHaveURL(/#\/policy$/);
+    const menu = page.getByTestId("sidebar").or(page.locator(".app-nav"));
+    await expect(menu.first()).toBeVisible();
+    await page.locator(".app-logo").or(page.getByTestId("sidebar").getByText("AXOR")).first().click();
+    await expect(page).toHaveURL(/#\/home$/);
+    await expect(page.getByTestId("first-visit")).toBeVisible();
+    await expect(menu.first()).toBeVisible();
   });
 
   test("the example fleet opens on the governed agents, with the menu", async ({ page }) => {

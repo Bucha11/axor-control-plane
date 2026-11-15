@@ -111,7 +111,7 @@ function FirstVisit() {
             <span>
               <span style={{ display: "block", fontWeight: 700 }}>Govern my production agent</span>
               <span style={{ display: "block", fontSize: 12, opacity: 0.85, marginTop: 2 }}>
-                wrap it in code to guard it live · or watch it through a proxy, no code change
+                wrap it in code · or put a proxy in front of its tools, no code change
               </span>
             </span>
             <ArrowRight size={18} />
@@ -153,13 +153,44 @@ function FirstVisit() {
         </div>
       )}
 
-      <div style={{ fontFamily: MONO, fontSize: 11, color: C.dim, marginTop: 22 }}>
+      <LookAround />
+
+      <div style={{ fontFamily: MONO, fontSize: 11, color: C.dim, marginTop: 10 }}>
         open source ·{" "}
         <button onClick={startTour} style={{ background: "none", border: "none", padding: 0, color: C.steel, cursor: "pointer", fontFamily: MONO, fontSize: 11 }}>
           Take the tour
         </button>{" "}
         — 60 seconds through the whole app
       </div>
+    </div>
+  );
+}
+
+/** For someone who wants to see the product before connecting anything: the
+ * sections, one click each — the menu itself is kept off a first visit. */
+const SECTIONS: [string, string][] = [
+  ["govern", "Agents"], ["policy", "Policy"], ["evidence", "Caught lies"],
+  ["explain", "Replay"], ["prevent", "Safe to ship?"],
+];
+
+function LookAround() {
+  // once the menu is there (a section was opened), this line is said twice
+  if (useApp((s) => s.lookedAround)) return null;
+  return (
+    <div data-testid="home-look-around" style={{ fontFamily: MONO, fontSize: 11.5, color: C.mut, marginTop: 22,
+      lineHeight: 1.8 }}>
+      or look around first:{" "}
+      {SECTIONS.map(([key, label], i) => (
+        <span key={key}>
+          {i > 0 && <span style={{ color: C.dim }}> · </span>}
+          <button onClick={() => navigate(key)} data-testid={`look-${key}`}
+            style={{ background: "none", border: "none", padding: 0, color: C.steel, cursor: "pointer",
+                     fontFamily: MONO, fontSize: 11.5 }}>
+            {label}
+          </button>
+        </span>
+      ))}
+      {" "}→
     </div>
   );
 }

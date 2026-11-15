@@ -57,6 +57,10 @@ interface AppState {
   // folded to one line — the user has read them and wants the room back.
   planNoticesFolded: boolean;
   setPlanNoticesFolded: (v: boolean) => void;
+  // Opened a section before connecting anything: from then on Home keeps the
+  // menu too — someone looking around should not lose the way back in.
+  lookedAround: boolean;
+  setLookedAround: (v: boolean) => void;
   // What each of the agent's tools does — one record, written wherever it is
   // decided (the wrap's and the proxy's onboarding, Policy) and read by all of
   // them and by a test run, so nobody classifies the same tools twice.
@@ -202,6 +206,8 @@ export const useApp = create<AppState>()(
       coachDismissed: [],
       planNoticesFolded: false,
       setPlanNoticesFolded: (v) => set({ planNoticesFolded: v }),
+      lookedAround: false,
+      setLookedAround: (v) => set({ lookedAround: v }),
       toolPolicy: {},
       setToolClass: (name, patch) =>
         set((s) => ({ toolPolicy: { ...s.toolPolicy,

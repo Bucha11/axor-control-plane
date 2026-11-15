@@ -110,7 +110,14 @@ export default function App() {
   const wide = useWide();
   // Someone who has not tried anything yet sees no menu on Home: five tabs of
   // product vocabulary is what made a first visit read as "close and leave".
-  const firstVisit = key === "home" && !isConnected(mode);
+  // Once a section was opened, Home keeps the menu: the way back in stays.
+  const lookedAround = useApp((s) => s.lookedAround);
+  const setLookedAround = useApp((s) => s.setLookedAround);
+  const inSection = LOOP.some((l) => l.key === (PARENT_TAB[key] ?? key));
+  useEffect(() => {
+    if (inSection && !lookedAround) setLookedAround(true);
+  }, [inSection, lookedAround, setLookedAround]);
+  const firstVisit = key === "home" && !isConnected(mode) && !lookedAround;
 
   // A wide screen gets the navigation as a sidebar: the sections and, under
   // Agents, its views — instead of a row of sections plus a row of views on

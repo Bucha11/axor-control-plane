@@ -317,11 +317,11 @@ export default function ControlTab({ focusNode }: { focusNode?: string }) {
           )}
         </div>
       ) : (
-        <div style={{ maxWidth: 640, margin: "0 auto 16px", fontFamily: MONO, fontSize: 11, color: C.mut,
-                      lineHeight: 1.6, border: `1px solid ${C.line}`, borderRadius: 8, padding: "10px 12px" }}>
-          {note}. until then, everything here works on an example fleet:
-          {!fleetLoaded && <ExampleFleet />}
-          <SpawnGoverned switchToAdapter />
+        // nothing on the plane: the empty page below already offers the
+        // example fleet — say only how your own agents get here
+        <div data-testid="adapter-note" style={{ maxWidth: 640, margin: "0 auto 16px", fontFamily: MONO,
+                      fontSize: 11, color: C.mut, lineHeight: 1.6 }}>
+          {note}.
         </div>
       ))}
       <ControlBody focusNode={focusNode} testBench={testBench} />
@@ -418,11 +418,11 @@ function ControlBody({ focusNode, testBench }: { focusNode?: string; testBench: 
             ? <>No node is reporting to the plane yet, so there is nothing to pause
                 or stop — but {traced.length} node{traced.length === 1 ? "" : "s"} have
                 traced here, and the shape they describe is below.</>
-            : <>No governed agents connected yet. Load an example fleet to see
-                what this looks like, or point your axor-core adapter at the plane:</>}
+            : <>No agents on the plane yet. Load an example fleet to see what this
+                looks like:</>}
         </div>
         <ExampleFleet />
-        <SpawnGoverned />
+        <SpawnGoverned switchToAdapter />
         {topo.data && traced.length > 0 && (
           <div className="mt-4">
             <TopologyGraph
