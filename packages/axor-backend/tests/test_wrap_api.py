@@ -354,7 +354,8 @@ async def test_manifests_carry_policy_consequence_and_always_fine_values(
     assert resp.status_code == 200, resp.text
     cfg = GovernanceConfig.from_dict(yaml.safe_load(resp.json()["governance_yaml"]))
     assert cfg.consequence_overrides == {"send_email": ConsequenceClass.CATASTROPHIC}
-    assert [p.allowed for p in cfg.value_policies["send_email"]] == [frozenset({"boss@corp.example"})]
+    allowed = [p.allowed for p in cfg.value_policies["send_email"]]
+    assert allowed == [frozenset({"boss@corp.example"})]
 
     bad = await client.post("/v1/wrap/manifests", json={
         **body, "consequence_overrides": {"send_email": "very bad"}})

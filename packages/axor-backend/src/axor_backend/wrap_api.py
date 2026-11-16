@@ -267,7 +267,8 @@ def _policy_yaml(consequence: object, values: object, tools: set[str]) -> str:
                     400, f"consequence_overrides: {tool!r} is not one of the tools")
             if cls not in _CONSEQUENCES:
                 raise HTTPException(
-                    400, f"consequence_overrides[{tool!r}] must be one of {'|'.join(_CONSEQUENCES)}")
+                    400, f"consequence_overrides[{tool!r}] must be one of "
+                         f"{'|'.join(_CONSEQUENCES)}")
             lines.append(f"  {json.dumps(tool)}: {json.dumps(cls)}")
     if values:
         if not isinstance(values, dict):
