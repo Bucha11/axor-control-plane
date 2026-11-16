@@ -65,7 +65,8 @@ test.describe("coding agents: their menu, and trying a skill", () => {
     ]);
     expect(sent.postDataJSON().files[0].path).toBe("release-helper/SKILL.md");
     const report = page.getByTestId("skill-report");
-    await expect(report).toContainText("release-helper: Axor refuses 1 of what it asks; 1 thing is yours to judge before you install it.");
+    // what a web page says is Axor's to stop too: nothing here is left to judge
+    await expect(report).toContainText("release-helper: Axor refuses 1 of what it asks.");
     await expect(report).toContainText("downloads code and runs it");
     await expect(report).toContainText("a command or a send built from it is refused");
     // the plain commands it runs are folded
