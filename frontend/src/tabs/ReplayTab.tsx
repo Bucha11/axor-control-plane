@@ -315,9 +315,9 @@ export default function ReplayTab({ runId: runIdProp, cursor: cursorProp, seq: s
     <div style={{ maxWidth: 680, margin: "0 auto" }}>
       <Coach id="replay" title="Replay — a run, step by step">
         Each box is one step: a tool asked, a tool answering, the agent speaking. Green was let
-        through, amber is text that came from outside, red was refused — with why. <span style={{ color: C.text }}>What if…</span>{" "}
-        re-runs the same recorded steps under different rules — no model is called — and shows the
-        first step that would have gone differently.
+        through, amber is text that came from outside, red was refused — with why. Below, ask whether other rules would have changed
+        the run: the same recorded steps are decided again — no model is called — and the first step
+        that would have gone differently is named.
       </Coach>
       <div data-tour="replay-picker" className="flex items-center gap-3 flex-wrap" style={{ marginBottom: 22 }}>
         <select value={runId} onChange={(e) => pickRun(e.target.value)} aria-label="run"
@@ -431,25 +431,29 @@ export default function ReplayTab({ runId: runIdProp, cursor: cursorProp, seq: s
           )}
 
           <div data-testid="replay-whatif" className="mt-4 p-4" style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 8 }}>
-            <div style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim, letterSpacing: "0.1em", marginBottom: 8 }}>WHAT IF…</div>
+            <div style={{ fontSize: 15, fontWeight: 600, color: C.text, marginBottom: 2 }}>Would other rules have changed this run?</div>
+            <div style={{ fontSize: 12.5, color: C.mut, marginBottom: 10 }}>
+              Decide the same recorded steps again under other rules — no model is called, same answer every time.
+            </div>
             <div className="flex gap-2 flex-wrap mb-3">
               {([
-                ["noexec", "…the agent couldn't run shell commands", hasShell],
-                ["taint", "…this answer had been outside text", canTaint],
-                ["policy", `…the rules from Policy applied (${policyTools} tools)`, policyTools > 0],
+                ["noexec", "no shell commands", hasShell],
+                ["taint", "this answer treated as outside text", canTaint],
+                ["policy", `the rules from Policy (${policyTools} tools)`, policyTools > 0],
               ] as const).filter(([, , ok]) => ok).map(([id, label]) => (
                 <button key={id} onClick={() => toggleCf(id)} data-testid={`whatif-${id}`}
                   style={btn({ background: cf === id ? "rgba(127,168,204,0.12)" : "none",
                     border: `1px solid ${cf === id ? C.steel : C.line}`, color: cf === id ? C.steel : C.mut, fontSize: 11.5 })}>
-                  {label}
+                  {cf === id ? "✓ " : "try: "}{label}
                 </button>
               ))}
             </div>
             <div data-testid="whatif-answer" style={{ fontSize: 13.5, lineHeight: 1.6 }}>
               {cf === null ? (
                 <span style={{ color: C.mut }}>
-                  Pick one: the same recorded steps are decided again under it — no model is called, same
-                  answer every time.{!hasShell && !canTaint && policyTools === 0 && " (Select a tool's answer to ask what if it had been outside text.)"}
+                  {!hasShell && !canTaint && policyTools === 0
+                    ? "Select a tool's answer above to try it as outside text."
+                    : "Pick one — the answer shows here."}
                 </span>
               ) : counterfactual.isPending ? (
                 <span style={{ color: C.mut }}>deciding again…</span>
