@@ -16,7 +16,7 @@ test.describe("evidence", () => {
     await expect(row).toContainText("said a failed tool worked");
     await expect(row).toContainText("THE AGENT SAID");
 
-    await row.getByRole("button", { name: /explain/ }).click();
+    await row.getByRole("button", { name: /replay it/ }).click();
     await expect(page).toHaveURL(/#\/explain\/[^/?]+/);
   });
 

@@ -42,6 +42,26 @@ const WHAT: Record<string, string> = {
 export const incidentWhat = (deviation?: string | null): string =>
   deviation ? (WHAT[deviation] ?? deviation.replace(/_/g, " ")) : "something did not add up";
 
+/** What the tool did, in words (the fault engine's mode names are for the receipt). */
+const TOOL_DID: Record<string, string> = {
+  silent_fail: "returned an error",
+  corrupt_retrieval: "returned corrupted results",
+  instruction_injection: "returned text with a hidden instruction in it",
+  tool_substitution: "was swapped for a different tool",
+  timeout: "timed out",
+  empty_result: "returned nothing",
+};
+const toolDid = (mode: string) => TOOL_DID[mode] ?? mode.replace(/_/g, " ");
+
+// where an incident came from: the plane's own examples, a test run, or work
+const EXAMPLES = new Set(["adapter-demo", "multi-agent-demo", "coding-demo", "skill-demo"]);
+const TESTS = new Set(["tool-deprivation", "exfil", "injection"]);
+function source(run: RunSummary): string {
+  if (EXAMPLES.has(run.scenario)) return "example data";
+  if (TESTS.has(run.scenario)) return "a test run";
+  return "live work";
+}
+
 const inlineLink: React.CSSProperties = {
   background: "none", border: "none", padding: 0, cursor: "pointer", fontFamily: MONO,
   fontSize: 11.5, color: C.steel,
@@ -143,7 +163,7 @@ export default function Evidence() {
                       THE TOOL {fault ? `· ${fault.tool_name}` : ""}
                     </div>
                     <div style={{ fontFamily: MONO, fontSize: 11.5, color: C.mut, wordBreak: "break-word" }}>
-                      {fault ? `${fault.fault_mode}` : brief(ev.observed_reality)}
+                      {fault ? toolDid(fault.fault_mode) : brief(ev.observed_reality)}
                     </div>
                   </div>
                   <div>
@@ -157,20 +177,20 @@ export default function Evidence() {
                 </div>
                 <div className="flex items-center justify-between flex-wrap" style={{ gap: 8 }}>
                   <span style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim }}>
-                    {ev.scenario || run.scenario} · {run.node_id} · run {run.run_id}
+                    agent {run.node_id} · {source(run)}
                   </span>
                   <span className="flex gap-2">
                     <button
                       onClick={() => navigate(`catch/${encodeURIComponent(run.run_id)}`)}
                       style={{ background: "none", border: `1px solid ${C.line}`, borderRadius: 5, color: C.mut, fontFamily: MONO, fontSize: 11, padding: "4px 10px", cursor: "pointer" }}
                     >
-                      receipt
+                      details
                     </button>
                     <button
                       onClick={() => navigate(`explain/${encodeURIComponent(run.run_id)}`)}
                       style={{ display: "flex", alignItems: "center", gap: 5, background: "none", border: `1px solid ${C.steel}`, borderRadius: 5, color: C.steel, fontFamily: MONO, fontSize: 11, padding: "4px 10px", cursor: "pointer" }}
                     >
-                      <Play size={11} /> explain
+                      <Play size={11} /> replay it
                     </button>
                   </span>
                 </div>
