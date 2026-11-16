@@ -90,6 +90,9 @@ _READ_METHODS = ("GET", "HEAD", "OPTIONS")
 # below, and a policy entry meant to guard a surface only guards writing to it.
 # Everything not listed here reads with `read`.
 _READ_POLICY: tuple[tuple[str, str], ...] = (
+    # What every coding-agent sidecar fetches — on a developer's ingest key,
+    # the only credential it holds (the skills it must refuse).
+    ("/v1/coding/policy", "ingest"),
     # Listing keys is credential enumeration: ids, scopes, labels, dates.
     ("/v1/keys", "admin"),
     # Every enrolment with the nodes allowed to dispense it — the map of which
@@ -160,6 +163,8 @@ _WRITE_POLICY: tuple[tuple[str, str], ...] = (
     ("/v1/trees/", "ingest"),
     # an eval run posts its own report, like a tree run its snapshot
     ("/v1/skill-evals", "ingest"),
+    # turning a skill off for every developer is an operator's decision
+    ("/v1/coding/", "operate"),
     ("/v1/plane/", "operate"),        # command / facts / cascade-stop
     ("/v1/keys", "admin"),            # mint / revoke API keys
     ("/v1/regression/schedule", "operate"),  # EE schedule is operator config

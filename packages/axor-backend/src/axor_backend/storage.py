@@ -781,6 +781,21 @@ class Store:
                                      for s in doc.get("per_skill", []) if isinstance(s, dict)}})
         return out
 
+    async def recent_refusals(self, limit: int = 5000) -> list[dict[str, Any]]:
+        """The newest refused tool calls' payloads (at most ``limit`` tool calls
+        looked at): what an operator reads "how often was this refused" from."""
+        async with self.engine.connect() as conn:
+            rows = (await conn.execute(
+                select(events.c.node_id, events.c.line)
+                .where(events.c.org_id == current_org_id(), events.c.kind == "tool_call")
+                .order_by(events.c.id.desc()).limit(limit))).all()
+        out = []
+        for r in rows:
+            line = r.line or {}
+            if line.get("verdict") == "deny":
+                out.append({"node_id": r.node_id, "payload": line.get("payload") or {}})
+        return out
+
     async def list_tree_runs(self, limit: int = 50) -> list[dict[str, Any]]:
         async with self.engine.connect() as conn:
             rows = (await conn.execute(

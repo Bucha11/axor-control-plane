@@ -14,6 +14,7 @@ import { Check, ChevronDown, ChevronRight, Circle, Copy, Loader2, Play, Upload }
 import { api, KernelEvent, SkillReport } from "../api";
 import { navigate } from "../router";
 import { C, MONO, btn } from "../theme";
+import { SkillsOffPanel } from "../components/SkillsOff";
 
 const PLANE_URL = typeof window === "undefined" ? "" : window.location.origin;
 const TRY_PREFIX = "skill-try.";
@@ -92,6 +93,7 @@ export default function Skills() {
       <CheckSkill />
       <RunSkill />
       <DryRuns />
+      <div className="mt-8"><SkillsOffPanel /></div>
       <div data-testid="skills-to-evals" className="mt-8" style={{ fontFamily: MONO, fontSize: 11.5, color: C.mut }}>
         safe is one question; whether it helps — and what it costs in tokens — is another:{" "}
         <button onClick={() => navigate("skill-evals")} style={link}>Skill evals →</button>

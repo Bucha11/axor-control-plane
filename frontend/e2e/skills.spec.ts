@@ -121,4 +121,27 @@ test.describe("coding agents: their menu, and trying a skill", () => {
     await page.getByRole("button", { name: /all skill evals/ }).click();
     await expect(page.getByTestId("skill-eval-se-example")).toContainText("changelog-entries · helps");
   });
+
+  test("a skill turned off for the team: the switch, the sidecars' policy, back on", async ({ page, request }) => {
+    await request.post("http://127.0.0.1:8400/v1/demo/seed-skill-eval");
+    await goHash(page, "skill-evals/se-example");
+    const card = page.getByTestId("skill-card-test-first");
+    await card.getByTestId("skill-off-test-first").click();
+    await expect(card.getByTestId("skill-is-off-test-first")).toContainText("turned off for the team");
+    // what every developer's sidecar fetches
+    const policy = await (await request.get("http://127.0.0.1:8400/v1/coding/policy")).json();
+    expect(policy.skills_off).toContain("test-first");
+    // the list says what it can and cannot do, and turns it back on
+    await page.getByRole("button", { name: /all skill evals/ }).click();
+    const panel = page.getByTestId("skills-off");
+    await expect(panel).toContainText("stay in the agent's context until the folder is removed");
+    await expect(panel.getByTestId("off-row-test-first")).toContainText("0 refused attempts");
+    await panel.getByTestId("off-row-test-first").getByRole("button", { name: "turn back on" }).click();
+    await expect(panel.getByTestId("off-row-test-first")).toHaveCount(0);
+    // and one can be turned off by name, without an eval
+    await panel.getByLabel("skill to turn off").fill("house-style");
+    await panel.getByLabel("skill to turn off").press("Enter");
+    await expect(panel.getByTestId("off-row-house-style")).toBeVisible();
+    await panel.getByTestId("off-row-house-style").getByRole("button", { name: "turn back on" }).click();
+  });
 });

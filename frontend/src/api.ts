@@ -1239,6 +1239,18 @@ export const api = {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ files }),
     }).then((r) => j<SkillReport>(r)),
+  // Skills turned off for the team: every sidecar refuses their use.
+  codingSkills: () =>
+    af("/v1/coding/skills").then((r) => j<{
+      off: { skill: string; ts: string; by: string }[];
+      attempts: Record<string, number>;
+    }>(r)),
+  setSkillOff: (name: string, off: boolean) =>
+    af(`/v1/coding/skills/${encodeURIComponent(name)}`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ off }),
+    }).then((r) => j<{ skills_off: string[] }>(r)),
   skillEvals: () => af("/v1/skill-evals").then((r) => j<{ evals: SkillEvalRow[] }>(r)),
   skillEval: (id: string) =>
     af(`/v1/skill-evals/${encodeURIComponent(id)}`).then((r) => j<SkillEval>(r)),
