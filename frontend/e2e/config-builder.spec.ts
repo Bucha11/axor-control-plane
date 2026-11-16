@@ -242,4 +242,33 @@ test.describe("config builder", () => {
     await expect(reading).toContainText("Only to boss@corp.example — any other value is refused.");
     await expect(reading).toContainText("Can't be undone: refused unless a person approves it.");
   });
+
+  test("the config beside the form: a click shows where, a hand edit comes back", async ({ page }) => {
+    await goHash(page, "config-builder");
+    await page.getByTestId("wrap-files").setInputFiles([
+      { name: "tools.py", mimeType: "text/x-python", buffer: Buffer.from(AGENT_PY) },
+    ]);
+    const notInstalled = page.getByText("wrap engine not installed on the backend");
+    const row = page.getByTestId("policy-tool-send_email");
+    await expect(row.or(notInstalled)).toBeVisible({ timeout: 15_000 });
+    if (await notInstalled.isVisible()) return;
+    await page.getByTestId("config-split").click();
+    const text = page.getByLabel("the config, as JSON");
+    await expect(text).toHaveValue(/"send_email": \{/);
+    // form → text
+    await row.getByRole("button", { name: /send_email/ }).click();
+    await page.getByTestId("consequence-send_email").getByRole("button", { name: "can't be undone" }).click();
+    await expect(text).toHaveValue(/"consequence": "CATASTROPHIC"/);
+    // text → form
+    const edited = (await text.inputValue()).replace('"consequence": "CATASTROPHIC"', '"consequence": "REVERSIBLE"');
+    await text.fill(edited);
+    await expect(page.getByTestId("consequence-send_email")).toContainText("let through", { timeout: 5_000 });
+    // a wrong value: the plane says which field, the form keeps what it had
+    await text.fill(edited.replace('"consequence": "REVERSIBLE"', '"consequence": "very bad"'));
+    await expect(page.getByTestId("config-error")).toContainText("consequence");
+    await expect(page.getByTestId("consequence-send_email")).toContainText("let through");
+    // broken JSON: the line is named
+    await text.fill('{\n  "sinks": {,\n}');
+    await expect(page.getByTestId("config-error")).toContainText("line 2");
+  });
 });

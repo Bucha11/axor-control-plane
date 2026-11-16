@@ -4,6 +4,7 @@ consequence axis, with a ceiling for what may happen without a person)."""
 from __future__ import annotations
 
 import json
+import pathlib
 
 import axor_core
 import pytest
@@ -80,3 +81,25 @@ def test_bad_values_are_named() -> None:
         kernel_config_from_json({**_policy(), "max_unattended_consequence": "high"})
     with pytest.raises(ConfigInvalid, match="driving_args"):
         kernel_config_from_json(_policy(driving_args=[1]))
+
+
+async def test_a_hand_written_config_is_checked_as_replay_reads_it(
+        tmp_path: pathlib.Path) -> None:
+    import httpx
+    from axor_backend.app import create_app
+
+    app = create_app(database_url=f"sqlite+aiosqlite:///{tmp_path}/c.db",
+                     operator_keys={}, allow_unsigned=True)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app),
+                                 base_url="http://cp.test") as c, \
+            app.router.lifespan_context(app):
+        ok = await c.post("/v1/config/check", json={"config": _policy(
+            driving_args=["to"], consequence="CATASTROPHIC")})
+        assert ok.status_code == 200, ok.text
+        assert ok.json()["tools"] == ["read_inbox", "send_email"]
+        assert ok.json()["driving_args"] == {"send_email": ["to"]}
+        assert ok.json()["consequence"] == {"send_email": "CATASTROPHIC"}
+        bad = await c.post("/v1/config/check", json={"config": _policy(consequence="bad")})
+        assert bad.status_code == 400 and "consequence" in bad.text
+        bad = await c.post("/v1/config/check", json={"config": {**_policy(), "version": "2"}})
+        assert bad.status_code == 400

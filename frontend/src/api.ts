@@ -1285,6 +1285,14 @@ export const api = {
       // of the answer: a tool in a skipped file is absent from the config, and
       // undeclared is denied.
     }).then((r) => j<{ tools: WrapTool[]; skipped: { path: string; reason: string }[] }>(r)),
+  // A hand-written config, read as Replay and Safe to ship? read it — 400
+  // naming the field when it is wrong (Policy's split view, as you type)
+  checkConfig: (config: unknown) =>
+    af("/v1/config/check", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ config }),
+    }).then((r) => j<{ ok: true; tools: string[] }>(r)),
   // `policy`: what Policy decides beyond the manifests — per-tool consequence
   // classes and per-argument always-fine lists — written into governance.yaml
   wrapManifests: (tools: (Omit<Partial<WrapTool>, "guess"> & { id: string; effect: WrapEffect })[],

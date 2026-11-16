@@ -39,6 +39,7 @@ from axor_core.kernel.subgraph import causal_subgraph
 from fastapi import APIRouter, HTTPException
 
 from axor_backend.deps import StoreDep, SubgraphCacheDep
+from axor_backend.errors import ConfigInvalid
 from axor_backend.limits import MAX_ABLATION_REFS
 from axor_backend.offload import off_loop as _off_loop
 from axor_backend.replay_api import (
@@ -205,6 +206,25 @@ async def replay_scrubber(run_id: str, store: StoreDep) -> dict:
     # take — the fix for it is not returning 22 MB, which is `MAX_EVENTS_PER_RUN`'s
     # job, not this route's.
     return await _off_loop(_replayed, await events_for(store, run_id))
+
+
+@router.post("/config/check")
+async def check_config(body: dict) -> dict:
+    """A config written by hand, read the way Replay and Safe to ship? read it:
+    400 naming the field when it is wrong, else what it declares. Nothing is
+    stored — Policy's split view calls this as the person types."""
+    config = body.get("config")
+    if not isinstance(config, dict):
+        raise ConfigInvalid("the config must be a JSON object")
+    if config.get("version", "axor-config/1") != "axor-config/1":
+        raise ConfigInvalid(f"version must be 'axor-config/1', got {config.get('version')!r}")
+    kc = kernel_config_from_json(config)
+    return {
+        "ok": True,
+        "tools": sorted(kc.allowed_tools or ()),
+        "driving_args": {t: sorted(a) for t, a in kc.driving_args.items()},
+        "consequence": {t: c.name for t, c in kc.consequence_overrides.items()},
+    }
 
 
 @router.post("/replay/{run_id}")

@@ -51,6 +51,7 @@ EXPECTED: dict[tuple[str, str], str] = {
     ("POST", "/v1/runs/{run_id}/evidence"): "ingest",
     ("GET", "/v1/runs"): "read",
     ("GET", "/v1/runs/search"): "read",
+    ("POST", "/v1/config/check"): "read",
     ("GET", "/v1/runs/{run_id}/events"): "read",
     ("GET", "/v1/runs/{run_id}/stream"): "read",
     # ── demo seeds ───────────────────────────────────────────────────────────

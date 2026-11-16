@@ -16,6 +16,7 @@ import type { Consequence, ToolClass } from "../store";
 import { C, MONO, btn } from "../theme";
 import Coach from "../components/Coach";
 import Tooltip from "../components/Tooltip";
+import ConfigText from "../components/ConfigText";
 
 const TYPES = ["READ", "WRITE", "EXPORT", "EXEC"] as const;
 type ToolType = (typeof TYPES)[number];
@@ -353,6 +354,10 @@ export default function ConfigBuilder() {
   const [adding, setAdding] = useState(false);
   const [draft, setDraft] = useState<{ name: string; type: ToolType }>({ name: "", type: "READ" });
   const [sel, setSel] = useState<number | null>(null);
+  // the config beside the form, editable; `focus` is where the last click in
+  // the form lands in it
+  const [split, setSplit] = useState(false);
+  const [focus, setFocus] = useState<string[] | null>(null);
   const [emitted, setEmitted] = useState(false);
   const [budgetCapCalls, setBudgetCapCalls] = useState<number | null>(null);
   const [peers, setPeers] = useState<PeerDecl[]>([]);
@@ -366,6 +371,7 @@ export default function ConfigBuilder() {
   const [skipped, setSkipped] = useState<{ path: string; reason: string }[]>([]);
   const fileInput = useRef<HTMLInputElement>(null);
   const folderInput = useRef<HTMLInputElement | null>(null);
+  const configInput = useRef<HTMLInputElement>(null);
 
   // Real upload: read the picked/dropped .py files in the browser, send them to
   // the wrap engine, and turn detected tools into sink rows.
@@ -401,6 +407,10 @@ export default function ConfigBuilder() {
     }
   };
   const patch = (i: number, p: Partial<Sink>) => {
+    const key = p.type ? "consequence_class" : p.outside !== undefined ? "outside_text"
+      : p.consequence !== undefined || "consequence" in p ? "consequence" : p.critical !== undefined ? "criticality"
+      : p.args ? (p.args.length === sinks[i].args.length ? "trusted_sets" : "driving_args") : null;
+    setFocus(key ? ["sinks", sinks[i].name, key] : ["sinks", sinks[i].name]);
     setSinks(sinks.map((s, j) => (j === i ? { ...s, ...p } : s)));
     const next = { ...sinks[i], ...p };
     if (next.type !== "?") {
@@ -418,6 +428,9 @@ export default function ConfigBuilder() {
       ...(s.args.length ? { driving_args: s.args.map((a) => a.arg) } : {}),
       ...(s.args.some((a) => a.set.length) ? { trusted_sets: Object.fromEntries(s.args.filter((a) => a.set.length).map((a) => [a.arg, a.set])) } : {}),
       ...(s.consequence ? { consequence: s.consequence } : {}),
+      // for the wrap and for you: its answers are outside text (the kernel
+      // reads taint from the recorded run, not from this key)
+      ...(s.outside ? { outside_text: true } : {}),
     }])),
     default: "DENY",
     ...(budgetCapCalls !== null ? { budget_cap_calls: budgetCapCalls } : {}),
@@ -429,6 +442,38 @@ export default function ConfigBuilder() {
         ...(p.attested ? { governance_attested: true } : {}),
       }])),
     } : {}),
+  };
+
+  // a hand edit the plane accepted, back into the form: each tool keeps what
+  // the config does not say (where it was found, the scanner's guess)
+  const applyConfig = (cfg: Record<string, unknown>) => {
+    const raw = (cfg.sinks ?? {}) as Record<string, Record<string, unknown>>;
+    const next: Sink[] = Object.entries(raw).map(([name, r]) => {
+      const prev = sinks.find((x) => x.name === name);
+      const driving = Array.isArray(r.driving_args) ? (r.driving_args as string[]) : [];
+      const trusted = (r.trusted_sets ?? {}) as Record<string, unknown[]>;
+      const argNames = [...new Set([...driving, ...Object.keys(trusted)])];
+      return {
+        ...(prev ?? { name, critical: false, outside: false, args: [] }),
+        name,
+        type: (r.consequence_class as SinkType) ?? "?",
+        critical: r.criticality === "critical",
+        outside: typeof r.outside_text === "boolean" ? r.outside_text : prev?.outside ?? false,
+        args: argNames.map((a) => ({ arg: a, set: (trusted[a] ?? []).map(String) })),
+        consequence: r.consequence as Consequence | undefined,
+      };
+    });
+    setSinks(next);
+    for (const x of next) {
+      if (x.type !== "?") setToolClass(x.name, { klass: x.type, outside: x.outside, ...toPolicy(x) });
+    }
+    setBudgetCapCalls(typeof cfg.budget_cap_calls === "number" ? cfg.budget_cap_calls : null);
+    const rawPeers = (cfg.peers ?? {}) as Record<string, Record<string, unknown>>;
+    setPeers(Object.entries(rawPeers).map(([peer_id, p]) => ({
+      peer_id, pubkey: String(p.pubkey ?? ""), level: String(p.level ?? "l0").toUpperCase() as PeerLevel,
+      classes: Array.isArray(p.message_classes) ? p.message_classes.join(", ") : "",
+      attested: p.governance_attested === true,
+    })));
   };
 
   const download = () => {
@@ -570,6 +615,31 @@ export default function ConfigBuilder() {
         )}
         {stage === "entry" && (
           <>
+            <input ref={configInput} type="file" accept=".json,application/json" style={{ display: "none" }}
+              data-testid="config-import"
+              onChange={(e) => {
+                const f = e.target.files?.[0];
+                e.target.value = "";
+                if (!f) return;
+                void f.text().then(async (t) => {
+                  try {
+                    const cfg = JSON.parse(t) as Record<string, unknown>;
+                    await api.checkConfig(cfg);
+                    setScanError(null);
+                    applyConfig(cfg);
+                    setStage("build");
+                    setSplit(true);
+                  } catch (err) {
+                    setScanError(`that config can't be read: ${(err as Error).message.replace(/^\d+\s*/, "")}`);
+                  }
+                });
+              }} />
+            <div>
+              <button onClick={() => configInput.current?.click()} className="mt-4" data-testid="policy-open-config"
+                style={{ background: "none", border: "none", color: C.mut, fontFamily: MONO, fontSize: 11.5, cursor: "pointer", padding: 0 }}>
+                open an axor.config.json you already have
+              </button>
+            </div>
             <div><Tooltip content="Skip the scan: start from an empty list and add each tool by name yourself.">
               <button onClick={() => { setSinks([]); setStage("build"); }} className="mt-4" style={{ background: "none", border: "none", color: C.mut, fontFamily: MONO, fontSize: 11.5, cursor: "pointer", padding: 0 }}>
                 add the tools by hand instead
@@ -591,11 +661,17 @@ export default function ConfigBuilder() {
   }
 
   if (stage === "build") {
-    return (
-      <Container>
-        <h1 style={{ fontSize: 22, fontWeight: 650, margin: "0 0 4px" }}>
-          {fromCode ? <>Found {sinks.length} tools. What does each one do?</> : <>What can your agent touch?</>}
-        </h1>
+    const form = (
+      <div style={{ minWidth: 0 }}>
+        <div className="flex items-start gap-3">
+          <h1 style={{ fontSize: 22, fontWeight: 650, margin: "0 0 4px", flex: 1 }}>
+            {fromCode ? <>Found {sinks.length} tools. What does each one do?</> : <>What can your agent touch?</>}
+          </h1>
+          <button data-testid="config-split" onClick={() => setSplit(!split)}
+            style={btn({ color: split ? C.steel : C.mut, fontSize: 11, padding: "4px 10px", whiteSpace: "nowrap", marginTop: 4 })}>
+            {split ? "hide the config" : "{ } show the config"}
+          </button>
+        </div>
         <div style={{ fontFamily: MONO, fontSize: 11.5, color: C.mut, marginBottom: 20 }}>
           {fromCode
             ? <>Guessed from the names — <span style={{ color: C.amber }}>check each one</span>. A tool left on “pick one” is refused.</>
@@ -638,7 +714,7 @@ export default function ConfigBuilder() {
                   {s.type === "?" && <option value="?">pick one…</option>}
                   {TYPES.map((t) => <option key={t} value={t}>{TYPE_LABEL[t]}</option>)}
                 </select>
-                <button onClick={() => setSel(sel === i ? null : i)} className="flex flex-col"
+                <button onClick={() => { setSel(sel === i ? null : i); setFocus(["sinks", s.name]); }} className="flex flex-col"
                   title="more: which arguments decide, how bad if it goes wrong"
                   style={{ minWidth: 0, flex: "1 1 200px", background: "none", border: "none", padding: 0, textAlign: "left", cursor: "pointer" }}>
                   <span style={{ fontFamily: MONO, fontSize: 13, color: s.type === "?" ? C.amber : C.text }}>
@@ -727,6 +803,7 @@ export default function ConfigBuilder() {
                 onChange={(e) => {
                   const n = parseInt(e.target.value, 10);
                   setBudgetCapCalls(e.target.value === "" || Number.isNaN(n) || n < 1 ? null : n);
+                  setFocus(["budget_cap_calls"]);
                 }}
                 style={{ width: 100, background: C.bg, border: `1px solid ${C.line}`, borderRadius: 4, color: C.text, fontFamily: MONO, fontSize: 11.5, padding: "5px 8px", outline: "none" }} />
               <span style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim }}>
@@ -808,7 +885,16 @@ export default function ConfigBuilder() {
           </Tooltip>
           {unclassified > 0 && <span style={{ fontFamily: MONO, fontSize: 11.5, color: C.amber }}>{unclassified} not picked yet — refused until you pick</span>}
         </div>
-      </Container>
+      </div>
+    );
+    if (!split) return <Container>{form}</Container>;
+    return (
+      <div style={{ maxWidth: 1360, margin: "0 auto", display: "grid", gridTemplateColumns: "minmax(0, 1fr) minmax(0, 1fr)", gap: 24 }}>
+        {form}
+        <div style={{ position: "sticky", top: 12, alignSelf: "start", height: "calc(100vh - 110px)" }}>
+          <ConfigText text={JSON.stringify(config, null, 2)} focus={focus} onApply={applyConfig} />
+        </div>
+      </div>
     );
   }
 
