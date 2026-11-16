@@ -42,6 +42,11 @@ const WHAT: Record<string, string> = {
 export const incidentWhat = (deviation?: string | null): string =>
   deviation ? (WHAT[deviation] ?? deviation.replace(/_/g, " ")) : "something did not add up";
 
+const inlineLink: React.CSSProperties = {
+  background: "none", border: "none", padding: 0, cursor: "pointer", fontFamily: MONO,
+  fontSize: 11.5, color: C.steel,
+};
+
 function when(ts: string): string {
   const d = new Date(ts);
   return Number.isNaN(d.getTime()) ? ts : d.toLocaleString();
@@ -58,17 +63,15 @@ export default function Evidence() {
 
   return (
     <div style={{ maxWidth: 640, margin: "0 auto" }}>
-      <div className="flex items-center justify-between flex-wrap" style={{ gap: 8, margin: "0 0 6px" }}>
-        <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>Incidents</h1>
-        <button onClick={() => navigate("catch")}
-          style={{ display: "flex", alignItems: "center", gap: 5, background: "none", border: `1px solid ${C.steel}`, borderRadius: 5, color: C.steel, fontFamily: MONO, fontSize: 11.5, padding: "5px 12px", cursor: "pointer" }}>
-          <Zap size={12} /> test an agent
-        </button>
-      </div>
+      <h1 style={{ fontSize: 22, fontWeight: 700, margin: "0 0 6px" }}>Incidents</h1>
       <div style={{ fontFamily: MONO, fontSize: 11.5, color: C.dim, marginBottom: 22, lineHeight: 1.6 }}>
         when an agent says a tool worked and it didn't, or tries to send out text that came from
-        outside — what really happened, next to what the agent said. caught in test runs (a tool
-        broken on purpose) and in the work of your connected agents. replay any one to see how.
+        outside — what really happened, next to what the agent said. they come from your{" "}
+        <button onClick={() => navigate(isConnected(mode) ? "govern" : "connect")} data-testid="incidents-from-agents"
+          style={inlineLink}>connected agents</button>' work, and from{" "}
+        <button onClick={() => navigate("catch")} data-testid="incidents-from-tests" style={inlineLink}>
+          test runs</button>{" "}
+        — a tool broken on purpose to see what the agent says. replay any one to see how.
       </div>
 
       {runs.isPending && (
