@@ -49,6 +49,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     await rehydrate(app.state)
     tasks = [
         asyncio.create_task(regression_schedule_loop(app.state)),
+        asyncio.create_task(chaos_schedule_loop(app.state)),
         # Always: entitlement housekeeping answers to the license, not to
         # whether the operator configured a retention window.
         asyncio.create_task(license_loop(app.state)),
@@ -304,6 +305,63 @@ async def regression_schedule_loop(state: Any) -> None:  # noqa: ANN401
             log.exception("scheduled corpus sweep failed")
         finally:
             set_current_org(PUBLIC_ORG)
+
+
+async def chaos_schedule_loop(state: Any) -> None:  # noqa: ANN401
+    """Arm each tenant's scheduled chaos tests when their interval is due —
+    the same sweep, the same license check at fire time, as corpus CI."""
+    sweep = state.config.schedule_sweep_seconds
+    while True:
+        await asyncio.sleep(sweep)
+        try:
+            for org in await state.store.orgs_with_setting("chaos_schedule"):
+                set_current_org(org)
+                await run_due_chaos(state, org)
+        except asyncio.CancelledError:
+            raise
+        except Exception:  # noqa: BLE001 - the loop must survive a bad cycle
+            log.exception("scheduled chaos sweep failed")
+        finally:
+            set_current_org(PUBLIC_ORG)
+
+
+async def run_due_chaos(state: Any, org: str) -> None:  # noqa: ANN401
+    """One tenant's scheduled chaos: a tool each chosen agent has used, broken
+    one of the chosen ways, on its next run. Every agent that has run when the
+    schedule names none."""
+    from axor_backend import chaos
+
+    try:
+        sched = await state.store.get_setting("chaos_schedule")
+        if not sched or not sched.get("enabled"):
+            return
+        if active_license(state, org) is None:
+            return
+        last = sched.get("last_run_ts")
+        interval = timedelta(hours=float(sched.get("interval_hours", 24)))
+        now_ts = datetime.now(UTC)
+        if last is not None and now_ts - datetime.fromisoformat(last) < interval:
+            return
+        nodes = sched.get("nodes") or sorted({r["node_id"] for r in await state.store.list_runs()})
+        picked, skipped = await chaos.plan(state.store, nodes, None, None, sched.get("modes"))
+        armed = []
+        for node, fault in picked:
+            try:
+                armed.append(await chaos.arm(state, node, [fault], "chaos-schedule"))
+            except Exception as exc:  # noqa: BLE001 - one agent's refusal is not the run's
+                skipped.append({"node_id": node, "reason": str(exc)})
+
+        def stamp(stored: Any) -> dict:  # noqa: ANN401
+            return {**(stored or {}), "last_run_ts": now_ts.isoformat(),
+                    "last_armed": [{"node_id": a["node_id"], **a["faults"][0]} for a in armed],
+                    "last_skipped": skipped}
+
+        await state.store.mutate_setting("chaos_schedule", stamp)
+        log.info("scheduled chaos (org %s): armed %d, skipped %d", org, len(armed), len(skipped))
+    except asyncio.CancelledError:
+        raise
+    except Exception:  # noqa: BLE001 - one tenant's bad cycle is not the fleet's
+        log.exception("scheduled chaos failed for org %s", org)
 
 
 async def run_due_schedule(state: Any, org: str) -> None:  # noqa: ANN401

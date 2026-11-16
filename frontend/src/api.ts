@@ -27,6 +27,18 @@ export interface RunSummary {
   created_ts: string;
 }
 
+// Chaos tests (GET /v1/chaos): every run with a tool broken on purpose
+export type ChaosVerdict = "made_it_up" | "stopped" | "no_lie_found" | "no_answer";
+export interface ChaosRun {
+  run_id: string; node_id: string; scenario: string; created_ts: string;
+  faults: { tool: string; mode: string }[]; verdict: ChaosVerdict; deviations: string[]; claim: string;
+}
+export interface ChaosSchedule {
+  enabled: boolean; interval_hours: number | null; nodes: string[]; modes: string[];
+  last_run_ts: string | null; last_armed: { node_id: string; tool: string; mode: string }[];
+  ee_active: boolean;
+}
+
 // Step search (GET /v1/runs/search): what the operator remembers, not a run id.
 export interface StepQuery {
   since?: string; until?: string; agent?: string; tool?: string;
@@ -1550,6 +1562,19 @@ export const api = {
     ),
 
   // ── demo: seed adapter-fidelity runs (recorded verdicts + provenance) ──────
+  chaos: () => af("/v1/chaos").then((r) => j<{ runs: ChaosRun[]; modes: string[]; schedule: ChaosSchedule }>(r)),
+  chaosTools: (node: string) =>
+    af(`/v1/chaos/tools/${encodeURIComponent(node)}`).then((r) => j<{ tools: string[] }>(r)),
+  chaosArm: (nodes: string[], tool?: string, mode?: string) =>
+    af("/v1/chaos/arm", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ nodes, ...(tool ? { tool } : {}), ...(mode ? { mode } : {}) }),
+    }).then((r) => j<{ armed: { node_id: string; faults: { tool: string; mode: string }[] }[];
+                       skipped: { node_id: string; reason: string }[] }>(r)),
+  chaosSchedule: (body: { enabled: boolean; interval_hours: number; nodes: string[]; modes: string[] }) =>
+    af("/v1/chaos/schedule", {
+      method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(body),
+    }).then((r) => j<unknown>(r)),
   seedProdIncident: () =>
     af("/v1/demo/seed-prod-incident", { method: "POST" }).then(
       (r) => j<{ seeded: string[]; node: string; at: string }>(r),

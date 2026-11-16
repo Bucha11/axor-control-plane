@@ -171,6 +171,7 @@ _WRITE_POLICY: tuple[tuple[str, str], ...] = (
     ("/v1/regression", "read"),       # replay-only, no state change
     ("/v1/replay/", "read"),          # counterfactual POST is read-only
     ("/v1/config/check", "read"),     # reads a config, stores nothing
+    ("/v1/chaos/", "operate"),        # arms a broken tool on a live agent
     ("/v1/notifications/", "operate"),
     ("/v1/lab/", "operate"),          # accepting a Lab deploy changes the corpus
     # ── vault, longest prefix first: the two subsystems are not one surface ──

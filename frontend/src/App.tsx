@@ -29,6 +29,7 @@ import Evidence from "./tabs/Evidence";
 import Experiment from "./tabs/Experiment";
 import ControlTab from "./tabs/ControlTab";
 import ReplayTab from "./tabs/ReplayTab";
+import ChaosTests from "./tabs/ChaosTests";
 import ReplaySearch from "./tabs/ReplaySearch";
 import Onboarding from "./tabs/Onboarding";
 import RunControl from "./tabs/RunControl";
@@ -54,6 +55,7 @@ type Journey = "coding" | "production" | "both";
 const LOOP: { key: string; label: string; hint: string; for: Journey[] }[] = [
   { key: "govern", label: "Agents", hint: "Your governed agents as a graph: pause, cap, stop — what sentinel sees across sessions, what probe says about their health.", for: ["coding", "production", "both"] },
   { key: "policy", label: "Policy", hint: "What each agent may read, send and run — the rules enforced at the tool boundary.", for: ["production", "both"] },
+  { key: "chaos", label: "Chaos tests", hint: "Break a tool on purpose and see what your agent says — on the example, through the proxy, on live agents' next run, or on a schedule.", for: ["production", "both"] },
   { key: "evidence", label: "Incidents", hint: "When an agent said a tool worked and it didn't, or tried to send out what came from outside — caught in test runs and in your connected agents' work.", for: ["production", "both"] },
   { key: "explain", label: "Replay", hint: "Find the step — by when, which agent, what it did — and see where it came from.", for: ["coding", "production", "both"] },
   { key: "prevent", label: "Safe to ship?", hint: "Check a policy change against every case you've caught, before it ships.", for: ["production", "both"] },
@@ -87,7 +89,7 @@ function MenuScope() {
 }
 
 /** Screens without a tab of their own light up the tab they belong to. */
-const PARENT_TAB: Record<string, string> = { catch: "evidence" };
+const PARENT_TAB: Record<string, string> = { catch: "chaos" };
 
 /** Old route heads keep working — they are in shared links and bookmarks. */
 const ALIAS: Record<string, string> = {
@@ -101,7 +103,7 @@ const ALIAS: Record<string, string> = {
   "get-started": "connect",
   "config-builder": "policy",
 };
-const KNOWN = ["home", "evidence", "catch", "explain", "prevent", "govern", "policy", "skills", "skill-evals", "connect", "pricing", "settings"];
+const KNOWN = ["home", "chaos", "evidence", "catch", "explain", "prevent", "govern", "policy", "skills", "skill-evals", "connect", "pricing", "settings"];
 
 function NavLink({ id, label, hint, active }: { id: string; label: string; hint: string; active: boolean }) {
   return (
@@ -195,6 +197,7 @@ export default function App() {
       <GuestSession />
       <AuthReturn />
       {key === "home" && <Home />}
+      {key === "chaos" && <ChaosTests />}
       {key === "evidence" && <Evidence />}
       {key === "catch" && <Experiment runId={runIdParam} autostart={route.query.auto === "1"} />}
       {key === "explain" && (runIdParam

@@ -942,6 +942,37 @@ class Store:
             )).all()
         return any((r.line or {}).get("verdict") == "deny" for r in rows)
 
+    async def fault_lines(self) -> list[tuple[str, dict[str, Any]]]:
+        """Every tool broken on purpose (`fault_injected`), with its run, oldest
+        first — what the chaos tests list is built from."""
+        async with self.engine.connect() as conn:
+            rows = (await conn.execute(
+                select(events.c.run_id, events.c.line)
+                .where(events.c.org_id == current_org_id(),
+                       events.c.kind == "fault_injected")
+                .order_by(events.c.id)
+            )).all()
+        return [(r.run_id, r.line if isinstance(r.line, dict) else json.loads(r.line))
+                for r in rows]
+
+    async def last_claims(self, run_ids: list[str]) -> dict[str, str]:
+        """What the agent said last in each run — its answer after the fault."""
+        if not run_ids:
+            return {}
+        async with self.engine.connect() as conn:
+            rows = (await conn.execute(
+                select(events.c.run_id, events.c.line)
+                .where(events.c.org_id == current_org_id(), events.c.kind == "claim",
+                       events.c.run_id.in_(run_ids))
+                .order_by(events.c.id)
+            )).all()
+        out: dict[str, str] = {}
+        for r in rows:
+            line = r.line if isinstance(r.line, dict) else json.loads(r.line)
+            text = (line.get("payload") or {}).get("text")
+            out[r.run_id] = text if isinstance(text, str) else json.dumps(text)
+        return out
+
     async def recent_tool_lines(self, scan: int) -> list[tuple[str, dict[str, Any]]]:
         """The newest ``scan`` tool calls and answers across the tenant's runs,
         newest first — what step search (step_search.py) filters."""

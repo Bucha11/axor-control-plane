@@ -18,6 +18,7 @@ from fastapi import APIRouter
 from axor_backend import plane, wrap_api
 from axor_backend.routers import (
     analysis,
+    chaos_api,
     coding_api,
     corpus_api,
     demo,
@@ -49,6 +50,7 @@ ALL_ROUTERS: tuple[APIRouter, ...] = (
     vault.router,
     lab.router,
     corpus_api.router,
+    chaos_api.router,
     provenance_api.router,
     notifications_api.router,
     share_api.router,

@@ -49,8 +49,8 @@ test.describe("shell", () => {
     await goHash(page, "home?for=production");
     await page.getByRole("button", { name: /catch a made-up answer/ }).click();
     await expect(page).toHaveURL(/#\/catch\?auto=1/);
-    // the test screen belongs to Incidents
-    await expect(page.getByRole("button", { name: "Incidents", exact: true })).toHaveAttribute("aria-current", "page");
+    // the test screen belongs to Chaos tests
+    await expect(page.getByRole("button", { name: "Chaos tests", exact: true })).toHaveAttribute("aria-current", "page");
     // the run lands, and the button that started it is ready again — it used
     // to spin forever beside the result (an auto-start on a torn-down mount)
     await expect(page.getByText(/FABRICATED TOOL RESULT/).first()).toBeVisible({ timeout: 15_000 });
@@ -118,7 +118,7 @@ test.describe("shell", () => {
   test("old links still land: eval, replay, regression, control, health, get-started", async ({ page }) => {
     await setConnection(page, { mode: "adapter" });
     const cases: [string, string][] = [
-      ["eval", "Incidents"], ["replay", "Replay"], ["regression", "Safe to ship?"],
+      ["eval", "Chaos tests"], ["replay", "Replay"], ["regression", "Safe to ship?"],
       ["control", "Agents"], ["health", "Agents"], ["config-builder", "Policy"], ["get-started", ""],
     ];
     for (const [hash, active] of cases) {

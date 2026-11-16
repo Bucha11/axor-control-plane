@@ -89,8 +89,8 @@ export default function Evidence() {
         outside — what really happened, next to what the agent said. they come from your{" "}
         <button onClick={() => navigate(isConnected(mode) ? "govern" : "connect")} data-testid="incidents-from-agents"
           style={inlineLink}>connected agents</button>' work, and from{" "}
-        <button onClick={() => navigate("catch")} data-testid="incidents-from-tests" style={inlineLink}>
-          test runs</button>{" "}
+        <button onClick={() => navigate("chaos")} data-testid="incidents-from-tests" style={inlineLink}>
+          chaos tests</button>{" "}
         — a tool broken on purpose to see what the agent says. replay any one to see how.
       </div>
 
