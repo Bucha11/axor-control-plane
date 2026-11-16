@@ -73,7 +73,7 @@ export const TOURS: Record<TourSide, TourStep[]> = {
       body: "Drop your agent's code: we find its tools and guess what each one does — reads, writes, sends something out. You correct the guess. That is what gets enforced, not the prompt.",
     },
     {
-      route: "evidence", target: sel("evidence-list"), title: "Caught lies",
+      route: "evidence", target: sel("evidence-list"), title: "Incidents",
       body: "When an agent says a tool worked and it didn't — or tries to send out text it read on the web — it lands here: what really happened, next to what the agent said.",
     },
     {

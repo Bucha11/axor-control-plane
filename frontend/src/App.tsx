@@ -5,7 +5,7 @@
 // The nav leads with governance, the product; the catch loop is its proof:
 //   Agents         (#/govern)   — governed agents: graph, sentinel reputation, context health & repair
 //   Policy         (#/policy)   — what each agent may read, send and run
-//   Caught lies    (#/evidence) — every EvidenceCase caught (tests run at #/catch)
+//   Incidents      (#/evidence) — every EvidenceCase caught (tests run at #/catch)
 //   Replay         (#/explain)  — step through a run, fork what-ifs
 //   Safe to ship?  (#/prevent)  — a policy change against the caught cases
 // Older route names stay as aliases, so no shared link breaks.
@@ -44,7 +44,7 @@ import Skills from "./tabs/Skills";
 import SkillEvals from "./tabs/SkillEvals";
 
 // Governance first: the product is the policy membrane between an agent and its
-// tools. "Caught lies" is the proof it works, not the product.
+// tools. "Incidents" is the proof it works, not the product.
 type Journey = "coding" | "production" | "both";
 // `for`: which journeys a section belongs to. Coding agents come with their
 // rules built in (what Bash or WebFetch does is known), so describing tools,
@@ -53,7 +53,7 @@ type Journey = "coding" | "production" | "both";
 const LOOP: { key: string; label: string; hint: string; for: Journey[] }[] = [
   { key: "govern", label: "Agents", hint: "Your governed agents as a graph: pause, cap, stop — what sentinel sees across sessions, what probe says about their health.", for: ["coding", "production", "both"] },
   { key: "policy", label: "Policy", hint: "What each agent may read, send and run — the rules enforced at the tool boundary.", for: ["production", "both"] },
-  { key: "evidence", label: "Caught lies", hint: "Every time an agent claimed something its tools never gave it — and the test that keeps it caught.", for: ["production", "both"] },
+  { key: "evidence", label: "Incidents", hint: "When an agent said a tool worked and it didn't, or tried to send out what came from outside — caught in test runs and in your connected agents' work.", for: ["production", "both"] },
   { key: "explain", label: "Replay", hint: "Step through any run and see exactly what crossed the boundary, and why.", for: ["coding", "production", "both"] },
   { key: "prevent", label: "Safe to ship?", hint: "Check a policy change against every case you've caught, before it ships.", for: ["production", "both"] },
   { key: "skills", label: "Try a skill", hint: "Before installing a skill for Claude Code or Codex: what it asks the agent to do, and what an agent actually does with it.", for: ["coding", "both"] },
@@ -564,7 +564,7 @@ function AccountButton() {
           {guest && (
             <div style={{ fontFamily: MONO, fontSize: 11, color: C.mut, lineHeight: 1.6, marginBottom: 10 }}>
               You are working as a guest: nothing is kept after the session ends. Sign up free —
-              your runs, agents and caught lies move into the new workspace.
+              your runs, agents and incidents move into the new workspace.
             </div>
           )}
           <IdentityLogin initialMode={guest ? "signup" : "login"} onDone={() => setOpen(false)} />

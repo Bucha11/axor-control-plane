@@ -1,4 +1,4 @@
-// An action whose value is what an account is for — keep a caught lie as a
+// An action whose value is what an account is for — keep an incident as a
 // test, get mail when an agent goes wrong — offered where the thing happens.
 // A guest is asked to sign up right there, told what it gets them (and that
 // their guest work comes along); anyone else just gets the action. Sign-up is
@@ -27,7 +27,7 @@ const link = (color: string) => ({
  * is checked against it before it ships (Safe to ship?). */
 export function KeepAsTest({ runId, testId = "keep-as-test" }: { runId: string; testId?: string }) {
   const guest = useGuest();
-  const pin = useMutation({ mutationFn: () => api.pin(runId, "must_block", "kept from a caught lie") });
+  const pin = useMutation({ mutationFn: () => api.pin(runId, "must_block", "kept from an incident") });
   if (pin.isSuccess) {
     return (
       <span data-testid={testId} style={{ fontFamily: MONO, fontSize: 11, color: C.green }}>
@@ -97,10 +97,10 @@ export function SignUpForYourAgent({ testId = "signup-own-agent" }: { testId?: s
   if (!guest) return null;
   return (
     <div data-testid={testId} style={{ fontFamily: MONO, fontSize: 11, color: C.mut, marginTop: 10, lineHeight: 1.6 }}>
-      want this on your own agent? an account is free: 1 production agent, alerts by email, caught lies kept
+      want this on your own agent? an account is free: 1 production agent, alerts by email, incidents kept
       as tests — and what you did here comes with you.{" "}
       <button onClick={() => askToSignUp("your workspace", "Sign up — free",
-        "1 production agent, alerts by email, caught lies kept as tests.")} style={link(C.steel)}>
+        "1 production agent, alerts by email, incidents kept as tests.")} style={link(C.steel)}>
         sign up →
       </button>
     </div>

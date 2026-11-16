@@ -43,7 +43,7 @@ test.describe("on a phone", () => {
       }),
     );
     await goHash(page, "home");
-    for (const id of ["Agents", "Policy", "Caught lies", "Replay"]) {
+    for (const id of ["Agents", "Policy", "Incidents", "Replay"]) {
       await expect(page.getByRole("button", { name: id, exact: true })).toBeInViewport();
     }
     await expect(page.getByRole("button", { name: "sign in", exact: true })).toBeInViewport();

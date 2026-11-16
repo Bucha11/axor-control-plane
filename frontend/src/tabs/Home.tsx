@@ -167,7 +167,7 @@ function FirstVisit() {
  * sections, one click each — the menu itself is kept off a first visit. */
 const SECTIONS: Record<Side, [string, string][]> = {
   coding: [["govern", "Agents"], ["explain", "Replay"], ["skills", "Try a skill"]],
-  production: [["govern", "Agents"], ["policy", "Policy"], ["evidence", "Caught lies"],
+  production: [["govern", "Agents"], ["policy", "Policy"], ["evidence", "Incidents"],
                ["explain", "Replay"], ["prevent", "Safe to ship?"]],
 };
 

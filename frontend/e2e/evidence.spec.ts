@@ -10,21 +10,21 @@ test.describe("evidence", () => {
     await page.getByRole("button", { name: /Run the test/ }).click();
     await expect(page.getByText("fabricated a tool result").first()).toBeVisible({ timeout: 20_000 });
 
-    await page.getByRole("button", { name: "Caught lies", exact: true }).click();
+    await page.getByRole("button", { name: "Incidents", exact: true }).click();
     const row = page.getByTestId("evidence-row").first();
     await expect(row).toBeVisible();
-    await expect(row).toContainText(/fabricated/i);
+    await expect(row).toContainText("said a failed tool worked");
     await expect(row).toContainText("THE AGENT SAID");
 
     await row.getByRole("button", { name: /explain/ }).click();
     await expect(page).toHaveURL(/#\/explain\/[^/?]+/);
   });
 
-  test("a proxy-connected visit with no route lands on Caught lies", async ({ page }) => {
+  test("a proxy-connected visit with no route lands on Incidents", async ({ page }) => {
     await setConnection(page, { mode: "proxy" });
     await page.goto("/");
     await expect(page).toHaveURL(/#\/evidence$/);
-    await expect(page.getByRole("heading", { name: "Caught lies" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Incidents" })).toBeVisible();
   });
 
   test("an empty inventory says how to catch the first one", async ({ page }) => {
@@ -32,8 +32,8 @@ test.describe("evidence", () => {
       route.fulfill({ status: 200, contentType: "application/json", body: "[]" }),
     );
     await goHash(page, "evidence");
-    await expect(page.getByTestId("evidence-empty")).toContainText("Nothing caught yet.");
-    await page.getByRole("button", { name: /catch one in demo-mode/ }).click();
+    await expect(page.getByTestId("evidence-empty")).toContainText("No incidents yet.");
+    await page.getByRole("button", { name: /test the example agent/ }).click();
     await expect(page).toHaveURL(/#\/catch\?auto=1/);
   });
 });

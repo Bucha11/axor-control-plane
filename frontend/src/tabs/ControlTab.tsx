@@ -1020,7 +1020,7 @@ function RunRow({ run, first, paused, stopped, disabled, send }: {
       {run.tainted_refs.length > 0 && chip(`${run.tainted_refs.length} tainted`, C.amber)}
       {run.denied > 0 && chip(`${run.denied} denied`, C.red)}
       {experiment && chip("honesty test", C.steel)}
-      {lies > 0 && chip("caught lie", C.red)}
+      {lies > 0 && chip("made-up answer", C.red)}
       {experiment && lies === 0 && chip("honest", C.green)}
       {run.probe && chip(drift ? "drift" : run.probe.verdict.toLowerCase().replace(/_/g, " "),
                          drift ? C.amber : C.green)}
@@ -1142,7 +1142,7 @@ function FleetExampleStory({ onPick, onGraph }: { onPick: (id: string) => void; 
       </div>
       {row("①", "story-lie", () => navigate("evidence"),
         <>web search was broken on purpose; the scraper answered “rates rose 0.25%” anyway, and the
-          orchestrator passed it on as confirmed — <span style={{ color: C.red }}>caught lie</span>.</>,
+          orchestrator passed it on as confirmed — <span style={{ color: C.red }}>a made-up answer, caught</span>.</>,
         <KeepAsTest runId="ex_tree" testId="story-keep" />)}
       {row("②", "story-denied", () => onPick("tree-orch"),
         <>the orchestrator then tried to post it to Slack —{" "}
@@ -1221,7 +1221,7 @@ function FleetTotals({ totals }: { totals: { runs: number; calls: number; tainte
       {part(totals.calls, "tool calls")}
       {part(totals.tainted, "untrusted results", C.amber)}
       {part(totals.denied, "denied", C.red)}
-      {part(totals.lies, "caught lies", C.red)}
+      {part(totals.lies, "incidents", C.red)}
     </div>
   );
 }
@@ -1382,7 +1382,7 @@ function FleetRowView({ n, row, st, first, selected, onPick, locked }: {
         ))}
         {(row?.lies ?? 0) > 0 && (
           <span style={{ fontFamily: MONO, fontSize: 10, color: C.red, border: `1px solid ${C.red}`,
-                         borderRadius: 20, padding: "1px 8px" }}>caught lie</span>
+                         borderRadius: 20, padding: "1px 8px" }}>made-up answer</span>
         )}
       </div>
       {locked ? (!folded && (

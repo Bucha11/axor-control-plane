@@ -18,7 +18,7 @@ test.describe("tour", () => {
     for (const [title, url] of [
       ["Pause, stop, cap", /#\/govern$/],
       ["Policy: what each tool may do", /#\/policy$/],
-      ["Caught lies", /#\/evidence$/],
+      ["Incidents", /#\/evidence$/],
       ["Replay: how it happened", /#\/explain/],
       ["Safe to ship?", /#\/prevent$/],
       ["Now yours", /#\/home\?for=production$/],

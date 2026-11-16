@@ -1,4 +1,7 @@
-// Evidence — every EvidenceCase this deployment has caught, newest first.
+// Incidents — every EvidenceCase this deployment has caught, newest first:
+// an agent said one thing and its tools showed another, or it tried to send
+// out what came from outside. Caught in test runs (a tool broken on purpose)
+// and in the work of agents connected to the plane.
 //
 // The EvidenceCase is the product's artifact: a reproducible discrepancy
 // between what a tool really returned and what the agent then claimed. Before
@@ -26,6 +29,19 @@ export function brief(value: unknown, max = 90): string {
   return text.length > max ? `${text.slice(0, max - 1)}…` : text;
 }
 
+/** What happened, in words — the deviation's name is for the receipt. */
+const WHAT: Record<string, string> = {
+  fabricated_tool_result: "said a failed tool worked",
+  fabrication_contained: "a made-up result was stopped before it spread",
+  tainted_value_exfiltrated: "tried to send out text that came from outside",
+  corrupted_retrieval_used: "used a poisoned search result",
+  direct_policy_violation: "followed an instruction from outside text",
+  undisclosed_tool_substitution: "swapped a tool without saying so",
+  budget_misreport: "misreported its budget",
+};
+export const incidentWhat = (deviation?: string | null): string =>
+  deviation ? (WHAT[deviation] ?? deviation.replace(/_/g, " ")) : "something did not add up";
+
 function when(ts: string): string {
   const d = new Date(ts);
   return Number.isNaN(d.getTime()) ? ts : d.toLocaleString();
@@ -43,15 +59,16 @@ export default function Evidence() {
   return (
     <div style={{ maxWidth: 640, margin: "0 auto" }}>
       <div className="flex items-center justify-between flex-wrap" style={{ gap: 8, margin: "0 0 6px" }}>
-        <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>Caught lies</h1>
+        <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>Incidents</h1>
         <button onClick={() => navigate("catch")}
           style={{ display: "flex", alignItems: "center", gap: 5, background: "none", border: `1px solid ${C.steel}`, borderRadius: 5, color: C.steel, fontFamily: MONO, fontSize: 11.5, padding: "5px 12px", cursor: "pointer" }}>
           <Zap size={12} /> test an agent
         </button>
       </div>
       <div style={{ fontFamily: MONO, fontSize: 11.5, color: C.dim, marginBottom: 22, lineHeight: 1.6 }}>
-        every time an agent claimed something its tools never gave it — what the tool
-        really returned, next to what the agent said. replay any one to see how it happened.
+        when an agent says a tool worked and it didn't, or tries to send out text that came from
+        outside — what really happened, next to what the agent said. caught in test runs (a tool
+        broken on purpose) and in the work of your connected agents. replay any one to see how.
       </div>
 
       {runs.isPending && (
@@ -69,11 +86,12 @@ export default function Evidence() {
           style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 10, padding: 20 }}
         >
           <div style={{ fontFamily: MONO, fontSize: 13, color: C.text, marginBottom: 6 }}>
-            Nothing caught yet.
+            No incidents yet.
           </div>
           <div style={{ fontFamily: MONO, fontSize: 11.5, color: C.dim, lineHeight: 1.6, marginBottom: 16 }}>
-            an EvidenceCase appears here the first time an agent claims something its tools
-            did not give it. the fastest way to see one is our own agent on our broken tools.
+            one appears the first time an agent says a tool worked when it didn't, or tries to
+            send out what it read from outside. the fastest way to see one: test our example agent
+            — we break its search on purpose and check what it says.
           </div>
           <div className="flex gap-2 flex-wrap">
             <button
@@ -83,7 +101,7 @@ export default function Evidence() {
               }}
               style={{ display: "flex", alignItems: "center", gap: 6, background: "none", border: `1px solid ${C.green}`, borderRadius: 6, color: C.green, fontFamily: MONO, fontSize: 12, padding: "7px 14px", cursor: "pointer" }}
             >
-              <Zap size={13} /> catch one in demo-mode
+              <Zap size={13} /> test the example agent
             </button>
             {!isConnected(mode) && (
               <button
@@ -110,7 +128,7 @@ export default function Evidence() {
                 <div className="flex items-center justify-between flex-wrap" style={{ gap: 8, marginBottom: 8 }}>
                   <span className="flex items-center gap-2" style={{ fontFamily: MONO, fontSize: 11.5, fontWeight: 700, color: C.red }}>
                     <AlertTriangle size={13} />
-                    {(ev.deviation ?? "discrepancy").replace(/_/g, " ").toLowerCase()}
+                    {incidentWhat(ev.deviation)}
                   </span>
                   <span style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim }}>
                     {when(run.created_ts)}

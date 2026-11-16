@@ -289,7 +289,7 @@ test("Agents with only the example fleet tells its story", async ({ page, reques
   });
   await page.getByTestId("home-example-fleet").click();
   const story = page.getByTestId("fleet-example-story");
-  await expect(story).toContainText("caught lie");
+  await expect(story).toContainText("a made-up answer, caught");
   await expect(page.getByText(/needs them wrapped in code/)).toHaveCount(0);
   await expect(page.getByRole("button", { name: "connection: example data" })).toBeVisible();
   // the activity reads as messages between agents, not event kinds

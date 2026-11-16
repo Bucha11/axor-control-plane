@@ -41,7 +41,7 @@ test.describe("coding agents: their menu, and trying a skill", () => {
     await expect(side.getByRole("button", { name: "Try a skill", exact: true })).toBeVisible();
     await expect(side.getByRole("button", { name: "Replay", exact: true })).toBeVisible();
     await expect(side.getByRole("button", { name: "Skill evals", exact: true })).toBeVisible();
-    for (const hidden of ["Policy", "Caught lies", "Safe to ship?"]) {
+    for (const hidden of ["Policy", "Incidents", "Safe to ship?"]) {
       await expect(side.getByRole("button", { name: hidden, exact: true })).toHaveCount(0);
     }
     await page.getByTestId("menu-scope").getByRole("button", { name: "show everything" }).click();

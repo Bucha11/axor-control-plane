@@ -113,7 +113,7 @@ export default function GuestSession() {
               <div style={{ fontSize: 13, color: C.text, lineHeight: 1.5, marginBottom: 8 }}>{askText.why}</div>
             )}
             <div style={{ fontFamily: MONO, fontSize: 11, color: C.mut, lineHeight: 1.6, marginBottom: 12 }}>
-              Free, one minute. Everything you did as a guest — runs, agents, caught lies —
+              Free, one minute. Everything you did as a guest — runs, agents, incidents —
               moves into the new workspace.
             </div>
             <IdentityLogin initialMode="signup" onDone={() => setAsk(null)} />
