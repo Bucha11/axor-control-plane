@@ -27,6 +27,21 @@ export interface RunSummary {
   created_ts: string;
 }
 
+// Step search (GET /v1/runs/search): what the operator remembers, not a run id.
+export interface StepQuery {
+  since?: string; until?: string; agent?: string; tool?: string;
+  outcome?: "" | "refused" | "would_refuse" | "let_through" | "outside";
+  does?: "" | "runs_code" | "changes_files" | "sends_out" | "deletes";
+  text?: string;
+}
+
+export interface FoundStep {
+  run_id: string; node_id: string; seq: number; ts: string | null;
+  kind: "tool_call" | "tool_result"; tool: string;
+  outcome: "refused" | "would_refuse" | "let_through" | "outside" | "answered";
+  does: string[]; from_outside: boolean; what: string; reason: string;
+}
+
 export interface CaseAnchor {
   node_id: string;
   seq: number;
@@ -1520,6 +1535,14 @@ export const api = {
     ),
 
   // ── demo: seed adapter-fidelity runs (recorded verdicts + provenance) ──────
+  seedProdIncident: () =>
+    af("/v1/demo/seed-prod-incident", { method: "POST" }).then(
+      (r) => j<{ seeded: string[]; node: string; at: string }>(r),
+    ),
+  searchSteps: (q: StepQuery) => {
+    const qs = new URLSearchParams(Object.entries(q).filter(([, v]) => v) as [string, string][]);
+    return af(`/v1/runs/search?${qs}`).then((r) => j<{ steps: FoundStep[]; scanned: number; more: boolean }>(r));
+  },
   seedAdapterRuns: () =>
     af("/v1/demo/seed-adapter-runs", { method: "POST" }).then(
       (r) => j<{ seeded: string[]; config: Record<string, unknown> }>(r),

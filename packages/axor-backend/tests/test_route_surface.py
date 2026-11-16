@@ -50,6 +50,7 @@ EXPECTED: dict[tuple[str, str], str] = {
     ("POST", "/v1/ingest/{run_id}"): "ingest",
     ("POST", "/v1/runs/{run_id}/evidence"): "ingest",
     ("GET", "/v1/runs"): "read",
+    ("GET", "/v1/runs/search"): "read",
     ("GET", "/v1/runs/{run_id}/events"): "read",
     ("GET", "/v1/runs/{run_id}/stream"): "read",
     # ── demo seeds ───────────────────────────────────────────────────────────
@@ -58,6 +59,7 @@ EXPECTED: dict[tuple[str, str], str] = {
     ("POST", "/v1/demo/seed-fleet"): "operate",
     ("POST", "/v1/demo/seed-coding"): "operate",
     ("POST", "/v1/demo/seed-skill-try"): "operate",
+    ("POST", "/v1/demo/seed-prod-incident"): "operate",
     ("POST", "/v1/demo/seed-skill-eval"): "operate",
     ("POST", "/v1/skill-evals"): "ingest",
     ("GET", "/v1/coding/policy"): "ingest",

@@ -4,7 +4,7 @@
 // the same recorded steps again under other rules and names the first step
 // that would have gone differently, and a run can be kept as a test.
 import { expect, test } from "@playwright/test";
-import { goHash, SEEDED, seedAdapterRuns, setConnection } from "./helpers";
+import { BACKEND, goHash, SEEDED, seedAdapterRuns, setConnection } from "./helpers";
 
 test.describe("replay", () => {
   test.beforeEach(async ({ page, request }) => {
@@ -44,5 +44,27 @@ test.describe("replay", () => {
     await page.getByRole("button", { name: /normal work — must keep passing/ }).click();
     await expect(page.getByText("check it in Safe to ship? →")).toBeVisible();
     await expect(page.getByRole("button", { name: /✓ normal work/ })).toBeVisible();
+  });
+
+  test("find the step: Thursday, prod, a table dropped — then where it came from", async ({ page, request }) => {
+    const r = await request.post(`${BACKEND}/v1/demo/seed-prod-incident`);
+    expect(r.ok()).toBeTruthy();
+    await goHash(page, "explain?when=30d");
+    await page.getByTestId("search-filters").getByRole("button", { name: "deleted or wiped" }).click();
+    await page.getByLabel("contains").fill("orders");
+    const row = page.getByTestId("search-row").filter({ hasText: "DROP TABLE orders" });
+    await expect(row).toHaveCount(1);
+    await expect(row).toContainText("let through");
+    await expect(row).toContainText("used text from outside");
+    await row.click();
+    // Replay opens on that very call, with the chain it came from
+    await expect(page.getByTestId("replay-title")).toContainText("support-agent-prod");
+    await expect(page.getByTestId("replay-step")).toContainText("STEP 5 OF 7");
+    await expect(page.getByTestId("replay-args")).toContainText("DROP TABLE orders CASCADE");
+    await expect(page.getByTestId("replay-origin")).toContainText("ticket_read's answer (outside text)");
+    // and back to the same results
+    await page.getByTestId("replay-back").click();
+    await expect(page.getByLabel("contains")).toHaveValue("orders");
+    await expect(page.getByTestId("search-row").filter({ hasText: "DROP TABLE orders" })).toHaveCount(1);
   });
 });

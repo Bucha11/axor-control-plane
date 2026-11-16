@@ -11,7 +11,7 @@ from __future__ import annotations
 import json
 from collections.abc import AsyncIterator
 
-from fastapi import APIRouter, Header
+from fastapi import APIRouter, Header, HTTPException
 from sse_starlette.sse import EventSourceResponse
 
 from axor_backend.broadcast import messages as bus_messages
@@ -132,6 +132,33 @@ async def set_evidence(
 @router.get("/runs")
 async def list_runs(store: StoreDep) -> list[dict]:
     return await store.list_runs()
+
+
+# How many of the newest tool events a search reads. Bounded so a tenant with
+# millions of events gets an answer, not a table scan; `more` says when the
+# window was full, so the UI can ask for a narrower time range.
+SEARCH_SCAN = 50_000
+
+
+@router.get("/runs/search")
+async def search_steps(
+    store: StoreDep, since: str | None = None, until: str | None = None,
+    agent: str = "", tool: str = "", outcome: str = "", does: str = "",
+    text: str = "", limit: int = 200,
+) -> dict:
+    """Steps across every run that match what the operator remembers — when,
+    which agent, which tool, what happened, what it did, any text in it."""
+    from axor_backend import step_search
+
+    if outcome and outcome not in step_search.OUTCOMES:
+        raise HTTPException(422, f"outcome is one of {', '.join(step_search.OUTCOMES)}")
+    if does and does not in step_search.DOES:
+        raise HTTPException(422, f"does is one of {', '.join(step_search.DOES)}")
+    rows = await store.recent_tool_lines(SEARCH_SCAN)
+    steps = step_search.search(rows, since=since, until=until, agent=agent, tool=tool,
+                               outcome=outcome, does=does, text=text,
+                               limit=max(1, min(limit, 500)))
+    return {"steps": steps, "scanned": len(rows), "more": len(rows) >= SEARCH_SCAN}
 
 
 @router.get("/runs/{run_id}/events")

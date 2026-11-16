@@ -54,7 +54,7 @@ const TOOL_DID: Record<string, string> = {
 const toolDid = (mode: string) => TOOL_DID[mode] ?? mode.replace(/_/g, " ");
 
 // where an incident came from: the plane's own examples, a test run, or work
-const EXAMPLES = new Set(["adapter-demo", "multi-agent-demo", "coding-demo", "skill-demo"]);
+const EXAMPLES = new Set(["adapter-demo", "multi-agent-demo", "coding-demo", "skill-demo", "ops-demo"]);
 const TESTS = new Set(["tool-deprivation", "exfil", "injection"]);
 function source(run: RunSummary): string {
   if (EXAMPLES.has(run.scenario)) return "example data";

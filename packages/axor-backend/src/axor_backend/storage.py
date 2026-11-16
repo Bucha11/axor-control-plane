@@ -937,6 +937,22 @@ class Store:
             )).all()
         return any((r.line or {}).get("verdict") == "deny" for r in rows)
 
+    async def recent_tool_lines(self, scan: int) -> list[tuple[str, dict[str, Any]]]:
+        """The newest ``scan`` tool calls and answers across the tenant's runs,
+        newest first — what step search (step_search.py) filters."""
+        async with self.engine.connect() as conn:
+            rows = (await conn.execute(
+                select(events.c.run_id, events.c.line)
+                .where(
+                    events.c.org_id == current_org_id(),
+                    events.c.kind.in_(("tool_call", "tool_result")),
+                )
+                .order_by(events.c.id.desc())
+                .limit(scan)
+            )).all()
+        return [(r.run_id, r.line if isinstance(r.line, dict) else json.loads(r.line))
+                for r in rows]
+
     async def run_events_after(
         self, run_id: str, after_id: int = 0,
     ) -> list[tuple[int, str]]:

@@ -29,7 +29,7 @@ test.describe("adoption", () => {
     await goHash(page, "eval");
     await expect(page.getByRole("note")).toContainText("EvidenceCase");
     await goHash(page, "replay");
-    await expect(page.getByRole("note")).toContainText("other rules would have changed");
+    await expect(page.getByRole("note")).toContainText("Something went wrong on Thursday");
     await goHash(page, "regression");
     await expect(page.getByRole("note")).toContainText("safe to ship", { ignoreCase: true });
   });

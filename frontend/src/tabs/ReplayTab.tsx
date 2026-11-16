@@ -9,24 +9,11 @@ import { api, ScrubberPayload, ScrubberStep } from "../api";
 import { navigate } from "../router";
 import { useApp } from "../store";
 import { incidentWhat } from "./Evidence";
+import { LAST_SEARCH } from "./ReplaySearch";
 import { C, MONO, btn, sevColor } from "../theme";
 import TaintGraph from "./TaintGraph";
 import CutResult from "../components/CutResult";
 import Coach from "../components/Coach";
-
-// A one-click seed of adapter-fidelity runs (recorded verdicts + value
-// provenance) — the trace depth the proxy can't produce, so the counterfactual,
-// the taint graph and two-sided regression can be shown with real data.
-function useSeedExample(onDone?: (blockRunId: string) => void) {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: () => api.seedAdapterRuns(),
-    onSuccess: async () => {
-      await qc.invalidateQueries({ queryKey: ["runs"] });
-      onDone?.("ex_block");
-    },
-  });
-}
 
 type Cf = "noexec" | "taint" | "policy";
 
@@ -61,6 +48,19 @@ function stepChip(s: ScrubberStep): { what: string; name: string } {
     fact: "note",
   };
   return { what: "", name: tags[s.kind] ?? s.kind.replace(/_/g, " ") };
+}
+
+/** What a call was asked to do, as the agent wrote it: the command, the query,
+ * the address, the file — or every argument when none of those is there. */
+function argsText(s: ScrubberStep): string {
+  const args = s.payload.args;
+  if (!args || typeof args !== "object") return "";
+  const a = args as Record<string, unknown>;
+  for (const k of ["command", "cmd", "query", "sql", "url", "file_path", "path"]) {
+    if (typeof a[k] === "string" && a[k]) return a[k] as string;
+  }
+  const rest = Object.entries(a).filter(([, v]) => v !== "" && v != null);
+  return rest.length ? rest.map(([k, v]) => `${k}: ${typeof v === "string" ? v : JSON.stringify(v)}`).join("\n") : "";
 }
 
 function taintRef(s: ScrubberStep | undefined): string | null {
@@ -184,6 +184,9 @@ export default function ReplayTab({ runId: runIdProp, cursor: cursorProp, seq: s
   // deep-link navigation that does not go through pickRun).
   useEffect(() => {
     setPinned(null);
+    setCf(null);
+    setCursor(cursorProp ? Number(cursorProp) : 0);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [runId]);
 
   const counterfactual = useMutation({
@@ -249,20 +252,7 @@ export default function ReplayTab({ runId: runIdProp, cursor: cursorProp, seq: s
   }, [base]);
 
   if (runs.isLoading) return <Center msg="loading runs…" />;
-  if (!runId) {
-    return (
-      <div style={{ maxWidth: 680, margin: "0 auto" }}>
-        <div data-tour="replay-picker">
-          <h1 style={{ fontSize: 22, fontWeight: 650, margin: "0 0 6px" }}>Replay</h1>
-          <div style={{ fontSize: 14, color: C.mut, marginBottom: 14, lineHeight: 1.6 }}>
-            Any run of your agents, step by step: what each tool was asked and answered, what was let
-            through, what was refused and why. Nothing has run yet.
-          </div>
-          <SeedButton label="replay an example run →" />
-        </div>
-      </div>
-    );
-  }
+  if (!runId) return <Center msg="No run picked." />;
 
   const run = (runs.data ?? []).find((r) => r.run_id === runId);
   const incident = run?.evidence?.[0];
@@ -273,14 +263,6 @@ export default function ReplayTab({ runId: runIdProp, cursor: cursorProp, seq: s
   const baseSteps = base?.steps ?? [];
   const outsideAt = baseSteps.findIndex(isTainted);
   const refusedAt = baseSteps.findIndex(isRefused);
-
-  const pickRun = (id: string) => {
-    if (id !== runId) navigate(`explain/${id}`);
-    setPickedRun(id);
-    setCursor(0);
-    setCf(null);
-    counterfactual.reset();
-  };
 
   const toggleCf = (which: Cf) => {
     if (cf === which) {
@@ -305,9 +287,11 @@ export default function ReplayTab({ runId: runIdProp, cursor: cursorProp, seq: s
   const canTaint = !!cur && cur.kind === "tool_result" && !isTainted(cur) && !!curRef;
   const policyTools = Object.keys(policy).length;
 
-  const runLabel = (r: typeof run) => r
-    ? `${r.node_id} · ${new Date(r.created_ts).toLocaleString()}${r.evidence?.[0] ? ` · ${incidentWhat(r.evidence[0].deviation)}` : ""}`
-    : "";
+  const backToSearch = () => {
+    let q: Record<string, string> = {};
+    try { q = JSON.parse(sessionStorage.getItem(LAST_SEARCH) ?? "{}"); } catch { /* a fresh search */ }
+    navigate("explain", q);
+  };
   const link: React.CSSProperties = { background: "none", border: "none", padding: 0, cursor: "pointer",
     fontFamily: MONO, fontSize: 11.5, color: C.steel };
 
@@ -319,15 +303,10 @@ export default function ReplayTab({ runId: runIdProp, cursor: cursorProp, seq: s
         the run: the same recorded steps are decided again — no model is called — and the first step
         that would have gone differently is named.
       </Coach>
-      <div data-tour="replay-picker" className="flex items-center gap-3 flex-wrap" style={{ marginBottom: 22 }}>
-        <select value={runId} onChange={(e) => pickRun(e.target.value)} aria-label="run"
-          style={{ background: C.panel2, border: `1px solid ${C.line}`, borderRadius: 5, color: C.text,
-                   fontFamily: MONO, fontSize: 11, padding: "5px 8px", maxWidth: 460 }}>
-          {(runs.data ?? []).map((r) => (
-            <option key={r.run_id} value={r.run_id}>{runLabel(r)}</option>
-          ))}
-        </select>
-        <SeedButton label="an example run" compact />
+      <div data-tour="replay-picker" className="flex items-center gap-3 flex-wrap" style={{ marginBottom: 14, fontFamily: MONO, fontSize: 11.5 }}>
+        <button onClick={backToSearch} data-testid="replay-back" style={link}>← find another step</button>
+        {run && <span style={{ color: C.dim }}>{new Date(run.created_ts).toLocaleString(undefined, {
+          weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", hourCycle: "h23" })}</span>}
       </div>
 
       <h1 data-testid="replay-title" style={{ fontSize: 21, fontWeight: 650, lineHeight: 1.35, margin: "0 0 4px" }}>
@@ -399,6 +378,12 @@ export default function ReplayTab({ runId: runIdProp, cursor: cursorProp, seq: s
                 <div style={{ fontFamily: MONO, fontSize: 11, color: C.text, marginTop: 8, background: C.panel2,
                               borderRadius: 4, padding: "6px 8px", whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>
                   {cur.payload.preview}
+                </div>
+              )}
+              {cur.kind === "tool_call" && argsText(cur) && (
+                <div data-testid="replay-args" style={{ fontFamily: MONO, fontSize: 11.5, color: C.text, marginTop: 8, background: C.panel2,
+                              borderRadius: 4, padding: "6px 8px", whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>
+                  {argsText(cur)}
                 </div>
               )}
               {cur.kind === "tool_call" && (() => {
@@ -517,19 +502,3 @@ function Center({ msg }: { msg: string }) {
   );
 }
 
-function SeedButton({ label, compact }: { label: string; compact?: boolean }) {
-  const seed = useSeedExample((blockRunId) => navigate(`explain/${blockRunId}`));
-  return (
-    <button
-      onClick={() => seed.mutate()}
-      disabled={seed.isPending}
-      title="two recorded example runs: an agent refused sending out what an email told it to, and normal work"
-      style={btn({
-        color: C.steel, borderColor: C.line,
-        fontSize: compact ? 10.5 : 12, padding: compact ? "4px 9px" : "7px 14px",
-      })}
-    >
-      {seed.isPending ? "seeding…" : label}
-    </button>
-  );
-}

@@ -49,7 +49,7 @@ router = APIRouter(prefix="/v1/demo", tags=["demo"])
 
 async def _seed(
     store: Store, cache: object, run_id: str, node: str, scenario: str,
-    events: list[dict], evidence: list[dict],
+    events: list[dict], evidence: list[dict], created: str | None = None,
 ) -> None:
     from axor_backend.demo import DEMO_RUN_IDS, DEMO_SCENARIOS
 
@@ -64,7 +64,7 @@ async def _seed(
             f"fabricated governance events to a recorded trace; rename or "
             f"delete that run first.",
         )
-    await store.reseed_run(run_id, node, scenario, now(), events)
+    await store.reseed_run(run_id, node, scenario, created or now(), events)
     cache.drop_run(current_org_id(), run_id)  # type: ignore[attr-defined]
     if evidence:
         await store.set_evidence(run_id, evidence)
@@ -251,3 +251,23 @@ async def fleet_reprobe(request: Request, store: StoreDep) -> dict:
         )
     await store.clear_desired_key(node, "pending_excision")
     return await plane.post_probe_report(node, demo.fleet_battery(drifted=False), request)
+
+
+@router.post("/seed-prod-incident")
+async def seed_prod_incident(store: StoreDep, cache: SubgraphCacheDep) -> dict:
+    """Example for step search: last Thursday afternoon a support agent dropped
+    the production orders table because a ticket told it to — let through."""
+    from datetime import UTC, datetime, timedelta
+
+    from axor_backend import demo
+
+    today = datetime.now(UTC).replace(hour=14, minute=31, second=0, microsecond=0)
+    back = (today.weekday() - 3) % 7 or 7          # the last Thursday before today
+    start = today - timedelta(days=back)
+    await _seed(store, cache, "ex_prod_drop", demo.OPS_AGENT, "ops-demo",
+                [{**e, "ts": (start + timedelta(seconds=9 * i)).isoformat()}
+                 for i, e in enumerate(demo.OPS_EVENTS)], [], created=start.isoformat())
+    if await store.get_reported(demo.OPS_AGENT) is None:
+        await store.upsert_reported(demo.OPS_AGENT, applied_version=0, level="NORMAL",
+                                    budget_remaining=None, ts=now())
+    return {"seeded": ["ex_prod_drop"], "node": demo.OPS_AGENT, "at": start.isoformat()}
