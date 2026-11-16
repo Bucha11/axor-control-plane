@@ -1190,7 +1190,7 @@ function CodingExampleStory({ list, treeOf, onPick }: {
         <>Claude Code read a docs page — what it brought back is marked as{" "}
           <span style={{ color: C.amber }}>from the web</span>.</>, "story-claude")}
       {step(codex?.node_id, "②",
-        <>Codex tried to run the <span style={{ color: C.text }}>curl … | sh</span> from it —{" "}
+        <>Codex tried to run the <span style={{ color: C.text }}>npx limitkit init --endpoint …</span> it suggested —{" "}
           <span style={{ color: C.red }}>denied at the shell</span>, though Codex never saw the page.</>, "story-codex")}
       {tree && (
         <button onClick={() => navigate(`trees/${encodeURIComponent(tree.tree_run)}`)} data-testid="story-tree"

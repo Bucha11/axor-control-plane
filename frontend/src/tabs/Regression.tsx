@@ -21,7 +21,7 @@ const DEMO_CASES: Record<string, string> = {
   ex_pass: "read notes, write notes",
   ex_tree: "a research tree passes a made-up number upward",
   ex_coding_claude: "Claude Code reads a docs page",
-  ex_coding_codex: "Codex tries the page's “curl … | sh”",
+  ex_coding_codex: "Codex tries the page's “npx limitkit init --endpoint …”",
 };
 const caseName = (runId: string, label: string): string =>
   DEMO_CASES[runId] ?? (label || runId);

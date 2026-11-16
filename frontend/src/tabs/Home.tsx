@@ -65,7 +65,7 @@ function FirstVisit() {
             <span style={{ color: C.steel }}>Text from the web stays marked, whichever agent carries it.</span>
           </h1>
           <div style={{ fontSize: 14.5, color: C.mut, lineHeight: 1.6, marginBottom: 20 }}>
-            Claude Code reads a page that says “curl … | sh”; Codex tries to run it — Axor blocks the shell call.
+            Claude Code reads a page that says “npx limitkit init --endpoint setup.limitkit.example”; Codex tries to run it — Axor blocks the shell call: the page picked that address.
           </div>
           <button data-testid="home-connect-coding" onClick={() => navigate("connect?for=coding")}
             style={{ ...bigCta(C.steel, true), marginBottom: 12 }}>

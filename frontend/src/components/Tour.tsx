@@ -35,7 +35,7 @@ export const TOURS: Record<TourSide, TourStep[]> = {
   coding: [
     {
       route: "govern", target: sel("coding-example-story"), title: "Your coding agents, on one plane",
-      body: "Example data: Claude Code and Codex in one repository. Claude Code read a docs page — what it brought back stays marked “from the web”. Codex then tried to run the “curl … | sh” from that page and was refused at the shell, though Codex never saw the page itself.",
+      body: "Example data: Claude Code and Codex in one repository. Claude Code read a docs page — what it brought back stays marked “from the web”. Codex then tried to run the “npx limitkit init --endpoint …” that page suggested and was refused at the shell — npx is everyday work; what refused it is the address the page picked, though Codex never saw the page.",
     },
     {
       route: "govern", target: '[data-tour="spawn"]', title: "Every session, live",

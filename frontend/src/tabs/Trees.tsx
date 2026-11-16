@@ -217,7 +217,7 @@ function ExampleIntro({ tree, onLight }: { tree: TreeRun; onLight: (ref: string)
         <>a reader cited a file it never opened — marked <span style={{ color: C.amber }}>unverified</span>, so the
           implementer does not take it as fact.</>)}
       {untrusted && caught(untrusted.ref, "②",
-        <>a reader found an instruction in a docs page (“curl … | sh”) —{" "}
+        <>a reader found an instruction in a docs page (“npx limitkit init --endpoint …”) —{" "}
           <span style={{ color: C.amber }}>withheld</span>: the implementer never sees it.</>)}
     </div>
   );
