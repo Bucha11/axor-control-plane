@@ -111,7 +111,12 @@ export interface ToolClass {
   source?: string;             // where the scanner found it (file:line)
   args_schema?: Record<string, unknown>;
   driving?: string[];          // the arguments that decide where it acts
+  // per driving argument, the values that are always fine (any other is refused)
+  trusted?: Record<string, string[]>;
+  // how bad it is if it goes wrong; unset = as the kernel judges it
+  consequence?: Consequence;
 }
+export type Consequence = "BENIGN" | "REVERSIBLE" | "CONSEQUENTIAL" | "CATASTROPHIC";
 
 export const MODE_LABEL: Record<ConnectionMode, string> = {
   none: "not connected",

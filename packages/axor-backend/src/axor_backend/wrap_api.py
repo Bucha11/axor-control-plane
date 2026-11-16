@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import ast
 import asyncio
+import json
 import tempfile
 from pathlib import Path, PurePosixPath
 from types import ModuleType
@@ -246,6 +247,45 @@ def _str_list(value: object, field: str, tool_id: str) -> list[str]:
     return list(value)
 
 
+_CONSEQUENCES = ("BENIGN", "REVERSIBLE", "CONSEQUENTIAL", "CATASTROPHIC")
+
+
+def _policy_yaml(consequence: object, values: object, tools: set[str]) -> str:
+    """What Policy decides beyond the manifests, as GovernanceConfig keys the
+    wrap's compiler does not write: per-tool consequence classes (how bad if it
+    goes wrong — "can't be undone" is refused unattended) and per-argument
+    always-fine lists. Validated here: a typo would otherwise ship as a config
+    that loads and governs nothing."""
+    lines: list[str] = []
+    if consequence:
+        if not isinstance(consequence, dict):
+            raise HTTPException(400, "consequence_overrides is {tool: class}")
+        lines.append("consequence_overrides:")
+        for tool, cls in sorted(consequence.items()):
+            if tool not in tools:
+                raise HTTPException(
+                    400, f"consequence_overrides: {tool!r} is not one of the tools")
+            if cls not in _CONSEQUENCES:
+                raise HTTPException(
+                    400, f"consequence_overrides[{tool!r}] must be one of {'|'.join(_CONSEQUENCES)}")
+            lines.append(f"  {json.dumps(tool)}: {json.dumps(cls)}")
+    if values:
+        if not isinstance(values, dict):
+            raise HTTPException(400, "value_policies is {tool: {arg: [values]}}")
+        lines.append("value_policies:")
+        for tool, args in sorted(values.items()):
+            if tool not in tools or not isinstance(args, dict):
+                raise HTTPException(400, f"value_policies: {tool!r} is not one of the tools")
+            lines.append(f"  {json.dumps(tool)}:")
+            for arg, allowed in args.items():
+                if not isinstance(allowed, list) or not allowed:
+                    raise HTTPException(
+                        400, f"value_policies[{tool!r}][{arg!r}] is a non-empty list")
+                lines += [f"    - arg: {json.dumps(arg)}", "      kind: enum", "      allowed:"]
+                lines += [f"        - {json.dumps(v)}" for v in allowed]
+    return "\n".join(lines) + "\n" if lines else ""
+
+
 @router.post("/manifests")
 async def wrap_manifests(body: dict) -> dict:
     """Build tool-manifest/v1 files + governance YAML from classified tools."""
@@ -316,7 +356,9 @@ async def wrap_manifests(body: dict) -> dict:
 
     return {
         "manifests": manifests,
-        "governance_yaml": engine.governance_yaml(manifests),
+        "governance_yaml": engine.governance_yaml(manifests) + _policy_yaml(
+            body.get("consequence_overrides"), body.get("value_policies"),
+            {m["id"] for m in manifests}),
         # Same shape as the wrap.json sidecar `axor-wrap manifest` writes.
         "wrap": {
             "generated_by": f"axor-wrap {engine.__version__}",

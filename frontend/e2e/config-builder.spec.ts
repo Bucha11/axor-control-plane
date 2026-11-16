@@ -217,4 +217,29 @@ test.describe("config builder", () => {
     await goHash(page, "config-builder");
     await expect(page.getByRole("button", { name: /add the tools by hand instead/ })).toBeVisible();
   });
+
+  test("per tool: which arguments decide, and how bad if it goes wrong", async ({ page }) => {
+    await goHash(page, "config-builder");
+    await page.getByTestId("wrap-files").setInputFiles([
+      { name: "tools.py", mimeType: "text/x-python", buffer: Buffer.from(AGENT_PY) },
+    ]);
+    const notInstalled = page.getByText("wrap engine not installed on the backend");
+    const row = page.getByTestId("policy-tool-send_email");
+    await expect(row.or(notInstalled)).toBeVisible({ timeout: 15_000 });
+    if (await notInstalled.isVisible()) return;
+    await row.getByRole("button", { name: /send_email/ }).click();
+    const decides = page.getByTestId("decides-send_email");
+    // the scanner's guess: `to` decides, `body` does not
+    await expect(decides.getByTestId("decides-send_email-to")).toContainText("✓");
+    await expect(decides).toContainText("in body it passes");
+    await decides.getByLabel("allowed to").fill("boss@corp.example");
+    await decides.getByLabel("allowed to").press("Enter");
+    await expect(decides).toContainText("any other value is refused");
+    await page.getByTestId("consequence-send_email").getByRole("button", { name: "can't be undone" }).click();
+    await expect(page.getByTestId("consequence-send_email")).toContainText("refused unless a person approves it");
+    await page.getByRole("button", { name: /See what gets refused/ }).click();
+    const reading = page.getByTestId("policy-reading");
+    await expect(reading).toContainText("Only to boss@corp.example — any other value is refused.");
+    await expect(reading).toContainText("Can't be undone: refused unless a person approves it.");
+  });
 });

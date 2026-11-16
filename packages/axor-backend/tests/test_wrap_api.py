@@ -332,3 +332,33 @@ async def test_wrap_scope_is_ingest(tmp_path: pathlib.Path) -> None:
             ro_h = {"Authorization": f"Bearer {ro.json()['secret']}"}
             denied = await c.post("/v1/wrap/scan", headers=ro_h, json=_scan_body())
             assert denied.status_code == 403
+
+
+@needs_wrap
+async def test_manifests_carry_policy_consequence_and_always_fine_values(
+        client: httpx.AsyncClient) -> None:
+    """Policy's "can't be undone" and an always-fine list reach the YAML the
+    governor loads — GovernanceConfig parses both."""
+    yaml = pytest.importorskip("yaml")
+    from axor_core.config import GovernanceConfig
+    from axor_core.contracts.canonical import ConsequenceClass
+
+    tools = {t["id"]: t for t in await _scanned_tools(client)}
+    body = {
+        "tools": [_classified(tools["read_inbox"], "READ"),
+                  _classified(tools["send_email"], "EXPORT")],
+        "consequence_overrides": {"send_email": "CATASTROPHIC"},
+        "value_policies": {"send_email": {"to": ["boss@corp.example"]}},
+    }
+    resp = await client.post("/v1/wrap/manifests", json=body)
+    assert resp.status_code == 200, resp.text
+    cfg = GovernanceConfig.from_dict(yaml.safe_load(resp.json()["governance_yaml"]))
+    assert cfg.consequence_overrides == {"send_email": ConsequenceClass.CATASTROPHIC}
+    assert [p.allowed for p in cfg.value_policies["send_email"]] == [frozenset({"boss@corp.example"})]
+
+    bad = await client.post("/v1/wrap/manifests", json={
+        **body, "consequence_overrides": {"send_email": "very bad"}})
+    assert bad.status_code == 400 and "CATASTROPHIC" in bad.text
+    bad = await client.post("/v1/wrap/manifests", json={
+        **body, "consequence_overrides": {"nope": "BENIGN"}})
+    assert bad.status_code == 400

@@ -11,6 +11,7 @@ import { useApp } from "../store";
 import { incidentWhat } from "./Evidence";
 import { LAST_SEARCH } from "./ReplaySearch";
 import { guessKlass, toolsFromSteps } from "../toolGuess";
+import { policyRules } from "../policyConfig";
 import { C, MONO, btn, sevColor } from "../theme";
 import TaintGraph from "./TaintGraph";
 import CutResult from "../components/CutResult";
@@ -291,10 +292,7 @@ export default function ReplayTab({ runId: runIdProp, cursor: cursorProp, seq: s
       counterfactual.mutate(ruleKlass === "EXPORT"
         ? { egress_sinks: [ruleTool] } : { imperative_sinks: [ruleTool] });
     } else if (which === "policy") {
-      counterfactual.mutate({
-        version: "axor-config/1", default: "DENY",
-        sinks: Object.fromEntries(Object.entries(policy).map(([n, c]) => [n, { consequence_class: c.klass }])),
-      });
+      counterfactual.mutate(policyRules(policy));
     } else {
       counterfactual.mutate({ synthetic_taint_refs: curRef ? [curRef] : [] });
     }

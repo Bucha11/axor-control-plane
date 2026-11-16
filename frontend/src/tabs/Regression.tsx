@@ -8,6 +8,7 @@ import { CalendarClock, ChevronDown, ChevronRight, Circle, FlaskConical, Loader2
 import { api, LabDeployResult, RegressionReport, RegressionRow } from "../api";
 import { C, MONO, btn } from "../theme";
 import { navigate } from "../router";
+import { policyRules as rulesOfPolicy } from "../policyConfig";
 import Coach from "../components/Coach";
 import { useApp } from "../store";
 import { LAB_SHIPPED } from "../flags";
@@ -316,11 +317,7 @@ export default function Regression({ rules: rulesParam }: { rules?: string } = {
     staleTime: Infinity,
   });
 
-  const policyRules: Record<string, unknown> = {
-    version: "axor-config/1",
-    sinks: Object.fromEntries(Object.entries(policy).map(([name, c]) => [name, { consequence_class: c.klass }])),
-    default: "DENY",
-  };
+  const policyRules: Record<string, unknown> = rulesOfPolicy(policy);
   const rules = (): Record<string, unknown> | null => {
     if (rulesFrom === "policy") return policyRules;
     if (rulesFrom === "example") return example.data ? exampleVariant(example.data, variant) : null;

@@ -279,6 +279,14 @@ def kernel_config_from_json(d: dict[str, Any]) -> KernelConfig:
             d.get("synthetic_taint_refs", ()), "synthetic_taint_refs"
         ),
     }
+    if d.get("max_unattended_consequence") is not None:
+        ceiling = d["max_unattended_consequence"]
+        if not isinstance(ceiling, str) or ceiling not in ConsequenceClass.__members__:
+            raise ConfigInvalid(
+                f"max_unattended_consequence: {ceiling!r} is not a consequence class "
+                f"— one of {'|'.join(ConsequenceClass.__members__)}"
+            )
+        common["max_unattended_consequence"] = ConsequenceClass[ceiling]
     if "sinks" in d:
         sinks = _obj(d["sinks"], "sinks")
         egress: set[str] = set()
@@ -303,6 +311,18 @@ def kernel_config_from_json(d: dict[str, Any]) -> KernelConfig:
             trusted = _obj(
                 sink.get("trusted_sets") or {}, f"sinks[{name!r}].trusted_sets"
             )
+            # The arguments that decide where it acts or what it does (`to` of
+            # an email, not its body): the taint check narrows to them. Declared
+            # on their own, or implied by an always-fine list below.
+            declared = sink.get("driving_args")
+            if declared is not None:
+                driving_args[name] = _names(declared, f"sinks[{name!r}].driving_args")
+            # How bad it is if it goes wrong — the consequence axis, per sink
+            if sink.get("consequence") is not None:
+                common["consequence_overrides"] = {
+                    **common["consequence_overrides"],
+                    **_consequence_overrides({name: sink["consequence"]}),
+                }
             if trusted:
                 value_policies[name] = [
                     ValuePredicate(
@@ -313,7 +333,7 @@ def kernel_config_from_json(d: dict[str, Any]) -> KernelConfig:
                     )
                     for arg, vals in trusted.items()
                 ]
-                driving_args[name] = frozenset(trusted.keys())
+                driving_args[name] = driving_args.get(name, frozenset()) | frozenset(trusted.keys())
         return KernelConfig(
             allowed_tools=frozenset(sinks.keys()),  # undeclared = denied
             egress_sinks=frozenset(egress),

@@ -1285,11 +1285,15 @@ export const api = {
       // of the answer: a tool in a skipped file is absent from the config, and
       // undeclared is denied.
     }).then((r) => j<{ tools: WrapTool[]; skipped: { path: string; reason: string }[] }>(r)),
-  wrapManifests: (tools: (Omit<Partial<WrapTool>, "guess"> & { id: string; effect: WrapEffect })[]) =>
+  // `policy`: what Policy decides beyond the manifests — per-tool consequence
+  // classes and per-argument always-fine lists — written into governance.yaml
+  wrapManifests: (tools: (Omit<Partial<WrapTool>, "guess"> & { id: string; effect: WrapEffect })[],
+                  policy?: { consequence_overrides?: Record<string, string>;
+                             value_policies?: Record<string, Record<string, string[]>> }) =>
     af("/v1/wrap/manifests", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ tools }),
+      body: JSON.stringify({ tools, ...(policy ?? {}) }),
     }).then((r) => j<WrapManifestsBundle>(r)),
 
   // ── Axor Lab cross-links (CP → Lab incident export, Lab → CP deploy) ──────

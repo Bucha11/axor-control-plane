@@ -12,6 +12,7 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import { toolsFromSteps } from "../toolGuess";
 import { navigate } from "../router";
 import { useApp } from "../store";
+import type { Consequence, ToolClass } from "../store";
 import { C, MONO, btn } from "../theme";
 import Coach from "../components/Coach";
 import Tooltip from "../components/Tooltip";
@@ -31,7 +32,11 @@ interface Sink {
   endpoint?: string;
   type: SinkType;
   critical: boolean;
+  // the arguments that decide where it acts / what it does — the taint check
+  // narrows to them — each with the values always fine (empty = no list)
   args: ArgAllow[];
+  // how bad it is if it goes wrong; unset = as the kernel judges it
+  consequence?: Consequence;
   // brings in outside text (web, email, documents): what it returns is what
   // a later send / write / run is checked against
   outside: boolean;
@@ -102,6 +107,21 @@ const toSink = (t: WrapTool): Sink => ({
   guess: { confidence: t.guess.confidence, reason: t.guess.reason },
 });
 
+// A tool already in Policy (decided on Connect, in Replay, or here before)
+// becomes a row with everything decided about it.
+const fromPolicy = (name: string, c: ToolClass, src?: string): Sink => ({
+  name, src: src ?? c.source ?? c.url, type: c.klass, critical: false, outside: c.outside,
+  args: (c.driving ?? []).map((a) => ({ arg: a, set: c.trusted?.[a] ?? [] })),
+  consequence: c.consequence,
+});
+
+// what the store keeps of a row
+const toPolicy = (s: Sink): Partial<ToolClass> => ({
+  driving: s.args.map((a) => a.arg),
+  trusted: Object.fromEntries(s.args.filter((a) => a.set.length).map((a) => [a.arg, a.set])),
+  consequence: s.consequence,
+});
+
 const saveBlob = (filename: string, text: string) => {
   const blob = new Blob([text], { type: "application/json" });
   const url = URL.createObjectURL(blob);
@@ -114,41 +134,75 @@ const saveBlob = (filename: string, text: string) => {
   URL.revokeObjectURL(url);
 };
 
-// ---- per-sink allowlist editor ----
-function ArgEditor({ sink, update }: { sink: Sink; update: (p: Partial<Sink>) => void }) {
-  const [newArg, setNewArg] = useState("");
-  const [addingArg, setAddingArg] = useState(false);
-  const [valDrafts, setValDrafts] = useState<Record<string, string>>({}); // argName -> current input
+// ---- per-tool: which arguments decide, and how bad if it goes wrong ----
+const CONSEQUENCE: [Consequence | undefined, string, string][] = [
+  [undefined, "as the kernel judges it", "the kernel's own table, by what the call does"],
+  ["BENIGN", "harmless", "let through"],
+  ["REVERSIBLE", "can be undone", "let through"],
+  ["CONSEQUENTIAL", "costly", "let through — the most an agent may do on its own"],
+  ["CATASTROPHIC", "can't be undone", "refused unless a person approves it"],
+];
 
+function argCandidates(sink: Sink, schema?: Record<string, unknown>): string[] {
+  const props = (schema?.properties ?? {}) as Record<string, unknown>;
+  return [...new Set([...Object.keys(props), ...sink.args.map((a) => a.arg)])];
+}
+
+function DecidesEditor({ sink, schema, update }: {
+  sink: Sink; schema?: Record<string, unknown>; update: (p: Partial<Sink>) => void;
+}) {
+  const [newArg, setNewArg] = useState("");
+  const [valDrafts, setValDrafts] = useState<Record<string, string>>({});
+  const chosen = new Set(sink.args.map((a) => a.arg));
+  const candidates = argCandidates(sink, schema);
+  const toggle = (arg: string) => update({
+    args: chosen.has(arg) ? sink.args.filter((a) => a.arg !== arg) : [...sink.args, { arg, set: [] }],
+  });
   const addArg = () => {
-    // Names key the allowlist: a duplicate would render twice and collapse to
-    // one entry in the emitted config.
-    if (!newArg.trim() || sink.args.some((a) => a.arg === newArg.trim())) return;
-    update({ args: [...sink.args, { arg: newArg.trim(), set: [] }] });
-    setNewArg(""); setAddingArg(false);
+    const a = newArg.trim();
+    if (a && !chosen.has(a)) update({ args: [...sink.args, { arg: a, set: [] }] });
+    setNewArg("");
   };
-  const addVal = (argName: string) => {
-    const v = (valDrafts[argName] || "").trim();
+  const addVal = (arg: string) => {
+    const v = (valDrafts[arg] || "").trim();
     if (!v) return;
-    update({ args: sink.args.map((a) => (a.arg === argName ? { ...a, set: [...a.set, v] } : a)) });
-    setValDrafts({ ...valDrafts, [argName]: "" });
+    update({ args: sink.args.map((a) => (a.arg === arg && !a.set.includes(v) ? { ...a, set: [...a.set, v] } : a)) });
+    setValDrafts({ ...valDrafts, [arg]: "" });
   };
-  const rmVal = (argName: string, v: string) =>
-    update({ args: sink.args.map((a) => (a.arg === argName ? { ...a, set: a.set.filter((x) => x !== v) } : a)) });
-  const rmArg = (argName: string) => update({ args: sink.args.filter((a) => a.arg !== argName) });
+  const rmVal = (arg: string, v: string) =>
+    update({ args: sink.args.map((a) => (a.arg === arg ? { ...a, set: a.set.filter((x) => x !== v) } : a)) });
+  const others = candidates.filter((c) => !chosen.has(c));
 
   return (
-    <div className="flex flex-col gap-2">
-      <div style={{ fontFamily: MONO, fontSize: 10, color: C.dim, letterSpacing: "0.08em" }}>VALUES THAT ARE ALWAYS FINE</div>
-      {sink.args.length === 0 && (
-        <div style={{ fontFamily: MONO, fontSize: 11.5, color: C.dim }}>
-          None — anything that came from outside text is refused (the safe default).
-          Add an argument and its values, e.g. to ∈ boss@corp.example, to let those through.
-        </div>
-      )}
+    <div className="flex flex-col gap-2" data-testid={`decides-${sink.name}`}>
+      <div style={{ fontFamily: MONO, fontSize: 10, color: C.dim, letterSpacing: "0.08em" }}>WHICH ARGUMENTS DECIDE</div>
+      <div style={{ fontFamily: MONO, fontSize: 11, color: C.mut, lineHeight: 1.6 }}>
+        The ones that say where it goes or what it does — for an email, <span style={{ color: C.text }}>to</span>,
+        not <span style={{ color: C.text }}>body</span>. Text from outside in these is refused; in the others it passes.
+      </div>
+      <div className="flex items-center gap-1.5 flex-wrap">
+        {candidates.map((c) => (
+          <button key={c} onClick={() => toggle(c)} data-testid={`decides-${sink.name}-${c}`}
+            style={{ background: chosen.has(c) ? "rgba(127,168,204,0.12)" : "none",
+                     border: `1px solid ${chosen.has(c) ? C.steel : C.line}`, borderRadius: 12,
+                     color: chosen.has(c) ? C.steel : C.mut, fontFamily: MONO, fontSize: 11, padding: "2px 10px", cursor: "pointer" }}>
+            {chosen.has(c) ? "✓ " : ""}{c}
+          </button>
+        ))}
+        <input value={newArg} onChange={(e) => setNewArg(e.target.value)} onKeyDown={(e) => e.key === "Enter" && addArg()}
+          placeholder="+ argument ⏎" aria-label={`add an argument to ${sink.name}`}
+          style={{ width: 110, background: "none", border: "none", borderBottom: `1px solid ${C.line}`, color: C.text,
+                   fontFamily: MONO, fontSize: 11, padding: "2px 4px", outline: "none" }} />
+      </div>
+      <div style={{ fontFamily: MONO, fontSize: 10.5, color: sink.args.length ? C.mut : C.dim }}>
+        {sink.args.length === 0
+          ? "None picked — every argument decides: outside text anywhere in the call is refused (the safe default)."
+          : <>Outside text in {sink.args.map((a) => a.arg).join(", ")} is refused
+              {others.length ? <>; in {others.join(", ")} it passes</> : null}.</>}
+      </div>
       {sink.args.map((a) => (
-        <div key={a.arg} className="flex items-center gap-2 flex-wrap">
-          <span style={{ fontFamily: MONO, fontSize: 11.5, color: C.text }}>{a.arg} ∈</span>
+        <div key={a.arg} className="flex items-center gap-2 flex-wrap" style={{ paddingLeft: 10 }}>
+          <span style={{ fontFamily: MONO, fontSize: 11, color: C.dim }}>only these {a.arg} values:</span>
           {a.set.map((v) => (
             <span key={v} className="flex items-center gap-1 px-2 py-0.5" style={{ background: C.panel2, border: `1px solid ${C.line}`, borderRadius: 10, fontFamily: MONO, fontSize: 11, color: C.green }}>
               {v}
@@ -156,25 +210,36 @@ function ArgEditor({ sink, update }: { sink: Sink; update: (p: Partial<Sink>) =>
             </span>
           ))}
           <input value={valDrafts[a.arg] || ""} onChange={(e) => setValDrafts({ ...valDrafts, [a.arg]: e.target.value })}
-            onKeyDown={(e) => e.key === "Enter" && addVal(a.arg)} placeholder="+ value ⏎"
-            style={{ width: 90, background: "none", border: "none", borderBottom: `1px solid ${C.line}`, color: C.text, fontFamily: MONO, fontSize: 11, padding: "2px 4px", outline: "none" }} />
-          <span onClick={() => rmArg(a.arg)} style={{ fontFamily: MONO, fontSize: 10, color: C.dim, cursor: "pointer" }}>remove</span>
-          {a.set.length > 0 && <span style={{ fontFamily: MONO, fontSize: 10, color: C.dim }}>— these pass even if they came from outside text</span>}
-          {a.set.length === 0 && <span style={{ fontFamily: MONO, fontSize: 10, color: C.amber }}>— no values yet: still refused if from outside text</span>}
+            onKeyDown={(e) => e.key === "Enter" && addVal(a.arg)} placeholder="+ value ⏎" aria-label={`allowed ${a.arg}`}
+            style={{ width: 120, background: "none", border: "none", borderBottom: `1px solid ${C.line}`, color: C.text, fontFamily: MONO, fontSize: 11, padding: "2px 4px", outline: "none" }} />
+          <span style={{ fontFamily: MONO, fontSize: 10, color: C.dim }}>
+            {a.set.length
+              ? "— any other value is refused, wherever it came from"
+              : "— no list: any value the agent picked itself goes through"}
+          </span>
         </div>
       ))}
-      {addingArg ? (
-        <div className="flex items-center gap-2">
-          <input autoFocus value={newArg} onChange={(e) => setNewArg(e.target.value)} onKeyDown={(e) => e.key === "Enter" && addArg()}
-            placeholder="argument name ⏎"
-            style={{ width: 160, background: C.bg, border: `1px solid ${C.line}`, borderRadius: 4, color: C.text, fontFamily: MONO, fontSize: 11.5, padding: "5px 8px", outline: "none" }} />
-          <button onClick={addArg} style={btn({ padding: "4px 8px" })}><Check size={12} /></button>
-        </div>
-      ) : (
-        <button onClick={() => setAddingArg(true)} style={{ background: "none", border: "none", color: C.steel, fontFamily: MONO, fontSize: 11.5, cursor: "pointer", padding: 0, textAlign: "left" }}>
-          + add an argument
-        </button>
-      )}
+    </div>
+  );
+}
+
+function ConsequencePicker({ sink, update }: { sink: Sink; update: (p: Partial<Sink>) => void }) {
+  const cur = CONSEQUENCE.find(([c]) => c === sink.consequence) ?? CONSEQUENCE[0];
+  return (
+    <div className="flex flex-col gap-2" data-testid={`consequence-${sink.name}`}>
+      <div style={{ fontFamily: MONO, fontSize: 10, color: C.dim, letterSpacing: "0.08em" }}>IF IT GOES WRONG</div>
+      <div className="flex items-center gap-1.5 flex-wrap">
+        {CONSEQUENCE.map(([c, label]) => (
+          <button key={label} onClick={() => update({ consequence: c })}
+            style={{ background: sink.consequence === c ? "rgba(127,168,204,0.12)" : "none",
+                     border: `1px solid ${sink.consequence === c ? (c === "CATASTROPHIC" ? C.red : C.steel) : C.line}`, borderRadius: 4,
+                     color: sink.consequence === c ? (c === "CATASTROPHIC" ? C.red : C.steel) : C.mut,
+                     fontFamily: MONO, fontSize: 10.5, padding: "3px 9px", cursor: "pointer" }}>
+            {label}
+          </button>
+        ))}
+      </div>
+      <div style={{ fontFamily: MONO, fontSize: 10.5, color: cur[0] === "CATASTROPHIC" ? C.red : C.dim }}>{cur[2]}</div>
     </div>
   );
 }
@@ -319,7 +384,7 @@ export default function ConfigBuilder() {
       setSinks(scan.tools.map((t) => {
         const sink = toSink(t);
         const known = policy[t.id];
-        if (known) return { ...sink, type: known.klass, outside: known.outside };
+        if (known) return { ...fromPolicy(t.id, known, t.source), guess: sink.guess };
         if (sink.type !== "?") {
           setToolClass(t.id, { klass: sink.type, outside: sink.outside,
                                source: t.source, args_schema: t.args_schema, driving: t.guess.driving_args });
@@ -338,8 +403,8 @@ export default function ConfigBuilder() {
   const patch = (i: number, p: Partial<Sink>) => {
     setSinks(sinks.map((s, j) => (j === i ? { ...s, ...p } : s)));
     const next = { ...sinks[i], ...p };
-    if (next.type !== "?" && (p.type || p.outside !== undefined)) {
-      setToolClass(next.name, { klass: next.type, outside: next.outside });
+    if (next.type !== "?") {
+      setToolClass(next.name, { klass: next.type, outside: next.outside, ...toPolicy(next) });
     }
   };
   const unclassified = sinks.filter((s) => s.type === "?").length;
@@ -350,7 +415,9 @@ export default function ConfigBuilder() {
     sinks: Object.fromEntries(sinks.filter((s) => s.type !== "?").map((s) => [s.name, {
       consequence_class: s.type,
       ...(s.critical ? { criticality: "critical" } : {}),
+      ...(s.args.length ? { driving_args: s.args.map((a) => a.arg) } : {}),
       ...(s.args.some((a) => a.set.length) ? { trusted_sets: Object.fromEntries(s.args.filter((a) => a.set.length).map((a) => [a.arg, a.set])) } : {}),
+      ...(s.consequence ? { consequence: s.consequence } : {}),
     }])),
     default: "DENY",
     ...(budgetCapCalls !== null ? { budget_cap_calls: budgetCapCalls } : {}),
@@ -396,6 +463,12 @@ export default function ConfigBuilder() {
             },
           };
         }),
+        {
+          consequence_overrides: Object.fromEntries(sinks.filter((s) => s.type !== "?" && s.consequence)
+            .map((s) => [s.name, s.consequence as string])),
+          value_policies: Object.fromEntries(sinks.filter((s) => s.type !== "?" && s.args.some((a) => a.set.length))
+            .map((s) => [s.name, Object.fromEntries(s.args.filter((a) => a.set.length).map((a) => [a.arg, a.set]))])),
+        },
       );
       // the name the guard and the wrap snippet on Connect load
       saveBlob("axor.manifests.json", JSON.stringify(bundle, null, 2));
@@ -479,19 +552,15 @@ export default function ConfigBuilder() {
           for (const [name, c] of Object.entries(found)) {
             if (!policy[name]) setToolClass(name, { klass: c.klass, outside: c.outside });
           }
-          setSinks(Object.entries(found).map(([name, c]) => ({
-            name, src: "seen in its runs", type: policy[name]?.klass ?? c.klass, critical: false,
-            outside: policy[name]?.outside ?? c.outside, args: [],
-          })));
+          setSinks(Object.entries(found).map(([name, c]) => (policy[name]
+            ? fromPolicy(name, policy[name])
+            : { name, src: "seen in its runs", type: c.klass, critical: false, outside: c.outside, args: [] })));
           setStage("build");
         }} />}
         {stage === "entry" && fromConnect.length > 0 && (
           <button data-testid="policy-from-connect" className="mt-4"
             onClick={() => {
-              setSinks(fromConnect.map(([name, c]) => ({
-                name, src: c.source ?? c.url, type: c.klass, critical: false, outside: c.outside,
-                args: (c.driving ?? []).map((a) => ({ arg: a, set: [] })),
-              })));
+              setSinks(fromConnect.map(([name, c]) => fromPolicy(name, c)));
               setStage("build");
             }}
             style={btn({ color: C.text, borderColor: C.steel, fontSize: 12, padding: "6px 14px" })}>
@@ -570,7 +639,7 @@ export default function ConfigBuilder() {
                   {TYPES.map((t) => <option key={t} value={t}>{TYPE_LABEL[t]}</option>)}
                 </select>
                 <button onClick={() => setSel(sel === i ? null : i)} className="flex flex-col"
-                  title="more: importance, values that are always fine"
+                  title="more: which arguments decide, how bad if it goes wrong"
                   style={{ minWidth: 0, flex: "1 1 200px", background: "none", border: "none", padding: 0, textAlign: "left", cursor: "pointer" }}>
                   <span style={{ fontFamily: MONO, fontSize: 13, color: s.type === "?" ? C.amber : C.text }}>
                     {s.name} {s.critical && <AlertTriangle size={11} color={C.red} style={{ display: "inline" }} />}
@@ -578,7 +647,8 @@ export default function ConfigBuilder() {
                   </span>
                   <span style={{ fontFamily: MONO, fontSize: 10, color: C.dim, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                     {s.guess ? plainGuess(s.guess.reason, s.guess.confidence) : (s.src ?? "added by hand")}
-                    {s.args.some((a) => a.set.length) ? ` · ${s.args.filter((a) => a.set.length).length} always-fine list` : ""}
+                    {s.args.length ? ` · decides: ${s.args.map((a) => a.set.length ? `${a.arg} ∈ ${a.set.length}` : a.arg).join(", ")}` : ""}
+                    {s.consequence === "CATASTROPHIC" ? " · can't be undone" : ""}
                   </span>
                   {s.outside && (() => {
                     const guarded = sinks.filter((o) => o.type !== "READ" && o.type !== "?").map((o) => o.name);
@@ -616,8 +686,9 @@ export default function ConfigBuilder() {
                       {s.critical ? "a refusal here is shown first and puts the agent on a shorter leash at once" : "nothing extra"}
                     </span>
                   </div>
-                  {/* allowlists */}
-                  <ArgEditor sink={s} update={(p) => patch(i, p)} />
+                  <DecidesEditor sink={s} update={(p) => patch(i, p)}
+                    schema={(wrapTools.find((w) => w.id === s.name)?.args_schema ?? policy[s.name]?.args_schema) as Record<string, unknown> | undefined} />
+                  <ConsequencePicker sink={s} update={(p) => patch(i, p)} />
                 </div>
               )}
             </div>
@@ -745,17 +816,20 @@ export default function ConfigBuilder() {
   const always = (x: Sink) => x.args.filter((a) => a.set.length);
   const drivenBy = (x: Sink, what: string) =>
     x.args.length ? `its ${x.args.map((a) => `“${a.arg}”`).join(" or ")}` : what;
-  const except = (x: Sink) => always(x).length
-    ? <> — except {always(x).map((a) => `${a.arg} ${a.set.join(" / ")}`).join("; ")}</>
+  const only = (x: Sink) => always(x).length
+    ? <> Only {always(x).map((a) => `${a.arg} ${a.set.join(" / ")}`).join("; ")} — any other value is refused.</>
+    : null;
+  const worst = (x: Sink) => x.consequence === "CATASTROPHIC"
+    ? <span style={{ color: C.red }}> Can't be undone: refused unless a person approves it.</span>
     : null;
   const sayTool = (x: Sink): React.ReactNode => {
     const name = <b style={{ color: C.text }}>{x.name}</b>;
     const crit = x.critical ? <span style={{ color: C.red }}> Critical: a refusal here is shown first.</span> : null;
     const marks = x.outside ? <> What it returns is marked as outside text.</> : null;
-    if (x.type === "READ") return <>{name} — allowed.{marks}{crit}</>;
-    if (x.type === "EXPORT") return <>{name} — refused if {drivenBy(x, "what it sends")} came from outside text{except(x)}.{marks}{crit}</>;
-    if (x.type === "WRITE") return <>{name} — refused if {drivenBy(x, "what it writes")} came from outside text{except(x)}.{marks}{crit}</>;
-    return <>{name} — refused once the agent has read outside text{except(x)}.{marks}{crit}</>;
+    if (x.type === "READ") return <>{name} — allowed.{only(x)}{worst(x)}{marks}{crit}</>;
+    if (x.type === "EXPORT") return <>{name} — refused if {drivenBy(x, "what it sends")} came from outside text.{only(x)}{worst(x)}{marks}{crit}</>;
+    if (x.type === "WRITE") return <>{name} — refused if {drivenBy(x, "what it writes")} came from outside text.{only(x)}{worst(x)}{marks}{crit}</>;
+    return <>{name} — refused if {drivenBy(x, "the command")} came from outside text.{only(x)}{worst(x)}{marks}{crit}</>;
   };
   const noOutside = !sinks.some((x) => x.outside);
 
