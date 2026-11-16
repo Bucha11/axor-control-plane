@@ -281,7 +281,7 @@ export function LabDeploys() {
   );
 }
 
-export default function Regression() {
+export default function Regression({ rules: rulesParam }: { rules?: string } = {}) {
   const qc = useQueryClient();
   const policy = useApp((s) => s.toolPolicy);
   const policyTools = Object.keys(policy);
@@ -289,11 +289,13 @@ export default function Regression() {
   const pins = corpus.data?.pins ?? [];
   const ownPins = pins.filter((p) => !(p.run_id in DEMO_CASES));
 
-  const [chosen, setChosen] = useState<RulesFrom | null>(null);
+  // `?rules=policy` — arriving from Replay's "make it a rule"
+  const [chosen, setChosen] = useState<RulesFrom | null>(
+    rulesParam === "policy" || rulesParam === "example" ? rulesParam : null);
   // until the person picks: their own cases are checked against their Policy;
   // the example's cases against the example's rules
   const rulesFrom: RulesFrom = chosen
-    ?? (ownPins.length > 0 && policyTools.length > 0 ? "policy"
+    ?? (ownPins.length > 0 ? "policy"
       : pins.length > 0 || policyTools.length === 0 ? "example" : "policy");
   const [variant, setVariant] = useState<Variant>("as-is");
   const [raw, setRaw] = useState("");
@@ -352,6 +354,11 @@ export default function Regression() {
   const run = () => {
     setParseError(null);
     setOpen(null);
+    // the example's rules load on first use — a click is that use
+    if (rulesFrom === "example" && !example.data) {
+      void example.refetch().then((r) => { if (r.data) check.mutate(exampleVariant(r.data, variant)); });
+      return;
+    }
     const config = rules();
     if (config) check.mutate(config);
   };
@@ -443,11 +450,17 @@ export default function Regression() {
       )}
 
       <div data-tour="regression-run" className="flex items-center gap-3 flex-wrap" style={{ marginTop: 12, marginBottom: 22 }}>
-        <button onClick={run} disabled={check.isPending || (rulesFrom === "example" && !example.data)
+        <button onClick={run} disabled={check.isPending || example.isFetching
             || (rulesFrom === "policy" && policyTools.length === 0)}
           style={btn({ color: C.text, borderColor: C.steel, fontSize: 12.5, padding: "8px 16px" })}>
           {check.isPending ? <Loader2 size={13} className="animate-spin" /> : <Play size={13} />} Check these rules
         </button>
+        {rulesFrom === "policy" && policyTools.length === 0 && (
+          <span style={{ fontFamily: MONO, fontSize: 11.5, color: C.dim }}>
+            Policy is empty —{" "}
+            <button onClick={() => navigate("config-builder")} style={link}>list your agent's tools there →</button>
+          </span>
+        )}
         {rulesFrom === "example" && example.data && (
           <span style={{ fontFamily: MONO, fontSize: 11.5, color: C.dim }}>
             see it fail:{" "}

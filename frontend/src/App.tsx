@@ -200,7 +200,7 @@ export default function App() {
       {key === "explain" && (runIdParam
         ? <ReplayTab runId={runIdParam} cursor={route.query.cursor} seq={route.query.seq} node={route.query.node} />
         : <ReplaySearch query={route.query} />)}
-      {key === "prevent" && <Regression />}
+      {key === "prevent" && <Regression rules={route.query.rules} />}
       {key === "govern" && (
         <>
           {!sidebar && <SubNav items={GOVERN_VIEWS} active={governView} />}

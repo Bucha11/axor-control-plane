@@ -27,7 +27,18 @@ async def pin_run(run_id: str, body: dict, store: StoreDep) -> dict:
     side = body.get("side")
     if side not in ("must_block", "must_pass"):
         raise HTTPException(400, "side must be must_block|must_pass")
-    await store.pin(run_id, side, body.get("label", ""))
+    raw = body.get("must_refuse")
+    anchors: list[dict] | None = None
+    if raw is not None:
+        if side != "must_block":
+            raise HTTPException(400, "must_refuse names calls a must_block pin holds")
+        if not isinstance(raw, list) or len(raw) > 50 or not all(
+            isinstance(a, dict) and isinstance(a.get("seq"), int)
+            and isinstance(a.get("node_id", ""), str) for a in raw
+        ):
+            raise HTTPException(400, "must_refuse is a list of {node_id, seq}")
+        anchors = [{"node_id": a.get("node_id", ""), "seq": a["seq"]} for a in raw]
+    await store.pin(run_id, side, body.get("label", ""), anchors)
     return {"pinned": run_id, "side": side}
 
 

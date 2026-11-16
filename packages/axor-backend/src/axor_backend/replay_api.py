@@ -395,7 +395,8 @@ def _step_ref(step: ReplayStep) -> dict[str, Any]:
 
 
 def regression_row(
-    run_id: str, side: str, label: str, events: list[Event], config: KernelConfig
+    run_id: str, side: str, label: str, events: list[Event], config: KernelConfig,
+    must_refuse: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """One corpus trace vs a candidate config (regression-report semantics).
 
@@ -409,7 +410,10 @@ def regression_row(
     it was recorded ungoverned, so the call that should be blocked is not
     marked anywhere in it. That is ``unanchored`` — reported, and never counted
     as safe to ship, because the alternative is to guess which denial was meant
-    and then call the guess a verification.
+    and then call the guess a verification. Unless the pin NAMES the calls
+    (``must_refuse``, [{node_id, seq}] — Replay's "make it a rule" knows the
+    call it is about): then those calls are the boundary, no guess involved,
+    and they must all be refused under the candidate config.
 
     must_pass mirrors it: a regression is a call the trace recorded as PASS
     that the candidate config now denies.
@@ -422,6 +426,13 @@ def regression_row(
     """
     result = replay(events, config)
     pinned = _pinned_denials(result)
+    if side == "must_block" and not pinned and must_refuse:
+        named = {(str(a.get("node_id", "")), int(a["seq"])) for a in must_refuse}
+        pinned = [
+            s for s in result.steps
+            if s.event.kind is EventKind.TOOL_CALL
+            and ((s.event.node_id, s.event.seq) in named or ("", s.event.seq) in named)
+        ]
     escaped_denials = [
         _step_ref(s) for s in pinned if s.reevaluated_verdict is not Verdict.DENY
     ]

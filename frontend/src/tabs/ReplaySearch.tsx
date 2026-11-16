@@ -108,10 +108,7 @@ export default function ReplaySearch({ query }: { query: Record<string, string> 
     [runs.data],
   );
   const seed = useMutation({
-    mutationFn: async () => {
-      await api.seedAdapterRuns();
-      return api.seedProdIncident();
-    },
+    mutationFn: () => api.seedProdIncident(),
     onSuccess: async () => {
       await qc.invalidateQueries({ queryKey: ["runs"] });
       await qc.invalidateQueries({ queryKey: ["step-search"] });

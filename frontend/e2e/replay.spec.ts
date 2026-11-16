@@ -67,4 +67,21 @@ test.describe("replay", () => {
     await expect(page.getByLabel("contains")).toHaveValue("orders");
     await expect(page.getByTestId("search-row").filter({ hasText: "DROP TABLE orders" })).toHaveCount(1);
   });
+
+  test("make it a rule: the drop is refused, the agent's normal work still passes", async ({ page, request }) => {
+    expect((await request.post(`${BACKEND}/v1/demo/seed-prod-incident`)).ok()).toBeTruthy();
+    await goHash(page, "explain/ex_prod_drop?seq=4&node=support-agent-prod");
+    await expect(page.getByTestId("replay-args")).toContainText("DROP TABLE");
+    await page.getByTestId("whatif-outside").click();
+    await expect(page.getByTestId("whatif-answer")).toContainText("step 5 (bash): refused");
+    await expect(page.getByTestId("whatif-answer")).toContainText("steps 1–4 go as before");
+    const rule = page.getByTestId("make-rule");
+    await expect(rule).toContainText("ticket_reply sends out");   // from the agent's other run
+    await rule.getByTestId("make-rule-apply").click();
+    await expect(page).toHaveURL(/#\/prevent\?rules=policy/);
+    await page.getByRole("button", { name: /Check these rules/ }).click();
+    const drop = page.getByText("support-agent-prod: bash built from outside text").locator("..");
+    await expect(drop).toContainText("still blocked");
+    await expect(page.getByText("normal work of support-agent-prod").locator("..")).toContainText("still passes");
+  });
 });

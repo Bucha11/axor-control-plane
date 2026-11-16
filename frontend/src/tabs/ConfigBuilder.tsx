@@ -8,6 +8,8 @@
 import { useRef, useState } from "react";
 import { Plus, ChevronDown, ChevronRight, Download, Check, X, ArrowRight, Upload, FileCode, Terminal, AlertTriangle } from "lucide-react";
 import { api, WrapTool } from "../api";
+import { useMutation, useQuery } from "@tanstack/react-query";
+import { toolsFromSteps } from "../toolGuess";
 import { navigate } from "../router";
 import { useApp } from "../store";
 import { C, MONO, btn } from "../theme";
@@ -243,6 +245,38 @@ export async function filesFromList(picked: FileList | File[] | null): Promise<P
   return out;
 }
 
+/** Start from what an agent actually called: its recorded steps, every tool in
+ * them, the kind guessed from the name — the plane has seen the tools even
+ * when nobody has uploaded the agent's code. */
+function FromAgent({ onTools }: { onTools: (t: ReturnType<typeof toolsFromSteps>) => void }) {
+  const runs = useQuery({ queryKey: ["runs"], queryFn: api.listRuns });
+  const agents = [...new Set((runs.data ?? []).map((r) => r.node_id))].sort();
+  const [agent, setAgent] = useState("");
+  const pick = agent || agents[0] || "";
+  const load = useMutation({
+    mutationFn: () => api.searchSteps({ agent: pick }),
+    onSuccess: (r) => onTools(toolsFromSteps(r.steps.filter((x) => x.node_id === pick))),
+  });
+  if (agents.length === 0) return null;
+  return (
+    <div data-testid="policy-from-agent" className="mt-4 flex items-center gap-2 flex-wrap"
+      style={{ fontFamily: MONO, fontSize: 11.5, color: C.mut }}>
+      or start from the tools
+      <select aria-label="agent" value={pick} onChange={(e) => setAgent(e.target.value)}
+        style={{ background: C.panel2, border: `1px solid ${C.line}`, borderRadius: 5, color: C.text,
+                 fontFamily: MONO, fontSize: 11.5, padding: "3px 6px" }}>
+        {agents.map((a) => <option key={a} value={a}>{a}</option>)}
+      </select>
+      used
+      <button onClick={() => load.mutate()} disabled={load.isPending}
+        style={btn({ color: C.text, borderColor: C.steel, fontSize: 11.5, padding: "4px 12px" })}>
+        {load.isPending ? "…" : "→"}
+      </button>
+      {load.isError && <span style={{ color: C.red }}>{(load.error as Error).message}</span>}
+    </div>
+  );
+}
+
 export default function ConfigBuilder() {
   const [stage, setStage] = useState<Stage>("entry");
   // the shared record of what each tool does (store.toolPolicy): what was
@@ -441,6 +475,16 @@ export default function ConfigBuilder() {
             scan failed: {scanError}
           </div>
         )}
+        {stage === "entry" && <FromAgent onTools={(found) => {
+          for (const [name, c] of Object.entries(found)) {
+            if (!policy[name]) setToolClass(name, { klass: c.klass, outside: c.outside });
+          }
+          setSinks(Object.entries(found).map(([name, c]) => ({
+            name, src: "seen in its runs", type: policy[name]?.klass ?? c.klass, critical: false,
+            outside: policy[name]?.outside ?? c.outside, args: [],
+          })));
+          setStage("build");
+        }} />}
         {stage === "entry" && fromConnect.length > 0 && (
           <button data-testid="policy-from-connect" className="mt-4"
             onClick={() => {
@@ -451,7 +495,7 @@ export default function ConfigBuilder() {
               setStage("build");
             }}
             style={btn({ color: C.text, borderColor: C.steel, fontSize: 12, padding: "6px 14px" })}>
-            start from the {fromConnect.length} tool{fromConnect.length === 1 ? "" : "s"} you described on Connect
+            start from the {fromConnect.length} tool{fromConnect.length === 1 ? "" : "s"} already in your policy
             ({fromConnect.slice(0, 3).map(([n]) => n).join(", ")}{fromConnect.length > 3 ? ", …" : ""}) →
           </button>
         )}

@@ -44,7 +44,8 @@ async def regression_report(store: Store, config_json: dict) -> dict:
                             "label": pin["label"], "reason": str(exc.detail)})
             continue
         row = regression_row(
-            pin["run_id"], pin["side"], pin["label"], events, config)
+            pin["run_id"], pin["side"], pin["label"], events, config,
+            must_refuse=pin.get("must_refuse") or None)
         # Canned evidence is real, replayable and about the DEMO. Marked rather
         # than excluded: a demo pin that REGRESSES is still a kernel that stopped
         # denying what it used to, which is worth failing on.

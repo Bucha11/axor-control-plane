@@ -1179,11 +1179,14 @@ export const api = {
     });
     return j<{ node_id: string; version: number; state: Record<string, unknown> }>(r);
   },
-  pin: (runId: string, side: "must_block" | "must_pass", label: string) =>
+  // `mustRefuse` names the calls a must_block pin holds — needed when the run
+  // was recorded ungoverned and refused nothing (else it can't be checked)
+  pin: (runId: string, side: "must_block" | "must_pass", label: string,
+        mustRefuse?: { node_id: string; seq: number }[]) =>
     af(`/v1/pins/${encodeURIComponent(runId)}`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ side, label }),
+      body: JSON.stringify({ side, label, ...(mustRefuse ? { must_refuse: mustRefuse } : {}) }),
     }).then((r) => j<{ pinned: string }>(r)),
   // The sign-up funnel report — the operator's (master token); 401/403 otherwise.
   funnelReport: (days = 30) =>

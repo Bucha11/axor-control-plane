@@ -158,6 +158,11 @@ pins = Table(
     Column("side", String(16), nullable=False),  # must_block | must_pass
     Column("label", String(200), nullable=False, default=""),
     Column("org_id", String(64), nullable=False, server_default=PUBLIC_ORG),
+    # must_block only: the calls that must be refused, as [{node_id, seq}] JSON.
+    # A run recorded ungoverned denied nothing, so without these there is no
+    # call to hold (replay_api.regression_row: "unanchored"); naming it — as
+    # Replay's "make it a rule" does — is what makes such a pin checkable.
+    Column("must_refuse", Text, nullable=False, server_default=""),
     PrimaryKeyConstraint("org_id", "run_id"),
 )
 
@@ -1691,15 +1696,20 @@ class Store:
 
     # ── pins (regression corpus, decision 11) ─────────────────────────────────
 
-    async def pin(self, run_id: str, side: str, label: str = "") -> None:
+    async def pin(
+        self, run_id: str, side: str, label: str = "",
+        must_refuse: list[dict[str, Any]] | None = None,
+    ) -> None:
         """Pin a run into the corpus, or move its side/label. Idempotent, and a
-        concurrent first pin of the same run resolves to one row."""
+        concurrent first pin of the same run resolves to one row. `must_refuse`
+        names the calls a must_block pin holds; None keeps what is stored."""
+        anchors = None if must_refuse is None else json.dumps(must_refuse)
         try:
-            await self._pin(run_id, side, label)
+            await self._pin(run_id, side, label, anchors)
         except IntegrityError:
-            await self._pin(run_id, side, label)  # the row now exists: update it
+            await self._pin(run_id, side, label, anchors)  # the row now exists: update it
 
-    async def _pin(self, run_id: str, side: str, label: str) -> None:
+    async def _pin(self, run_id: str, side: str, label: str, anchors: str | None) -> None:
         async with self.engine.begin() as conn:
             dup = (await conn.execute(
                 select(pins.c.run_id).where(
@@ -1709,16 +1719,19 @@ class Store:
             )).first()
             if dup is None:
                 await conn.execute(insert(pins).values(
-                    run_id=run_id, side=side, label=label,
+                    run_id=run_id, side=side, label=label, must_refuse=anchors or "",
                     org_id=current_org_id(),
                 ))
             else:
+                values: dict[str, Any] = {"side": side, "label": label}
+                if anchors is not None:
+                    values["must_refuse"] = anchors
                 await conn.execute(
                     update(pins).where(
                         pins.c.run_id == run_id,
                         pins.c.org_id == current_org_id(),
                     )
-                    .values(side=side, label=label)
+                    .values(**values)
                 )
 
     async def prune_runs_older_than(self, cutoff_ts: str) -> int:
@@ -1761,7 +1774,9 @@ class Store:
                 select(pins).where(pins.c.org_id == current_org_id())
             )).all()
         return [
-            {"run_id": r.run_id, "side": r.side, "label": r.label} for r in rows
+            {"run_id": r.run_id, "side": r.side, "label": r.label,
+             "must_refuse": json.loads(r.must_refuse) if r.must_refuse else []}
+            for r in rows
         ]
 
     # ── share links (EvidenceCase permalinks, spec §8.3) ──────────────────────

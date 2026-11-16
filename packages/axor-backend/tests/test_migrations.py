@@ -116,7 +116,8 @@ async def test_legacy_create_all_db_is_stamped_and_kept(db_url: str) -> None:
     assert "alembic_version" in tables
     assert "dead_letters" in tables  # 0002 applied on top of the stamp
     pins = await store.pinned()
-    assert pins == [{"run_id": "run_legacy", "side": "must_block", "label": "kept"}]
+    assert pins == [{"run_id": "run_legacy", "side": "must_block", "label": "kept",
+                     "must_refuse": []}]
     await engine.dispose()
 
 

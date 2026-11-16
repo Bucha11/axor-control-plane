@@ -10,12 +10,13 @@ import { navigate } from "../router";
 import { useApp } from "../store";
 import { incidentWhat } from "./Evidence";
 import { LAST_SEARCH } from "./ReplaySearch";
+import { guessKlass, toolsFromSteps } from "../toolGuess";
 import { C, MONO, btn, sevColor } from "../theme";
 import TaintGraph from "./TaintGraph";
 import CutResult from "../components/CutResult";
 import Coach from "../components/Coach";
 
-type Cf = "noexec" | "taint" | "policy";
+type Cf = "noexec" | "taint" | "policy" | "outside";
 
 // A tool result whose root names an untrusted source: the content an
 // injection rides in, and what an operator's cut names.
@@ -264,6 +265,18 @@ export default function ReplayTab({ runId: runIdProp, cursor: cursorProp, seq: s
   const outsideAt = baseSteps.findIndex(isTainted);
   const refusedAt = baseSteps.findIndex(isRefused);
 
+  // The call this run should not have made: one that was let through while
+  // what it was given came from outside text — the selected one, or else the
+  // first in the run. Its rule: refuse anything built from outside text.
+  const usedOutside = (x: ScrubberStep) => x.kind === "tool_call" && !isRefused(x)
+    && lineage(baseSteps, taintRef(x) ?? "").some((f) => f.outside);
+  const ruleStep = cur && usedOutside(cur) ? cur : baseSteps.find(usedOutside);
+  const ruleTool = ruleStep ? toolOf(ruleStep) : "";
+  const ruleKlass = ruleTool
+    ? (policy[ruleTool]?.klass === "EXPORT" || policy[ruleTool]?.klass === "EXEC"
+      ? policy[ruleTool].klass : guessKlass(ruleTool) === "EXPORT" ? "EXPORT" : "EXEC")
+    : "EXEC";
+
   const toggleCf = (which: Cf) => {
     if (cf === which) {
       setCf(null);
@@ -274,6 +287,9 @@ export default function ReplayTab({ runId: runIdProp, cursor: cursorProp, seq: s
     if (which === "noexec") {
       const shell = toolsSeen.find((t) => ["bash", "shell", "exec", "run_shell"].includes(t.toLowerCase()));
       counterfactual.mutate({ allowed_tools: toolsSeen.filter((t) => t !== shell) });
+    } else if (which === "outside" && ruleTool) {
+      counterfactual.mutate(ruleKlass === "EXPORT"
+        ? { egress_sinks: [ruleTool] } : { imperative_sinks: [ruleTool] });
     } else if (which === "policy") {
       counterfactual.mutate({
         version: "axor-config/1", default: "DENY",
@@ -422,7 +438,8 @@ export default function ReplayTab({ runId: runIdProp, cursor: cursorProp, seq: s
             </div>
             <div className="flex gap-2 flex-wrap mb-3">
               {([
-                ["noexec", "no shell commands", hasShell],
+                ["outside", `${ruleTool} refuses anything built from outside text`, !!ruleTool],
+                ["noexec", "no shell commands at all", hasShell],
                 ["taint", "this answer treated as outside text", canTaint],
                 ["policy", `the rules from Policy (${policyTools} tools)`, policyTools > 0],
               ] as const).filter(([, , ok]) => ok).map(([id, label]) => (
@@ -457,11 +474,20 @@ export default function ReplayTab({ runId: runIdProp, cursor: cursorProp, seq: s
                   {toolOf(divStep) ? <> ({toolOf(divStep)})</> : null}:{" "}
                   {isRefused(divStep) ? <>refused — {plainReason(steps, divStep)}.</> : <>let through.</>}
                   <div style={{ fontFamily: MONO, color: C.dim, fontSize: 11, marginTop: 4 }}>
-                    the steps after it would not have happened — shown faded
+                    {divIndex > 0 ? `steps 1–${divIndex} go as before · ` : ""}the steps after it would not have happened — shown faded
                   </div>
                 </>
               )}
             </div>
+            {cf === "outside" && divStep && isRefused(divStep) && toolOf(divStep) === ruleTool && run && (
+              <MakeRule runId={runId} node={nodeProp ?? run.node_id} seq={ruleStep!.seq} tool={ruleTool} klass={ruleKlass}
+                tools={toolsSeen.map((t) => ({
+                  name: t,
+                  outside: baseSteps.some((x) => x.kind === "tool_result" && toolOf(x) === t && isTainted(x)),
+                }))}
+                otherRuns={(runs.data ?? []).filter((r) => r.node_id === run.node_id && r.run_id !== runId
+                  && (r.evidence ?? []).length === 0).map((r) => r.run_id)} />
+            )}
           </div>
 
           <div data-testid="replay-keep" className="mt-4 flex items-center gap-2 flex-wrap" style={{ fontFamily: MONO, fontSize: 11.5, color: C.mut }}>
@@ -477,6 +503,93 @@ export default function ReplayTab({ runId: runIdProp, cursor: cursorProp, seq: s
           </div>
         </>
       )}
+    </div>
+  );
+}
+
+const KLASS_WORDS: Record<string, string> = {
+  READ: "reads", WRITE: "changes files", EXPORT: "sends out", EXEC: "runs code",
+};
+
+/** Turn the what-if into the rule: the tool's kind goes into Policy (refusing
+ * anything built from outside text follows from it), the run's other tools are
+ * added as they look, the run is kept as an attack that must stay blocked, and
+ * the agent's other runs as normal work that must keep passing — then Safe to
+ * ship? checks exactly that. */
+function MakeRule({ runId, node, seq, tool, klass, tools: inRun, otherRuns }: {
+  runId: string; node: string; seq: number; tool: string; klass: "EXEC" | "EXPORT";
+  tools: { name: string; outside: boolean }[]; otherRuns: string[];
+}) {
+  const policy = useApp((st) => st.toolPolicy);
+  const setToolClass = useApp((st) => st.setToolClass);
+  const qc = useQueryClient();
+  const [keepNormal, setKeepNormal] = useState(true);
+  // every tool the agent has called, not only in this run: a tool missing from
+  // Policy is refused, and its normal work uses tools this run never did
+  const seen = useQuery({
+    queryKey: ["agent-tools", node],
+    queryFn: () => api.searchSteps({ agent: node }),
+  });
+  const tools = useMemo(() => {
+    const all = toolsFromSteps((seen.data?.steps ?? []).filter((x) => x.node_id === node));
+    for (const t of inRun) all[t.name] = { klass: all[t.name]?.klass ?? guessKlass(t.name), outside: t.outside || !!all[t.name]?.outside };
+    return Object.entries(all).map(([name, c]) => ({ name, outside: c.outside }));
+  }, [seen.data, inRun, node]);
+  const added = tools.filter((t) => t.name !== tool && !policy[t.name]);
+  const apply = useMutation({
+    mutationFn: async () => {
+      const source = `seen in ${node}'s runs`;
+      for (const t of added) setToolClass(t.name, { klass: guessKlass(t.name), outside: t.outside, source });
+      setToolClass(tool, { klass, outside: tools.find((t) => t.name === tool)?.outside ?? false,
+                           source: policy[tool]?.source ?? source });
+      await api.pin(runId, "must_block", `${node}: ${tool} built from outside text`,
+        [{ node_id: node, seq }]);
+      if (keepNormal) {
+        for (const r of otherRuns) await api.pin(r, "must_pass", `normal work of ${node}`);
+      }
+    },
+    onSuccess: async () => {
+      await qc.invalidateQueries({ queryKey: ["pins"] });
+      navigate("prevent", { rules: "policy" });
+    },
+  });
+  return (
+    <div data-testid="make-rule" className="mt-4 p-3" style={{ background: C.panel2, border: `1px solid ${C.steel}`, borderRadius: 6 }}>
+      <div style={{ fontSize: 13.5, fontWeight: 600, color: C.text, marginBottom: 6 }}>Make it a rule</div>
+      <ul style={{ fontSize: 12.5, color: C.mut, lineHeight: 1.7, margin: 0, paddingLeft: 18 }}>
+        <li>
+          In Policy, <span style={{ fontFamily: MONO, color: C.text }}>{tool}</span> {KLASS_WORDS[klass]} — so{" "}
+          {klass === "EXEC" ? "a command" : "anything it sends"} built from outside text is refused, whoever asked.
+        </li>
+        {added.length > 0 && (
+          <li>
+            {node}'s other tools go into Policy as they look:{" "}
+            {added.map((t, i) => (
+              <span key={t.name}>{i > 0 && ", "}<span style={{ fontFamily: MONO, color: C.text }}>{t.name}</span>{" "}
+                {KLASS_WORDS[guessKlass(t.name)]}{t.outside ? " · brings outside text" : ""}</span>
+            ))}. A tool not in Policy is refused.
+          </li>
+        )}
+        <li>This run is kept as an attack: its {tool} call must be refused.</li>
+        {otherRuns.length > 0 && (
+          <li>
+            <label style={{ cursor: "pointer" }}>
+              <input type="checkbox" checked={keepNormal} onChange={(e) => setKeepNormal(e.target.checked)}
+                style={{ marginRight: 6, verticalAlign: "middle" }} />
+              {node}'s other {otherRuns.length === 1 ? "run is" : `${otherRuns.length} runs are`} kept as normal work
+              that must keep passing — so a rule that is too strict shows up.
+            </label>
+          </li>
+        )}
+      </ul>
+      <div className="flex items-center gap-3 mt-3">
+        <button onClick={() => apply.mutate()} disabled={apply.isPending || seen.isPending} data-testid="make-rule-apply"
+          style={btn({ color: C.text, borderColor: C.steel, fontSize: 12, padding: "6px 14px" })}>
+          {apply.isPending ? "…" : "Make it a rule and check it →"}
+        </button>
+        <span style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim }}>opens Safe to ship? with the rules from Policy</span>
+        {apply.isError && <span style={{ color: C.red, fontSize: 12 }}>{(apply.error as Error).message}</span>}
+      </div>
     </div>
   );
 }

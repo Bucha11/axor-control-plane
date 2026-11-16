@@ -256,7 +256,9 @@ async def fleet_reprobe(request: Request, store: StoreDep) -> dict:
 @router.post("/seed-prod-incident")
 async def seed_prod_incident(store: StoreDep, cache: SubgraphCacheDep) -> dict:
     """Example for step search: last Thursday afternoon a support agent dropped
-    the production orders table because a ticket told it to — let through."""
+    the production orders table because a ticket told it to — let through; and
+    the day before, the same agent's normal work (an order looked up and the
+    customer answered), which a rule against the drop must leave passing."""
     from datetime import UTC, datetime, timedelta
 
     from axor_backend import demo
@@ -267,7 +269,12 @@ async def seed_prod_incident(store: StoreDep, cache: SubgraphCacheDep) -> dict:
     await _seed(store, cache, "ex_prod_drop", demo.OPS_AGENT, "ops-demo",
                 [{**e, "ts": (start + timedelta(seconds=9 * i)).isoformat()}
                  for i, e in enumerate(demo.OPS_EVENTS)], [], created=start.isoformat())
+    day_before = start - timedelta(days=1, hours=3)
+    await _seed(store, cache, "ex_prod_ok", demo.OPS_AGENT, "ops-demo",
+                [{**e, "ts": (day_before + timedelta(seconds=7 * i)).isoformat()}
+                 for i, e in enumerate(demo.OPS_OK_EVENTS)], [], created=day_before.isoformat())
     if await store.get_reported(demo.OPS_AGENT) is None:
         await store.upsert_reported(demo.OPS_AGENT, applied_version=0, level="NORMAL",
                                     budget_remaining=None, ts=now())
-    return {"seeded": ["ex_prod_drop"], "node": demo.OPS_AGENT, "at": start.isoformat()}
+    return {"seeded": ["ex_prod_drop", "ex_prod_ok"], "node": demo.OPS_AGENT,
+            "at": start.isoformat()}
