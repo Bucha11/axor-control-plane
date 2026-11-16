@@ -1,8 +1,8 @@
-// Replay — a timeline you can question (ReplayTab.tsx). Deep-linked to the
-// seeded adapter-fidelity run ex_block: the timeline boxes carry tool-name
-// chips, a counterfactual fork re-gates the recorded trace deterministically
-// and shows the first divergence, the provenance graph draws a value's
-// derivation, and a run can be pinned into the regression corpus.
+// Replay — a run, step by step (ReplayTab.tsx). Deep-linked to the seeded
+// adapter-fidelity run ex_block: each step is a box named by its tool, the
+// selected step reads as one sentence (refused — and why), "what if" decides
+// the same recorded steps again under other rules and names the first step
+// that would have gone differently, and a run can be kept as a test.
 import { expect, test } from "@playwright/test";
 import { goHash, SEEDED, seedAdapterRuns, setConnection } from "./helpers";
 
@@ -12,36 +12,37 @@ test.describe("replay", () => {
     await setConnection(page, { mode: "adapter" });
   });
 
-  test("the timeline renders with tool-name chips, not blank boxes", async ({ page }) => {
+  test("the run reads in words: what happened, then each step", async ({ page }) => {
     await goHash(page, `replay/${SEEDED.block}`);
-    await expect(page.getByRole("heading", { name: `${SEEDED.block}, moment by moment.` })).toBeVisible();
-    // Boxes are labelled by the tool that ran — slack_post is the egress the
-    // recorded trace denies.
-    await expect(page.getByText("slack_post").first()).toBeVisible();
+    await expect(page.getByTestId("replay-title")).toBeVisible();
+    await expect(page.getByTestId("replay-summary")).toContainText(/\d+ steps/);
+    await expect(page.getByTestId("replay-summary")).toContainText(/refused at step \d+/);
+    // Boxes are labelled by the tool that ran — slack_post is the send-out the
+    // recorded trace refuses.
+    await expect(page.getByTestId("replay-steps").getByText(/slack_post/).first()).toBeVisible();
+    await page.getByTestId("replay-steps").getByTitle(/slack_post — refused/).first().click();
+    await expect(page.getByTestId("replay-step")).toContainText(/slack_post — refused/);
   });
 
-  test("a counterfactual fork re-gates the trace and finds the first divergence", async ({ page }) => {
+  test("what if: the same steps decided again find the first step that changes", async ({ page }) => {
     await goHash(page, `replay/${SEEDED.block}`);
-    await page.getByRole("button", { name: /What if/ }).click();
-    await page.getByRole("button", { name: "no exec capability" }).click();
-    // Dropping bash from the capability table diverges at the exec step.
-    await expect(page.getByText(/First divergence at/)).toBeVisible();
-    await expect(page.getByText(/excluded from scores/)).toBeVisible();
+    await page.getByTestId("whatif-noexec").click();
+    await expect(page.getByTestId("whatif-answer")).toContainText(/It would have gone differently at step \d+/);
+    await expect(page.getByTestId("whatif-answer")).toContainText("shown faded");
   });
 
-  test("the provenance panel draws a value's derivation", async ({ page }) => {
+  test("an answer's details fold out the value graph", async ({ page }) => {
     await goHash(page, `replay/${SEEDED.block}`);
-    // Step 1 (email_read → v_mail) produces a value ref, so selecting it focuses
-    // provenance on that value. Boxes are titled "N. <label>".
-    await page.getByTitle(/^1\. /).click();
-    await expect(page.getByText("provenance · run", { exact: false })).toBeVisible();
+    // email_read's answer is the value v_mail.
+    await page.getByTitle(/^\d+\. email_read answered/).first().click();
+    await page.getByRole("button", { name: /details/ }).click();
     await expect(page.getByText("v_mail", { exact: false }).first()).toBeVisible();
   });
 
-  test("a run can be pinned into the regression corpus", async ({ page }) => {
+  test("a run can be kept as a test", async ({ page }) => {
     await goHash(page, `replay/${SEEDED.block}`);
-    await page.getByRole("button", { name: "must-pass" }).click();
+    await page.getByRole("button", { name: /normal work — must keep passing/ }).click();
     await expect(page.getByText("check it in Safe to ship? →")).toBeVisible();
-    await expect(page.getByRole("button", { name: /✓ must-pass/ })).toBeVisible();
+    await expect(page.getByRole("button", { name: /✓ normal work/ })).toBeVisible();
   });
 });

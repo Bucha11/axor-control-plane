@@ -1,15 +1,18 @@
-// Replay: a timeline you can question (main-tabs mockup, ReplayTab).
-// Wired to /v1/replay/{run_id}; counterfactuals re-evaluate gates over the
-// recorded trace — no model call, fully deterministic.
+// Replay: a run, step by step (/v1/replay/{run_id}). Every step in words — a
+// tool asked, a tool answering (marked when its text came from outside), a
+// call refused and why — where a call's input came from, as a chain of tools,
+// and "what if": the same recorded steps decided again under other rules
+// (/v1/replay/{run}/counterfactual — no model call, deterministic).
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, ScrubberPayload, ScrubberStep } from "../api";
 import { navigate } from "../router";
+import { useApp } from "../store";
+import { incidentWhat } from "./Evidence";
 import { C, MONO, btn, sevColor } from "../theme";
 import TaintGraph from "./TaintGraph";
 import CutResult from "../components/CutResult";
 import Coach from "../components/Coach";
-import Tooltip from "../components/Tooltip";
 
 // A one-click seed of adapter-fidelity runs (recorded verdicts + value
 // provenance) — the trace depth the proxy can't produce, so the counterfactual,
@@ -25,7 +28,7 @@ function useSeedExample(onDone?: (blockRunId: string) => void) {
   });
 }
 
-type Cf = "noexec" | "taint";
+type Cf = "noexec" | "taint" | "policy";
 
 // A tool result whose root names an untrusted source: the content an
 // injection rides in, and what an operator's cut names.
@@ -35,38 +38,29 @@ function isTainted(s: ScrubberStep): boolean {
   return Array.isArray(root?.sources) && root!.sources.length > 0;
 }
 
+const verdictOf = (s: ScrubberStep) => s.reevaluated_verdict ?? s.recorded_verdict;
+const isRefused = (s: ScrubberStep) => s.kind === "tool_call" && verdictOf(s) === "deny";
+const toolOf = (s: ScrubberStep) => (typeof s.payload.tool === "string" ? s.payload.tool : "");
+
 function stepColor(s: ScrubberStep): string {
   if (isTainted(s)) return C.amber;
-  return sevColor(s.reevaluated_verdict ?? s.recorded_verdict, s.kind);
+  return sevColor(verdictOf(s), s.kind);
 }
 
-function stepLabel(s: ScrubberStep): string {
-  const tool = typeof s.payload.tool === "string" ? ` ${s.payload.tool}` : "";
-  if (s.kind === "tool_result") {
-    const sources = ((s.payload.root as { sources?: string[] } | undefined)?.sources ?? []).join(", ");
-    return `result of${tool}${sources ? ` — untrusted (${sources})` : ""}`;
-  }
-  const deny = s.deny_reason ? ` — ${s.deny_reason}` : "";
-  return `${s.kind}${tool}${deny}`;
-}
-
-// The short label inside a timeline box: the tool name when there is one, else a
-// compact tag for the non-tool event kinds (claim, fault, excision, …).
-function stepChip(s: ScrubberStep): string {
-  if (typeof s.payload.tool === "string" && s.payload.tool) {
-    // a call and its result are two steps of the same tool: say which
-    if (s.kind === "tool_call") return `→ ${s.payload.tool}`;
-    if (s.kind === "tool_result") return `← ${s.payload.tool}`;
-    return s.payload.tool;
-  }
+// The words inside a timeline box: what happened at that step.
+/** A step's box: the tool (or what happened) on the main line, and what the
+ * step was — asked, answered, refused — on the small line above it. */
+function stepChip(s: ScrubberStep): { what: string; name: string } {
+  const tool = toolOf(s);
+  if (s.kind === "tool_call") return { what: isRefused(s) ? "refused" : "asked", name: tool };
+  if (s.kind === "tool_result") return { what: "answered", name: tool };
   const tags: Record<string, string> = {
-    claim: "claim",
-    fault_injected: "⚡fault",
-    context_excision: "excision",
-    fact: "fact",
-    tool_result: "result",
+    claim: "agent said",
+    fault_injected: "broken on purpose",
+    context_excision: "cut",
+    fact: "note",
   };
-  return tags[s.kind] ?? s.kind;
+  return { what: "", name: tags[s.kind] ?? s.kind.replace(/_/g, " ") };
 }
 
 function taintRef(s: ScrubberStep | undefined): string | null {
@@ -80,6 +74,86 @@ function taintRef(s: ScrubberStep | undefined): string | null {
   return null;
 }
 
+/** Where a value came from, as the steps recorded it: the answer that made it,
+ * the call that asked for that answer, and what that call was given — back to
+ * the first answer. Labels are tools, never value ids. */
+function lineage(steps: ScrubberStep[], ref: string): { label: string; outside: boolean }[] {
+  const out: { label: string; outside: boolean }[] = [];
+  const seen = new Set<string>();
+  let current: string | null = ref;
+  while (current && !seen.has(current) && out.length < 8) {
+    seen.add(current);
+    const i = steps.findIndex((x) => x.kind === "tool_result" && x.payload.value_ref === current);
+    if (i < 0) break;
+    const res = steps[i];
+    out.unshift({ label: `${toolOf(res)}'s answer`, outside: isTainted(res) });
+    const call = steps.slice(0, i).reverse().find((x) => x.kind === "tool_call" && toolOf(x) === toolOf(res));
+    const parents = call?.payload.arg_refs && typeof call.payload.arg_refs === "object"
+      ? Object.values(call.payload.arg_refs as Record<string, unknown>).filter((v): v is string => typeof v === "string")
+      : [];
+    current = parents[0] ?? null;
+  }
+  return out;
+}
+
+function origin(steps: ScrubberStep[], s: ScrubberStep): string | null {
+  const refs = s.payload.arg_refs && typeof s.payload.arg_refs === "object"
+    ? Object.values(s.payload.arg_refs as Record<string, unknown>).filter((v): v is string => typeof v === "string")
+    : [];
+  for (const r of refs) {
+    const chain = lineage(steps, r);
+    const first = chain.find((c) => c.outside) ?? chain[0];
+    if (first) return first.label;
+  }
+  return null;
+}
+
+/** Why a call was refused, in words — the kernel's own text stays under "details". */
+function plainReason(steps: ScrubberStep[], s: ScrubberStep): string {
+  const raw = String(s.deny_reason ?? s.payload.reason ?? "");
+  const gate = s.gate ?? s.deny_category ?? "";
+  if (/Refused by the axor rule/.test(raw)) return raw.split(" Refused by the axor rule")[0].replace(/^axor: /, "");
+  if (/turned off from the Control Plane|paused from the Control Plane|stopped from the Control Plane/.test(raw)) {
+    return raw.replace(/^axor: /, "");
+  }
+  if (gate === "taint_floor" || gate === "taint_enforcement" || /taint enforcement/.test(raw)) {
+    const from = origin(steps, s);
+    return `what it was going to use came from ${from ?? "text"} — text that came from outside`;
+  }
+  if (gate === "carrier" || gate === "carrier_gate") return "it would have followed an instruction that came from outside text";
+  if (gate === "budget" || /budget/.test(raw)) return "the call budget was spent";
+  if (gate === "ssrf" || gate === "ssrf_gate") return "it pointed at an internal address";
+  if (gate === "value_policies" || gate === "value_policy") return "the value is not one of the allowed ones";
+  if (/not in the capability table/.test(raw)) return "this tool is not on the allowed list";
+  if (gate === "capability") return "this tool is not allowed here";
+  return raw || "refused";
+}
+
+const FAULT_WORDS: Record<string, string> = {
+  silent_fail: "made to return an error", corrupt_retrieval: "made to return corrupted results",
+  instruction_injection: "made to return text with a hidden instruction",
+  tool_substitution: "swapped for a different tool", timeout: "made to time out",
+};
+
+/** One sentence for one step. */
+function sentence(steps: ScrubberStep[], s: ScrubberStep): string {
+  const tool = toolOf(s);
+  if (s.kind === "tool_call") {
+    return isRefused(s) ? `${tool} — refused: ${plainReason(steps, s)}.` : `The agent called ${tool}.`;
+  }
+  if (s.kind === "tool_result") {
+    return isTainted(s)
+      ? `${tool} answered — marked as outside text: anything built from it is watched.`
+      : `${tool} answered.`;
+  }
+  if (s.kind === "claim") return `The agent said: “${String(s.payload.text ?? "").slice(0, 300)}”`;
+  if (s.kind === "fault_injected") {
+    return `${tool || "a tool"} was ${FAULT_WORDS[String(s.payload.mode)] ?? "broken"} — on purpose, for the test.`;
+  }
+  if (s.kind === "context_excision") return "An item was cut from the agent's context.";
+  return s.kind.replace(/_/g, " ");
+}
+
 // `cursor` is a position in the step list; `seq` is a kernel event seq (what
 // evidence anchors and regression rows name) and is resolved to its step once
 // the trace loads.
@@ -88,6 +162,7 @@ export default function ReplayTab({ runId: runIdProp, cursor: cursorProp, seq: s
   runId?: string; cursor?: string; seq?: string; node?: string;
 }) {
   const runs = useQuery({ queryKey: ["runs"], queryFn: api.listRuns });
+  const policy = useApp((st) => st.toolPolicy);
   const [pickedRun, setPickedRun] = useState<string | null>(runIdProp ?? null);
   const runId = pickedRun ?? runIdProp ?? runs.data?.[0]?.run_id ?? null;
 
@@ -98,7 +173,6 @@ export default function ReplayTab({ runId: runIdProp, cursor: cursorProp, seq: s
   });
 
   const [cursor, setCursor] = useState(cursorProp ? Number(cursorProp) : 0);
-  const [fork, setFork] = useState(false);
   const [cf, setCf] = useState<Cf | null>(null);
 
   useEffect(() => {
@@ -113,18 +187,16 @@ export default function ReplayTab({ runId: runIdProp, cursor: cursorProp, seq: s
   }, [runId]);
 
   const counterfactual = useMutation({
-    mutationFn: (config: Record<string, unknown>) =>
-      api.counterfactual(runId!, config),
+    mutationFn: (config: Record<string, unknown>) => api.counterfactual(runId!, config),
   });
 
-  // Pin the run under inspection to either corpus side. must_block auto-pins on
-  // evidence upload, but a legitimate flow that PASSED has no evidence — this is
-  // the only way to add the must_pass side the corpus needs to be two-sided.
+  // Keep the run as a test: an attack that must stay blocked, or normal work
+  // that must keep passing — the only way to add the second side, since a
+  // flow that passed has no incident to be kept from.
   const qc = useQueryClient();
   const [pinned, setPinned] = useState<string | null>(null);
   const pin = useMutation({
-    mutationFn: (side: "must_block" | "must_pass") =>
-      api.pin(runId!, side, "manual"),
+    mutationFn: (side: "must_block" | "must_pass") => api.pin(runId!, side, "kept from Replay"),
     onSuccess: (_r, side) => {
       setPinned(side);
       void qc.invalidateQueries({ queryKey: ["pins"] });
@@ -151,61 +223,61 @@ export default function ReplayTab({ runId: runIdProp, cursor: cursorProp, seq: s
     const key = `${runId}:${nodeProp ?? ""}:${seqProp}`;
     if (seqLanded.current === key) return;
     const want = Number(seqProp);
-    const steps = scrubber.data.steps;
+    const all = scrubber.data.steps;
     const kernel = (nodeEvents.data ?? []).filter((e) => e.schema_version);
-    const aligned = kernel.length === steps.length
-      && kernel.every((e, i) => e.seq === steps[i].seq);
+    const aligned = kernel.length === all.length && kernel.every((e, i) => e.seq === all[i].seq);
     let i = nodeProp && aligned
       ? kernel.findIndex((e) => e.node_id === nodeProp && e.seq === want)
       : -1;
-    if (i < 0) i = steps.findIndex((s) => s.seq === want);
+    if (i < 0) i = all.findIndex((x) => x.seq === want);
     if (i >= 0) setCursor(i);
     seqLanded.current = key;
   }, [seqProp, nodeProp, runId, scrubber.data, nodeEvents.isPending, nodeEvents.data]);
   const firstDiv = active?.first_divergence ?? null;
-  // A counterfactual can only DIVERGE from something that was recorded. A
-  // proxy-depth trace records no gate verdicts (it observes; it does not gate),
-  // so first_divergence can never fire — reporting "behaves identically" there
-  // would be a false reassurance. Detect the fidelity and say so honestly.
-  const hasRecordedVerdicts = (base?.steps ?? []).some(
-    (s) => s.recorded_verdict != null,
-  );
+  // A what-if can only differ from something that was decided. A proxy-depth
+  // trace records no verdicts (it watches; it does not decide), so nothing
+  // could ever differ — say so instead of a false "nothing would change".
+  const hasRecordedVerdicts = (base?.steps ?? []).some((x) => x.recorded_verdict != null);
 
   const toolsSeen = useMemo(() => {
     const seen: string[] = [];
-    for (const s of base?.steps ?? []) {
-      const t = s.payload.tool;
+    for (const x of base?.steps ?? []) {
+      const t = x.payload.tool;
       if (typeof t === "string" && !seen.includes(t)) seen.push(t);
     }
     return seen;
   }, [base]);
 
-  if (runs.isLoading) {
-    return <Center msg="loading runs…" />;
-  }
+  if (runs.isLoading) return <Center msg="loading runs…" />;
   if (!runId) {
     return (
-      <div style={{ maxWidth: 640, margin: "0 auto" }}>
+      <div style={{ maxWidth: 680, margin: "0 auto" }}>
         <div data-tour="replay-picker">
-          <div style={{ fontFamily: MONO, fontSize: 12.5, color: C.mut, marginBottom: 12 }}>
-            No runs yet. Catch one first, from Incidents —
+          <h1 style={{ fontSize: 22, fontWeight: 650, margin: "0 0 6px" }}>Replay</h1>
+          <div style={{ fontSize: 14, color: C.mut, marginBottom: 14, lineHeight: 1.6 }}>
+            Any run of your agents, step by step: what each tool was asked and answered, what was let
+            through, what was refused and why. Nothing has run yet.
           </div>
-          <SeedButton label="or load an example adapter run →" />
+          <SeedButton label="replay an example run →" />
         </div>
       </div>
     );
   }
 
+  const run = (runs.data ?? []).find((r) => r.run_id === runId);
+  const incident = run?.evidence?.[0];
   const cur = steps[Math.min(cursor, Math.max(steps.length - 1, 0))];
-  const cursorTool = typeof cur?.payload.tool === "string" ? cur.payload.tool : null;
   const curRef = taintRef(cur);
-  const divStep = firstDiv != null ? steps.find((s) => s.seq === firstDiv) : undefined;
+  const divIndex = firstDiv != null ? steps.findIndex((x) => x.seq === firstDiv) : -1;
+  const divStep = divIndex >= 0 ? steps[divIndex] : undefined;
+  const baseSteps = base?.steps ?? [];
+  const outsideAt = baseSteps.findIndex(isTainted);
+  const refusedAt = baseSteps.findIndex(isRefused);
 
   const pickRun = (id: string) => {
     if (id !== runId) navigate(`explain/${id}`);
     setPickedRun(id);
     setCursor(0);
-    setFork(false);
     setCf(null);
     counterfactual.reset();
   };
@@ -218,218 +290,217 @@ export default function ReplayTab({ runId: runIdProp, cursor: cursorProp, seq: s
     }
     setCf(which);
     if (which === "noexec") {
-      const drop = toolsSeen.includes("bash") ? "bash" : cursorTool;
+      const shell = toolsSeen.find((t) => ["bash", "shell", "exec", "run_shell"].includes(t.toLowerCase()));
+      counterfactual.mutate({ allowed_tools: toolsSeen.filter((t) => t !== shell) });
+    } else if (which === "policy") {
       counterfactual.mutate({
-        allowed_tools: toolsSeen.filter((t) => t !== drop),
+        version: "axor-config/1", default: "DENY",
+        sinks: Object.fromEntries(Object.entries(policy).map(([n, c]) => [n, { consequence_class: c.klass }])),
       });
     } else {
-      const ref = taintRef(cur);
-      counterfactual.mutate({ synthetic_taint_refs: ref ? [ref] : [] });
+      counterfactual.mutate({ synthetic_taint_refs: curRef ? [curRef] : [] });
     }
   };
+  const hasShell = toolsSeen.some((t) => ["bash", "shell", "exec", "run_shell"].includes(t.toLowerCase()));
+  const canTaint = !!cur && cur.kind === "tool_result" && !isTainted(cur) && !!curRef;
+  const policyTools = Object.keys(policy).length;
+
+  const runLabel = (r: typeof run) => r
+    ? `${r.node_id} · ${new Date(r.created_ts).toLocaleString()}${r.evidence?.[0] ? ` · ${incidentWhat(r.evidence[0].deviation)}` : ""}`
+    : "";
+  const link: React.CSSProperties = { background: "none", border: "none", padding: 0, cursor: "pointer",
+    fontFamily: MONO, fontSize: 11.5, color: C.steel };
 
   return (
-    <div style={{ maxWidth: 640, margin: "0 auto" }}>
-      <Coach id="replay" title="Replay — question a run, moment by moment">
-        Scrub the timeline; each box is one step, coloured by verdict.{" "}
-        <span style={{ color: C.text }}>What if…</span> forks a counterfactual —
-        it re-runs the recorded trace under an edited policy (no model call) and
-        shows the first step that would change. The provenance graph traces where a
-        value came from. Pin a run to build the regression corpus.
+    <div style={{ maxWidth: 680, margin: "0 auto" }}>
+      <Coach id="replay" title="Replay — a run, step by step">
+        Each box is one step: a tool asked, a tool answering, the agent speaking. Green was let
+        through, amber is text that came from outside, red was refused — with why. <span style={{ color: C.text }}>What if…</span>{" "}
+        re-runs the same recorded steps under different rules — no model is called — and shows the
+        first step that would have gone differently.
       </Coach>
-      <div data-tour="replay-picker" className="flex items-center gap-3 mb-3">
-        <select
-          value={runId}
-          onChange={(e) => pickRun(e.target.value)}
-          style={{
-            background: C.panel2, border: `1px solid ${C.line}`, borderRadius: 5,
-            color: C.text, fontFamily: MONO, fontSize: 11, padding: "5px 8px",
-          }}
-        >
+      <div data-tour="replay-picker" className="flex items-center gap-3 flex-wrap" style={{ marginBottom: 22 }}>
+        <select value={runId} onChange={(e) => pickRun(e.target.value)} aria-label="run"
+          style={{ background: C.panel2, border: `1px solid ${C.line}`, borderRadius: 5, color: C.text,
+                   fontFamily: MONO, fontSize: 11, padding: "5px 8px", maxWidth: 460 }}>
           {(runs.data ?? []).map((r) => (
-            <option key={r.run_id} value={r.run_id}>
-              {r.run_id} · {r.scenario}
-            </option>
+            <option key={r.run_id} value={r.run_id}>{runLabel(r)}</option>
           ))}
         </select>
-        <SeedButton label="load example adapter run" compact />
+        <SeedButton label="an example run" compact />
       </div>
 
-      <div className="flex items-center gap-2 mb-3">
-        <span style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim }}>pin to corpus:</span>
-        {(["must_pass", "must_block"] as const).map((side) => (
-          <button
-            key={side}
-            onClick={() => pin.mutate(side)}
-            disabled={pin.isPending}
-            title={side === "must_pass"
-              ? "add this run as a legitimate flow that must keep passing"
-              : "add this run as an attack that must stay blocked"}
-            style={btn({
-              color: pinned === side ? C.green : C.mut, borderColor: C.line,
-              fontSize: 10.5, padding: "3px 9px",
-            })}
-          >
-            {pinned === side ? "✓ " : ""}{side.replace("_", "-")}
-          </button>
-        ))}
-        {pin.isError && (
-          <span style={{ fontFamily: MONO, fontSize: 10.5, color: C.red }}>
-            pin failed: {(pin.error as Error).message}
-          </span>
-        )}
-        {pinned && (
-          <span style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim }}>
-            pinned → <span style={{ color: C.steel, cursor: "pointer" }} onClick={() => navigate("prevent")}>check it in Safe to ship? →</span>
-          </span>
-        )}
-      </div>
-
-      <h1 style={{ fontSize: 22, fontWeight: 650, margin: "0 0 20px" }}>
-        {runId}, moment by moment.
+      <h1 data-testid="replay-title" style={{ fontSize: 21, fontWeight: 650, lineHeight: 1.35, margin: "0 0 4px" }}>
+        {run?.node_id ?? runId}{" "}
+        {incident
+          ? <span style={{ color: C.red }}>{incidentWhat(incident.deviation)}</span>
+          : <span style={{ color: C.mut }}>— a run, step by step</span>}
       </h1>
+      {baseSteps.length > 0 && (
+        <div data-testid="replay-summary" style={{ fontFamily: MONO, fontSize: 11.5, color: C.dim, marginBottom: 18 }}>
+          {baseSteps.length} steps
+          {outsideAt >= 0 && <> · <span style={{ color: C.amber }}>outside text at step {outsideAt + 1}</span></>}
+          {refusedAt >= 0 && <> · <span style={{ color: C.red }}>refused at step {refusedAt + 1}</span></>}
+          {incident && <> · <button onClick={() => navigate("evidence")} style={{ ...link, fontSize: 11.5 }}>the incident →</button></>}
+        </div>
+      )}
 
       {scrubber.isLoading ? (
-        <Center msg="loading trace…" />
+        <Center msg="loading the run…" />
       ) : scrubber.isError ? (
         // e.g. a heartbeat-only live run: the backend answers 422 with the
         // reason — show it instead of a false "no steps recorded".
         <Center msg={(scrubber.error as Error).message} />
       ) : steps.length === 0 ? (
-        <Center msg="No steps recorded for this run." />
+        <Center msg="No steps were recorded in this run." />
       ) : (
         <>
-          <div className="flex gap-1 mb-2">
-            {steps.map((s, i) => (
-              <div
-                key={s.seq}
-                onClick={() => setCursor(i)}
-                title={`${s.seq}. ${stepLabel(s)}`}
+          <div className="flex gap-1 mb-1" data-testid="replay-steps">
+            {steps.map((x, i) => (
+              <div key={x.seq} onClick={() => setCursor(i)} title={`${i + 1}. ${sentence(steps, x)}`}
+                data-testid={`step-${i + 1}`}
                 style={{
-                  flex: 1, minWidth: 0, height: 34, cursor: "pointer", borderRadius: 4,
+                  flex: 1, minWidth: 0, height: 38, cursor: "pointer", borderRadius: 4,
                   background: i === cursor ? "rgba(127,168,204,0.08)" : C.panel,
-                  opacity: s.hypothetical ? 0.35 : 1,
-                  border: `1px solid ${
-                    i === cursor ? C.steel : firstDiv != null && s.seq === firstDiv ? C.red : C.line
-                  }`,
-                  borderBottom: `3px solid ${stepColor(s)}`,
-                  display: "flex", alignItems: "center", justifyContent: "center",
-                  padding: "0 4px",
-                }}
-              >
-                <span style={{
-                  fontFamily: MONO, fontSize: 9.5,
-                  color: i === cursor ? C.text : C.mut,
-                  whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
+                  opacity: x.hypothetical ? 0.35 : 1,
+                  border: `1px solid ${i === cursor ? C.steel : divIndex === i ? C.red : C.line}`,
+                  borderBottom: `3px solid ${stepColor(x)}`,
+                  display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: "0 4px",
                 }}>
-                  {stepChip(s)}
+                <span style={{ fontFamily: MONO, fontSize: 8.5, color: isRefused(x) ? C.red : isTainted(x) ? C.amber : C.dim,
+                               whiteSpace: "nowrap", overflow: "hidden", maxWidth: "100%" }}>
+                  {i + 1}{stepChip(x).what ? ` · ${stepChip(x).what}` : ""}
+                </span>
+                <span style={{ fontFamily: MONO, fontSize: 9.5, color: i === cursor ? C.text : isRefused(x) ? C.red : C.mut,
+                               whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: "100%" }}>
+                  {stepChip(x).name}
                 </span>
               </div>
             ))}
           </div>
-          <input
-            type="range"
-            min={0}
-            max={steps.length - 1}
-            value={Math.min(cursor, steps.length - 1)}
-            onChange={(e) => setCursor(+e.target.value)}
-            className="w-full"
-            style={{ accentColor: C.steel }}
-          />
+          <div className="flex gap-3 mb-2" style={{ fontFamily: MONO, fontSize: 10, color: C.dim, marginTop: 8 }}>
+            <span><span style={{ color: C.green }}>━</span> let through</span>
+            <span><span style={{ color: C.amber }}>━</span> text from outside</span>
+            <span><span style={{ color: C.red }}>━</span> refused</span>
+          </div>
+          <input type="range" min={0} max={steps.length - 1} value={Math.min(cursor, steps.length - 1)}
+            onChange={(e) => setCursor(+e.target.value)} aria-label="step" className="w-full" style={{ accentColor: C.steel }} />
 
           {cur && (
-            <div className="mt-3 p-4" style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 8 }}>
-              <div style={{ fontFamily: MONO, fontSize: 13, color: C.text }}>
-                {stepLabel(cur)}
+            <div data-testid="replay-step" className="mt-3 p-4"
+              style={{ background: C.panel, border: `1px solid ${isRefused(cur) ? C.red : C.line}`, borderRadius: 8 }}>
+              <div style={{ fontFamily: MONO, fontSize: 10, color: C.dim, marginBottom: 4 }}>
+                STEP {Math.min(cursor, steps.length - 1) + 1} OF {steps.length}{cur.hypothetical ? " · would not have happened" : ""}
               </div>
-              <div style={{ fontFamily: MONO, fontSize: 11, color: C.mut, marginTop: 6 }}>
-                level {cur.state.level} · {cur.state.tainted_refs.length} tainted so far ·{" "}
-                {cur.state.budget_spent_calls} calls spent
-                {typeof cur.state.budget_spent_cost === "number" &&
-                  cur.state.budget_spent_cost !== cur.state.budget_spent_calls &&
-                  ` · cost ${cur.state.budget_spent_cost}`}
+              <div style={{ fontSize: 14.5, color: isRefused(cur) ? C.red : C.text, lineHeight: 1.5 }}>
+                {sentence(steps, cur)}
               </div>
               {typeof cur.payload.preview === "string" && cur.payload.preview && (
-                <div style={{ fontFamily: MONO, fontSize: 11, color: C.text, marginTop: 8,
-                              background: C.panel2, borderRadius: 4, padding: "6px 8px",
-                              whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>
+                <div style={{ fontFamily: MONO, fontSize: 11, color: C.text, marginTop: 8, background: C.panel2,
+                              borderRadius: 4, padding: "6px 8px", whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>
                   {cur.payload.preview}
                 </div>
               )}
+              {cur.kind === "tool_call" && (() => {
+                const from = lineage(steps, taintRef(cur) ?? "");
+                return from.length > 0 ? (
+                  <div data-testid="replay-origin" style={{ fontFamily: MONO, fontSize: 11.5, color: C.mut, marginTop: 8 }}>
+                    what it was given came from:{" "}
+                    {from.map((f, i) => (
+                      <span key={i}>
+                        {i > 0 && " → "}
+                        <span style={{ color: f.outside ? C.amber : C.text }}>{f.label}{f.outside ? " (outside text)" : ""}</span>
+                      </span>
+                    ))}
+                  </div>
+                ) : null;
+              })()}
               {isTainted(cur) && typeof cur.payload.value_ref === "string" && (
                 <CutResult runId={runId} valueRef={cur.payload.value_ref}
                   excised={cur.state.excised_refs.includes(cur.payload.value_ref)} />
               )}
+              <Fold label="details">
+                <div style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim, lineHeight: 1.7 }}>
+                  {cur.kind} · seq {cur.seq} · {cur.state.budget_spent_calls} calls so far ·{" "}
+                  {cur.state.tainted_refs.length} values from outside so far · level {cur.state.level}
+                  {(cur.deny_reason || cur.payload.reason) ? <div>kernel: {String(cur.deny_reason ?? cur.payload.reason)}</div> : null}
+                </div>
+                {curRef && <TaintGraph key={`${runId}:${curRef}`} runId={runId} focus={curRef} />}
+              </Fold>
             </div>
           )}
 
-          {curRef && <TaintGraph key={`${runId}:${curRef}`} runId={runId} focus={curRef} />}
-
-          {!fork ? (
-            <Tooltip content="Fork a counterfactual from this run: change one policy and see how the recorded trace would re-gate — deterministic, no model call.">
-              <button
-                onClick={() => setFork(true)}
-                className="mt-4"
-                style={btn({ color: C.steel, fontSize: 12, padding: "8px 14px" })}
-              >
-                What if… (fork here)
-              </button>
-            </Tooltip>
-          ) : (
-            <div className="mt-4 p-4" style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 8 }}>
-              <div className="flex gap-2 mb-3">
-                {([
-                  ["no exec capability", "noexec"],
-                  ["this value arrives tainted", "taint"],
-                ] as const).map(([label, id]) => (
-                  <button
-                    key={id}
-                    onClick={() => toggleCf(id)}
-                    style={btn({
-                      background: cf === id ? "rgba(127,168,204,0.12)" : "none",
-                      border: `1px solid ${cf === id ? C.steel : C.line}`,
-                      color: cf === id ? C.steel : C.mut,
-                    })}
-                  >
-                    {label}
-                  </button>
-                ))}
-              </div>
+          <div data-testid="replay-whatif" className="mt-4 p-4" style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 8 }}>
+            <div style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim, letterSpacing: "0.1em", marginBottom: 8 }}>WHAT IF…</div>
+            <div className="flex gap-2 flex-wrap mb-3">
+              {([
+                ["noexec", "…the agent couldn't run shell commands", hasShell],
+                ["taint", "…this answer had been outside text", canTaint],
+                ["policy", `…the rules from Policy applied (${policyTools} tools)`, policyTools > 0],
+              ] as const).filter(([, , ok]) => ok).map(([id, label]) => (
+                <button key={id} onClick={() => toggleCf(id)} data-testid={`whatif-${id}`}
+                  style={btn({ background: cf === id ? "rgba(127,168,204,0.12)" : "none",
+                    border: `1px solid ${cf === id ? C.steel : C.line}`, color: cf === id ? C.steel : C.mut, fontSize: 11.5 })}>
+                  {label}
+                </button>
+              ))}
+            </div>
+            <div data-testid="whatif-answer" style={{ fontSize: 13.5, lineHeight: 1.6 }}>
               {cf === null ? (
-                <div style={{ fontFamily: MONO, fontSize: 11.5, color: C.mut }}>
-                  Pick a change. Gates re-evaluate over the recorded trace — no model call, fully deterministic.
-                </div>
+                <span style={{ color: C.mut }}>
+                  Pick one: the same recorded steps are decided again under it — no model is called, same
+                  answer every time.{!hasShell && !canTaint && policyTools === 0 && " (Select a tool's answer to ask what if it had been outside text.)"}
+                </span>
               ) : counterfactual.isPending ? (
-                <div style={{ fontFamily: MONO, fontSize: 11.5, color: C.mut }}>re-evaluating…</div>
+                <span style={{ color: C.mut }}>deciding again…</span>
               ) : counterfactual.isError ? (
-                <div style={{ fontFamily: MONO, fontSize: 11, color: C.red }}>
-                  {(counterfactual.error as Error).message}
-                </div>
+                <span style={{ color: C.red }}>{(counterfactual.error as Error).message}</span>
               ) : firstDiv == null && !hasRecordedVerdicts ? (
-                <div style={{ fontFamily: MONO, fontSize: 12, color: C.amber }}>
-                  This trace carries no recorded gate verdicts (proxy-depth — the proxy observes, it does not gate),
-                  so there is nothing to diverge from.
-                  <div style={{ color: C.dim, fontSize: 11, marginTop: 4 }}>
-                    Counterfactual divergence needs an adapter-depth trace (recorded verdicts + value provenance).
-                  </div>
-                </div>
-              ) : firstDiv == null ? (
-                <div style={{ fontFamily: MONO, fontSize: 12, color: C.mut }}>
-                  No divergence — this trace behaves identically under the edited config.
-                </div>
+                <span style={{ color: C.amber }}>
+                  This run was recorded by the proxy, which watches without deciding — there is nothing to
+                  decide differently. Agents wrapped in code record their decisions.
+                </span>
+              ) : firstDiv == null || !divStep ? (
+                <span style={{ color: C.mut }}>Nothing would have gone differently.</span>
               ) : (
-                <div style={{ fontFamily: MONO, fontSize: 12, color: C.text }}>
-                  First divergence at <span style={{ color: C.red }}>step {firstDiv}</span>:{" "}
-                  {divStep?.deny_category ?? "diverged"} — {divStep?.deny_reason ?? "gate outcome changed"}.
-                  <div style={{ color: C.dim, fontSize: 11, marginTop: 4 }}>
-                    Steps after {firstDiv} are hypothetical and excluded from scores.
+                <>
+                  It would have gone differently at <span style={{ color: C.red }}>step {divIndex + 1}</span>
+                  {toolOf(divStep) ? <> ({toolOf(divStep)})</> : null}:{" "}
+                  {isRefused(divStep) ? <>refused — {plainReason(steps, divStep)}.</> : <>let through.</>}
+                  <div style={{ fontFamily: MONO, color: C.dim, fontSize: 11, marginTop: 4 }}>
+                    the steps after it would not have happened — shown faded
                   </div>
-                </div>
+                </>
               )}
             </div>
-          )}
+          </div>
+
+          <div data-testid="replay-keep" className="mt-4 flex items-center gap-2 flex-wrap" style={{ fontFamily: MONO, fontSize: 11.5, color: C.mut }}>
+            keep this run as a test:
+            {(["must_block", "must_pass"] as const).map((side) => (
+              <button key={side} onClick={() => pin.mutate(side)} disabled={pin.isPending}
+                style={btn({ color: pinned === side ? C.green : C.text, fontSize: 11, padding: "4px 10px" })}>
+                {pinned === side ? "✓ " : ""}{side === "must_block" ? "an attack — must stay blocked" : "normal work — must keep passing"}
+              </button>
+            ))}
+            {pin.isError && <span style={{ color: C.red }}>{(pin.error as Error).message}</span>}
+            {pinned && <button onClick={() => navigate("prevent")} style={link}>check it in Safe to ship? →</button>}
+          </div>
         </>
       )}
+    </div>
+  );
+}
+
+function Fold({ label, children }: { label: string; children: React.ReactNode }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="mt-2">
+      <button onClick={() => setOpen(!open)} style={{ background: "none", border: "none", padding: 0, cursor: "pointer",
+        fontFamily: MONO, fontSize: 10.5, color: C.dim }}>
+        {open ? "▾" : "▸"} {label}
+      </button>
+      {open && <div className="mt-2">{children}</div>}
     </div>
   );
 }
@@ -448,7 +519,7 @@ function SeedButton({ label, compact }: { label: string; compact?: boolean }) {
     <button
       onClick={() => seed.mutate()}
       disabled={seed.isPending}
-      title="ingests two adapter-fidelity runs so counterfactual, taint graph and two-sided regression work with real data"
+      title="two recorded example runs: an agent refused sending out what an email told it to, and normal work"
       style={btn({
         color: C.steel, borderColor: C.line,
         fontSize: compact ? 10.5 : 12, padding: compact ? "4px 9px" : "7px 14px",

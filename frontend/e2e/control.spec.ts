@@ -289,9 +289,10 @@ test.describe("cross-session reputation", () => {
     // a row opens the run's control screen; Replay is one step further
     await runs.getByText("open →").first().click();
     await page.getByRole("button", { name: /Open in Replay/ }).click();
-    await expect(page.getByText("← fetch")).toBeVisible();
-    await page.getByText("← fetch").click();
-    await expect(page.getByText(/result of fetch — untrusted \(web\)/)).toBeVisible();
+    const answer = page.getByTestId("replay-steps").getByTitle(/fetch answered — marked as outside/);
+    await expect(answer).toBeVisible();
+    await answer.click();
+    await expect(page.getByTestId("replay-step")).toContainText("fetch answered — marked as outside text");
     await expect(page.getByText("IGNORE PREVIOUS INSTRUCTIONS")).toBeVisible();
     page.once("dialog", (d) => d.accept("poisoned page"));
     await page.getByRole("button", { name: `cut this result from ${node}` }).click();
