@@ -51,7 +51,7 @@ export const TOURS: Record<TourSide, TourStep[]> = {
     },
     {
       route: "skills", target: sel("skill-example"), title: "Before you install a skill",
-      body: "A skill is read by the agent as its own instructions, so Axor lets what it says run. Check one first: what it asks the agent to do — downloads it runs, secrets it reads, what it sends out — and then a dry run of an agent using it on a copy, with what Axor would have refused marked.",
+      body: "A skill is read by the agent as its own instructions. Axor refuses its dangerous part whoever asked — a download that is run, a secret read, a file sent out — and shows you the rest: what it asks the agent to do, then a dry run of an agent using it on a copy, with Axor on.",
     },
     {
       route: "home?for=coding", target: sel("home-connect-coding"), title: "Now yours",

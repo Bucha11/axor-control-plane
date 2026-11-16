@@ -1,12 +1,13 @@
 // Try a skill — look at a coding agent's skill before installing it.
 //
 // A skill (SKILL.md, often scripts beside it) is read by the agent as its own
-// instructions. Axor marks text from OUTSIDE (what WebFetch / WebSearch / an
-// MCP tool brought in) and refuses a command or a send built from it; a skill
-// in your repository is trusted the moment it is installed. So two looks:
-// what it asks the agent to do (a static read, /v1/wrap/skill-check), and what
-// an agent actually does with it (`axor-wrap skill try`, a session on a copy
-// with nothing refused — its calls Axor would have refused are marked).
+// instructions. Axor refuses what outside text drives, and — whoever asked —
+// the dangerous calls in axor_wrap.agents.rules (downloads that are run,
+// secrets, uploads, persistence, root …). What neither covers runs, and a
+// script the skill ships is one call to Axor. So two looks: what it asks the
+// agent to do (a static read, /v1/wrap/skill-check, each finding with whether
+// Axor refuses it), and what an agent actually does with it (`axor-wrap skill
+// try`, a session on a copy with Axor enforcing as in real work).
 import { useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Check, ChevronDown, ChevronRight, Circle, Copy, Loader2, Play, Upload } from "lucide-react";
@@ -82,10 +83,11 @@ export default function Skills() {
     <div style={{ maxWidth: 680, margin: "0 auto" }}>
       <h1 style={{ fontSize: 22, fontWeight: 650, margin: "0 0 6px" }}>Try a skill</h1>
       <div style={{ fontSize: 14, color: C.mut, lineHeight: 1.6, marginBottom: 24 }}>
-        Claude Code and Codex read a skill as their own instructions. Axor marks text that comes
-        from outside — a web page, a search result — and refuses a command built from it; a skill
-        you installed is trusted. So look before you install: what it asks the agent to do, then
-        what an agent actually does with it.
+        Claude Code and Codex read a skill as their own instructions. Axor refuses the dangerous
+        part whoever asked — a download that is run, a secret read, a file sent out, a force push —
+        but not everything a skill can ask is dangerous on its face, and what a script it ships does
+        inside is not seen. So look before you install: what it asks the agent to do, then what an
+        agent actually does with it.
       </div>
       <CheckSkill />
       <RunSkill />
@@ -144,16 +146,22 @@ function CheckReport({ report }: { report: SkillReport }) {
   const [more, setMore] = useState(false);
   const name = report.name || "This skill";
   const danger = report.summary.danger;
+  const refused = report.findings.filter((f) => f.axor.startsWith("Axor refuses")).length;
+  // what nothing stops: not refused by a rule, not what a web page says
+  const yours = report.findings.filter((f) => f.severity !== "info" && f.kind !== "follows_web"
+    && !f.axor.startsWith("Axor refuses")).length;
   return (
     <div data-testid="skill-report" className="mt-4">
       <div style={{ fontSize: 18, fontWeight: 650, lineHeight: 1.35, marginBottom: 4 }}>
-        {danger > 0
-          ? <><span style={{ color: C.red }}>{name}:</span> {danger} thing{danger === 1 ? "" : "s"} to look at before you install it</>
+        {danger > 0 || yours > 0
+          ? <><span style={{ color: danger ? C.red : C.amber }}>{name}:</span>{" "}
+              {refused > 0 && <>Axor refuses {refused} of what it asks{yours > 0 ? "; " : "."}</>}
+              {yours > 0 && <>{yours} {yours === 1 ? "thing is" : "things are"} yours to judge before you install it.</>}</>
           : <><span style={{ color: C.green }}>{name}:</span> nothing here downloads and runs code, reads secrets or sends anything out</>}
       </div>
       <div style={{ fontFamily: MONO, fontSize: 11.5, color: C.dim, marginBottom: 12, lineHeight: 1.6 }}>
-        Axor lets most of this run: it comes from the skill, and the agent takes a skill as its own
-        instructions. What it does stop is a command built from what a web page said.
+        <span style={{ color: C.green }}>Refused</span> is what Axor stops in every session, whoever asked.
+        The rest runs if the agent follows the skill — including whatever a script it ships does inside.
       </div>
       <div style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 8 }}>
         {report.findings.filter((f) => more || f.severity !== "info").map((f, i) => (
@@ -166,7 +174,9 @@ function CheckReport({ report }: { report: SkillReport }) {
             </div>
             <div style={{ fontFamily: MONO, fontSize: 11.5, color: C.mut, margin: "4px 0 2px 16px",
               overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{f.snippet}</div>
-            <div style={{ fontFamily: MONO, fontSize: 10.5, color: f.kind === "follows_web" ? C.green : C.dim,
+            <div style={{ fontFamily: MONO, fontSize: 10.5,
+              color: f.axor.startsWith("Axor refuses") || f.kind === "follows_web" ? C.green
+                : f.axor.startsWith("Inside a script") ? C.amber : C.dim,
               marginLeft: 16 }}>{f.axor}</div>
           </div>
         ))}
@@ -209,8 +219,8 @@ function RunSkill() {
       <div style={label}>2 · WHAT AN AGENT ACTUALLY DOES WITH IT</div>
       <div style={{ fontSize: 13.5, color: C.mut, lineHeight: 1.6, marginBottom: 10 }}>
         On your machine: {agent === "codex" ? "Codex" : "Claude Code"} uses the skill once, on a
-        copy of your repository. Nothing is refused, everything is recorded, and each call Axor
-        would have refused in real work is marked. The copy is thrown away; the run shows up below.
+        copy of your repository, with Axor on as in real work — the dangerous calls are refused, not
+        just noted, and you see which and why. The copy is thrown away; the run shows up below.
       </div>
       <div className="flex gap-2 mb-2">
         {(["claude-code", "codex"] as const).map((a) => (
@@ -291,8 +301,15 @@ function DryRuns() {
   );
 }
 
-/** One call, in words: what the agent did. */
+/** One call, in words: what the agent did — or tried to, when refused. */
 function said(e: KernelEvent): string {
+  const text = saidRan(e);
+  if (e.verdict !== "deny") return text;
+  return text.replace(/^(ran|read|wrote|fetched|searched) /, (_, v: string) =>
+    `tried to ${({ ran: "run", read: "read", wrote: "write", fetched: "fetch", searched: "search" } as Record<string, string>)[v]} `);
+}
+
+function saidRan(e: KernelEvent): string {
   const p = e.payload as { tool?: string; args?: Record<string, unknown> };
   const a = p.args ?? {};
   const tool = String(p.tool ?? "");
@@ -315,6 +332,8 @@ function DryRun({ nodeId }: { nodeId: string }) {
     return <div className="px-4 pb-3" style={{ fontFamily: MONO, fontSize: 11.5, color: C.dim }}>loading…</div>;
   }
   const calls = events.data.filter((e) => e.kind === "tool_call");
+  const refused = calls.filter((e) => e.verdict === "deny");
+  // a run recorded with enforcement off (AXOR_ENFORCE=off) marks instead
   const would = calls.filter((e) => (e.payload as { would_deny?: unknown }).would_deny);
   const outside = events.data.filter((e) => e.kind === "tool_result"
     && ((e.payload as { root?: { sources?: string[] } }).root?.sources ?? []).length > 0);
@@ -322,20 +341,31 @@ function DryRun({ nodeId }: { nodeId: string }) {
   return (
     <div data-testid="dry-run" className="px-4 pb-4" style={{ paddingLeft: 40 }}>
       <div style={{ fontSize: 14, marginBottom: 8 }}>
-        {would.length > 0
-          ? <><span style={{ color: C.red }}>{would.length} call{would.length === 1 ? "" : "s"} Axor would have refused</span> in real work</>
-          : <span style={{ color: C.green }}>nothing Axor would have refused</span>}
+        {refused.length > 0
+          ? <><span style={{ color: C.green }}>Axor refused {refused.length} call{refused.length === 1 ? "" : "s"}</span>
+              {would.length > 0 && <span style={{ color: C.red }}> · {would.length} more it would have</span>}</>
+          : would.length > 0
+            ? <><span style={{ color: C.red }}>{would.length} call{would.length === 1 ? "" : "s"} Axor would have refused</span> (recorded with Axor off)</>
+            : <span style={{ color: C.mut }}>nothing in it was refused</span>}
         <span style={{ color: C.mut }}> · {calls.length} calls · outside text read {outside.length} time{outside.length === 1 ? "" : "s"}</span>
       </div>
       <div className="flex flex-col gap-1.5">
         {calls.map((e) => {
           const w = (e.payload as { would_deny?: { reason?: string } }).would_deny;
+          const denied = e.verdict === "deny";
+          const reason = String((e.payload as { reason?: string }).reason ?? "");
           return (
             <div key={e.seq} style={{ fontFamily: MONO, fontSize: 11.5, lineHeight: 1.5 }}>
-              <span style={{ color: w ? C.red : C.mut }}>{said(e)}</span>
-              {w && (
+              <span style={{ color: denied ? C.green : w ? C.red : C.mut,
+                textDecoration: denied ? "line-through" : "none" }}>{said(e)}</span>
+              {denied && (
+                <div style={{ color: C.green, fontSize: 10.5, marginLeft: 12 }}>
+                  ↳ refused — {reason || e.gate}
+                </div>
+              )}
+              {w && !denied && (
                 <div style={{ color: C.red, fontSize: 10.5, marginLeft: 12 }}>
-                  ↳ Axor would have refused this: {w.reason}
+                  ↳ ran — Axor would have refused it: {w.reason}
                 </div>
               )}
             </div>

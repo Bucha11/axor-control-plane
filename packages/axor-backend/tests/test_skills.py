@@ -75,7 +75,7 @@ async def test_an_axor_wrap_without_skills_says_so(
     assert r.status_code == 501 and "axor-wrap skill" in r.json()["detail"]
 
 
-async def test_the_example_dry_run_marks_what_would_have_been_refused(
+async def test_the_example_dry_run_refuses_the_dangerous_calls(
         client: httpx.AsyncClient) -> None:
     for _ in range(2):  # re-seeding is safe
         r = await client.post("/v1/demo/seed-skill-try")
@@ -83,8 +83,9 @@ async def test_the_example_dry_run_marks_what_would_have_been_refused(
     node = r.json()["node"]
     assert node.startswith("skill-try.claude-code.release-helper.")
     runs = (await client.get(f"/v1/plane/{node}/runs")).json()["runs"]
-    assert runs and runs[0]["denied"] == 0          # observe-only: nothing refused
+    assert runs and runs[0]["denied"] == 2          # Axor enforcing, as in real work
     events = (await client.get("/v1/runs/ex_skill_try/events")).json()
     events = events["events"] if isinstance(events, dict) else events
-    would = [e for e in events if (e.get("payload") or {}).get("would_deny")]
-    assert len(would) == 1 and would[0]["payload"]["args"]["command"].startswith("curl")
+    denied = [e for e in events if e.get("verdict") == "deny"]
+    assert [e["gate"] for e in denied] == ["consequence", "consequence"]
+    assert "'download_and_run'" in denied[0]["payload"]["reason"]
