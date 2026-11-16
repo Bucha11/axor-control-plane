@@ -456,6 +456,81 @@ export interface WrapGuess {
   untrusted_fields: string[];
 }
 
+// A skill eval (axor-eval `python -m axor_eval.skills run --plane`): the report
+// as the eval wrote it — the plane re-judges nothing.
+export interface SkillEvalCompare {
+  arm: string;
+  base: string;
+  lift: number;
+  p_value: number;
+  token_delta: number;
+  token_delta_ci: [number, number] | null;
+  token_change: number | null;
+  cost_delta_usd: number | null;
+}
+
+export interface SkillEvalArm {
+  arm: string;
+  skills: string[];
+  trials: number;
+  solved: number;
+  rate: number;
+  mean_tokens: number;
+  median_tokens: number;
+  mean_input_tokens: number;
+  mean_cache_read_tokens: number;
+  mean_output_tokens: number;
+  mean_cost_usd: number | null;
+  tokens_per_solved: number | null;
+  cost_per_solved_usd: number | null;
+  mean_turns: number;
+  mean_duration_s: number;
+  errors: number;
+  opened: Record<string, number> | null;
+}
+
+export interface SkillEvalTask {
+  task: string;
+  arms: SkillEvalArm[];
+  vs_none: SkillEvalCompare[];
+}
+
+export interface SkillEvalSkill {
+  skill: string;
+  carried_tokens: number;
+  body_tokens: number;
+  alone: SkillEvalCompare | null;
+  on_top: SkillEvalCompare | null;
+  opened: string;
+  verdict: string;
+}
+
+export interface SkillEval {
+  eval_id: string;
+  created_ts: string;
+  example?: boolean;
+  agent: string;
+  model: string;
+  skills: string[];
+  arms: { arm: string; skills: string[] }[];
+  per_skill: SkillEvalSkill[];
+  overall: SkillEvalTask;
+  per_task: SkillEvalTask[];
+  trials: Record<string, unknown>[];
+}
+
+export interface SkillEvalRow {
+  eval_id: string;
+  created_ts: string;
+  agent: string;
+  model: string;
+  runs: number;
+  tasks: number;
+  skills: string[];
+  verdicts: Record<string, string>;
+  example?: boolean;
+}
+
 export interface SkillFinding {
   kind: string;
   severity: "danger" | "warn" | "info";
@@ -1164,6 +1239,11 @@ export const api = {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ files }),
     }).then((r) => j<SkillReport>(r)),
+  skillEvals: () => af("/v1/skill-evals").then((r) => j<{ evals: SkillEvalRow[] }>(r)),
+  skillEval: (id: string) =>
+    af(`/v1/skill-evals/${encodeURIComponent(id)}`).then((r) => j<SkillEval>(r)),
+  seedSkillEval: () =>
+    af("/v1/demo/seed-skill-eval", { method: "POST" }).then((r) => j<{ eval_id: string }>(r)),
   seedSkillTry: () =>
     af("/v1/demo/seed-skill-try", { method: "POST" }).then((r) => j<{ node: string; run: string }>(r)),
   wrapScan: (files: { path: string; content: string }[]) =>

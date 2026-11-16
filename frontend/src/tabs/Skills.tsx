@@ -92,6 +92,10 @@ export default function Skills() {
       <CheckSkill />
       <RunSkill />
       <DryRuns />
+      <div data-testid="skills-to-evals" className="mt-8" style={{ fontFamily: MONO, fontSize: 11.5, color: C.mut }}>
+        safe is one question; whether it helps — and what it costs in tokens — is another:{" "}
+        <button onClick={() => navigate("skill-evals")} style={link}>Skill evals →</button>
+      </div>
     </div>
   );
 }

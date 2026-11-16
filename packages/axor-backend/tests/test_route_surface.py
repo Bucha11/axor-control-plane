@@ -58,6 +58,10 @@ EXPECTED: dict[tuple[str, str], str] = {
     ("POST", "/v1/demo/seed-fleet"): "operate",
     ("POST", "/v1/demo/seed-coding"): "operate",
     ("POST", "/v1/demo/seed-skill-try"): "operate",
+    ("POST", "/v1/demo/seed-skill-eval"): "operate",
+    ("POST", "/v1/skill-evals"): "ingest",
+    ("GET", "/v1/skill-evals"): "read",
+    ("GET", "/v1/skill-evals/{eval_id}"): "read",
     ("POST", "/v1/demo/fleet-reprobe"): "operate",
     # ── analysis: pure kernel reads, POST or not ─────────────────────────────
     ("GET", "/v1/runs/{run_id}/subgraph"): "read",

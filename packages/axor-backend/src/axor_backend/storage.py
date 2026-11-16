@@ -409,6 +409,20 @@ tree_runs = Table(
     Column("doc", Text, nullable=False),
 )
 
+# Skill evals (axor-eval `python -m axor_eval.skills run … --plane`): one report
+# each — which skills help, alone and on top of the others, and what they cost
+# in tokens. Stored as the report the eval wrote; the list reads the columns.
+skill_evals = Table(
+    "skill_evals", metadata,
+    Column("org_id", String(64), primary_key=True),
+    Column("eval_id", String(64), primary_key=True),
+    Column("created_ts", String(40), nullable=False, index=True),
+    Column("agent", String(40), nullable=False, server_default=""),
+    Column("model", String(120), nullable=False, server_default=""),
+    Column("runs", Integer, nullable=False, server_default="0"),
+    Column("doc", Text, nullable=False),
+)
+
 # A hosted visitor's guest session (no account): a short-lived bearer whose
 # HASH is kept here, mapped to the throwaway org its work lives under. Not
 # tenant data itself — it is what lets that work be claimed into an account
@@ -727,6 +741,45 @@ class Store:
             return None
         return {"tree_run": row.tree_run, "status": row.status,
                 "updated_ts": row.updated_ts, **json.loads(row.doc)}
+
+    async def put_skill_eval(self, eval_id: str, doc: dict, ts: str) -> None:
+        org = current_org_id()
+        body = json.dumps(doc, separators=(",", ":"))
+        values = dict(created_ts=ts, agent=str(doc.get("agent", ""))[:40],
+                      model=str(doc.get("model", ""))[:120],
+                      runs=len(doc.get("trials", [])), doc=body)
+        async with self.engine.begin() as conn:
+            done = await conn.execute(skill_evals.update().where(
+                skill_evals.c.org_id == org,
+                skill_evals.c.eval_id == eval_id).values(**values))
+            if not done.rowcount:
+                await conn.execute(skill_evals.insert().values(
+                    org_id=org, eval_id=eval_id, **values))
+
+    async def get_skill_eval(self, eval_id: str) -> dict[str, Any] | None:
+        async with self.engine.connect() as conn:
+            row = (await conn.execute(select(skill_evals).where(
+                skill_evals.c.org_id == current_org_id(),
+                skill_evals.c.eval_id == eval_id))).first()
+        if row is None:
+            return None
+        return {"eval_id": row.eval_id, "created_ts": row.created_ts, **json.loads(row.doc)}
+
+    async def list_skill_evals(self, limit: int = 50) -> list[dict[str, Any]]:
+        async with self.engine.connect() as conn:
+            rows = (await conn.execute(
+                select(skill_evals).where(skill_evals.c.org_id == current_org_id())
+                .order_by(skill_evals.c.created_ts.desc()).limit(limit))).all()
+        out = []
+        for r in rows:
+            doc = json.loads(r.doc)
+            out.append({"eval_id": r.eval_id, "created_ts": r.created_ts, "agent": r.agent,
+                        "model": r.model, "runs": r.runs, "skills": doc.get("skills", []),
+                        "tasks": len(doc.get("per_task", [])),
+                        "example": bool(doc.get("example")),
+                        "verdicts": {s.get("skill"): s.get("verdict")
+                                     for s in doc.get("per_skill", []) if isinstance(s, dict)}})
+        return out
 
     async def list_tree_runs(self, limit: int = 50) -> list[dict[str, Any]]:
         async with self.engine.connect() as conn:

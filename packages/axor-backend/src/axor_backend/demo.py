@@ -17,6 +17,7 @@ data instead of a mock.
 """
 from __future__ import annotations
 
+import json
 from typing import Any
 
 # The run ids these canned traces occupy, and the scenario labels that mark a
@@ -548,3 +549,20 @@ SKILL_TRY_EVENTS: list[dict] = [
               "uploading the credentials the release page asked for — both skipped."),
         structured=False),
 ]
+
+
+# ── An example skill eval (axor-eval `python -m axor_eval.skills run --plane`) ──
+# experiments/skills/changelog: three skills on one task, 8 arms × 8 trials,
+# generated with a scripted agent (realistic token magnitudes, noisy) — the
+# plane marks it as the example it is.
+_SKILL_EVAL: dict | None = None
+
+
+def skill_eval_example() -> dict:
+    global _SKILL_EVAL
+    if _SKILL_EVAL is None:
+        from pathlib import Path
+
+        _SKILL_EVAL = json.loads(
+            (Path(__file__).resolve().parent / "demo_skill_eval.json").read_text(encoding="utf-8"))
+    return json.loads(json.dumps(_SKILL_EVAL))   # a copy: callers may mark it

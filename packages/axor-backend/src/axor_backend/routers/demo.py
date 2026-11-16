@@ -217,6 +217,18 @@ async def seed_skill_try(store: StoreDep, cache: SubgraphCacheDep) -> dict:
     return {"node": demo.SKILL_TRY, "run": "ex_skill_try"}
 
 
+@router.post("/seed-skill-eval")
+async def seed_skill_eval(store: StoreDep) -> dict:
+    """An example skill eval: three skills on one task (axor-eval's
+    experiments/skills/changelog), 8 arms × 8 trials, as `--plane` posts it.
+    The numbers come from a scripted agent, and the example says so."""
+    from axor_backend import demo
+
+    doc = {**demo.skill_eval_example(), "example": True}
+    await store.put_skill_eval("se-example", doc, now())
+    return {"eval_id": "se-example"}
+
+
 @router.post("/fleet-reprobe", status_code=201)
 async def fleet_reprobe(request: Request, store: StoreDep) -> dict:
     """Play the example scraper's half of a heal: take the cut it was sent,

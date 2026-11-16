@@ -41,6 +41,7 @@ import AuthReturn from "./components/AuthReturn";
 import Tabs from "./components/Tabs";
 import Pricing from "./tabs/Pricing";
 import Skills from "./tabs/Skills";
+import SkillEvals from "./tabs/SkillEvals";
 
 // Governance first: the product is the policy membrane between an agent and its
 // tools. "Caught lies" is the proof it works, not the product.
@@ -56,6 +57,7 @@ const LOOP: { key: string; label: string; hint: string; for: Journey[] }[] = [
   { key: "explain", label: "Replay", hint: "Step through any run and see exactly what crossed the boundary, and why.", for: ["coding", "production", "both"] },
   { key: "prevent", label: "Safe to ship?", hint: "Check a policy change against every case you've caught, before it ships.", for: ["production", "both"] },
   { key: "skills", label: "Try a skill", hint: "Before installing a skill for Claude Code or Codex: what it asks the agent to do, and what an agent actually does with it.", for: ["coding", "both"] },
+  { key: "skill-evals", label: "Skill evals", hint: "Which of your skills help, and what they cost: the same tasks with no skill, all, each alone and all but one.", for: ["coding", "both"] },
 ];
 
 /** The sections this person's menu shows: their journey's, or all of them
@@ -98,7 +100,7 @@ const ALIAS: Record<string, string> = {
   "get-started": "connect",
   "config-builder": "policy",
 };
-const KNOWN = ["home", "evidence", "catch", "explain", "prevent", "govern", "policy", "skills", "connect", "pricing", "settings"];
+const KNOWN = ["home", "evidence", "catch", "explain", "prevent", "govern", "policy", "skills", "skill-evals", "connect", "pricing", "settings"];
 
 function NavLink({ id, label, hint, active }: { id: string; label: string; hint: string; active: boolean }) {
   return (
@@ -208,6 +210,7 @@ export default function App() {
       )}
       {key === "policy" && <ConfigBuilder />}
       {key === "skills" && <Skills />}
+      {key === "skill-evals" && <SkillEvals evalId={runIdParam ? decodeURIComponent(runIdParam) : undefined} />}
       {key === "connect" && <Onboarding />}
       {key === "pricing" && <Pricing />}
       {key === "settings" && <Settings />}

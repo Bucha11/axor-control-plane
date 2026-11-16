@@ -40,6 +40,7 @@ test.describe("coding agents: their menu, and trying a skill", () => {
     const side = page.getByTestId("sidebar");
     await expect(side.getByRole("button", { name: "Try a skill", exact: true })).toBeVisible();
     await expect(side.getByRole("button", { name: "Replay", exact: true })).toBeVisible();
+    await expect(side.getByRole("button", { name: "Skill evals", exact: true })).toBeVisible();
     for (const hidden of ["Policy", "Caught lies", "Safe to ship?"]) {
       await expect(side.getByRole("button", { name: hidden, exact: true })).toHaveCount(0);
     }
@@ -99,5 +100,25 @@ test.describe("coding agents: their menu, and trying a skill", () => {
     // a dry run is not an agent to operate
     await goHash(page, "govern");
     await expect(page.getByText(/skill-try\./)).toHaveCount(0);
+  });
+
+  test("skill evals: which skills help and what they cost, from an example report", async ({ page }) => {
+    await goHash(page, "skill-evals");
+    await expect(page.getByTestId("skill-eval-cmd")).toContainText("python -m axor_eval.skills run skill-eval.json --plane");
+    const example = page.getByTestId("skill-eval-example");
+    if (await example.isVisible()) await example.click();
+    else await page.getByTestId("skill-eval-se-example").click();
+    await expect(page).toHaveURL(/#\/skill-evals\/se-example$/);
+    const view = page.getByTestId("skill-eval");
+    await expect(view).toContainText("example: a scripted agent, not a real run");
+    await expect(page.getByTestId("skill-card-changelog-entries")).toContainText("helps");
+    await expect(page.getByTestId("skill-card-changelog-entries")).toContainText("ON TOP OF THE OTHERS");
+    await expect(page.getByTestId("skill-card-test-first")).toContainText("costs tokens, no gain seen");
+    await expect(page.getByTestId("skill-card-house-style")).toContainText("never opened");
+    await expect(page.getByTestId("skill-eval-headline")).toContainText("Fewest tokens per solved task");
+    await expect(page.getByTestId("skill-eval-arms").locator("tbody tr")).toHaveCount(8);
+    // and back to the list, where it is one row with its verdicts
+    await page.getByRole("button", { name: /all skill evals/ }).click();
+    await expect(page.getByTestId("skill-eval-se-example")).toContainText("changelog-entries · helps");
   });
 });
