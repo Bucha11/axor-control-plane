@@ -38,7 +38,19 @@ const WHAT: Record<string, string> = {
   direct_policy_violation: "followed an instruction from outside text",
   undisclosed_tool_substitution: "swapped a tool without saying so",
   budget_misreport: "misreported its budget",
+  claimed_checks_passed: "said the checks passed when they failed",
 };
+
+const CHECK_WORDS: Record<string, string> = {
+  tests: "THE TESTS", build: "THE BUILD", lint: "THE LINTER", typecheck: "THE TYPE CHECK",
+};
+/** A coding agent's check (tests, build…) the case is about, when it is one. */
+function checkOf(ev: EvidenceCaseDto): { kind: string; command: string; summary: string } | null {
+  const o = ev.observed_reality as Record<string, unknown> | null;
+  return o && typeof o === "object" && typeof o.check === "string"
+    ? { kind: o.check, command: String(o.command ?? ""), summary: String(o.summary ?? "") }
+    : null;
+}
 export const incidentWhat = (deviation?: string | null): string =>
   deviation ? (WHAT[deviation] ?? deviation.replace(/_/g, " ")) : "something did not add up";
 
@@ -74,6 +86,7 @@ function when(ts: string): string {
 
 export default function Evidence() {
   const { mode } = useApp((s) => s.connection);
+  const journey = useApp((s) => s.journey);
   const connect = useApp((s) => s.connect);
   const runs = useQuery({ queryKey: ["runs"], queryFn: api.listRuns });
 
@@ -85,13 +98,16 @@ export default function Evidence() {
     <div style={{ maxWidth: 640, margin: "0 auto" }}>
       <h1 style={{ fontSize: 22, fontWeight: 700, margin: "0 0 6px" }}>Incidents</h1>
       <div style={{ fontFamily: MONO, fontSize: 11.5, color: C.dim, marginBottom: 22, lineHeight: 1.6 }}>
-        when an agent says a tool worked and it didn't, or tries to send out text that came from
-        outside — what really happened, next to what the agent said. they come from your{" "}
+        when an agent says a tool worked and it didn't, says the tests passed when they failed, or
+        tries to send out text that came from outside — what really happened, next to what the
+        agent said. they come from your{" "}
         <button onClick={() => navigate(isConnected(mode) ? "govern" : "connect")} data-testid="incidents-from-agents"
-          style={inlineLink}>connected agents</button>' work, and from{" "}
-        <button onClick={() => navigate("chaos")} data-testid="incidents-from-tests" style={inlineLink}>
-          chaos tests</button>{" "}
-        — a tool broken on purpose to see what the agent says. replay any one to see how.
+          style={inlineLink}>connected agents</button>' work
+        {journey === "coding" ? <>. </> : <>, and from{" "}
+          <button onClick={() => navigate("chaos")} data-testid="incidents-from-tests" style={inlineLink}>
+            chaos tests</button>{" "}
+          — a tool broken on purpose to see what the agent says. </>}
+        replay any one to see how.
       </div>
 
       {runs.isPending && (
@@ -142,6 +158,7 @@ export default function Evidence() {
         <div className="flex flex-col gap-2" data-testid="evidence-list">
           {rows.map(({ run, ev, index }) => {
             const fault = ev.fault_attribution?.[0];
+            const check = checkOf(ev);
             return (
               <div
                 key={`${run.run_id}:${index}`}
@@ -160,10 +177,12 @@ export default function Evidence() {
                 <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) minmax(0, 1fr)", gap: 10, marginBottom: 10 }}>
                   <div>
                     <div style={{ fontFamily: MONO, fontSize: 9.5, color: C.dim, letterSpacing: "0.1em", marginBottom: 4 }}>
-                      THE TOOL {fault ? `· ${fault.tool_name}` : ""}
+                      {check ? `${CHECK_WORDS[check.kind] ?? check.kind.toUpperCase()} · ${check.command}`
+                        : <>THE TOOL {fault ? `· ${fault.tool_name}` : ""}</>}
                     </div>
                     <div style={{ fontFamily: MONO, fontSize: 11.5, color: C.mut, wordBreak: "break-word" }}>
-                      {fault ? toolDid(fault.fault_mode) : brief(ev.observed_reality)}
+                      {check ? `failed — ${check.summary || "the last run did not pass"}`
+                        : fault ? toolDid(fault.fault_mode) : brief(ev.observed_reality)}
                     </div>
                   </div>
                   <div>

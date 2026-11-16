@@ -175,12 +175,13 @@ async def seed_coding(store: StoreDep, cache: SubgraphCacheDep) -> dict:
     # stamped now: the example reads as a session that just ran, not one
     # from the date the fixture was written
     stamp = now()
-    for run_id, node, events in (
-        ("ex_coding_claude", demo.CODING_CLAUDE, demo.CODING_CLAUDE_EVENTS),
-        ("ex_coding_codex", demo.CODING_CODEX, demo.CODING_CODEX_EVENTS),
+    for run_id, node, events, evidence in (
+        ("ex_coding_claude", demo.CODING_CLAUDE, demo.CODING_CLAUDE_EVENTS,
+         demo.CODING_CLAUDE_EVIDENCE),
+        ("ex_coding_codex", demo.CODING_CODEX, demo.CODING_CODEX_EVENTS, []),
     ):
         await _seed(store, cache, run_id, node, "coding-demo",
-                    [{**e, "ts": stamp} for e in events], [])
+                    [{**e, "ts": stamp} for e in events], evidence)
     sessions = [demo.CODING_CLAUDE, demo.CODING_CODEX, *demo.CODING_TREE_NODES]
     ts = now()
     for node in [*sessions, demo.CODING_TREE]:

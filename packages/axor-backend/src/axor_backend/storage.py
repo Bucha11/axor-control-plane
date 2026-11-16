@@ -942,6 +942,13 @@ class Store:
             )).all()
         return any((r.line or {}).get("verdict") == "deny" for r in rows)
 
+    async def run_event_count(self, run_id: str) -> int:
+        async with self.engine.connect() as conn:
+            return int((await conn.execute(
+                select(func.count()).select_from(events).where(
+                    events.c.org_id == current_org_id(), events.c.run_id == run_id)
+            )).scalar_one())
+
     async def run_has_kind(self, run_id: str, kind: str) -> bool:
         """Whether this run recorded at least one event of this kind."""
         async with self.engine.connect() as conn:

@@ -56,7 +56,7 @@ const LOOP: { key: string; label: string; hint: string; for: Journey[] }[] = [
   { key: "govern", label: "Agents", hint: "Your governed agents as a graph: pause, cap, stop — what sentinel sees across sessions, what probe says about their health.", for: ["coding", "production", "both"] },
   { key: "policy", label: "Policy", hint: "What each agent may read, send and run — the rules enforced at the tool boundary.", for: ["production", "both"] },
   { key: "chaos", label: "Chaos tests", hint: "Break a tool on purpose and see what your agent says — on the example, through the proxy, on live agents' next run, or on a schedule.", for: ["production", "both"] },
-  { key: "evidence", label: "Incidents", hint: "When an agent said a tool worked and it didn't, or tried to send out what came from outside — caught in test runs and in your connected agents' work.", for: ["production", "both"] },
+  { key: "evidence", label: "Incidents", hint: "When an agent said a tool worked and it didn't, said the tests passed when they failed, or tried to send out what came from outside — caught in test runs and in your agents' work.", for: ["coding", "production", "both"] },
   { key: "explain", label: "Replay", hint: "Find the step — by when, which agent, what it did — and see where it came from.", for: ["coding", "production", "both"] },
   { key: "prevent", label: "Safe to ship?", hint: "Check a policy change against every case you've caught, before it ships.", for: ["production", "both"] },
   { key: "skills", label: "Try a skill", hint: "Before installing a skill for Claude Code or Codex: what it asks the agent to do, and what an agent actually does with it.", for: ["coding", "both"] },

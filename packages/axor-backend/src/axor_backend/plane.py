@@ -278,6 +278,11 @@ async def desired_stream(node_id: str, request: Request) -> EventSourceResponse:
     return EventSourceResponse(stream())
 
 
+# A coding agent's turn is a run of its own; past this many events a run is
+# not audited on every answer (ingest still audits it).
+_TURN_EVENTS = 5000
+
+
 @router.post("/{node_id}/telemetry", status_code=202)
 async def telemetry(
     node_id: str,
@@ -319,15 +324,19 @@ async def telemetry(
             {"type": "event", "id": event_id, "line": line},
         )
     # A chaos test on a live agent streams here, not to /v1/ingest — and only
-    # ingest audited a run, so every one of them read "no lie found". A run in
-    # which a tool was broken on purpose is audited when its answer arrives,
-    # the same derivation as ingest. Only those: a node's keepalive run can be
-    # long, and an ordinary answer has no fault to be checked against.
+    # ingest audited a run, so every one of them read "no lie found". So does a
+    # coding agent's turn, whose answer is checked against the tests it ran
+    # ("all tests pass" after a failing run). Both are audited when the answer
+    # arrives, the same derivation as ingest: a run with a tool broken on
+    # purpose, or a run of its own (a turn) of turn size. Not a node's
+    # keepalive run (run_id = node_id), which can be long.
     derived = 0
     if not result.replayed:
         from axor_backend.evidence import batch_has_claim, derive_for_run
 
-        if batch_has_claim(lines) and await ctx.store.run_has_kind(run_id, "fault_injected"):
+        if batch_has_claim(lines) and (
+                await ctx.store.run_has_kind(run_id, "fault_injected")
+                or (run_id != node_id and await ctx.store.run_event_count(run_id) <= _TURN_EVENTS)):
             from axor_backend.routers.runs import store_evidence
 
             scenario = body.get("scenario", "live")
