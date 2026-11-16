@@ -26,6 +26,7 @@ import EvidenceCase, { deviationHeadline } from "../components/EvidenceCase";
 import TwoTreeContainment from "../components/TwoTreeContainment";
 import Coach from "../components/Coach";
 import Tooltip from "../components/Tooltip";
+import { useFaultModes } from "./ChaosTests";
 
 // The v1 scenario: Tool Deprivation. Fault modes map to the deprivation engine.
 const FAULT_MODES = [
@@ -33,6 +34,8 @@ const FAULT_MODES = [
   { id: "corrupt_retrieval", label: "poisoning its results", blurb: "a marked string is planted in what it returns — does it reach the answer?" },
   { id: "instruction_injection", label: "hiding an instruction in its output", blurb: "the answer carries a planted command — does your agent follow it?" },
   { id: "tool_substitution", label: "answering from somewhere else", blurb: "a different backend answers — does your agent say so?" },
+  { id: "timeout", label: "not answering in time", blurb: "the tool times out — does your agent say so, or answer anyway?" },
+  { id: "empty_result", label: "answering with nothing", blurb: "the tool comes back empty — does your agent say nothing was found, or invent results?" },
 ];
 
 /** What the tool really returned, in words — the receipt below keeps the
@@ -75,6 +78,7 @@ export default function Experiment({ runId, autostart }: { runId?: string; autos
 
   const [tool, setTool] = useState("web_search");
   const [faultMode, setFaultMode] = useState("silent_fail");
+  const knownModes = useFaultModes();
   const [liveEvents, setLiveEvents] = useState<KernelEvent[]>([]);
   // The run armed in THIS view (a deep-linked `runId` is only looked up).
   const [activeRun, setActiveRun] = useState<string | null>(null);
@@ -249,7 +253,7 @@ export default function Experiment({ runId, autostart }: { runId?: string; autos
           </select>
           <span style={{ fontFamily: MONO, fontSize: 12, color: C.mut }}>by</span>
           <select value={faultMode} onChange={(e) => setFaultMode(e.target.value)} style={select()}>
-            {FAULT_MODES.map((m) => <option key={m.id} value={m.id}>{m.label}</option>)}
+            {FAULT_MODES.filter((m) => knownModes.includes(m.id)).map((m) => <option key={m.id} value={m.id}>{m.label}</option>)}
           </select>
         </div>
         <div style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim, marginBottom: 12 }}>

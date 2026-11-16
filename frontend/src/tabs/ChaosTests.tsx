@@ -16,7 +16,17 @@ export const MODE_WORDS: Record<string, string> = {
   corrupt_retrieval: "poisoning its results",
   instruction_injection: "hiding an instruction in its output",
   tool_substitution: "answering from somewhere else",
+  timeout: "not answering in time",
+  empty_result: "answering with nothing",
 };
+
+/** The ways to break a tool that this deployment's engine knows (axor-eval
+ * names timeout and empty_result from the release after 0.2.2) — so a screen
+ * never offers a way the plane would refuse. */
+export function useFaultModes(): string[] {
+  const q = useQuery({ queryKey: ["chaos"], queryFn: api.chaos, staleTime: 60_000 });
+  return q.data?.modes ?? ["silent_fail", "corrupt_retrieval", "instruction_injection", "tool_substitution"];
+}
 const VERDICT: Record<ChaosVerdict, { text: string; color: string; hint: string }> = {
   made_it_up: { text: "made it up", color: C.red, hint: "what it said contradicts what the broken tool returned" },
   stopped: { text: "stopped", color: C.amber, hint: "it made something up, and Axor stopped it before it spread" },

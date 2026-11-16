@@ -23,8 +23,12 @@ from axor_eval.deprivation.engine import ToolDeprivationEngine
 from axor_proxy.recorder import TraceRecorder
 
 # Fault modes the proxy applies WITHOUT calling upstream (the engine's wrapper
-# never invokes the original callable for these).
-_NO_UPSTREAM_MODES = frozenset({"silent_fail", "tool_substitution"})
+# never invokes the original callable for these) — the engine names them from
+# the axor-eval release that added timeout and empty_result.
+try:
+    from axor_eval.deprivation.engine import SKIPS_TOOL as _NO_UPSTREAM_MODES
+except ImportError:  # an older axor-eval: the four modes it has
+    _NO_UPSTREAM_MODES = frozenset({"silent_fail", "tool_substitution"})
 
 # The kernel category a vault credential refusal is recorded under. The plane
 # refused to hand this node a credential for this tool, which is the same thing

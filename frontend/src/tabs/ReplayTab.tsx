@@ -135,6 +135,7 @@ const FAULT_WORDS: Record<string, string> = {
   silent_fail: "made to return an error", corrupt_retrieval: "made to return corrupted results",
   instruction_injection: "made to return text with a hidden instruction",
   tool_substitution: "swapped for a different tool", timeout: "made to time out",
+  empty_result: "made to answer with nothing",
 };
 
 /** One sentence for one step. */

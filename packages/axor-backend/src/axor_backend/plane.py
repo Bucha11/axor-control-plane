@@ -318,7 +318,24 @@ async def telemetry(
             topic("run", run_id),
             {"type": "event", "id": event_id, "line": line},
         )
-    return {"stored": len(result.rows)}
+    # A chaos test on a live agent streams here, not to /v1/ingest — and only
+    # ingest audited a run, so every one of them read "no lie found". A run in
+    # which a tool was broken on purpose is audited when its answer arrives,
+    # the same derivation as ingest. Only those: a node's keepalive run can be
+    # long, and an ordinary answer has no fault to be checked against.
+    derived = 0
+    if not result.replayed:
+        from axor_backend.evidence import batch_has_claim, derive_for_run
+
+        if batch_has_claim(lines) and await ctx.store.run_has_kind(run_id, "fault_injected"):
+            from axor_backend.routers.runs import store_evidence
+
+            scenario = body.get("scenario", "live")
+            cases = await derive_for_run(ctx.store, run_id, node_id, scenario)
+            derived = len(cases)
+            if cases:
+                await store_evidence(ctx.store, ctx.notifier, run_id, node_id, scenario, cases)
+    return {"stored": len(result.rows), "evidence": derived}
 
 
 async def _note_agent_connected(ctx: Any, node_id: str) -> None:  # noqa: ANN401

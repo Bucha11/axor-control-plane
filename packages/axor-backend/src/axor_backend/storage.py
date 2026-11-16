@@ -942,6 +942,17 @@ class Store:
             )).all()
         return any((r.line or {}).get("verdict") == "deny" for r in rows)
 
+    async def run_has_kind(self, run_id: str, kind: str) -> bool:
+        """Whether this run recorded at least one event of this kind."""
+        async with self.engine.connect() as conn:
+            row = (await conn.execute(
+                select(events.c.id).where(
+                    events.c.org_id == current_org_id(), events.c.run_id == run_id,
+                    events.c.kind == kind,
+                ).limit(1)
+            )).first()
+        return row is not None
+
     async def fault_lines(self) -> list[tuple[str, dict[str, Any]]]:
         """Every tool broken on purpose (`fault_injected`), with its run, oldest
         first — what the chaos tests list is built from."""

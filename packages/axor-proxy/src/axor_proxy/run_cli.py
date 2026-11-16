@@ -59,9 +59,12 @@ DEFAULT_PROXY_URL = os.environ.get(
 
 # Fault modes the axor-eval engine applies. Validated here so a typo fails fast
 # with a clear message instead of a 500 from the engine (repo honesty rule).
-VALID_FAULT_MODES = frozenset(
-    {"silent_fail", "corrupt_retrieval", "instruction_injection", "tool_substitution"}
-)
+try:  # the engine's own list, from the axor-eval release that names it
+    from axor_eval.deprivation.engine import MODES as _ENGINE_MODES
+except ImportError:
+    _ENGINE_MODES = ("silent_fail", "corrupt_retrieval", "instruction_injection",
+                     "tool_substitution")
+VALID_FAULT_MODES = frozenset(_ENGINE_MODES)
 DEFAULT_FAULT_MODE = "silent_fail"
 
 # Conservative markers that an answer *acknowledges* a tool failure/limitation.

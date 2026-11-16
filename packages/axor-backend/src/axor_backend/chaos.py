@@ -22,7 +22,12 @@ from __future__ import annotations
 import random
 from typing import Any
 
-MODES = ("silent_fail", "corrupt_retrieval", "instruction_injection", "tool_substitution")
+# The ways to break a tool: axor-eval's engine names them (with timeout and
+# empty_result) from the release after 0.2.2; the four every release has else.
+try:
+    from axor_eval.deprivation.engine import MODES
+except ImportError:
+    MODES = ("silent_fail", "corrupt_retrieval", "instruction_injection", "tool_substitution")
 CHAOS_SCENARIOS = frozenset({"tool-deprivation", "exfil", "injection", "langchain-experiment"})
 
 
