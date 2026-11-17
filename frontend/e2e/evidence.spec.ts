@@ -1,7 +1,7 @@
 // Evidence — the inventory of caught discrepancies (Evidence.tsx). Before this
 // screen an EvidenceCase lived only inside the run that produced it.
 import { expect, test } from "@playwright/test";
-import { goHash, setConnection } from "./helpers";
+import { BACKEND, goHash, setConnection } from "./helpers";
 
 test.describe("evidence", () => {
   test("a case caught by a fault test is listed, and opens in Replay", async ({ page }) => {
@@ -28,12 +28,34 @@ test.describe("evidence", () => {
   });
 
   test("an empty inventory says how to catch the first one", async ({ page }) => {
-    await page.route("**/v1/runs", (route) =>
-      route.fulfill({ status: 200, contentType: "application/json", body: "[]" }),
+    await page.route("**/v1/incidents**", (route) =>
+      route.fulfill({ status: 200, contentType: "application/json",
+        body: JSON.stringify({ items: [], new: { made_up: 0, dangerous: 0, would_refuse: 0, refused: 0 },
+                               needs_a_look: 0 }) }),
     );
     await goHash(page, "evidence");
     await expect(page.getByTestId("evidence-empty")).toContainText("No incidents yet.");
     await page.getByRole("button", { name: /test the example agent/ }).click();
     await expect(page).toHaveURL(/#\/catch\?auto=1/);
+  });
+
+  test("a dangerous call let through is in the feed; settling it takes it off the new list", async ({ page, request }) => {
+    expect((await request.post(`${BACKEND}/v1/demo/seed-prod-incident`)).ok()).toBeTruthy();
+    await setConnection(page, { mode: "adapter" });
+    await goHash(page, "evidence");
+    await page.getByTestId("incident-filters").getByRole("button", { name: /dangerous, let through/ }).click();
+    const drop = page.locator('[data-kind="dangerous"]').filter({ hasText: "DROP TABLE orders" });
+    await expect(drop).toContainText("deleted or wiped something");
+    await expect(drop).toContainText("agent support-agent-prod · example data");
+    await drop.getByTestId("incident-status").selectOption("not_a_problem");
+    await expect(page.locator('[data-kind="dangerous"]').filter({ hasText: "DROP TABLE orders" })).toHaveCount(0);
+    await page.getByRole("button", { name: "any status" }).click();
+    const again = page.locator('[data-kind="dangerous"]').filter({ hasText: "DROP TABLE orders" });
+    await expect(again.getByTestId("incident-status")).toHaveValue("not_a_problem");
+    await again.getByRole("button", { name: /where it came from/ }).click();
+    await expect(page).toHaveURL(/#\/explain\/ex_prod_drop\?seq=4/);
+    // and back, for the next one
+    await again.page().goBack();
+    await again.getByTestId("incident-status").selectOption("new");
   });
 });

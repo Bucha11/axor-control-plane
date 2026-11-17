@@ -25,7 +25,7 @@ import Tooltip from "./components/Tooltip";
 import { codingExampleOnly, fleetExampleOnly } from "./components/CodingOnboarding";
 import Tour from "./components/Tour";
 import Home from "./tabs/Home";
-import Evidence from "./tabs/Evidence";
+import Evidence, { useIncidentCount } from "./tabs/Evidence";
 import Experiment from "./tabs/Experiment";
 import ControlTab from "./tabs/ControlTab";
 import ReplayTab from "./tabs/ReplayTab";
@@ -283,6 +283,7 @@ function useWide(): boolean {
  * session's controls at the bottom. */
 function Sidebar({ active, view }: { active: string; view: string }) {
   const menu = useMenu();
+  const incidentCount = useIncidentCount();
   const item = (on: boolean, indent: boolean): React.CSSProperties => ({
     display: "block", width: "100%", textAlign: "left", cursor: "pointer",
     background: on ? "rgba(127,168,204,0.10)" : "none", border: "none",
@@ -310,6 +311,10 @@ function Sidebar({ active, view }: { active: string; view: string }) {
               aria-current={active === l.key ? "page" : undefined}
               style={item(active === l.key && (l.key !== "govern" || view === "govern"), false)}>
               {l.label}
+              {l.key === "evidence" && incidentCount > 0 && (
+                <span data-testid="incidents-count" aria-hidden="true" title="new, needing a look" style={{ marginLeft: 8, fontSize: 10.5, color: C.bg, background: C.amber,
+                  borderRadius: 9, padding: "0 6px", fontWeight: 700 }}>{incidentCount}</span>
+              )}
             </button>
             {l.key === "govern" && (
               <div className="flex flex-col" style={{ gap: 1, margin: "2px 0 6px" }}>

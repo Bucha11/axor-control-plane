@@ -543,6 +543,8 @@ function MakeRule({ runId, node, seq, tool, klass, tools: inRun, otherRuns }: {
                            source: policy[tool]?.source ?? source });
       await api.pin(runId, "must_block", `${node}: ${tool} built from outside text`,
         [{ node_id: node, seq }]);
+      // the incident this call was in the feed as, settled
+      await api.setIncidentStatus(`step:${runId}:${node}:${seq}`, "rule_made").catch(() => undefined);
       if (keepNormal) {
         for (const r of otherRuns) await api.pin(r, "must_pass", `normal work of ${node}`);
       }

@@ -27,6 +27,17 @@ export interface RunSummary {
   created_ts: string;
 }
 
+// The Incidents feed (GET /v1/incidents): what needs a look, and the operator's word on it
+export type IncidentKind = "made_up" | "dangerous" | "would_refuse" | "refused";
+export type IncidentStatus = "new" | "looked_at" | "kept_as_test" | "rule_made" | "not_a_problem";
+export interface IncidentItem {
+  id: string; kind: IncidentKind; ts: string | null; node_id: string; run_id: string;
+  seq: number | null; anchor_node?: string | null; what: string; detail: string; count: number;
+  status: IncidentStatus; reason?: string; tool?: string; scenario?: string;
+  case?: { observed_reality: unknown; agent_claim: unknown; index: number;
+           fault_attribution: { fault_mode: string; tool_name: string; influence: string }[] };
+}
+
 // Chaos tests (GET /v1/chaos): every run with a tool broken on purpose
 export type ChaosVerdict = "made_it_up" | "stopped" | "no_lie_found" | "no_answer";
 export interface ChaosRun {
@@ -1562,6 +1573,16 @@ export const api = {
     ),
 
   // ── demo: seed adapter-fidelity runs (recorded verdicts + provenance) ──────
+  incidents: (q: { kind?: string; status?: string; agent?: string; since?: string } = {}) => {
+    const qs = new URLSearchParams(Object.entries(q).filter(([, v]) => v) as [string, string][]);
+    return af(`/v1/incidents?${qs}`).then((r) => j<{
+      items: IncidentItem[]; new: Record<IncidentKind, number>; needs_a_look: number }>(r));
+  },
+  setIncidentStatus: (id: string, status: IncidentStatus) =>
+    af("/v1/incidents/status", {
+      method: "PUT", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ id, status }),
+    }).then((r) => j<{ id: string; status: IncidentStatus }>(r)),
   chaos: () => af("/v1/chaos").then((r) => j<{ runs: ChaosRun[]; modes: string[]; schedule: ChaosSchedule }>(r)),
   chaosTools: (node: string) =>
     af(`/v1/chaos/tools/${encodeURIComponent(node)}`).then((r) => j<{ tools: string[] }>(r)),

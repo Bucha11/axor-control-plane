@@ -417,6 +417,17 @@ tree_runs = Table(
 # Skill evals (axor-eval `python -m axor_eval.skills run … --plane`): one report
 # each — which skills help, alone and on top of the others, and what they cost
 # in tokens. Stored as the report the eval wrote; the list reads the columns.
+# What an operator decided about an item of the Incidents feed (incidents.py):
+# looked at, kept as a test, made a rule of, not a problem. Keyed by the item's
+# id, which names what it is about (a run's case, a step, a day's refusals).
+incident_status = Table(
+    "incident_status", metadata,
+    Column("org_id", String(64), primary_key=True),
+    Column("item_id", String(240), primary_key=True),
+    Column("status", String(24), nullable=False),
+    Column("ts", String(40), nullable=False),
+)
+
 skill_evals = Table(
     "skill_evals", metadata,
     Column("org_id", String(64), primary_key=True),
@@ -959,6 +970,24 @@ class Store:
                 ).limit(1)
             )).first()
         return row is not None
+
+    async def incident_statuses(self) -> dict[str, str]:
+        async with self.engine.connect() as conn:
+            rows = (await conn.execute(
+                select(incident_status.c.item_id, incident_status.c.status)
+                .where(incident_status.c.org_id == current_org_id())
+            )).all()
+        return {r.item_id: r.status for r in rows}
+
+    async def set_incident_status(self, item_id: str, status: str, ts: str) -> None:
+        async with self.engine.begin() as conn:
+            where = (incident_status.c.org_id == current_org_id()) & \
+                (incident_status.c.item_id == item_id)
+            done = await conn.execute(update(incident_status).where(where)
+                                      .values(status=status, ts=ts))
+            if done.rowcount == 0:
+                await conn.execute(insert(incident_status).values(
+                    org_id=current_org_id(), item_id=item_id, status=status, ts=ts))
 
     async def fault_lines(self) -> list[tuple[str, dict[str, Any]]]:
         """Every tool broken on purpose (`fault_injected`), with its run, oldest
