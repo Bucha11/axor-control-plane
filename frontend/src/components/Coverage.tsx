@@ -108,13 +108,9 @@ export default function Coverage({ nodeId, refetchMs }: {
   }
   if (cov.isPending || !cov.data) return null;
   const { facts, level, reported_level: reported } = cov.data;
-  if (facts.length === 0) {
-    return (
-      <div style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim, marginTop: 10 }}>
-        nothing is holding this node down — no recorded fact to attest.
-      </div>
-    );
-  }
+  // nothing holds the agent down: nothing to say (the panel used to say so in
+  // the kernel's words, on every healthy agent)
+  if (facts.length === 0) return null;
 
   return (
     <div className="mt-3 p-3" style={{ background: C.bg, border: `1px solid ${C.line}`, borderRadius: 6 }}>

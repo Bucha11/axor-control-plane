@@ -111,15 +111,14 @@ test.describe("control", () => {
     await expect(page.getByText(/node still reports RESTRICTED/)).toBeVisible();
   });
 
-  test("a healthy node says there is nothing to attest", async ({ page, request }) => {
+  test("a healthy node shows no facts to attest", async ({ page, request }) => {
     const node = uniqueNode("gov-clean");
     await seedNode(request, node);
     await setConnection(page, { mode: "adapter" });
     await goHash(page, "control");
     await page.getByTestId(`agent-row-${node}`).click();
-    await expect(
-      page.getByText("nothing is holding this node down — no recorded fact to attest."),
-    ).toBeVisible();
+    await expect(page.getByTestId("agent-panel")).toContainText(node);
+    await expect(page.getByText("facts behind this node's level")).toHaveCount(0);
   });
 
   test("cascade stop is signed when the signed posture is armed", async ({ page, request }) => {
@@ -213,11 +212,12 @@ test.describe("cross-session reputation", () => {
     await page.getByRole("button", { name: "graph" }).click();
     await page.getByTestId("topo-node-unwatched-node").click();
 
-    await expect(page.getByText("no axor-sentinel is reporting here", { exact: false })).toBeVisible();
+    // no sentinel: no badge, and no verdict — the panel says nothing rather than "clean"
     await expect(page.getByTestId("topo-rep-unwatched-node")).toHaveCount(0);
+    await expect(page.getByTestId("agent-panel").getByText(/clean/)).toHaveCount(0);
   });
 
-  test("test honesty: arm a broken tool on a live agent, and see the caught lie", async ({ page, request }) => {
+  test("a caught lie on a live agent is in its panel; chaos tests are one click away", async ({ page, request }) => {
     const node = uniqueNode("gov-honesty");
     await seedNode(request, node);
     // A finished experiment run, exactly as axor-langchain posts it: the fault,
@@ -238,25 +238,16 @@ test.describe("cross-session reputation", () => {
       ] } });
     expect((await ingest.json()).evidence).toBe(1);
 
-    // Off the test bench the button is disabled and says why.
-    await setConnection(page, { mode: "adapter", testBench: false });
+    // the panel names the lie, and opens where it happened
+    await setConnection(page, { mode: "adapter" });
     await goHash(page, "control");
     await page.getByTestId(`agent-row-${node}`).click();
-    const panel = page.getByTestId("honesty-test");
-    await expect(panel.getByText(/caught — fabricated_tool_result/)).toBeVisible();
-    await panel.getByLabel("tool to break").fill("get_rates");
-    await expect(panel.getByRole("button", { name: "arm next run" })).toBeDisabled();
-    await expect(panel.getByText(/test-bench only/)).toBeVisible();
-
-    // On the test bench it arms the node's next run.
-    // same URL: goto would be a same-document hop, so reload to re-hydrate
-    await setConnection(page, { mode: "adapter", testBench: true });
-    await page.reload();
-    await page.getByTestId(`agent-row-${node}`).click();
-    await panel.getByLabel("tool to break").fill("get_rates");
-    await panel.getByLabel("how to break it").selectOption("silent_fail");
-    await panel.getByRole("button", { name: "arm next run" }).click();
-    await expect(panel.getByText(/armed: get_rates · silent_fail/)).toBeVisible();
+    const panel = page.getByTestId("agent-panel");
+    await expect(panel.getByTestId("agent-needs-a-look")).toContainText("said a failed tool worked");
+    await expect(panel.getByTestId("node-runs")).toContainText("chaos test");
+    // breaking a tool on its next run is Chaos tests' job, one click away
+    await panel.getByTestId("agent-chaos-link").getByRole("button").click();
+    await expect(page).toHaveURL(/#\/chaos$/);
   });
 
   test("the agent card lists its runs, and a tainted result can be cut from Replay", async ({ page, request }) => {
@@ -282,9 +273,9 @@ test.describe("cross-session reputation", () => {
     await page.getByTestId(`agent-row-${node}`).click();
     const runs = page.getByTestId("node-runs");
     await expect(runs.getByText("1 call · fetch")).toBeVisible();
-    await expect(runs.getByText("1 tainted")).toBeVisible();
+    await expect(runs.getByText("1 from outside")).toBeVisible();
     // the protocol jargon is folded away
-    await expect(page.getByText("protocol state")).toBeVisible();
+    await expect(page.getByText("details", { exact: true })).toBeVisible();
 
     // a row opens the run's control screen; Replay is one step further
     await runs.getByText("open →").first().click();
