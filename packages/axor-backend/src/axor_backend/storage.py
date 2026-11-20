@@ -428,6 +428,40 @@ incident_status = Table(
     Column("ts", String(40), nullable=False),
 )
 
+# A pair session: someone's coding-agent session others watch live and send
+# notes into. The token is the link; it resolves across tenants (a guest from
+# outside the team reads the inviting org's session) — routers/pair_api checks
+# who may.
+pair_sessions = Table(
+    "pair_sessions", metadata,
+    Column("token", String(64), primary_key=True),
+    Column("org_id", String(64), nullable=False, index=True),
+    Column("node_id", String(128), nullable=False),
+    Column("created_by", String(255), nullable=False, server_default=""),
+    Column("created_ts", String(40), nullable=False),
+    Column("expires_ts", String(40), nullable=False),
+    Column("closed_ts", String(40), nullable=True),
+    Column("outside", Boolean, nullable=False, default=False),
+    Column("guests", Text, nullable=False, server_default="[]"),
+)
+
+# A note from a pair session to the agent: queued here, fetched by the
+# developer's sidecar, and given to the agent at its next step.
+pair_notes = Table(
+    "pair_notes", metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("org_id", String(64), nullable=False, index=True),
+    Column("node_id", String(128), nullable=False, index=True),
+    Column("token", String(64), nullable=False),
+    Column("by", String(255), nullable=False, server_default=""),
+    # from someone outside the team: the sidecar treats it as outside text
+    Column("outside", Boolean, nullable=False, default=False),
+    Column("text", Text, nullable=False),
+    Column("ts", String(40), nullable=False),
+    Column("delivered_ts", String(40), nullable=True),
+    Column("delivered_at", String(128), nullable=True),
+)
+
 # A skill shared for the team: the latest upload, and the version turned on
 # for the team (what every developer's sidecar installs), kept apart so a new
 # upload reaches nobody until someone turns it on.
@@ -781,6 +815,100 @@ class Store:
             return None
         return {"tree_run": row.tree_run, "status": row.status,
                 "updated_ts": row.updated_ts, **json.loads(row.doc)}
+
+    # ── pair sessions ─────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _pair_row(r: Any) -> dict[str, Any]:  # noqa: ANN401 - a Row
+        return {"token": r.token, "org_id": r.org_id, "node_id": r.node_id,
+                "created_by": r.created_by, "created_ts": r.created_ts,
+                "expires_ts": r.expires_ts, "closed_ts": r.closed_ts,
+                "outside": bool(r.outside), "guests": json.loads(r.guests or "[]")}
+
+    async def create_pair(self, token: str, node_id: str, by: str, ts: str,
+                          expires: str, outside: bool) -> None:
+        async with self.engine.begin() as conn:
+            await conn.execute(insert(pair_sessions).values(
+                token=token, org_id=current_org_id(), node_id=node_id, created_by=by,
+                created_ts=ts, expires_ts=expires, outside=outside, guests="[]"))
+
+    async def pair_by_token(self, token: str) -> dict[str, Any] | None:
+        """ACROSS tenants: the link names the session, whoever opens it."""
+        async with self.engine.connect() as conn:
+            r = (await conn.execute(select(pair_sessions).where(
+                pair_sessions.c.token == token))).first()
+        return self._pair_row(r) if r else None
+
+    async def list_pairs(self, now_ts: str) -> list[dict[str, Any]]:
+        """This tenant's open pair sessions, newest first."""
+        async with self.engine.connect() as conn:
+            rows = (await conn.execute(select(pair_sessions).where(
+                pair_sessions.c.org_id == current_org_id(),
+                pair_sessions.c.closed_ts.is_(None),
+                pair_sessions.c.expires_ts > now_ts,
+            ).order_by(pair_sessions.c.created_ts.desc()))).all()
+        return [self._pair_row(r) for r in rows]
+
+    async def update_pair(self, token: str, **values: Any) -> None:  # noqa: ANN401
+        if "guests" in values:
+            values["guests"] = json.dumps(values["guests"])
+        async with self.engine.begin() as conn:
+            await conn.execute(update(pair_sessions).where(
+                pair_sessions.c.token == token).values(**values))
+
+    async def add_pair_note(self, token: str, node_id: str, by: str, text: str,
+                            ts: str, outside: bool = False) -> int:
+        async with self.engine.begin() as conn:
+            res = await conn.execute(insert(pair_notes).values(
+                org_id=current_org_id(), node_id=node_id, token=token, by=by,
+                text=text, ts=ts, outside=outside))
+        return int(res.inserted_primary_key[0])
+
+    async def pair_notes_of(self, token: str) -> list[dict[str, Any]]:
+        async with self.engine.connect() as conn:
+            rows = (await conn.execute(select(pair_notes).where(
+                pair_notes.c.org_id == current_org_id(), pair_notes.c.token == token,
+            ).order_by(pair_notes.c.id))).all()
+        return [{"id": r.id, "by": r.by, "text": r.text, "ts": r.ts, "outside": bool(r.outside),
+                 "delivered_ts": r.delivered_ts, "delivered_at": r.delivered_at} for r in rows]
+
+    async def pending_notes(self, node_id: str, since_ts: str) -> list[dict[str, Any]]:
+        """Notes for one agent session not yet given to it (newer than since)."""
+        async with self.engine.connect() as conn:
+            rows = (await conn.execute(select(pair_notes).where(
+                pair_notes.c.org_id == current_org_id(), pair_notes.c.node_id == node_id,
+                pair_notes.c.delivered_ts.is_(None), pair_notes.c.ts > since_ts,
+            ).order_by(pair_notes.c.id))).all()
+        return [{"id": r.id, "by": r.by, "text": r.text, "ts": r.ts,
+                 "outside": bool(r.outside)} for r in rows]
+
+    async def mark_notes_delivered(self, node_id: str, ids: list[int], ts: str,
+                                   at: str) -> int:
+        if not ids:
+            return 0
+        async with self.engine.begin() as conn:
+            res = await conn.execute(update(pair_notes).where(
+                pair_notes.c.org_id == current_org_id(), pair_notes.c.node_id == node_id,
+                pair_notes.c.id.in_(ids), pair_notes.c.delivered_ts.is_(None),
+            ).values(delivered_ts=ts, delivered_at=at[:128]))
+        return res.rowcount or 0
+
+    async def node_events_after(self, node_id: str, after_id: int,
+                                limit: int) -> list[tuple[int, str, dict[str, Any]]]:
+        """``(event id, run id, line)`` of every run of one node after a cursor,
+        oldest first — a live session's steps. With no cursor, the last
+        ``limit`` of them."""
+        q = select(events.c.id, events.c.run_id, events.c.line).where(
+            events.c.org_id == current_org_id(), events.c.node_id == node_id)
+        async with self.engine.connect() as conn:
+            if after_id:
+                rows = (await conn.execute(q.where(events.c.id > after_id)
+                                           .order_by(events.c.id).limit(limit))).all()
+            else:
+                rows = list(reversed((await conn.execute(
+                    q.order_by(events.c.id.desc()).limit(limit))).all()))
+        return [(r.id, r.run_id, r.line if isinstance(r.line, dict) else json.loads(r.line))
+                for r in rows]
 
     async def team_skills(self) -> list[dict[str, Any]]:
         """Every shared skill: ``{name, latest, live}`` (live None when off)."""

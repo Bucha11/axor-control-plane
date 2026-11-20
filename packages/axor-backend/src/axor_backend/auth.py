@@ -95,6 +95,8 @@ _READ_POLICY: tuple[tuple[str, str], ...] = (
     ("/v1/coding/policy", "ingest"),
     # ...and the skills turned on for the team, which it installs
     ("/v1/coding/skill-bundles/", "ingest"),
+    # ...and the notes a pair session sent its agent
+    ("/v1/coding/notes/", "ingest"),
     # Listing keys is credential enumeration: ids, scopes, labels, dates.
     ("/v1/keys", "admin"),
     # Every enrolment with the nodes allowed to dispense it — the map of which
@@ -168,6 +170,10 @@ _WRITE_POLICY: tuple[tuple[str, str], ...] = (
     ("/v1/setup-health", "ingest"),   # posted by the check, on an ingest key
     # sharing a skill reaches nobody by itself: a developer's key may upload
     ("/v1/coding/skill-bundles", "ingest"),
+    ("/v1/coding/notes/", "ingest"),   # the sidecar says a note was given
+    # pairing on a session and writing a note: any signed-in member, and a
+    # guest from outside the team where the pair lets them (routers/pair_api)
+    ("/v1/pair", "read"),
     # turning a skill off — or on — for every developer is an operator's decision
     ("/v1/coding/", "operate"),
     ("/v1/plane/", "operate"),        # command / facts / cascade-stop

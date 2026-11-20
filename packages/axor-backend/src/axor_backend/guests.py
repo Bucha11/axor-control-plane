@@ -41,6 +41,7 @@ ACCOUNT_ONLY: tuple[tuple[str, str, str, str], ...] = (
     ("*", "/v1/vault", "", "the vault"),
     ("*", "/v1/keys", "", "API and node keys"),
     ("*", "/v1/license", "", "licences"),
+    ("*", "/v1/pair", "", "pair sessions"),
 )
 
 

@@ -217,4 +217,58 @@ test.describe("coding agents: their menu, and trying a skill", () => {
     const after = await (await request.get("http://127.0.0.1:8400/v1/coding/policy")).json();
     expect(after.skills_team.map((t: { name: string }) => t.name)).not.toContain("changelog-entries");
   });
+
+  test("pair sessions: watch a session live, a note reaches the agent, two side by side", async ({ page, request }) => {
+    const B = "http://127.0.0.1:8400";
+    const claude = "claude-code-example-3f9a21c0";
+    await request.post(`${B}/v1/demo/seed-coding`);
+    await setConnection(page, { mode: "demo" });
+    await journey(page, "coding");
+    await goHash(page, "govern");
+    await page.getByTestId("side-pair").click();
+    const home = page.getByTestId("pair-home");
+    // outside the team is the paid plan; this plane is on the free one
+    await home.getByTestId("pair-outside").check();
+    await home.getByTestId(`pair-start-${claude}`).click();
+    await expect(home.getByTestId("pair-error")).toContainText("paid plan");
+    await expect(home.getByRole("button", { name: "see plans →" })).toBeVisible();
+    await home.getByTestId("pair-outside").uncheck();
+    await home.getByTestId(`pair-start-${claude}`).click();
+    await expect(page).toHaveURL(/#\/pair\/[A-Za-z0-9_-]+$/);
+    const token = page.url().split("/pair/")[1];
+    const pane = page.getByTestId("pair-pane");
+    await expect(pane.getByTestId("pair-who")).toContainText("you're here as a teammate");
+    const feed = pane.getByTestId("pair-feed");
+    await expect(feed).toContainText("ran pytest -q tests/auth");
+    await expect(feed).toContainText("tests failed — === 1 failed, 11 passed in 0.82s ===");
+    await expect(feed).toContainText("said: “Added a token-bucket limiter");
+    // a note: waiting, then the sidecar takes it and says where it gave it
+    await pane.getByLabel("note to the agent").fill("the lockout test needs the fake limiter from conftest");
+    await pane.getByTestId("pair-send").click();
+    const note = feed.getByTestId("pair-note").last();
+    await expect(note).toContainText("the lockout test needs the fake limiter");
+    await expect(note.getByTestId("pair-note-state")).toHaveText("waiting for the agent's next step");
+    const pending = await (await request.get(`${B}/v1/coding/notes/${claude}`)).json();
+    const ids = pending.notes.map((n: { id: number }) => n.id);
+    expect(ids.length).toBeGreaterThan(0);
+    await request.post(`${B}/v1/coding/notes/${claude}/delivered`, { data: { ids, at: "Bash" } });
+    await expect(note.getByTestId("pair-note-state")).toContainText("given to the agent after Bash");
+    // hold the agent, and let it go again
+    await pane.getByTestId("pair-hold").click();
+    await expect(pane.getByTestId("pair-hold")).toHaveText("let it continue");
+    await pane.getByTestId("pair-hold").click();
+    await expect(pane.getByTestId("pair-hold")).toHaveText("hold the agent");
+    // a second session beside it
+    const other = await (await request.post(`${B}/v1/pair`, { data: { node_id: "codex-example-77b0e4d2" } })).json();
+    await page.getByTestId("pair-split").click();
+    await page.getByTestId("pair-pick").getByRole("button", { name: /codex-example/ }).click();
+    await expect(page).toHaveURL(new RegExp(`with=${other.token}`));
+    await expect(page.getByTestId("pair-pane")).toHaveCount(2);
+    await expect(page.getByTestId("pair-pane").nth(1)).toContainText("codex");
+    await request.delete(`${B}/v1/pair/${other.token}`);
+    await request.delete(`${B}/v1/pair/${token}`);
+    // an ended pair says so
+    await goHash(page, `pair/${token}`);
+    await expect(page.getByTestId("pair-denied")).toContainText("This pair session has ended, or the link is wrong.");
+  });
 });

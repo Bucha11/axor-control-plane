@@ -879,6 +879,10 @@ function ControlBody({ focusNode, testBench }: { focusNode?: string; testBench: 
 
           {isCodingNode(node) ? (
             <div className="mt-4" style={{ fontFamily: MONO, fontSize: 11, color: C.mut, lineHeight: 1.7 }}>
+              <button onClick={() => navigate("pair", { node: node.node_id })} data-testid="agent-pair-link" style={panelLink}>
+                pair on this session — watch it live, send the agent a note →
+              </button>
+              <br />
               <button onClick={() => navigate("skills")} style={panelLink}>skills for the team — try one, turn one off →</button>
             </div>
           ) : (

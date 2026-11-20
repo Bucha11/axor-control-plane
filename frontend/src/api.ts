@@ -546,6 +546,28 @@ export interface SkillEvalSkill {
   verdict: string;
 }
 
+/** A pair session: someone's coding-agent session others watch live. */
+export interface PairInfo {
+  token: string; node_id: string; created_by: string; created_ts: string; expires_ts: string;
+  outside: boolean; guests: { who: string; org: string; ts: string }[];
+}
+export interface PairStep {
+  id: number; ts: string; kind: "tool_call" | "tool_result" | "claim" | "task";
+  tool?: string; target?: string; refused?: boolean; reason?: string;
+  failed?: boolean; preview?: string; check?: { kind: string; passed: boolean; summary: string } | null;
+  text?: string;
+}
+export interface PairNote {
+  id: number; by: string; text: string; ts: string; outside: boolean;
+  delivered_ts: string | null; delivered_at: string | null;
+}
+export interface PairFeed {
+  pair: { node_id: string; agent: string; created_by: string; created_ts: string; expires_ts: string;
+          outside: boolean; guests: string[]; you: "teammate" | "guest"; paused: boolean;
+          stopped: boolean; desired_version: number; level: string };
+  steps: PairStep[]; cursor: number; notes: PairNote[];
+}
+
 /** A skill shared for the team: the latest upload and the version on. */
 export interface TeamSkill {
   name: string; description: string; skill_md: string;
@@ -1334,6 +1356,25 @@ export const api = {
     af(`/v1/skill-evals/${encodeURIComponent(id)}`).then((r) => j<SkillEval>(r)),
   seedSkillEval: () =>
     af("/v1/demo/seed-skill-eval", { method: "POST" }).then((r) => j<{ eval_id: string }>(r)),
+  openPair: (nodeId: string, outside: boolean) =>
+    af("/v1/pair", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ node_id: nodeId, outside }),
+    }).then((r) => j<{ token: string; node_id: string; outside: boolean; expires_ts: string }>(r)),
+  pairs: () => af("/v1/pair").then((r) => j<{ pairs: PairInfo[] }>(r)),
+  closePair: (token: string) =>
+    af(`/v1/pair/${encodeURIComponent(token)}`, { method: "DELETE" }).then((r) => j<{ closed: boolean }>(r)),
+  pairFeed: (token: string) =>
+    af(`/v1/pair/${encodeURIComponent(token)}/feed`).then((r) => j<PairFeed>(r)),
+  sendNote: (token: string, text: string) =>
+    af(`/v1/pair/${encodeURIComponent(token)}/notes`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ text }),
+    }).then((r) => j<{ id: number }>(r)),
+  seedPair: () =>
+    af("/v1/demo/seed-pair", { method: "POST" }).then((r) => j<{ token: string; node_id: string }>(r)),
   setupHealth: () =>
     af("/v1/setup-health").then((r) => j<{ checks: SetupHealthCheck[] }>(r)),
   seedSetupHealth: () =>

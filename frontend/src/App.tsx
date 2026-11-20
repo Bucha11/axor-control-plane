@@ -45,6 +45,7 @@ import Pricing from "./tabs/Pricing";
 import Skills from "./tabs/Skills";
 import SkillEvals from "./tabs/SkillEvals";
 import SetupHealth from "./tabs/SetupHealth";
+import Pair from "./tabs/Pair";
 
 // Governance first: the product is the policy membrane between an agent and its
 // tools. "Incidents" is the proof it works, not the product.
@@ -101,6 +102,7 @@ const ALIAS: Record<string, string> = {
   health: "govern",
   sentinel: "govern",
   trees: "govern",
+  pair: "govern",
   "get-started": "connect",
   "config-builder": "policy",
 };
@@ -162,7 +164,8 @@ export default function App() {
   // Agents, its views — instead of a row of sections plus a row of views on
   // top of every page. A phone keeps the compact header.
   const sidebar = wide && !firstVisit;
-  const governView = head === "health" || head === "sentinel" || head === "trees" ? head : "govern";
+  const governView = head === "health" || head === "sentinel" || head === "trees" || head === "pair"
+    ? head : "govern";
   const header = (
     <div className="app-header" style={{ maxWidth: 1200, margin: "0 auto 36px" }}>
       <div className="app-header-left">
@@ -210,6 +213,7 @@ export default function App() {
           {!sidebar && <SubNav items={GOVERN_VIEWS} active={governView} />}
           {head === "health" ? <ContextHealth journey={menu.journey} /> : head === "sentinel" ? <Sentinel />
             : head === "trees" ? <Trees treeRun={runIdParam} />
+            : head === "pair" ? <Pair token={runIdParam} withToken={route.query.with} node={route.query.node} />
             : runIdParam === "run" && route.segments[2]
               ? <RunControl runId={decodeURIComponent(route.segments[2])} />
               : <ControlTab focusNode={runIdParam} />}
@@ -272,7 +276,7 @@ function ContextHealth({ journey }: { journey: Journey | null }) {
 }
 
 const GOVERN_VIEWS: [string, string][] = [
-  ["govern", "agents"], ["trees", "agent trees"],
+  ["govern", "agents"], ["trees", "agent trees"], ["pair", "pair sessions"],
   ["sentinel", "data across sessions"], ["health", "context health & repair"],
 ];
 
@@ -336,7 +340,7 @@ function Sidebar({ active, view }: { active: string; view: string }) {
             {l.key === "govern" && (
               <div className="flex flex-col" style={{ gap: 1, margin: "2px 0 6px" }}>
                 {GOVERN_VIEWS.slice(1).filter(([route]) => menu.all || menu.journey !== "coding"
-                  || route === "trees" || route === "health").map(([route, label]) => (
+                  || route === "trees" || route === "health" || route === "pair").map(([route, label]) => (
                   <button key={route} onClick={() => navigate(route)}
                     aria-current={view === route ? "page" : undefined}
                     data-testid={`side-${route}`} style={item(view === route, true)}>

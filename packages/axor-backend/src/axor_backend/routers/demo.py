@@ -230,6 +230,36 @@ async def seed_skill_eval(store: StoreDep) -> dict:
     return {"eval_id": "se-example"}
 
 
+@router.post("/seed-pair")
+async def seed_pair(store: StoreDep, cache: SubgraphCacheDep) -> dict:
+    """A pair session on the example Claude Code session, with one note the
+    example sidecar already gave the agent — the sidecar's half played here,
+    as /fleet-reprobe plays the example scraper's (the example has no agent)."""
+    from datetime import timedelta
+
+    from axor_backend import demo
+    from axor_backend.routers.pair_api import PAIR_TTL, _now
+
+    await seed_coding(store, cache)
+    node = demo.CODING_CLAUDE
+    open_now = [p for p in await store.list_pairs(now()) if p["node_id"] == node]
+    if open_now:
+        return {"token": open_now[0]["token"], "node_id": node}
+    import secrets
+
+    token = secrets.token_urlsafe(16)
+    start = _now()
+    await store.create_pair(token, node, "ada@example.dev", start.isoformat(),
+                            (start + PAIR_TTL).isoformat(), False)
+    note = await store.add_pair_note(
+        token, node, "sam@example.dev",
+        "The lockout test needs Redis — use the fake limiter from tests/conftest.py, "
+        "don't start a server.", (start + timedelta(seconds=1)).isoformat())
+    await store.mark_notes_delivered(node, [note], (start + timedelta(seconds=9)).isoformat(),
+                                     "Bash")
+    return {"token": token, "node_id": node}
+
+
 @router.post("/seed-team-skill")
 async def seed_team_skill(store: StoreDep) -> dict:
     """An example shared skill — changelog-entries, the one the example skill
