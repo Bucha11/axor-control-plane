@@ -73,6 +73,12 @@ def test_fisher() -> None:
 
 # ── through the API ─────────────────────────────────────────────────────────
 
+
+@pytest.fixture(autouse=True)
+def _team_plan(monkeypatch: pytest.MonkeyPatch) -> None:
+    """These tests are about what agents get: a workspace on the Team plan."""
+    monkeypatch.setattr(memory, "given_on_plan", lambda state, repo: True)
+
 @pytest.fixture
 async def client(tmp_path: pathlib.Path) -> AsyncIterator[httpx.AsyncClient]:
     app = create_app(database_url=f"sqlite+aiosqlite:///{tmp_path}/d.db",

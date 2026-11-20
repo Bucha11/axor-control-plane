@@ -113,18 +113,32 @@ function RepoMemory({ repo, freshDays }: { repo: MemoryRepo; freshDays: number }
   const given = new Set(repo.given_ids);
   return (
     <>
+      {!repo.given && (
+        <section data-testid="memory-plan" className="mb-8 p-4" style={{ ...panel, borderLeft: `3px solid ${C.amber}` }}>
+          <div style={{ fontSize: 15, fontWeight: 650, color: C.amber, marginBottom: 4 }}>
+            Team memory is on the Team plan
+          </div>
+          <div style={{ fontSize: 13, color: C.mut, lineHeight: 1.6 }}>
+            Agents in this workspace get nothing from it yet. What it learns is kept — on the Team plan every
+            agent gets it from its next session.{" "}
+            <button onClick={() => navigate("pricing")} style={{ ...link, fontSize: 12 }}>see plans →</button>
+          </div>
+        </section>
+      )}
       {repo.drift && <Drift change={repo.drift} onOff={(id) => set.mutate({ id, status: "off" })} />}
       <section className="mb-8" data-testid="memory-preview">
-        <div style={label}>WHAT EVERY AGENT GETS AT SESSION START · {repo.label}</div>
+        <div style={label}>{repo.given ? "WHAT EVERY AGENT GETS AT SESSION START" : "WHAT EVERY AGENT WOULD GET ON THE TEAM PLAN"} · {repo.label}</div>
         {repo.preview ? (
           <pre style={{ ...panel, padding: "12px 14px", margin: 0, fontFamily: MONO, fontSize: 11.5, color: C.text,
                         whiteSpace: "pre-wrap", lineHeight: 1.6 }}>{repo.preview}</pre>
         ) : (
           <div style={{ ...panel, padding: 14, fontSize: 13, color: C.mut }}>Nothing on yet — agents get nothing from the team's memory here.</div>
         )}
-        <div style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim, marginTop: 6 }}>
-          given to {repo.sessions_given} session{repo.sessions_given === 1 ? "" : "s"} so far · exactly this text, nothing else
-        </div>
+        {repo.given && (
+          <div style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim, marginTop: 6 }}>
+            given to {repo.sessions_given} session{repo.sessions_given === 1 ? "" : "s"} so far · exactly this text, nothing else
+          </div>
+        )}
       </section>
 
       {GROUPS.map((g) => {

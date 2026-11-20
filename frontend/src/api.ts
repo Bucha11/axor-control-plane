@@ -569,7 +569,7 @@ export interface MemoryChange {
 }
 export interface MemoryRepo {
   repo: string; label: string; items: MemoryItem[]; preview: string; given_ids: number[]; sessions_given: number;
-  version: string; changes: MemoryChange[]; drift: MemoryChange | null;
+  version: string; changes: MemoryChange[]; drift: MemoryChange | null; given: boolean;
 }
 
 /** A pair session: someone's coding-agent session others watch live. */
@@ -1382,7 +1382,7 @@ export const api = {
     af(`/v1/skill-evals/${encodeURIComponent(id)}`).then((r) => j<SkillEval>(r)),
   seedSkillEval: () =>
     af("/v1/demo/seed-skill-eval", { method: "POST" }).then((r) => j<{ eval_id: string }>(r)),
-  memory: () => af("/v1/memory").then((r) => j<{ repos: MemoryRepo[]; fresh_days: number }>(r)),
+  memory: () => af("/v1/memory").then((r) => j<{ repos: MemoryRepo[]; fresh_days: number; plan_tier: string }>(r)),
   setMemorySettings: (freshDays: number) =>
     af("/v1/memory/settings", {
       method: "PUT",

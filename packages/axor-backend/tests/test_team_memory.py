@@ -15,6 +15,12 @@ from axor_backend.app import create_app
 REPO = "r-acme-api"
 
 
+
+@pytest.fixture(autouse=True)
+def _team_plan(monkeypatch: pytest.MonkeyPatch) -> None:
+    """These tests are about what agents get: a workspace on the Team plan."""
+    monkeypatch.setattr(memory, "given_on_plan", lambda state, repo: True)
+
 @pytest.fixture
 async def client(tmp_path: pathlib.Path) -> AsyncIterator[httpx.AsyncClient]:
     app = create_app(database_url=f"sqlite+aiosqlite:///{tmp_path}/m.db",
@@ -183,3 +189,25 @@ async def test_example_memory(client: httpx.AsyncClient) -> None:
     assert by["runs:typecheck:make typecheck"] == "stale"
     assert by["runs:tests:make test-all-integration --profile ci"] == "kept_out"
     assert "Run migrations with --dry-run first" in repo["preview"]
+
+
+async def test_below_the_team_plan_agents_get_nothing_and_learning_goes_on(
+        client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.undo()          # the real plan check: this workspace has no license
+    await _session(client, "ada-1", "dev-ada")
+    await _session(client, "bob-1", "dev-bob")
+    await _check(client, "ada-1", "a1", "uv run pytest -q", True)
+    await _check(client, "bob-1", "b1", "uv run pytest -q", True)
+    given = (await client.get("/v1/coding/memory", params={"repo": REPO})).json()
+    assert given["text"] == "" and given["ids"] == [] and given["items"] == []
+    assert given["plan_required"] == "team"
+    body = (await client.get("/v1/memory")).json()
+    repo = next(r for r in body["repos"] if r["repo"] == REPO)
+    # what it learned is kept, and shown as what agents would get
+    assert repo["given"] is False and "uv run pytest -q" in repo["preview"]
+    assert repo["changes"] == [] and body["plan_tier"] == "team"
+    # the example repository is always given — it shows the product
+    await client.post("/v1/demo/seed-memory")
+    example = (await client.get("/v1/coding/memory",
+                                params={"repo": "r-example-acme-api"})).json()
+    assert "uv run pytest -q" in example["text"]

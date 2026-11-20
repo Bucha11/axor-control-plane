@@ -153,6 +153,7 @@ const TIERS: Tier[] = [
       { text: "includes 10,000 hosted trials", roadmap: true },
       { text: "+$75 / governed node / mo beyond 10" },
       { text: "5 developer seats included — everything in Coding" },
+      { text: "team memory — what your coding agents verifiably learned, given to every agent at session start" },
       { text: "+$25 / developer / mo beyond 5" },
     ],
     kind: "paid",

@@ -17,7 +17,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 
 from axor_backend import memory
 from axor_backend.deps import PrincipalDep, StoreDep
@@ -38,14 +38,16 @@ def _who(principal: object) -> str:
 
 
 @router.get("/v1/coding/memory")
-async def memory_for_agent(repo: str, store: StoreDep) -> dict:
-    items, text, ids, version = await memory.refresh(store, repo)
+async def memory_for_agent(repo: str, request: Request, store: StoreDep) -> dict:
+    given = memory.given_on_plan(request.app.state, repo)
+    items, text, ids, version = await memory.refresh(store, repo, given=given)
     by_id = {i["id"]: i for i in items}
     # each fact on its own too: a setup health check takes them out one by one
     return {"repo": repo, "label": (await store.repo_labels()).get(repo, ""), "text": text,
             "ids": ids, "version": version,
             "items": [{"id": i, "text": by_id[i]["doc"]["text"], "kind": by_id[i]["kind"]}
-                      for i in ids if i in by_id]}
+                      for i in ids if i in by_id],
+            **({} if given else {"plan_required": memory.PLAN_TIER})}
 
 
 @router.post("/v1/coding/memory/given")
@@ -71,18 +73,23 @@ COMPARE_CHANGES = 5
 
 
 @router.get("/v1/memory")
-async def team_memory(store: StoreDep) -> dict:
+async def team_memory(request: Request, store: StoreDep) -> dict:
     labels = await store.repo_labels()
     repos = sorted({i["repo"] for i in await store.memory_items_of()} | set(labels))
     out = []
     for repo in repos:
-        items, text, ids, version = await memory.refresh(store, repo, labels.get(repo, ""))
+        given = memory.given_on_plan(request.app.state, repo)
+        items, text, ids, version = await memory.refresh(store, repo, labels.get(repo, ""),
+                                                         given=given)
+        if not given:
+            # what agents WOULD get: the screen shows it, marked as not given
+            text, ids = memory.for_agent(items, labels.get(repo, ""))
         changes = await store.memory_changes_of(repo, 10)
         for n, change in enumerate(changes):
             change["compare"] = (await memory.compare(store, repo, change)
                                  if n < COMPARE_CHANGES else None)
         out.append({"repo": repo, "label": labels.get(repo, repo), "items": items,
-                    "preview": text, "given_ids": ids, "version": version,
+                    "preview": text, "given_ids": ids, "version": version, "given": given,
                     "sessions_given": await store.memory_sessions_given(repo),
                     "changes": changes,
                     # worse after a change, while what it added is still given —
@@ -91,7 +98,8 @@ async def team_memory(store: StoreDep) -> dict:
                                    if (c.get("compare") or {}).get("verdict") == "worse"
                                    and (any(a["id"] in ids for a in c["added"])
                                         or not c["added"])), None)})
-    return {"repos": out, "fresh_days": await memory.fresh_days(store)}
+    return {"repos": out, "fresh_days": await memory.fresh_days(store),
+            "plan_tier": memory.PLAN_TIER}
 
 
 @router.put("/v1/memory/settings")
@@ -119,7 +127,8 @@ async def memory_of_session(node_id: str, store: StoreDep) -> dict:
 
 
 @router.put("/v1/memory/{item_id}")
-async def set_status(item_id: int, body: dict, store: StoreDep, principal: PrincipalDep) -> dict:
+async def set_status(item_id: int, body: dict, request: Request, store: StoreDep,
+                     principal: PrincipalDep) -> dict:
     status = body.get("status")
     if status not in ("on", "off"):
         raise HTTPException(400, 'body is {"status": "on"} or {"status": "off"}')
@@ -139,12 +148,14 @@ async def set_status(item_id: int, body: dict, store: StoreDep, principal: Princ
     else:
         doc.pop("keep", None)
     await store.update_memory_item(item_id, status, doc, now)
-    await memory.refresh(store, item["repo"])
+    await memory.refresh(store, item["repo"],
+                         given=memory.given_on_plan(request.app.state, item["repo"]))
     return {"id": item_id, "status": status}
 
 
 @router.post("/v1/memory/notes", status_code=201)
-async def add_note(body: dict, store: StoreDep, principal: PrincipalDep) -> dict:
+async def add_note(body: dict, request: Request, store: StoreDep,
+                   principal: PrincipalDep) -> dict:
     repo = str(body.get("repo", ""))
     text = " ".join(str(body.get("text", "")).split())
     if not repo or repo not in await store.repo_labels():
@@ -158,5 +169,5 @@ async def add_note(body: dict, store: StoreDep, principal: PrincipalDep) -> dict
     doc = {"text": text, "by": _who(principal), "developers": [], "evidence": [], "fails": 0,
            "last_ok_ts": ts, "given": 0, "auto": False, "reason": ""}
     item_id = await store.add_memory_item(repo, f"note:{ts}:{text[:200]}", "note", "on", doc, ts)
-    await memory.refresh(store, repo)
+    await memory.refresh(store, repo, given=memory.given_on_plan(request.app.state, repo))
     return {"id": item_id}

@@ -317,10 +317,12 @@ test.describe("coding agents: their menu, and trying a skill", () => {
   test("team memory drift: agents did worse after a change — on the memory page, in Incidents, context health and Replay", async ({ page, request }) => {
     const B = "http://127.0.0.1:8400";
     const tag = Math.random().toString(36).slice(2, 8);
-    const repo = `r-e2e-${tag}`;
+    // the example repository: it is given on any plan (this plane has no license)
+    await request.post(`${B}/v1/demo/seed-memory`);
+    const repo = "r-example-acme-api";
     const session = async (node: string, dev: string, command: string, passed: boolean) => {
       await request.post(`${B}/v1/plane/${node}/profile`, { data: {
-        kind: "coding", agent: "claude-code", developer: `dev-${dev}`, repo, repo_label: `e2e/${tag}` } });
+        kind: "coding", agent: "claude-code", developer: `dev-${dev}`, repo, repo_label: "acme/api" } });
       const given = await (await request.get(`${B}/v1/coding/memory?repo=${repo}`)).json();
       await request.post(`${B}/v1/coding/memory/given`, { data: { node_id: node, repo, ids: given.ids } });
       const ts = new Date().toISOString();
@@ -341,19 +343,19 @@ test.describe("coding agents: their menu, and trying a skill", () => {
     await setConnection(page, { mode: "demo" });
     await goHash(page, "memory");
     const view = page.getByTestId("team-memory");
-    await view.getByRole("tab", { name: `e2e/${tag}` }).click();
+    { const t = view.getByRole("tab", { name: "acme/api" }); if (await t.isVisible()) await t.click(); }
     const drift = view.getByTestId("memory-drift");
     await expect(drift).toContainText("Agents did worse after the team memory changed");
     await expect(drift).toContainText("added: Always run the tests with -x --lf.");
     await expect(view.getByTestId("memory-changes")).toContainText("worse after");
     // Incidents
     await goHash(page, "evidence");
-    const row = page.locator("[data-kind=memory_worse]", { hasText: `e2e/${tag}` });
+    const row = page.locator("[data-kind=memory_worse]", { hasText: "acme/api" }).first();
     await expect(row).toContainText("agents did worse after the team memory changed");
     await expect(row).toContainText("Always run the tests with -x --lf.");
     // context health points at it
     await goHash(page, "health");
-    await expect(page.getByTestId("setup-health-memory-drift").filter({ hasText: `e2e/${tag}` })).toBeVisible();
+    await expect(page.getByTestId("setup-health-memory-drift").filter({ hasText: "acme/api" })).toBeVisible();
     // Replay: what the session was given
     await goHash(page, `explain/e2e-${tag}-bad0-r`);
     const mem = page.getByTestId("replay-memory");
@@ -362,7 +364,7 @@ test.describe("coding agents: their menu, and trying a skill", () => {
     await expect(mem).toContainText("Always run the tests with -x --lf.");
     // turned off from the drift card; the incident is set aside so it does not count for other tests
     await goHash(page, "memory");
-    await view.getByRole("tab", { name: `e2e/${tag}` }).click();
+    { const t = view.getByRole("tab", { name: "acme/api" }); if (await t.isVisible()) await t.click(); }
     await view.getByTestId("memory-drift").getByRole("button", { name: "turn off" }).click();
     await expect(view.getByTestId("memory-preview")).not.toContainText("Always run the tests with -x --lf.");
     await expect(view.getByTestId("memory-drift")).toHaveCount(0);
@@ -370,5 +372,35 @@ test.describe("coding agents: their menu, and trying a skill", () => {
     for (const i of feed.items.filter((x: { kind: string }) => x.kind === "memory_worse")) {
       await request.put(`${B}/v1/incidents/status`, { data: { id: i.id, status: "not_a_problem" } });
     }
+  });
+
+  test("team memory below the Team plan: learned and shown, given to no agent", async ({ page, request }) => {
+    const B = "http://127.0.0.1:8400";
+    const tag = Math.random().toString(36).slice(2, 8);
+    const repo = `r-free-${tag}`;
+    for (const dev of ["ada", "bob"]) {
+      const node = `free-${tag}-${dev}`;
+      await request.post(`${B}/v1/plane/${node}/profile`, { data: {
+        kind: "coding", agent: "claude-code", developer: `dev-${tag}${dev}`, repo, repo_label: `free/${tag}` } });
+      const ts = new Date().toISOString();
+      const line = (seq: number, kind: string, payload: object) => ({ schema_version: "1.0", seq, node_id: node, kind, ts,
+        causal_root: null, gate: null, verdict: kind === "tool_call" ? "pass" : null, payload });
+      await request.post(`${B}/v1/plane/${node}/telemetry`, { data: { run_id: `${node}-r`, events: [
+        line(0, "tool_call", { tool: "Bash", args: { command: "pnpm test" } }),
+        line(1, "tool_result", { tool: "Bash", status: "ok", preview: "",
+          check: { kind: "tests", passed: true, command: "pnpm test", summary: "ok" } })] } });
+    }
+    const given = await (await request.get(`${B}/v1/coding/memory?repo=${repo}`)).json();
+    expect(given.text).toBe("");
+    expect(given.plan_required).toBe("team");
+    await setConnection(page, { mode: "demo" });
+    await goHash(page, "memory");
+    const view = page.getByTestId("team-memory");
+    await view.getByRole("tab", { name: `free/${tag}` }).click();
+    await expect(view.getByTestId("memory-plan")).toContainText("Team memory is on the Team plan");
+    await expect(view.getByTestId("memory-preview")).toContainText("WOULD GET ON THE TEAM PLAN");
+    await expect(view.getByTestId("memory-preview")).toContainText("pnpm test");
+    await view.getByTestId("memory-plan").getByRole("button", { name: "see plans →" }).click();
+    await expect(page).toHaveURL(/#\/pricing/);
   });
 });

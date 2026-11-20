@@ -63,6 +63,10 @@ FRESH_SETTING = "memory_fresh_days"
 SUGGESTED_DAYS = 14
 NOTE_ASK_DAYS = 90
 MIN_SESSIONS = 5              # per side, before a comparison says anything
+# agents are given the team's memory on this workspace tier and above; below
+# it the plane keeps learning (an upgrade gives agents what was learned) and
+# gives nothing. The example repository is always given: it shows the product.
+PLAN_TIER = "team"
 WORSE_P = 0.05
 MAX_COMMAND = 200
 TEXT_LIMIT = 1500
@@ -354,6 +358,18 @@ async def rotate(store: Any, repo: str, now: datetime | None = None) -> list[dic
 
 # ── versions and drift ──────────────────────────────────────────────────────
 
+def given_on_plan(state: Any, repo: str) -> bool:  # noqa: ANN401 - app.state
+    """Whether this workspace's plan gives agents the team's memory."""
+    from axor_backend.demo import CODING_REPO
+    from axor_backend.licensing import active_license
+    from axor_backend.tenancy import current_org_id
+
+    if repo == CODING_REPO:
+        return True
+    lic = active_license(state, current_org_id())
+    return lic is not None and lic.tier_at_least(PLAN_TIER)
+
+
 def version_of(ids: list[int]) -> str:
     """What an agent was given, as one short id: "" for nothing."""
     if not ids:
@@ -366,13 +382,14 @@ _WHY_GONE = {"replaced": "replaced", "dormant": "not confirmed lately",
 
 
 async def refresh(store: Any, repo: str,  # noqa: ANN401
-                  label: str = "") -> tuple[list[dict], str, list[int], str]:
+                  label: str = "", *, given: bool = True) -> tuple[list[dict], str, list[int], str]:
     """Rotate, render, and log a change of what agents get. Returns (items,
-    text, ids, version)."""
+    text, ids, version). ``given`` False (the plan gives agents nothing):
+    agents get "" — and that is what is logged."""
     items = await rotate(store, repo)
     if not label:
         label = (await store.repo_labels()).get(repo, "")
-    text, ids = for_agent(items, label)
+    text, ids = for_agent(items, label) if given else ("", [])
     version = version_of(ids)
     last = await store.last_memory_change(repo)
     if (last["version"] if last else "") != version and (last or ids):
