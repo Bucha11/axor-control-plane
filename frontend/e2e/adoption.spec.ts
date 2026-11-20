@@ -47,7 +47,7 @@ test.describe("adoption", () => {
     const cases: [string, string | RegExp][] = [
       ["config-builder", "outside text"],
       ["get-started", "credentials pass through untouched"],
-      ["health", "localizer blames"],
+      ["health", "which piece of its context changed it"],
       ["settings", "dead-letter"],
       ["pricing", "one ladder"],
     ];

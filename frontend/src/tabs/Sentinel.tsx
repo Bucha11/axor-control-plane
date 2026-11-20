@@ -23,11 +23,11 @@ interface Link { resource: string; session: string; kind: EdgeKind; heuristic: b
 
 const LEVEL_COLOR: Record<Level, string> = { FLAGGED: C.red, WATCH: C.amber, CLEAN: C.green };
 const EDGE_STYLE: Record<EdgeKind, { color: string; dash?: string; label: string }> = {
-  export_denied: { color: C.red, label: "export denied" },
-  export: { color: C.red, dash: "5 4", label: "exported" },
-  staging: { color: C.amber, label: "staged (tainted)" },
-  read: { color: C.steel, label: "read while tainted" },
-  touched: { color: C.amber, dash: "3 4", label: "touched (tainted)" },
+  export_denied: { color: C.red, label: "sending it out was refused" },
+  export: { color: C.red, dash: "5 4", label: "sent out" },
+  staging: { color: C.amber, label: "copied after reading outside text" },
+  read: { color: C.steel, label: "read after reading outside text" },
+  touched: { color: C.amber, dash: "3 4", label: "touched after reading outside text" },
 };
 
 function sessionsIn(text: string): string[] {
@@ -44,32 +44,32 @@ export function readFacts(resource: string, facts: string[]): { links: Link[]; l
   for (const raw of facts) {
     const heuristic = raw.startsWith("heuristic_ceiling:");
     const fact = heuristic ? raw.slice("heuristic_ceiling:".length) : raw;
-    const caveat = heuristic ? " (resource id was inferred, so this can only reach WATCH)" : "";
+    const caveat = heuristic ? " (which data this is was guessed, so it can only reach watch)" : "";
     if (fact.startsWith("P1:")) {
       const s = sessionsIn(fact);
       s.forEach((session) => links.push({ resource, session, kind: "export_denied", heuristic }));
-      lines.push(`an export of it was denied at the sink in ${s.join(", ")}${caveat}`);
+      lines.push(`sending it out was refused in ${s.join(", ")}${caveat}`);
     } else if (fact.startsWith("P3:")) {
       const s = sessionsIn(fact);
       s.forEach((session) => links.push({ resource, session, kind: "staging", heuristic }));
-      lines.push(`staged in ${s.length} tainted sessions inside the window: ${s.join(", ")}${caveat}`);
+      lines.push(`copied a little at a time in ${s.length} sessions that had read outside text: ${s.join(", ")}${caveat}`);
     } else if (fact.startsWith("P4:")) {
       const m = fact.match(/read=([^:]+):export=(.+)$/);
       if (m) {
         links.push({ resource, session: m[1], kind: "read", heuristic });
         links.push({ resource, session: m[2], kind: "export", heuristic });
-        lines.push(`read while tainted in ${m[1]}, then exported in a later session, ${m[2]} — staged, then sent${caveat}`);
+        lines.push(`read in ${m[1]} after it had read outside text, then sent out in a later session, ${m[2]}${caveat}`);
       }
     } else if (fact.startsWith("W1:")) {
       const s = sessionsIn(fact);
       s.forEach((session) => links.push({ resource, session, kind: "touched", heuristic }));
-      lines.push(`touched by tainted sessions ${s.join(", ")} — not enough to flag, enough to watch`);
+      lines.push(`touched in sessions that had read outside text, ${s.join(", ")} — not enough to flag, enough to watch`);
     } else if (fact.startsWith("P2:")) {
-      lines.push(`export-adjacent from several origins: ${sessionsIn(fact).join(", ")}${caveat}`);
+      lines.push(`close to being sent out, from several sources: ${sessionsIn(fact).join(", ")}${caveat}`);
     } else if (fact.startsWith("C1:")) {
-      lines.push(`flagged members: ${fact.split("=")[1]}`);
+      lines.push(`flagged inside it: ${fact.split("=")[1]}`);
     } else if (fact.startsWith("C2:")) {
-      lines.push("a member is above clean");
+      lines.push("something inside it is not clean");
     } else {
       lines.push(raw);
     }
@@ -99,7 +99,7 @@ function Graph({ snap, selected, onSelect }: {
   return (
     <svg viewBox={`0 0 600 ${height}`} style={{ width: "100%", display: "block" }} role="img"
       aria-label="sentinel graph: resources and the sessions that touched them">
-      <text x={RX} y={14} textAnchor="end" fill={C.dim} fontSize="9.5" fontFamily={MONO} letterSpacing="1">RESOURCES</text>
+      <text x={RX} y={14} textAnchor="end" fill={C.dim} fontSize="9.5" fontFamily={MONO} letterSpacing="1">DATA</text>
       <text x={SX} y={14} fill={C.dim} fontSize="9.5" fontFamily={MONO} letterSpacing="1">SESSIONS</text>
       {links.map((l, i) => {
         const y1 = rY(resources.indexOf(l.resource));
@@ -179,22 +179,22 @@ export default function Sentinel() {
 
   return (
     <div style={{ maxWidth: 680, margin: "0 auto" }}>
-      <h1 style={{ fontSize: 22, fontWeight: 650, margin: "0 0 6px" }}>What sentinel sees across sessions</h1>
+      <h1 style={{ fontSize: 22, fontWeight: 650, margin: "0 0 6px" }}>Data an agent touched, across sessions</h1>
       <div style={{ fontFamily: MONO, fontSize: 11.5, color: C.dim, marginBottom: 18, lineHeight: 1.6 }}>
-        one session reading a customer table is normal. the same table staged a little in
-        many tainted sessions, then exported, is a leak no single session shows. sentinel
-        watches resources across all of them and marks them clean, watch or flagged.
+        one session reading a customer table is normal. the same table copied a little at a time
+        in many sessions that had read outside text, then sent out, is a slow leak no single
+        session shows. each piece of data an agent touched is marked clean, watch or flagged.
       </div>
 
       {topo.isSuccess && watched.length === 0 && (
         <div style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 10, padding: 18 }}
           data-testid="sentinel-empty">
           <div style={{ fontFamily: MONO, fontSize: 12.5, color: C.text, marginBottom: 6 }}>
-            No node is reporting sentinel reputation yet.
+            No agent is reporting this yet.
           </div>
           <div style={{ fontFamily: MONO, fontSize: 11.5, color: C.dim, lineHeight: 1.6, marginBottom: 14 }}>
-            that is an absence of evidence, not a clean bill. axor-sentinel runs beside
-            axor-core on the node and posts here. to see what it looks like:
+            so nothing here is marked clean either. axor-sentinel runs beside the agent and
+            reports here. to see what it looks like:
           </div>
           <button onClick={() => seed.mutate()} disabled={seed.isPending}
             style={btn({ color: C.steel, borderColor: C.steel, fontSize: 12, padding: "7px 14px" })}>
@@ -206,7 +206,7 @@ export default function Sentinel() {
 
       {watched.length > 0 && (
         <div className="flex items-center gap-2 flex-wrap mb-3" style={{ fontFamily: MONO, fontSize: 11, color: C.mut }}>
-          node
+          agent
           <select value={node ?? ""} onChange={(e) => { setNode(e.target.value); setSelected(null); }}
             aria-label="sentinel node"
             style={{ background: C.bg, border: `1px solid ${C.line}`, borderRadius: 4, color: C.text, fontFamily: MONO, fontSize: 11, padding: "4px 8px" }}>
@@ -214,7 +214,7 @@ export default function Sentinel() {
           </select>
           {snap && (
             <span style={{ color: C.dim }}>
-              snapshot v{snap.version} · {new Date(snap.generated_at * 1000).toLocaleString()}
+              as of {new Date(snap.generated_at * 1000).toLocaleString()}
             </span>
           )}
         </div>
@@ -233,7 +233,7 @@ export default function Sentinel() {
                 {EDGE_STYLE[k].label}
               </span>
             ))}
-            <span>· click a resource to read why</span>
+            <span>· click a piece of data to read why</span>
           </div>
 
           {selected && (
@@ -244,7 +244,7 @@ export default function Sentinel() {
                   {snap.resource_level[selected].toLowerCase()}</span>
               </div>
               {facts.length === 0 ? (
-                <div style={{ fontFamily: MONO, fontSize: 11.5, color: C.dim }}>no predicate fired — nothing to explain.</div>
+                <div style={{ fontFamily: MONO, fontSize: 11.5, color: C.dim }}>nothing it was used for gives pause.</div>
               ) : (
                 <ul style={{ margin: 0, paddingLeft: 18, fontFamily: MONO, fontSize: 11.5, color: C.mut, lineHeight: 1.7 }}>
                   {facts.map((f, i) => <li key={i}>{f}</li>)}
@@ -255,7 +255,7 @@ export default function Sentinel() {
 
           {Object.keys(snap.container_level ?? {}).length > 0 && (
             <div style={{ marginTop: 14, fontFamily: MONO, fontSize: 11, color: C.mut, lineHeight: 1.7 }}>
-              <div style={{ fontSize: 9.5, color: C.dim, letterSpacing: "0.1em", marginBottom: 4 }}>CONTAINERS</div>
+              <div style={{ fontSize: 9.5, color: C.dim, letterSpacing: "0.1em", marginBottom: 4 }}>WHERE THE DATA LIVES</div>
               {Object.entries(snap.container_level).map(([c, lvl]) => (
                 <div key={c}>
                   <span style={{ color: LEVEL_COLOR[lvl] }}>●</span> {c} · {lvl.toLowerCase()}
@@ -268,9 +268,8 @@ export default function Sentinel() {
           )}
 
           <div style={{ marginTop: 14, fontFamily: MONO, fontSize: 10.5, color: C.dim, lineHeight: 1.6 }}>
-            the graph is rebuilt from the facts behind each verdict: an edge is drawn wherever a fact
-            names a session. sentinel reports levels and facts, not its whole graph, so a clean
-            resource stands alone. observe-only: reputation tightens caution, it never denies on its own.
+            a line is drawn wherever a reason names a session, so clean data stands alone. this only
+            watches: a flagged piece of data makes the rules more careful, it never refuses anything by itself.
           </div>
         </>
       )}

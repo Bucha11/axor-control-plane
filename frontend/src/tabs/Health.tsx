@@ -40,10 +40,16 @@ export const EXAMPLE_PROBE_NODE = "tree-scraper";
 type Phase = "idle" | "reason" | "healing" | "awaiting" ;
 
 const VERDICT_LINE: Record<ProbeHealth["overall_verdict"], string> = {
-  CONSISTENT: "Agent behavior is on baseline.",
-  DRIFT_DETECTED: "A probe family drifted from baseline.",
-  INCONCLUSIVE: "Not enough probes to answer.",
-  CONSISTENCY_ANOMALY: "Responses are suspiciously invariant.",
+  CONSISTENT: "It answers the way it used to.",
+  DRIFT_DETECTED: "It answers differently than it used to.",
+  INCONCLUSIVE: "Not enough test questions to tell.",
+  CONSISTENCY_ANOMALY: "Its answers are suspiciously all the same.",
+};
+
+const FAMILY_WORDS: Record<string, string> = {
+  data_disclosure: "giving out data",
+  scope_expansion: "going beyond the task",
+  instruction_following: "following instructions",
 };
 
 function famColor(state: ProbeFamily["state"]): string {
@@ -183,7 +189,7 @@ export default function Health() {
 
   const picker = (
     <div className="flex items-center gap-2 mb-3" style={{ fontFamily: MONO, fontSize: 11, color: C.mut }}>
-      node
+      agent
       <select value={node} onChange={(e) => pickNode(e.target.value)} aria-label="health node"
         style={{ background: C.bg, border: `1px solid ${C.line}`, borderRadius: 4, color: C.text, fontFamily: MONO, fontSize: 11, padding: "4px 8px", outline: "none" }}>
         {nodeIds.map((id) => <option key={id} value={id}>{id}</option>)}
@@ -197,13 +203,11 @@ export default function Health() {
 
   return (
     <div style={{ maxWidth: 560, margin: "0 auto" }}>
-      <Coach id="health" title="Health — is the agent still the agent you baselined?">
-        Probe families compare today's behaviour against an isolated shadow
-        baseline. <span style={{ color: C.text }}>DRIFT</span> means a family
-        diverged; self-heal cuts the context fragments the node's localizer
-        blames — with a required reason, delivered as a signed plane command. It
-        never fires automatically: the verdict recommends, you trigger. This is
-        not an Eval score and is never blended into one.
+      <Coach id="health" title="Health — does the agent still answer the way it used to?">
+        A set of test questions — about giving out data, going beyond the task, following
+        instructions — is asked again and compared with how the agent answered before. When it
+        answers differently, the check traces which piece of its context changed it, and you can
+        remove that piece. Nothing is removed without you.
       </Coach>
 
       {picker}
@@ -216,12 +220,11 @@ export default function Health() {
         <div style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 8, padding: 20 }}>
           <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 8 }}>No health check yet.</div>
           <div style={{ fontFamily: MONO, fontSize: 11, color: C.mut, lineHeight: 1.7 }}>
-            This node has not posted an axor-probe battery. That is an absence of
-            evidence, not a clean bill — the panel will not colour it green.
+            This agent has not sent a check, so nothing here is green either.
             <br /><br />
-            Batteries run node-side and are posted out-dial to{" "}
+            Checks run beside the agent (axor-probe) and are sent to{" "}
             <span style={{ color: C.text }}>POST /v1/plane/{node}/probe-report</span>.
-            The plane never reaches into your runtime to invoke your agent.
+            The plane never starts your agent itself.
           </div>
         </div>
       ) : (
@@ -230,8 +233,8 @@ export default function Health() {
             {VERDICT_LINE[latest.overall_verdict]}
           </h1>
           <div style={{ fontFamily: MONO, fontSize: 11, color: C.mut, marginBottom: 20 }}>
-            {latest.agent_id} · last check {clock(latest.created_ts)} · {latest.probes_sent} probes
-            {latest.calibration_status !== "CALIBRATED" && " · uncalibrated"}
+            {latest.agent_id} · checked {clock(latest.created_ts)} · {latest.probes_sent} test questions
+            {latest.calibration_status !== "CALIBRATED" && " · thresholds not calibrated yet"}
           </div>
 
           <div style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 8 }}>
@@ -242,14 +245,14 @@ export default function Health() {
                     ? <MinusCircle size={11} color={C.dim} />
                     : <Circle size={9} fill={famColor(f.state)} color={famColor(f.state)} />}
                   <span style={{ fontFamily: MONO, fontSize: 13, color: f.state === "escaped" ? C.text : C.mut, flex: 1 }}>
-                    {f.family}
+                    {FAMILY_WORDS[f.family] ?? f.family.replace(/_/g, " ")}
                   </span>
                   <span style={{ fontFamily: MONO, fontSize: 10.5, color: famColor(f.state), fontWeight: f.state === "escaped" ? 700 : 400 }}>
                     {f.state === "unprobed"
-                      ? "not probed"
+                      ? "not checked"
                       : f.state === "escaped"
-                        ? (phase === "healing" ? "healing…" : `DRIFT · ${f.escapes}/${f.probes} escaped`)
-                        : `OK · 0/${f.probes}`}
+                        ? (phase === "healing" ? "removing…" : `${f.escapes} of ${f.probes} answered differently`)
+                        : `same as before · ${f.probes} questions`}
                   </span>
                 </div>
 
@@ -261,18 +264,18 @@ export default function Health() {
                 {f.family === firstEscaped && phase === "idle" && (
                   <div className="px-4 pb-3 flex items-center gap-3" style={{ paddingLeft: 40 }}>
                     <span style={{ fontFamily: MONO, fontSize: 11, color: C.mut }}>
-                      {f.escapes} of {f.probes} probes escaped the baseline regime.
+                      {f.escapes} of {f.probes} test questions got a different answer than before.
                       {canCut
-                        ? ` Self-heal excises ${(proposal!.auto_excise.length || escalated.length)} context fragment${(proposal!.auto_excise.length || escalated.length) === 1 ? "" : "s"} the localizer blames.`
+                        ? ` The check traced it to ${(proposal!.auto_excise.length || escalated.length)} piece${(proposal!.auto_excise.length || escalated.length) === 1 ? "" : "s"} of its context — removing ${(proposal!.auto_excise.length || escalated.length) === 1 ? "it" : "them"} should bring it back.`
                         : proposal === null
-                          ? " This battery did not localize the drift, so there is nothing to excise yet."
-                          : " The localizer found the tainted fragments do not cause this drift — an excision would be surgery with no verdict behind it."}
+                          ? " The check did not trace it to a piece of its context, so there is nothing to remove yet."
+                          : " The pieces of context that came from outside are not what changed it — removing them would not help."}
                     </span>
                     {canCut && (
-                      <Tooltip content={`Remove ${(proposal!.auto_excise.length ? proposal!.auto_excise : escalated).join(", ")} from the agent's context. Delivered as a signed pending_excision command; the adapter applies it at its next intent boundary and reports back. The verifying re-probe arrives as a new check.`}>
+                      <Tooltip content={`Remove ${(proposal!.auto_excise.length ? proposal!.auto_excise : escalated).join(", ")} from the agent's context at its next turn; it is checked again afterwards.`}>
                         <button onClick={() => setPhase("reason")}
                           style={{ display: "flex", alignItems: "center", gap: 6, background: "none", border: `1px solid ${C.steel}`, borderRadius: 5, color: C.steel, fontFamily: MONO, fontSize: 11, padding: "5px 12px", cursor: "pointer", whiteSpace: "nowrap" }}>
-                          <HeartPulse size={12} /> Self-heal
+                          <HeartPulse size={12} /> Remove the cause
                         </button>
                       </Tooltip>
                     )}
@@ -282,11 +285,11 @@ export default function Health() {
                 {f.family === firstEscaped && phase === "reason" && (
                   <div className="px-4 pb-3 flex flex-col gap-2" style={{ paddingLeft: 40 }}>
                     <span style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim }}>
-                      signed plane command · operator op_ui · cuts{" "}
+                      removes{" "}
                       <span style={{ color: C.text }}>
                         {(proposal?.auto_excise.length ? proposal.auto_excise : escalated).join(", ")}
                       </span>{" "}
-                      · a running experiment would be marked `intervened`
+                      from its context at the next turn · a chaos test running now would be marked as interfered with
                     </span>
                     {escalated.length > 0 && (
                       <label className="flex items-start gap-2" style={{ fontFamily: MONO, fontSize: 10.5, color: C.amber, cursor: "pointer" }}>
@@ -294,15 +297,15 @@ export default function Health() {
                           onChange={(e) => setConfirmCollateral(e.target.checked)}
                           style={{ marginTop: 2 }} />
                         <span>
-                          {escalated.join(", ")} also carr{escalated.length === 1 ? "ies" : "y"} legitimate
-                          task content — cutting {escalated.length === 1 ? "it" : "them"} loses work the
-                          agent was asked to do. Confirm to include {escalated.length === 1 ? "it" : "them"}.
+                          {escalated.join(", ")} also carr{escalated.length === 1 ? "ies" : "y"} part of the
+                          task — removing {escalated.length === 1 ? "it" : "them"} loses work the agent was asked
+                          to do. Tick to remove {escalated.length === 1 ? "it" : "them"} anyway.
                         </span>
                       </label>
                     )}
                     <div className="flex gap-2">
                       <input autoFocus value={reason} onChange={(e) => setReason(e.target.value)}
-                        placeholder="reason (required) — e.g. drift after prompt update, re-anchoring"
+                        placeholder="why (required) — e.g. changed after the prompt update"
                         style={{ flex: 1, background: C.bg, border: `1px solid ${C.line}`, borderRadius: 4, color: C.text, fontFamily: MONO, fontSize: 11, padding: "6px 8px", outline: "none" }} />
                       {(() => {
                         const armed = Boolean(reason.trim()) && canCut
@@ -310,7 +313,7 @@ export default function Health() {
                         return (
                           <button onClick={trigger} disabled={!armed || heal.isPending}
                             style={{ display: "flex", alignItems: "center", gap: 6, background: "none", border: `1px solid ${armed ? C.steel : C.line}`, borderRadius: 4, color: armed ? C.steel : C.dim, fontFamily: MONO, fontSize: 11, padding: "5px 12px", cursor: armed ? "pointer" : "default" }}>
-                            <Check size={12} /> excise & re-probe
+                            <Check size={12} /> remove and check again
                           </button>
                         );
                       })()}
@@ -336,14 +339,12 @@ export default function Health() {
                           color: lastHeal.resolved === true ? C.green
                                : lastHeal.resolved === false ? C.amber : C.steel }}>
               {lastHeal.reprobe_verdict === null ? (
-                <>excised {lastHeal.target_refs.join(", ")} → awaiting the verifying
-                  re-probe. A heal without one is not resolved, so nothing turns green
-                  here until the node posts the next check.
+                <>removed {lastHeal.target_refs.join(", ")} → waiting for the agent's next check.
+                  Nothing turns green here until it comes back.
                   {node !== EXAMPLE_PROBE_NODE && (
                     <span style={{ display: "block", marginTop: 6, color: C.dim }}>
-                      the node cuts it from its context at its next turn — if it runs
-                      axor-core ≥ 0.12.1 with PlaneAdmission passed as directives.
-                      an older adapter receives the command and cannot apply it.
+                      the agent drops it from its context at its next turn — if it runs
+                      axor-core 0.12.1 or later; an older one gets the command and cannot apply it.
                     </span>
                   )}
                   {node === EXAMPLE_PROBE_NODE && (
@@ -355,7 +356,7 @@ export default function Health() {
                         disabled={reprobe.isPending}
                         style={btn({ color: C.steel, borderColor: C.steel, fontSize: 11, padding: "5px 12px" })}
                       >
-                        {reprobe.isPending ? "re-probing…" : "run the example node's re-probe"}
+                        {reprobe.isPending ? "checking…" : "check the example agent again"}
                       </button>
                       {reprobe.isError && (
                         <span style={{ color: C.red, marginLeft: 8 }}>{(reprobe.error as Error).message}</span>
@@ -363,19 +364,17 @@ export default function Health() {
                     </span>
                   )}</>
               ) : lastHeal.resolved ? (
-                <>healed by {lastHeal.operator} → re-probe: OK · cut{" "}
-                  {lastHeal.target_refs.join(", ")} ({lastHeal.families.join(", ") || "no family named"})</>
+                <>removed by {lastHeal.operator} → checked again: answers as before · removed{" "}
+                  {lastHeal.target_refs.join(", ")}</>
               ) : (
-                <>healed by {lastHeal.operator} → re-probe: still drifting ·{" "}
-                  {lastHeal.target_refs.join(", ")} was cut and{" "}
-                  {lastHeal.families.join(", ") || "the family"} still escapes. The
-                  excision was not the cause.</>
+                <>removed by {lastHeal.operator} → checked again: still answers differently ·{" "}
+                  {lastHeal.target_refs.join(", ")} was removed and it did not help — that was not the cause.</>
               )}
             </div>
           )}
           {phase === "awaiting" && !lastHeal && (
             <div style={{ fontFamily: MONO, fontSize: 11, color: C.steel, marginTop: 10 }}>
-              excision commanded → awaiting the verifying re-probe.
+              removal sent → waiting for the agent's next check.
             </div>
           )}
 
@@ -390,7 +389,8 @@ export default function Health() {
               agents by: BEHAVIORAL_DRIFT is Experimental and excluded from the
               integrity score whatever its confidence (ui-spec 8.2). */}
           {graded && (
-            <div style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim, marginTop: 10, lineHeight: 1.7 }}>
+            <details style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim, marginTop: 10, lineHeight: 1.7 }}>
+              <summary style={{ cursor: "pointer" }}>how this was graded</summary>
               graded as <span style={{ color: C.text }}>{graded.deviation}</span> ·{" "}
               <Tooltip content={graded.verdict_source === "deterministic"
                 ? "Escape-backed: a canary or structural readout escaped the clean baseline. A fact about the probe output, not a judgement about it."
@@ -402,10 +402,10 @@ export default function Health() {
               </Tooltip>{" "}
               · confidence {graded.confidence.toFixed(2)}
               <br />
-              Evidence, not a score — this is never blended into Scenario Delta
-              or the integrity score. Drift asks whether your agent changed; Eval
-              asks whether it lies under fault.
-            </div>
+              Evidence, not a score — never blended into Scenario Delta or the integrity
+              score. This asks whether your agent changed; a chaos test asks whether it lies
+              when a tool breaks.
+            </details>
           )}
 
           {/* The drift series — only once there is something to compare against. */}
@@ -423,7 +423,7 @@ export default function Health() {
 
           <div className="flex items-center justify-between mt-3">
             <span style={{ fontFamily: MONO, fontSize: 11, color: drifting ? C.amber : C.dim }}>
-              verdict: {latest.overall_verdict} · {latest.escape_count} escaped of {latest.probes_sent} probes
+              {latest.escape_count} of {latest.probes_sent} test questions answered differently
             </span>
             <Tooltip content="Re-read the node's latest posted battery, and how the last excision ended. Batteries are run node-side — the plane does not dial into your runtime to start one.">
               {/* Both queries. The heal->verify line is fed by /repair, not by
@@ -440,10 +440,8 @@ export default function Health() {
       )}
 
       <div style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim, marginTop: 14, lineHeight: 1.7 }}>
-        Self-heal never fires automatically on a drift verdict — a behavior-correction loop with no human
-        in it is exactly what this product exists to prevent. The verdict recommends; you trigger. What it
-        cuts is the localizer's answer, not this panel's: the fragments come from the node, and the ones it
-        marked as carrying real work are not removed unless you confirm them by name.
+        Nothing is removed on its own: the check suggests, you decide. What is removed is what the check
+        traced the change to; a piece that also carries part of the task stays unless you tick it.
       </div>
     </div>
   );

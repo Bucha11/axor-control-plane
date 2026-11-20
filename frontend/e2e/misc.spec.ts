@@ -48,7 +48,7 @@ test.describe("secondary surfaces", () => {
     await setConnection(page, { mode: "adapter" });
     await goHash(page, "health");
     await expect(
-      page.getByText(/Agent behavior is on baseline\.|A probe family drifted from baseline\./),
+      page.getByText(/It answers the way it used to\.|It answers differently than it used to\./),
     ).toBeVisible();
   });
 
@@ -85,20 +85,20 @@ test.describe("secondary surfaces", () => {
     // listed agent is drifting, and the suite shares one backend
     await goHash(page, "health?node=banking-assistant");
 
-    await expect(page.getByRole("heading", { name: /A probe family drifted/ })).toBeVisible();
+    await expect(page.getByRole("heading", { name: /It answers differently than it used to/ })).toBeVisible();
     // The battery graded in Eval's vocabulary: escape-backed, so deterministic —
     // and labelled as evidence, never as a number to rank agents by.
     await expect(page.getByText("graded as behavioral_drift", { exact: false })).toBeVisible();
     await expect(page.getByText("deterministic · confidence 1.00", { exact: false })).toBeVisible();
     await expect(page.getByText("never blended into Scenario Delta", { exact: false })).toBeVisible();
-    await expect(page.getByText("Self-heal excises 1 context fragment", { exact: false })).toBeVisible();
-    await page.getByRole("button", { name: /Self-heal/ }).click();
-    await page.getByPlaceholder("reason (required)", { exact: false })
+    await expect(page.getByText("The check traced it to 1 piece of its context", { exact: false })).toBeVisible();
+    await page.getByRole("button", { name: /Remove the cause/ }).click();
+    await page.getByPlaceholder("why (required)", { exact: false })
       .fill("drift after the retrieval change");
-    await page.getByRole("button", { name: /excise & re-probe/ }).click();
+    await page.getByRole("button", { name: /remove and check again/ }).click();
 
     // the panel is honest about what is outstanding
-    await expect(page.getByText("awaiting the verifying re-probe", { exact: false }))
+    await expect(page.getByText("waiting for the agent's next check", { exact: false }))
       .toBeVisible();
 
     // and the node was actually told to cut it
@@ -125,7 +125,7 @@ test.describe("secondary surfaces", () => {
       },
     });
     await page.getByRole("button", { name: /Refresh/ }).click();
-    await expect(page.getByText("re-probe: OK", { exact: false })).toBeVisible();
+    await expect(page.getByText("checked again: answers as before", { exact: false })).toBeVisible();
   });
 });
 

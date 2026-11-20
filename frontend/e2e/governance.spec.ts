@@ -34,14 +34,14 @@ test.describe.serial("governance on the example fleet", () => {
   test("sentinel draws resources joined by the sessions that touched them", async ({ page }) => {
     await setConnection(page, { mode: "demo" });
     await goHash(page, "sentinel");
-    await expect(page.getByRole("heading", { name: "What sentinel sees across sessions" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Data an agent touched, across sessions" })).toBeVisible();
     await expect(page.getByTestId("sentinel-graph")).toBeVisible();
     // the flagged resource is selected first, and its verdict reads as words
     const why = page.getByTestId("sentinel-why");
     await expect(why).toContainText("crm:customers");
     await expect(why).toContainText("flagged");
-    await expect(why).toContainText(/staged in 4 tainted sessions/);
-    await expect(why).toContainText(/export of it was denied at the sink in s-0419/);
+    await expect(why).toContainText(/copied a little at a time in 4 sessions that had read outside text/);
+    await expect(why).toContainText(/sending it out was refused in s-0419/);
     // a watched one, by click
     await page.getByTestId("sentinel-resource-s3:weekly-exports").click();
     await expect(why).toContainText(/not enough to flag, enough to watch/);
@@ -51,12 +51,12 @@ test.describe.serial("governance on the example fleet", () => {
     await setConnection(page, { mode: "demo" });
     await goHash(page, "health");
     await page.getByLabel("health node").selectOption("tree-scraper");
-    await expect(page.getByText("data_disclosure").first()).toBeVisible();
-    await page.getByRole("button", { name: /Self-heal/ }).click();
-    await page.getByPlaceholder(/reason \(required\)/).fill("web result #3 carries an injected instruction");
-    await page.getByRole("button", { name: /excise & re-probe/ }).click();
-    await expect(page.getByText(/awaiting the verifying/).first()).toBeVisible();
-    await page.getByRole("button", { name: "run the example node's re-probe" }).click();
-    await expect(page.getByText(/re-probe: OK/)).toBeVisible();
+    await expect(page.getByText("giving out data").first()).toBeVisible();
+    await page.getByRole("button", { name: /Remove the cause/ }).click();
+    await page.getByPlaceholder(/why \(required\)/).fill("web result #3 carries an injected instruction");
+    await page.getByRole("button", { name: /remove and check again/ }).click();
+    await expect(page.getByText(/waiting for the agent's next check/).first()).toBeVisible();
+    await page.getByRole("button", { name: "check the example agent again" }).click();
+    await expect(page.getByText(/checked again: answers as before/)).toBeVisible();
   });
 });

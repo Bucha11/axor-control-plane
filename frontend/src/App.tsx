@@ -256,7 +256,7 @@ export default function App() {
 
 const GOVERN_VIEWS: [string, string][] = [
   ["govern", "agents"], ["trees", "agent trees"],
-  ["sentinel", "reputation across sessions"], ["health", "context health & repair"],
+  ["sentinel", "data across sessions"], ["health", "context health & repair"],
 ];
 
 const WIDE = "(min-width: 1000px)";
@@ -318,7 +318,8 @@ function Sidebar({ active, view }: { active: string; view: string }) {
             </button>
             {l.key === "govern" && (
               <div className="flex flex-col" style={{ gap: 1, margin: "2px 0 6px" }}>
-                {GOVERN_VIEWS.slice(1).map(([route, label]) => (
+                {GOVERN_VIEWS.slice(1).filter(([route]) => menu.all || menu.journey !== "coding"
+                  || route === "trees").map(([route, label]) => (
                   <button key={route} onClick={() => navigate(route)}
                     aria-current={view === route ? "page" : undefined}
                     data-testid={`side-${route}`} style={item(view === route, true)}>
