@@ -11,16 +11,18 @@ test.describe("tour", () => {
     const next = dialog.getByRole("button", { name: "next →" });
 
     await expect(dialog.getByText("Your agents, live")).toBeVisible({ timeout: 15_000 });
-    await expect(dialog.getByText("1 / 7")).toBeVisible();
+    await expect(dialog.getByText("1 / 9")).toBeVisible();
     await expect(page).toHaveURL(/#\/govern$/);
     // (the fleet's story shows when only the example is on the plane; this
     // suite's plane is shared, so the card may center instead)
     for (const [title, url] of [
       ["Pause, stop, cap", /#\/govern$/],
       ["Policy: what each tool may do", /#\/policy$/],
+      ["Chaos tests", /#\/chaos$/],
       ["Incidents", /#\/evidence$/],
       ["Replay: how it happened", /#\/explain/],
       ["Safe to ship?", /#\/prevent$/],
+      ["How this plane is protected", /#\/settings\?tab=security$/],
       ["Now yours", /#\/home\?for=production$/],
     ] as const) {
       await next.click();
@@ -35,24 +37,36 @@ test.describe("tour", () => {
     await expect(page.getByRole("dialog", { name: "guided tour" })).toHaveCount(0);
   });
 
-  test("coding: the example sessions and the tree — then connect", async ({ page }) => {
+  test("coding: sessions, pairing, team memory, context health, shared skills, incidents, the team — then connect", async ({ page }) => {
     await goHash(page, "home");
     await page.getByRole("button", { name: "Take the tour" }).click();
     const dialog = page.getByRole("dialog", { name: "guided tour" });
     const next = dialog.getByRole("button", { name: "next →" });
     await expect(dialog.getByText("Your coding agents, on one plane")).toBeVisible({ timeout: 15_000 });
-    await expect(dialog.getByText("1 / 6")).toBeVisible();
-    await next.click();
-    await next.click();
-    await expect(dialog.getByText("A team on one task")).toBeVisible();
-    await expect(page).toHaveURL(/#\/trees\/tree-example-coding$/);
-    await next.click();
-    await next.click();
-    await expect(dialog.getByText("Before you install a skill")).toBeVisible();
-    await expect(page).toHaveURL(/#\/skills$/);
-    await next.click();
-    await expect(dialog.getByText("Now yours")).toBeVisible();
-    await dialog.getByRole("button", { name: "done" }).click();
+    await expect(dialog.getByText("1 / 9")).toBeVisible();
+    for (const [title, url] of [
+      ["Pair on a session", /#\/pair\/[A-Za-z0-9_-]+$/],
+      ["What your agents learned, for the whole team", /#\/memory$/],
+      ["Is your setup making agents worse?", /#\/health$/],
+      ["Skills: which help, shared in one click", /#\/skill-evals$/],
+      ["Incidents", /#\/evidence$/],
+      ["A team of agents on one task", /#\/trees\/tree-example-coding$/],
+      ["Your team", /#\/settings\?tab=connect$/],
+      ["Now yours", /#\/home\?for=coding$/],
+    ] as const) {
+      await next.click();
+      await expect(dialog.getByText(title, { exact: true })).toBeVisible();
+      await expect(page).toHaveURL(url);
+    }
+    // the stops are not empty pages: the example data was seeded for them
+    await dialog.getByRole("button", { name: "back" }).click();
+    await dialog.getByRole("button", { name: "back" }).click();
+    await dialog.getByRole("button", { name: "back" }).click();
+    await dialog.getByRole("button", { name: "back" }).click();
+    await dialog.getByRole("button", { name: "back" }).click();
+    await dialog.getByRole("button", { name: "back" }).click();
+    await expect(page.getByTestId("memory-preview")).toContainText("uv run pytest -q");
+    await dialog.getByRole("button", { name: "skip tour" }).click();
     await expect(page.getByRole("dialog", { name: "guided tour" })).toHaveCount(0);
   });
 

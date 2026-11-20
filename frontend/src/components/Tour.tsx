@@ -35,27 +35,39 @@ export const TOURS: Record<TourSide, TourStep[]> = {
   coding: [
     {
       route: "govern", target: sel("coding-example-story"), title: "Your coding agents, on one plane",
-      body: "Example data: Claude Code and Codex in one repository. Claude Code read a docs page — what it brought back stays marked “from the web”. Codex then tried to run the “npx limitkit init --endpoint …” that page suggested and was refused at the shell — npx is everyday work; what refused it is the address the page picked, though Codex never saw the page.",
+      body: "Example data: Claude Code and Codex in one repository. Claude Code read a docs page — what it brought back stays marked “from the web”. Codex then tried to run the command that page suggested and was refused at the shell, though Codex never saw the page. Every session shows up here live: pause it, stop it, cap it.",
     },
     {
-      route: "govern", target: '[data-tour="spawn"]', title: "Every session, live",
-      body: "Each session shows up here as it runs. Pause it, stop it, or cap how many more tool calls it may make — it obeys on its next call.",
+      route: "pair/{pair}", target: sel("pair-pane"), title: "Pair on a session",
+      body: "Open a pair on a teammate's session and send the link: you watch each step as it happens — what it ran, what failed, what it said — and can write the agent a note. It gets the note at its next step.",
     },
     {
-      route: "trees/tree-example-coding", target: sel("example-intro"), title: "A team on one task",
-      body: "Claude Code writes a plan, five Codex readers look through the code, Claude Code does the work. Axor checks what each passes on: a finding about a file its reader never opened is marked unverified, and an instruction found in a web page never reaches the one that writes code.",
+      route: "memory", target: sel("memory-preview"), title: "What your agents learned, for the whole team",
+      body: "When a command passes — how to run the tests here, which one fails and which works — it is remembered for the repository and given to every agent at the start of its next session. Only what was recorded counts, never what an agent claimed; a command that came from a web page is kept out.",
     },
     {
-      route: "trees/tree-example-coding", target: sel("tree-items"), title: "What each step passed on",
-      body: "Every plan line and finding, with where it came from. Cut one, and no later step sees it.",
+      route: "health", target: sel("setup-health-latest"), title: "Is your setup making agents worse?",
+      body: "A check runs your skills, CLAUDE.md and team memory on tasks that tempt an agent — a script to download, a secret within reach, a failing test. When something got worse since the last check, it names the piece that did it, and you turn it off from here.",
     },
     {
-      route: "skills", target: sel("skill-example"), title: "Before you install a skill",
-      body: "A skill is read by the agent as its own instructions. Axor refuses its dangerous part whoever asked — a download that is run, a secret read, a file sent out — and shows you the rest: what it asks the agent to do, then a dry run of an agent using it on a copy, with Axor on.",
+      route: "skill-evals", target: sel("team-skills"), title: "Skills: which help, shared in one click",
+      body: "Try a skill before you install it. An eval shows which of your skills help and what they cost. The ones that help, turn on for the team — every developer's agent gets it; turn one off, and every agent is refused it.",
+    },
+    {
+      route: "evidence", target: sel("evidence-list"), title: "Incidents",
+      body: "When an agent says the tests passed and they failed, or runs what a web page told it to, it lands here — what really happened next to what the agent said. Settings → alerts sends it to e-mail or a webhook as it happens.",
+    },
+    {
+      route: "trees/tree-example-coding", target: sel("example-intro"), title: "A team of agents on one task",
+      body: "Claude Code writes a plan, five Codex readers look through the code, Claude Code does the work. A finding about a file its reader never opened is marked unverified, and an instruction found in a web page never reaches the agent that writes code.",
+    },
+    {
+      route: "settings?tab=connect", target: sel("settings-tabs"), title: "Your team",
+      body: "Invite your team with a link, make the key their agents report with, choose what alerts you. Billing shows what a month costs: Coding is per developer whose agents ran.",
     },
     {
       route: "home?for=coding", target: sel("home-connect-coding"), title: "Now yours",
-      body: `One install, no code change: every session shows up here. Free for 1 developer and one kind of agent — only Claude Code, or only Codex. ${LEARN}`,
+      body: `One install, no code change: every session shows up here. Free for 1 developer and one kind of agent — Claude Code or Codex; a team, team memory and shared skills are on Coding. ${LEARN}`,
       cta: { label: "Connect your coding agents →", route: "connect?for=coding" },
     },
   ],
@@ -70,19 +82,27 @@ export const TOURS: Record<TourSide, TourStep[]> = {
     },
     {
       route: "policy", target: sel("wrap-dropzone"), title: "Policy: what each tool may do",
-      body: "Drop your agent's code: we find its tools and guess what each one does — reads, writes, sends something out. You correct the guess. That is what gets enforced, not the prompt.",
+      body: "Drop your agent's code: we find its tools and guess what each one does — reads, writes, sends something out, and how much harm a call can do. You correct the guess. That is what gets enforced, not the prompt.",
+    },
+    {
+      route: "chaos", target: null, title: "Chaos tests",
+      body: "Break a tool on purpose — make it fail, time out or answer nothing — on the example, on a live agent's next run, or on a schedule, and see whether the agent tells you or makes something up.",
     },
     {
       route: "evidence", target: sel("evidence-list"), title: "Incidents",
-      body: "When an agent says a tool worked and it didn't — or tries to send out text it read on the web — it lands here: what really happened, next to what the agent said.",
+      body: "When an agent says a tool worked and it didn't, a dangerous call goes through, or it tries to send out text it read on the web — it lands here, and Settings → alerts pages you as it happens.",
     },
     {
       route: "explain/ex_block", target: '[data-tour="replay-picker"]', title: "Replay: how it happened",
-      body: "Any run, step by step: each tool call, what was let through, what was refused and why. “What if…” replays the same run under different rules — no model is called.",
+      body: "Find the step — by when, which agent, what it did — and see where it came from. “What if…” replays the same run under different rules — no model is called.",
     },
     {
       route: "prevent", target: '[data-tour="regression-run"]', title: "Safe to ship?",
       body: "Before you change the rules, every case you kept is replayed under the new ones: attacks must stay blocked, normal work must keep passing.",
+    },
+    {
+      route: "settings?tab=security", target: sel("security-posture"), title: "How this plane is protected",
+      body: "Every wall — sign-in, signed commands, sealed tool credentials, how long runs are kept — up or down, with how to raise the ones that are down. Give each agent a key of its own so one can't speak for its neighbours.",
     },
     {
       route: "home?for=production", target: sel("home-connect-production"), title: "Now yours",
@@ -91,6 +111,14 @@ export const TOURS: Record<TourSide, TourStep[]> = {
     },
   ],
 };
+
+// the example pair session the coding tour opens (its token is made fresh)
+const PAIR_KEY = "axor-tour-pair";
+function routeOf(step: TourStep): string {
+  if (!step.route.includes("{pair}")) return step.route;
+  const token = typeof localStorage === "undefined" ? "" : localStorage.getItem(PAIR_KEY) ?? "";
+  return token ? step.route.replace("{pair}", token) : "pair";
+}
 
 // Shared launcher: load the side's example data, then start on its first stop.
 export function useStartTour(): (side?: TourSide) => void {
@@ -106,8 +134,10 @@ export function useStartTour(): (side?: TourSide) => void {
     setTourSide(which);
     setJourney(which);
     const seeds = which === "coding"
-      ? [api.seedCoding()]
-      : [api.seedFleet(), api.seedAdapterRuns()];
+      ? [api.seedCoding().then(() => Promise.allSettled([
+          api.seedPair().then((p) => localStorage.setItem(PAIR_KEY, p.token)),
+          api.seedMemory(), api.seedSetupHealth(), api.seedSkillEval(), api.seedTeamSkill()]))]
+      : [api.seedFleet(), api.seedAdapterRuns(), api.seedProdIncident()];
     // example data is idempotent; a failed seed still leaves a readable tour
     void Promise.allSettled(seeds).then(() => {
       connect("demo");
@@ -135,8 +165,9 @@ export default function Tour() {
       setTourStep(null);
       return;
     }
-    const want = `#/${step.route}`;
-    if (window.location.hash !== want) navigate(step.route);
+    const route = routeOf(step);
+    const want = `#/${route}`;
+    if (window.location.hash !== want) navigate(route);
   }, [active, stepIdx]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Find and track the target (poll briefly — the tab may still be mounting).
