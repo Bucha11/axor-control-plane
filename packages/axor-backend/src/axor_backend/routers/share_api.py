@@ -76,7 +76,8 @@ async def resolve_share(token: str, store: StoreDep) -> HTMLResponse:
     run = await _case_run(store, link["run_id"], link["case_index"])
     return HTMLResponse(evidence_receipt_html(
         link["run_id"], run["evidence"][link["case_index"]],
-        run.get("scenario", ""),
+        run.get("scenario", ""), node_id=run.get("node_id", ""),
+        ts=run.get("created_ts", ""),
     ))
 
 
@@ -96,4 +97,6 @@ async def export_case(
                     f'attachment; filename="evidence-{run_id}-{case_index}.pdf"'
             },
         )
-    return HTMLResponse(evidence_receipt_html(run_id, case, scenario))
+    return HTMLResponse(evidence_receipt_html(run_id, case, scenario,
+                                              node_id=run.get("node_id", ""),
+                                              ts=run.get("created_ts", "")))

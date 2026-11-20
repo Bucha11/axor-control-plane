@@ -78,38 +78,102 @@ def _scrub(value: Any, path: str = "") -> tuple[Any, list[str]]:  # noqa: ANN401
     return value, removed
 
 
+# What a case is, as one sentence a reader outside the team understands.
+HEADLINE: dict[str, str] = {
+    "claimed_checks_passed": "The agent said the checks passed. They failed.",
+    "fabricated_tool_result": "The agent said a tool worked. It had failed.",
+    "tainted_value_exfiltrated": "The agent tried to send out text that came from outside.",
+    "corrupted_retrieval_used": "The agent relied on a poisoned search result.",
+    "direct_policy_violation": "The agent followed an instruction hidden in outside text.",
+    "undisclosed_tool_substitution": "A tool was swapped, and the agent didn't say so.",
+    "budget_misreport": "The agent misreported its budget.",
+    "fabrication_contained": "A made-up result was stopped before it spread.",
+    "behavioral_drift": "The agent's behaviour drifted from what it was checked to do.",
+}
+TOOL_DID: dict[str, str] = {
+    "silent_fail": "returned an error",
+    "corrupt_retrieval": "returned corrupted results",
+    "instruction_injection": "returned text with a hidden instruction in it",
+    "tool_substitution": "was swapped for a different tool",
+    "timeout": "timed out",
+    "empty_result": "returned nothing",
+}
+_KEY_WORDS: dict[str, str] = {
+    "driving_value": "what it carried", "provenance": "where that came from",
+    "actual_result": "what the tool did", "injected": "broken on purpose",
+    "tool_name": "tool",
+}
+_EXAMPLE_SCENARIOS = frozenset({"adapter-demo", "multi-agent-demo", "coding-demo", "skill-demo",
+                                "ops-demo"})
+
+
+def headline(deviation: str) -> str:
+    return HEADLINE.get(deviation) or (deviation.replace("_", " ").capitalize() + "."
+                                       if deviation else "Something did not add up.")
+
+
+def how_we_know(source: str, confidence: object) -> str:
+    if source == "deterministic":
+        return "certain — read from what was recorded, not a guess"
+    try:
+        pct = f" ({round(float(confidence) * 100)}% sure)"  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        pct = ""
+    return f"likely — the agent's words read against what was recorded{pct}"
+
+
+def _observed_rows(value: Any) -> list[tuple[str, str]]:  # noqa: ANN401
+    """What happened, as (label, text) rows — a check as one sentence."""
+    if isinstance(value, dict):
+        if isinstance(value.get("check"), str):
+            verdict = "passed" if value.get("passed") else "failed"
+            text = f"{verdict}" + (f" — {value['summary']}" if value.get("summary") else "")
+            return [(str(value["check"]), text),
+                    *([("command", str(value["command"]))] if value.get("command") else [])]
+        return [(_KEY_WORDS.get(str(k), str(k).replace("_", " ")),
+                 v if isinstance(v, str) else _render(v)) for k, v in value.items()]
+    return [("", _render(value))]
+
+
 def evidence_receipt_html(
-    run_id: str, case: dict[str, Any], scenario: str = ""
+    run_id: str, case: dict[str, Any], scenario: str = "", *,
+    node_id: str = "", ts: str = "",
 ) -> str:
-    """A self-contained HTML receipt — the caught discrepancy, fully legible,
-    no external assets, observations only."""
+    """A self-contained HTML receipt — the caught discrepancy, legible to
+    someone outside the team, on a phone too; no external assets,
+    observations only."""
     c, removed = _scrub(case)
-    deviation = str(c.get("deviation") or "no deviation")
-    verdict_source = str(c.get("verdict_source", ""))
-    confidence = c.get("confidence", "")
-    observed = html.escape(_render(c.get("observed_reality")))
-    claim = html.escape(_render(c.get("agent_claim")))
-    faults = c.get("fault_attribution", [])
-    fault_rows = "".join(
-        f"<li>{html.escape(str(f.get('fault_mode')))} on "
-        f"{html.escape(str(f.get('tool_name')))} — {html.escape(str(f.get('influence')))}</li>"
-        for f in faults
-    )
+    deviation = str(c.get("deviation") or "")
+    title = headline(deviation)
+    rows = "".join(
+        f'<div class="kv"><span class="k">{html.escape(k)}</span>'
+        f'<span class="v">{html.escape(v)}</span></div>' if k else
+        f'<div class="v">{html.escape(v)}</div>'
+        for k, v in _observed_rows(c.get("observed_reality")))
+    claim = c.get("agent_claim")
+    claim_text = claim if isinstance(claim, str) else _render(claim)
+    faults = c.get("fault_attribution") or []
+    def did(mode: object) -> str:
+        return TOOL_DID.get(str(mode), str(mode).replace("_", " "))
+
+    why = "".join(
+        f"<li><b>{html.escape(str(f.get('tool_name')))}</b> {html.escape(did(f.get('fault_mode')))}"
+        f"{' — it shaped what the agent did' if f.get('influence') == 'strong' else ''}</li>"
+        for f in faults if isinstance(f, dict))
+    why_block = f'<div class="label">WHY</div><ul>{why}</ul>' if why else ""
     withheld = (
-        "<p class=\"mono dim\">withheld by the export content rule: "
-        + html.escape(", ".join(removed))
-        + "</p>"
+        '<p class="small">left out of this link (it could carry contents): '
+        + html.escape(", ".join(removed)) + "</p>"
     ) if removed else ""
+    when = html.escape(ts[:16].replace("T", " ")) if ts else ""
+    meta = " · ".join(x for x in (html.escape(node_id), when) if x)
+    example = ('<span class="tag">example data</span>'
+               if scenario in _EXAMPLE_SCENARIOS else "")
     return _TEMPLATE.format(
-        run_id=html.escape(run_id),
-        scenario=html.escape(scenario),
-        deviation=html.escape(deviation.replace("_", " ").upper()),
-        verdict_source=html.escape(verdict_source),
-        confidence=html.escape(str(confidence)),
-        observed=observed,
-        claim=claim,
-        fault_rows=fault_rows or "<li>—</li>",
-        withheld=withheld,
+        title=html.escape(title), meta=meta, example=example, rows=rows,
+        claim=html.escape(claim_text), how=html.escape(
+            how_we_know(str(c.get("verdict_source", "")), c.get("confidence"))),
+        why=why_block, withheld=withheld, ref=html.escape(run_id),
     )
 
 
@@ -168,37 +232,38 @@ def _receipt_lines(run_id: str, case: dict[str, Any], scenario: str) -> list[str
     c, removed = _scrub(case)
     deviation = str(c.get("deviation") or "no deviation").replace("_", " ").upper()
     lines = [
-        "AXOR EVIDENCECASE",
-        f"{run_id}  ·  {scenario}",
+        "AXOR — CAUGHT",
+        headline(str(c.get("deviation") or "")),
+        f"ref {run_id}  ·  {scenario}",
         "",
         f"VERDICT: {deviation}",
-        f"source {c.get('verdict_source', '')}  ·  confidence {c.get('confidence', '')}",
+        "How we know: " + how_we_know(str(c.get("verdict_source", "")), c.get("confidence")),
         "",
-        "WHAT HAPPENED (observed reality)",
+        "WHAT ACTUALLY HAPPENED",
     ]
     for raw in _render(c.get("observed_reality")).splitlines() or [""]:
         lines += textwrap.wrap(raw, 92) or [""]
-    lines += ["", "WHAT THE AGENT SAID (claim)"]
+    lines += ["", "WHAT THE AGENT SAID"]
     for raw in _render(c.get("agent_claim")).splitlines() or [""]:
         lines += textwrap.wrap(raw, 92) or [""]
-    lines += ["", "FAULT ATTRIBUTION"]
+    lines += ["", "WHY"]
     faults = c.get("fault_attribution", [])
     if faults:
         for f in faults:
+            mode = str(f.get("fault_mode"))
             lines += textwrap.wrap(
-                f"- {f.get('fault_mode')} on {f.get('tool_name')} — {f.get('influence')}",
-                92,
-            )
+                f"- {f.get('tool_name')} {TOOL_DID.get(mode, mode.replace('_', ' '))}"
+                f" ({f.get('influence')} influence)", 92)
     else:
         lines.append("- —")
     lines += [
         "",
-        "observations only — no raw request/response bodies are exported (spec 8.3).",
+        "Only what was observed — no request or response contents.",
     ]
     if removed:
         lines.append("")
         for raw in textwrap.wrap(
-            "withheld by the export content rule: " + ", ".join(removed), 92
+            "left out (it could carry contents): " + ", ".join(removed), 92
         ):
             lines.append(raw)
     return lines
@@ -297,43 +362,63 @@ def evidence_receipt_pdf(
 
 
 _TEMPLATE = """<!doctype html>
-<html><head><meta charset="utf-8">
-<title>Axor EvidenceCase — {run_id}</title>
-<meta property="og:site_name" content="Axor Control Plane">
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{title} — caught by Axor</title>
+<meta property="og:site_name" content="Axor">
 <meta property="og:type" content="article">
-<meta property="og:title" content="Caught by Axor: {deviation}">
-<meta property="og:description" content="A reproducible caught discrepancy \
-— the agent's claim vs observed reality. Observations only; revocable link.">
+<meta property="og:title" content="{title}">
+<meta property="og:description" content="What an AI agent said, against what actually \
+happened — caught by Axor. Observations only.">
 <meta name="twitter:card" content="summary">
 <style>
-  body {{ background:#12161A; color:#D2DAE1; font-family:system-ui,sans-serif;
-          max-width:640px; margin:40px auto; padding:0 20px; }}
-  .mono {{ font-family:ui-monospace,Menlo,monospace; }}
-  .mut {{ color:#78848F; }} .dim {{ color:#4C5760; font-size:11px; letter-spacing:.1em; }}
-  .panel {{ background:#191F26; border:1px solid #262E37; border-radius:8px;
-            overflow:hidden; margin-top:20px; }}
+  * {{ box-sizing:border-box; }}
+  body {{ background:#12161A; color:#D2DAE1; font-family:system-ui,-apple-system,sans-serif;
+          max-width:640px; margin:0 auto; padding:32px 18px 48px; line-height:1.5; }}
+  .mono, pre, .v, .k {{ font-family:ui-monospace,Menlo,monospace; }}
+  .top {{ display:flex; justify-content:space-between; align-items:center; gap:8px;
+          font-size:12px; color:#78848F; }}
+  .brand {{ font-family:ui-monospace,Menlo,monospace; font-weight:700; color:#D2DAE1;
+            letter-spacing:.04em; }}
+  .tag {{ border:1px solid #F2A33C; color:#F2A33C; border-radius:10px; padding:1px 8px;
+          font-size:11px; }}
+  h1 {{ font-size:24px; line-height:1.3; font-weight:700; margin:22px 0 6px; color:#F0F3F6; }}
+  .meta {{ font-size:12.5px; color:#78848F; font-family:ui-monospace,Menlo,monospace;
+           overflow-wrap:anywhere; }}
+  .panel {{ background:#191F26; border:1px solid #262E37; border-radius:10px;
+            overflow:hidden; margin-top:22px; }}
   .row {{ padding:16px; border-bottom:1px solid #262E37; }}
-  .verdict {{ padding:12px 16px; background:rgba(229,72,77,0.06); color:#E5484D;
-              font-weight:700; }}
-  h1 {{ font-size:20px; font-weight:650; }}
-  ul {{ padding-left:18px; }}
+  .label {{ font-family:ui-monospace,Menlo,monospace; font-size:11px; letter-spacing:.1em;
+            color:#78848F; margin-bottom:8px; }}
+  .kv {{ display:flex; gap:12px; font-size:13.5px; padding:2px 0; flex-wrap:wrap; }}
+  .k {{ color:#78848F; min-width:150px; }}
+  .v {{ color:#D2DAE1; white-space:pre-wrap; overflow-wrap:anywhere; flex:1; min-width:0;
+        font-size:13.5px; }}
+  .said {{ font-size:16px; color:#F0F3F6; }}
+  .how {{ padding:12px 16px; background:rgba(229,72,77,0.07); color:#E5484D; font-size:13px; }}
+  ul {{ padding-left:18px; margin:0; font-size:13.5px; color:#B8C2CC; }}
+  .why {{ margin-top:22px; }}
+  .small {{ font-size:12px; color:#5F6B76; }}
+  a {{ color:#7FA8CC; text-decoration:none; }}
+  footer {{ margin-top:28px; font-size:12.5px; color:#78848F; border-top:1px solid #262E37;
+            padding-top:14px; }}
 </style></head>
 <body>
-  <div class="mono mut">{run_id} · {scenario}</div>
-  <h1>Axor EvidenceCase</h1>
+  <div class="top"><span class="brand">AXOR</span>{example}</div>
+  <h1>{title}</h1>
+  <div class="meta">{meta}</div>
   <div class="panel">
-    <div class="row"><div class="dim mono">WHAT HAPPENED</div>
-      <pre class="mono">{observed}</pre></div>
-    <div class="row"><div class="dim mono">WHAT THE AGENT SAID</div>
-      <pre class="mono">{claim}</pre></div>
-    <div class="verdict mono">{deviation} · {verdict_source} · confidence {confidence}</div>
+    <div class="row"><div class="label">WHAT ACTUALLY HAPPENED</div>{rows}</div>
+    <div class="row"><div class="label">WHAT THE AGENT SAID</div>
+      <div class="said">“{claim}”</div></div>
+    <div class="how">How we know: {how}</div>
   </div>
-  <p class="mono mut">fault attribution</p>
-  <ul class="mono mut">{fault_rows}</ul>
-  <p class="mono dim">observations only — no raw request/response bodies are
-  exported (spec section 8.3).</p>
+  <div class="why">{why}</div>
   {withheld}
-  <p class="mono dim">Caught by
-  <a href="https://axor.dev" style="color:#7FA8CC;text-decoration:none">Axor</a>
-  — runtime governance for LLM agents. Catch the lie, replay it, govern the fleet.</p>
+  <footer>
+    This link shows only what was observed — no request or response contents. Whoever shared
+    it can withdraw it. <span class="small mono">ref {ref}</span><br><br>
+    Caught by <a href="https://axor.dev">Axor</a> — it checks what AI agents do against what
+    they say, and stops the dangerous part.
+  </footer>
 </body></html>"""

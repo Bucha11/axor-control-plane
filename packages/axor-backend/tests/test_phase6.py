@@ -322,7 +322,7 @@ async def test_share_link_is_revocable_and_scrubs_bodies(
     token = share["token"]
     page = await client.get(f"/v1/share/{token}")
     assert page.status_code == 200
-    assert "FABRICATED TOOL RESULT" in page.text
+    assert "The agent said a tool worked. It had failed." in page.text
     assert "SECRET-LEAK" not in page.text  # raw bodies never exported (8.3)
 
     assert (await client.delete(f"/v1/share/{token}")).status_code == 200
@@ -397,8 +397,8 @@ async def test_export_endpoint_renders_receipt(client: httpx.AsyncClient) -> Non
     }]})
     page = await client.get("/v1/runs/run_x2/cases/0/export")
     assert page.status_code == 200
-    assert "CORRUPTED RETRIEVAL USED" in page.text
-    assert "corrupt_retrieval on web_search" in page.text
+    assert "The agent relied on a poisoned search result." in page.text
+    assert "<b>web_search</b> returned corrupted results" in page.text
 
     # PDF variant: a valid, self-contained PDF byte stream (spec §8.3).
     pdf = await client.get("/v1/runs/run_x2/cases/0/export", params={"format": "pdf"})
@@ -406,7 +406,7 @@ async def test_export_endpoint_renders_receipt(client: httpx.AsyncClient) -> Non
     assert pdf.headers["content-type"] == "application/pdf"
     assert pdf.content.startswith(b"%PDF-1.4")
     assert pdf.content.rstrip().endswith(b"%%EOF")
-    assert b"AXOR EVIDENCECASE" in pdf.content
+    assert b"CAUGHT" in pdf.content
 
 
 # ── EE license ────────────────────────────────────────────────────────────────

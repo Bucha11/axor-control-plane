@@ -283,7 +283,7 @@ async def test_share_link_resolves_for_an_identity_org(
     # resolves with no credential at all, under the LINK's tenant
     opened = await client.get(f"/v1/share/{token}")
     assert opened.status_code == 200
-    assert "EvidenceCase" in opened.text
+    assert "caught by Axor" in opened.text
 
     # …but another tenant cannot burn it
     assert (await client.delete(f"/v1/share/{token}",

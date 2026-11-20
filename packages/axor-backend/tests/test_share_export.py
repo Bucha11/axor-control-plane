@@ -146,8 +146,8 @@ class TestThePdfReceiptDoesNotRunOffThePage:
         assert len(pages) > 1
         flat = [line for page in pages for line in page]
         assert any("claim line 19" == line for line in flat)
-        assert any("observations only" in line for line in flat)
-        assert any("m9 on t9" in line for line in flat)
+        assert any("Only what was observed" in line for line in flat)
+        assert any("t9 m9" in line for line in flat)
 
     def test_no_line_is_written_below_the_page(self) -> None:
         pages = _pdf_pages(evidence_receipt_pdf("run", _long_case(), "demo"))
@@ -231,11 +231,11 @@ class TestTheContentRuleNamesWhatItWithheld:
     def test_the_pdf_says_it_too(self) -> None:
         flat = [line for page in _pdf_pages(evidence_receipt_pdf("run", self.LEAKY, "s"))
                 for line in page]
-        assert any("withheld by the export content rule" in line for line in flat)
+        assert any("left out" in line for line in flat)
         assert not any("SECRET" in line for line in flat)
 
     def test_a_clean_case_claims_nothing_was_withheld(self) -> None:
-        assert "withheld by the export content rule" not in evidence_receipt_html(
+        assert "left out" not in evidence_receipt_html(
             "run", CASE, "s"
         )
 
