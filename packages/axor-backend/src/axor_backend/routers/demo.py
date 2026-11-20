@@ -252,6 +252,7 @@ async def seed_memory(store: StoreDep, cache: SubgraphCacheDep) -> dict:
     await store.add_memory_item(repo, f"note:{ts}", "note", "on", {
         "text": demo.MEMORY_NOTE, "by": "ada@example.dev", "developers": [], "evidence": [],
         "fails": 0, "last_ok_ts": ts, "given": 0, "auto": False, "reason": ""}, ts)
+    await memory.refresh(store, repo)
     return {"repo": repo}
 
 

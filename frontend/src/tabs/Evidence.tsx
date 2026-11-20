@@ -84,11 +84,12 @@ function when(ts: string | null): string {
 }
 
 const KIND_CHIPS: [string, string][] = [
-  ["made_up,dangerous,would_refuse", "needs a look"],
+  ["made_up,dangerous,would_refuse,memory_worse", "needs a look"],
   ["made_up", "made something up"],
   ["dangerous", "dangerous, let through"],
   ["would_refuse", "would have been refused"],
   ["refused", "refused — stopped"],
+  ["memory_worse", "worse after a memory change"],
   ["", "everything"],
 ];
 const STATUS_WORDS: Record<IncidentStatus, string> = {
@@ -96,7 +97,7 @@ const STATUS_WORDS: Record<IncidentStatus, string> = {
   rule_made: "made a rule", not_a_problem: "not a problem",
 };
 const KIND_COLOR: Record<IncidentKind, string> = {
-  made_up: C.red, dangerous: C.red, would_refuse: C.amber, refused: C.dim,
+  made_up: C.red, dangerous: C.red, would_refuse: C.amber, refused: C.dim, memory_worse: C.amber,
 };
 
 const chip = (on: boolean): React.CSSProperties => ({
@@ -120,7 +121,7 @@ export default function Evidence({ agent: agentParam }: { agent?: string } = {})
   const { mode } = useApp((s) => s.connection);
   const journey = useApp((s) => s.journey);
   const connect = useApp((s) => s.connect);
-  const [kind, setKind] = useState("made_up,dangerous,would_refuse");
+  const [kind, setKind] = useState("made_up,dangerous,would_refuse,memory_worse");
   const [status, setStatus] = useState("new");
   // `?agent=` — arriving from an agent's row in Agents
   const [agent, setAgent] = useState(agentParam ?? "");
@@ -227,6 +228,7 @@ function StatusPick({ item }: { item: IncidentItem }) {
 }
 
 function Item({ item }: { item: IncidentItem }) {
+  if (item.kind === "memory_worse") return <MemoryWorse item={item} />;
   const color = KIND_COLOR[item.kind];
   const toStep = () => navigate(`explain/${encodeURIComponent(item.run_id)}`,
     item.seq != null ? { seq: item.seq, node: item.anchor_node ?? item.node_id } : undefined);
@@ -291,6 +293,37 @@ function Item({ item }: { item: IncidentItem }) {
             <Play size={11} /> {item.kind === "dangerous" ? "where it came from" : "replay it"}
           </button>
         </span>
+      </div>
+    </div>
+  );
+}
+
+
+/** The team's memory changed, and the sessions after did significantly worse. */
+function MemoryWorse({ item }: { item: IncidentItem }) {
+  const c = item.compare;
+  const pct = (s: { sessions: number; bad: number }) => `${s.bad} of ${s.sessions}`;
+  return (
+    <div data-testid="incident-row" data-kind="memory_worse"
+      style={{ background: C.panel, border: `1px solid ${C.line}`, borderLeft: `3px solid ${C.amber}`, borderRadius: 10, padding: 14 }}>
+      <div className="flex items-center justify-between flex-wrap" style={{ gap: 8, marginBottom: 8 }}>
+        <span className="flex items-center gap-2" style={{ fontFamily: MONO, fontSize: 11.5, fontWeight: 700, color: C.amber }}>
+          <AlertTriangle size={13} /> {item.what}
+        </span>
+        <span style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim }}>{when(item.ts)}</span>
+      </div>
+      <div style={{ fontFamily: MONO, fontSize: 11.5, color: C.text, background: C.panel2, borderRadius: 4,
+                    padding: "5px 8px", overflowWrap: "anywhere", marginBottom: 8 }}>{item.detail}</div>
+      {c && (
+        <div style={{ fontFamily: MONO, fontSize: 11, color: C.mut, marginBottom: 10 }}>
+          sessions that went wrong (first check failed, or said checks passed when they failed):
+          before {pct(c.before)} · after {pct(c.after)}{c.p != null ? ` · p ${c.p < 0.001 ? "<0.001" : c.p.toPrecision(2)}` : ""}
+        </div>
+      )}
+      <div className="flex items-center justify-end flex-wrap" style={{ gap: 8 }}>
+        <StatusPick item={item} />
+        <button onClick={() => navigate("memory")}
+          style={{ ...small, border: `1px solid ${C.steel}`, color: C.steel }}>see the team memory →</button>
       </div>
     </div>
   );

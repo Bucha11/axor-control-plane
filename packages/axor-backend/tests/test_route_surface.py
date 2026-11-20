@@ -62,6 +62,8 @@ EXPECTED: dict[tuple[str, str], str] = {
     ("GET", "/v1/memory"): "read",
     ("PUT", "/v1/memory/{item_id}"): "operate",
     ("POST", "/v1/memory/notes"): "operate",
+    ("PUT", "/v1/memory/settings"): "operate",
+    ("GET", "/v1/memory/session/{node_id}"): "read",
     ("POST", "/v1/demo/seed-memory"): "operate",
     ("GET", "/v1/pair"): "read",
     ("DELETE", "/v1/pair/{token}"): "read",

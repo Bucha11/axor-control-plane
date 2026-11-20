@@ -338,6 +338,7 @@ export default function ReplayTab({ runId: runIdProp, cursor: cursorProp, seq: s
           {incident && <> · <button onClick={() => navigate("evidence")} style={{ ...link, fontSize: 11.5 }}>the incident →</button></>}
         </div>
       )}
+      {run?.node_id && <SessionMemory nodeId={run.node_id} />}
 
       {scrubber.isLoading ? (
         <Center msg="loading the run…" />
@@ -591,6 +592,27 @@ function MakeRule({ runId, node, seq, tool, klass, tools: inRun, otherRuns }: {
         <span style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim }}>opens Safe to ship? with the rules from Policy</span>
         {apply.isError && <span style={{ color: C.red, fontSize: 12 }}>{(apply.error as Error).message}</span>}
       </div>
+    </div>
+  );
+}
+
+/** The team's memory this session's agent was given at its start, if any. */
+function SessionMemory({ nodeId }: { nodeId: string }) {
+  const q = useQuery({ queryKey: ["memory-of", nodeId], queryFn: () => api.memoryOfSession(nodeId), retry: false });
+  const [open, setOpen] = useState(false);
+  const given = (q.data?.given ?? []).filter((g) => g.items.length);
+  if (!given.length) return null;
+  const last = given[given.length - 1];
+  return (
+    <div data-testid="replay-memory" style={{ fontFamily: MONO, fontSize: 11, color: C.dim, margin: "-10px 0 16px" }}>
+      given the team memory v {last.version} ({last.items.length} fact{last.items.length === 1 ? "" : "s"}) ·{" "}
+      <button onClick={() => setOpen(!open)} style={{ background: "none", border: "none", padding: 0, cursor: "pointer",
+        fontFamily: MONO, fontSize: 11, color: C.steel }}>{open ? "hide" : "what it said"}</button>
+      {open && (
+        <ul style={{ margin: "6px 0 0 16px", color: C.mut, lineHeight: 1.6 }}>
+          {last.items.map((i) => <li key={i.id}>{i.text}</li>)}
+        </ul>
+      )}
     </div>
   );
 }

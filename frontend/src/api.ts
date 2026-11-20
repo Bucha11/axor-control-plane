@@ -28,12 +28,13 @@ export interface RunSummary {
 }
 
 // The Incidents feed (GET /v1/incidents): what needs a look, and the operator's word on it
-export type IncidentKind = "made_up" | "dangerous" | "would_refuse" | "refused";
+export type IncidentKind = "made_up" | "dangerous" | "would_refuse" | "refused" | "memory_worse";
 export type IncidentStatus = "new" | "looked_at" | "kept_as_test" | "rule_made" | "not_a_problem";
 export interface IncidentItem {
   id: string; kind: IncidentKind; ts: string | null; node_id: string; run_id: string;
   seq: number | null; anchor_node?: string | null; what: string; detail: string; count: number;
-  status: IncidentStatus; reason?: string; tool?: string; scenario?: string;
+  status: IncidentStatus; reason?: string; tool?: string; scenario?: string; label?: string;
+  compare?: { before: { sessions: number; bad: number }; after: { sessions: number; bad: number }; p: number | null };
   case?: { observed_reality: unknown; agent_claim: unknown; index: number;
            fault_attribution: { fault_mode: string; tool_name: string; influence: string }[] };
 }
@@ -549,16 +550,26 @@ export interface SkillEvalSkill {
 /** The team's memory: what coding agents verifiably learned in a repo. */
 export interface MemoryItem {
   id: number; repo: string; key: string; kind: "runs" | "fix" | "note";
-  status: "suggested" | "on" | "off" | "stale" | "kept_out"; updated_ts: string;
+  status: "suggested" | "on" | "off" | "stale" | "dormant" | "replaced" | "kept_out"; updated_ts: string;
   doc: {
     text: string; check_kind?: string; command?: string; failed?: string; by?: string;
     developers: string[]; evidence: { run_id: string; node_id: string; seq: number; developer: string; ts: string; summary: string }[];
     fails: number; last_ok_ts: string; last_fail_ts?: string; given: number; auto: boolean; reason: string;
-    decided_by?: string; decided_ts?: string;
+    decided_by?: string; decided_ts?: string; vouched_ts?: string; replaced_by?: string;
+    evidence_pruned?: number; fail_devs?: Record<string, number>;
   };
+}
+export interface MemoryCompareSide { sessions: number; bad: number; first_check_failed: number; made_up: number }
+export interface MemoryChange {
+  id: number; ts: string; version: string; previous: string; ids: number[];
+  added: { id: number; text: string; kind: string; why: string }[];
+  removed: { id: number; text: string; why: string; replaced_by?: string }[];
+  compare: { before: MemoryCompareSide; after: MemoryCompareSide; p: number | null;
+             verdict: "worse" | "better" | "same" | "too_few" } | null;
 }
 export interface MemoryRepo {
   repo: string; label: string; items: MemoryItem[]; preview: string; given_ids: number[]; sessions_given: number;
+  version: string; changes: MemoryChange[]; drift: MemoryChange | null;
 }
 
 /** A pair session: someone's coding-agent session others watch live. */
@@ -594,7 +605,7 @@ export interface TeamSkill {
 
 /** A coding-agent setup health check, as axor_eval.setup_health posts it. */
 export interface SetupHealthCause {
-  family: string; fragment: string; kind: "skill" | "instructions"; name: string; words: string;
+  family: string; fragment: string; kind: "skill" | "instructions" | "memory"; name: string; words: string;
   with: [number, number]; without: [number, number]; text: string;
 }
 export interface SetupHealthRow {
@@ -1371,7 +1382,18 @@ export const api = {
     af(`/v1/skill-evals/${encodeURIComponent(id)}`).then((r) => j<SkillEval>(r)),
   seedSkillEval: () =>
     af("/v1/demo/seed-skill-eval", { method: "POST" }).then((r) => j<{ eval_id: string }>(r)),
-  memory: () => af("/v1/memory").then((r) => j<{ repos: MemoryRepo[] }>(r)),
+  memory: () => af("/v1/memory").then((r) => j<{ repos: MemoryRepo[]; fresh_days: number }>(r)),
+  setMemorySettings: (freshDays: number) =>
+    af("/v1/memory/settings", {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ fresh_days: freshDays }),
+    }).then((r) => j<{ fresh_days: number }>(r)),
+  memoryOfSession: (nodeId: string) =>
+    af(`/v1/memory/session/${encodeURIComponent(nodeId)}`).then((r) => j<{
+      node_id: string;
+      given: { repo: string; ids: number[]; ts: string; version: string; items: { id: number; text: string; kind: string }[] }[];
+    }>(r)),
   setMemory: (id: number, status: "on" | "off") =>
     af(`/v1/memory/${id}`, {
       method: "PUT",

@@ -125,19 +125,28 @@ async def test_a_fix_is_never_learned_from_a_command_outside_wrote(
     assert not any(k.startswith("fix:") for k in await _items(client))
 
 
-async def test_stops_working_after_two_failures_and_comes_back(client: httpx.AsyncClient) -> None:
+async def test_stops_working_for_the_team_not_for_one_broken_machine(
+        client: httpx.AsyncClient) -> None:
     await _session(client, "ada-1", "dev-ada")
+    await _session(client, "bob-1", "dev-bob")
     await _check(client, "ada-1", "a1", "make typecheck", True, kind="typecheck")
     key = "runs:typecheck:make typecheck"
     item = (await _items(client))[key]
     assert (await client.put(f"/v1/memory/{item['id']}", json={"status": "on"})).status_code == 200
-    await _check(client, "ada-1", "a2", "make typecheck", False, kind="typecheck")
+    # bob's machine has no mypy: two failures, one developer — still on
+    await _check(client, "bob-1", "b1", "make typecheck", False, kind="typecheck")
+    await _check(client, "bob-1", "b2", "make typecheck", False, kind="typecheck")
     assert (await _items(client))[key]["status"] == "on"
-    await _check(client, "ada-1", "a3", "make typecheck", False, kind="typecheck")
+    # it fails for ada too: two developers — stopped working, not given
+    await _check(client, "ada-1", "a2", "make typecheck", False, kind="typecheck")
     assert (await _items(client))[key]["status"] == "stale"
     assert (await client.get("/v1/coding/memory", params={"repo": REPO})).json()["text"] == ""
-    await _check(client, "ada-1", "a4", "make typecheck", True, kind="typecheck")
+    await _check(client, "ada-1", "a3", "make typecheck", True, kind="typecheck")
     assert (await _items(client))[key]["status"] == "on"
+    # three times for one developer is enough on its own
+    for run in ("b3", "b4", "b5"):
+        await _check(client, "bob-1", run, "make typecheck", False, kind="typecheck")
+    assert (await _items(client))[key]["status"] == "stale"
 
 
 async def test_a_persons_note_is_on_at_once_and_comes_first(client: httpx.AsyncClient) -> None:

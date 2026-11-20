@@ -11,7 +11,10 @@ Four kinds, from what the plane already holds:
 - would_refuse  — let through only because enforcement was off (observe mode):
                   the rules would have refused it;
 - refused       — what the rules did refuse: attacks stopped, and normal work
-                  blocked by a rule too strict — grouped per agent, tool and day.
+                  blocked by a rule too strict — grouped per agent, tool and day;
+- memory_worse  — the team's memory changed in a repository, and the sessions
+                  given the new version did significantly worse than those given
+                  the one before (memory.compare).
 
 Each item has a status the operator sets — new, looked at, kept as a test, made
 a rule of, not a problem; an item whose run was kept as a test reads "kept as a
@@ -23,10 +26,10 @@ from typing import Any
 
 from axor_backend import step_search
 
-KINDS = ("made_up", "dangerous", "would_refuse", "refused")
+KINDS = ("made_up", "dangerous", "would_refuse", "refused", "memory_worse")
 STATUSES = ("new", "looked_at", "kept_as_test", "rule_made", "not_a_problem")
 # kinds that ask for a look (the menu's count); refusals are the rules working
-NEEDS_A_LOOK = ("made_up", "dangerous", "would_refuse")
+NEEDS_A_LOOK = ("made_up", "dangerous", "would_refuse", "memory_worse")
 
 
 def _dangerous(step: dict[str, Any]) -> str | None:
@@ -84,6 +87,7 @@ async def incidents(store: Any, scan: int) -> list[dict[str, Any]]:  # noqa: ANN
             else:
                 group["count"] += 1
     items += refused.values()
+    items += await _memory_worse(store)
     for item in items:
         item.setdefault("scenario", scenario.get(item["run_id"], ""))
     kept = {p["run_id"] for p in await store.pinned()}
@@ -93,3 +97,23 @@ async def incidents(store: Any, scan: int) -> list[dict[str, Any]]:  # noqa: ANN
             "kept_as_test" if item["run_id"] in kept and item["kind"] != "refused" else "new")
     items.sort(key=lambda x: str(x["ts"] or ""), reverse=True)
     return items
+
+
+async def _memory_worse(store: Any) -> list[dict[str, Any]]:  # noqa: ANN401
+    """A change of the team's memory after which agents did significantly worse."""
+    from axor_backend import memory
+
+    out = []
+    for repo, label in (await store.repo_labels()).items():
+        for change in await store.memory_changes_of(repo, 5):
+            cmp = await memory.compare(store, repo, change)
+            if cmp["verdict"] != "worse":
+                continue
+            what = "; ".join([f"on: {a['text']}" for a in change["added"]]
+                             + [f"off: {r['text']}" for r in change["removed"]])
+            out.append({"id": f"memory:{repo}:{change['version']}", "kind": "memory_worse",
+                        "ts": change["ts"], "node_id": "", "run_id": "", "seq": None,
+                        "anchor_node": None, "repo": repo, "label": label,
+                        "what": f"agents did worse after the team memory changed in {label}",
+                        "detail": what, "count": cmp["after"]["sessions"], "compare": cmp})
+    return out

@@ -28,7 +28,7 @@ from typing import Any
 DEMO_RUN_IDS = frozenset({"ex_block", "ex_pass", "ex_tree",
                           "ex_coding_claude", "ex_coding_codex", "ex_skill_try",
                           "ex_prod_drop", "ex_prod_ok",
-                          "ex_mem_ada", "ex_mem_bob", "ex_mem_bob_2"})
+                          "ex_mem_ada", "ex_mem_bob", "ex_mem_bob_2", "ex_mem_ada_2"})
 DEMO_SCENARIOS = frozenset({"adapter-demo", "multi-agent-demo", "coding-demo", "skill-demo",
                             "ops-demo"})
 
@@ -749,8 +749,9 @@ def memory_runs(stamp: Any) -> list[tuple[str, str, list[dict]]]:  # noqa: ANN40
     """(run, node, lines) the example memory is learned from: Ada's agent finds
     that plain pytest fails and `uv run pytest -q` works, lints and typechecks;
     Bob's agent confirms the tests and the typecheck; a day later the
-    typecheck stops working for Bob twice. One command Ada's agent ran came
-    from a web page — it passed, and it is kept out."""
+    typecheck fails for Bob twice and then for Ada — two developers: it
+    stopped working. One command Ada's agent ran came from a web page — it
+    passed, and it is kept out."""
     from datetime import timedelta
 
     def at(hours: float) -> str:
@@ -781,6 +782,10 @@ def memory_runs(stamp: Any) -> list[tuple[str, str, list[dict]]]:  # noqa: ANN40
                          "make: mypy: No such file or directory", at(3)),
             *_check_pair(2, bob, "make typecheck", "typecheck", False,
                          "make: mypy: No such file or directory", at(2.9)),
+        ]),
+        ("ex_mem_ada_2", ada, [
+            *_check_pair(0, ada, "make typecheck", "typecheck", False,
+                         "error: Module 'limits' has no attribute 'Bucket'", at(1)),
         ]),
     ]
 

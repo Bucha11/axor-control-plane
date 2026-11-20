@@ -447,7 +447,8 @@ memory_items = Table(
     UniqueConstraint("org_id", "repo", "key", name="uq_memory_items_key"),
 )
 
-# Which session was given which memory items, when.
+# Which session was given which memory items, when — and the version (a hash
+# of the items) a drift comparison groups sessions by.
 memory_given = Table(
     "memory_given", metadata,
     Column("id", Integer, primary_key=True, autoincrement=True),
@@ -456,6 +457,20 @@ memory_given = Table(
     Column("node_id", String(200), nullable=False),
     Column("ids", Text, nullable=False),
     Column("ts", String(40), nullable=False),
+    Column("version", String(16), nullable=False, server_default=""),
+)
+
+# Every change of what agents get in a repository: the version, the items,
+# what was added and removed and why.
+memory_changes = Table(
+    "memory_changes", metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("org_id", String(64), nullable=False, index=True),
+    Column("repo", String(64), nullable=False, index=True),
+    Column("ts", String(40), nullable=False),
+    Column("version", String(16), nullable=False),
+    Column("previous", String(16), nullable=False, server_default=""),
+    Column("doc", Text, nullable=False),
 )
 
 # A pair session: someone's coding-agent session others watch live and send
@@ -897,10 +912,65 @@ class Store:
                     node_profiles.c.repo != ""))).all()
         return {r.repo: r.repo_label or r.repo for r in rows}
 
-    async def add_memory_given(self, repo: str, node_id: str, ids: list[int], ts: str) -> None:
+    async def add_memory_given(self, repo: str, node_id: str, ids: list[int], ts: str,
+                               version: str = "") -> None:
         async with self.engine.begin() as conn:
             await conn.execute(insert(memory_given).values(
-                org_id=current_org_id(), repo=repo, node_id=node_id, ids=json.dumps(ids), ts=ts))
+                org_id=current_org_id(), repo=repo, node_id=node_id, ids=json.dumps(ids), ts=ts,
+                version=version))
+
+    async def delete_memory_item(self, item_id: int) -> None:
+        async with self.engine.begin() as conn:
+            await conn.execute(delete(memory_items).where(
+                memory_items.c.org_id == current_org_id(), memory_items.c.id == item_id))
+
+    async def add_memory_change(self, repo: str, version: str, ids: list[int], added: list,
+                                removed: list, previous: str, ts: str) -> None:
+        async with self.engine.begin() as conn:
+            await conn.execute(insert(memory_changes).values(
+                org_id=current_org_id(), repo=repo, ts=ts, version=version, previous=previous,
+                doc=json.dumps({"ids": ids, "added": added, "removed": removed})))
+
+    @staticmethod
+    def _change_row(r: Any) -> dict[str, Any]:  # noqa: ANN401 - a Row
+        return {"id": r.id, "repo": r.repo, "ts": r.ts, "version": r.version,
+                "previous": r.previous, **json.loads(r.doc)}
+
+    async def last_memory_change(self, repo: str) -> dict[str, Any] | None:
+        changes = await self.memory_changes_of(repo, 1)
+        return changes[0] if changes else None
+
+    async def memory_changes_of(self, repo: str, limit: int = 20) -> list[dict[str, Any]]:
+        """Newest first."""
+        async with self.engine.connect() as conn:
+            rows = (await conn.execute(select(memory_changes).where(
+                memory_changes.c.org_id == current_org_id(), memory_changes.c.repo == repo,
+            ).order_by(memory_changes.c.id.desc()).limit(limit))).all()
+        return [self._change_row(r) for r in rows]
+
+    async def sessions_given_version(self, repo: str, version: str) -> list[str]:
+        """The sessions given exactly this version, first given first."""
+        async with self.engine.connect() as conn:
+            rows = (await conn.execute(select(memory_given.c.node_id).where(
+                memory_given.c.org_id == current_org_id(), memory_given.c.repo == repo,
+                memory_given.c.version == version,
+            ).order_by(memory_given.c.id))).all()
+        return list(dict.fromkeys(r.node_id for r in rows))
+
+    async def memory_given_to(self, node_id: str) -> list[dict[str, Any]]:
+        """What one session was given, oldest first."""
+        async with self.engine.connect() as conn:
+            rows = (await conn.execute(select(memory_given).where(
+                memory_given.c.org_id == current_org_id(), memory_given.c.node_id == node_id,
+            ).order_by(memory_given.c.id))).all()
+        return [{"repo": r.repo, "ids": json.loads(r.ids), "ts": r.ts, "version": r.version}
+                for r in rows]
+
+    async def runs_of_node(self, node_id: str) -> list[dict[str, Any]]:
+        async with self.engine.connect() as conn:
+            rows = (await conn.execute(select(runs).where(
+                runs.c.org_id == current_org_id(), runs.c.node_id == node_id))).all()
+        return [_run_row(r) for r in rows]
 
     async def memory_sessions_given(self, repo: str) -> int:
         async with self.engine.connect() as conn:
@@ -2140,6 +2210,21 @@ class Store:
                 runs.c.run_id.in_(old_ids),
                 runs.c.org_id == current_org_id(),
             ))
+            # the team's memory keeps what it learned, not the pruned runs'
+            # addresses: evidence pointing at them goes, counted
+            gone = set(old_ids)
+            for r in (await conn.execute(select(memory_items).where(
+                    memory_items.c.org_id == current_org_id()))).all():
+                doc = json.loads(r.doc)
+                kept = [e for e in doc.get("evidence", []) if e.get("run_id") not in gone]
+                if len(kept) != len(doc.get("evidence", [])):
+                    doc["evidence_pruned"] = (doc.get("evidence_pruned", 0)
+                                              + len(doc["evidence"]) - len(kept))
+                    doc["evidence"] = kept
+                    await conn.execute(update(memory_items).where(
+                        memory_items.c.id == r.id).values(doc=json.dumps(doc)))
+            await conn.execute(delete(memory_given).where(
+                memory_given.c.org_id == current_org_id(), memory_given.c.ts < cutoff_ts))
             return len(old_ids)
 
     async def pinned(self) -> list[dict[str, str]]:

@@ -11,6 +11,7 @@ import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Check, Copy } from "lucide-react";
 import { api, SetupHealthCause, SetupHealthCheck } from "../api";
+import { navigate } from "../router";
 import { C, MONO, btn } from "../theme";
 import { SkillSwitch } from "../components/SkillsOff";
 
@@ -23,6 +24,9 @@ const panel: React.CSSProperties = { background: C.panel, border: `1px solid ${C
 
 const day = (ts: string) => ts.slice(0, 16).replace("T", " ");
 const ofRuns = (c: [number, number] | null) => (c ? `${c[0]} of ${c[1]}` : "—");
+
+const pieceName = (kind: string, name: string) =>
+  kind === "skill" ? `skill ${name}` : kind === "memory" ? `team memory · ${name}` : `CLAUDE.md · ${name}`;
 
 const HEADLINE: Record<SetupHealthCheck["verdict"], [string, string]> = {
   worse: ["Your agents behave worse than at the last check.", C.red],
@@ -39,6 +43,8 @@ export default function SetupHealth() {
   });
   const checks = q.data?.checks ?? [];
   const latest = checks[0];
+  const mem = useQuery({ queryKey: ["memory"], queryFn: api.memory, retry: false });
+  const drifted = (mem.data?.repos ?? []).filter((r) => r.drift);
   return (
     <div data-testid="setup-health" style={{ maxWidth: 860, margin: "0 auto" }}>
       <h1 style={{ fontSize: 22, fontWeight: 650, margin: "0 0 6px" }}>Context health</h1>
@@ -51,6 +57,15 @@ export default function SetupHealth() {
         that did it.
       </div>
 
+      {drifted.map((r) => (
+        <div key={r.repo} data-testid="setup-health-memory-drift" className="mb-6 px-4 py-3"
+          style={{ ...panel, borderLeft: `3px solid ${C.red}`, fontSize: 13, color: C.mut, lineHeight: 1.6 }}>
+          <span style={{ color: C.red, fontWeight: 600 }}>Agents did worse after the team memory changed in {r.label}.</span>{" "}
+          Run a check — it takes each fact of the memory out in turn, like a skill or a section of CLAUDE.md.{" "}
+          <button onClick={() => navigate("memory")} style={{ background: "none", border: "none", padding: 0, cursor: "pointer",
+            fontFamily: MONO, fontSize: 11.5, color: C.steel }}>see what changed →</button>
+        </div>
+      ))}
       {latest ? <Latest check={latest} previous={checks[1]} /> : q.isLoading ? null : (
         <div data-testid="setup-health-empty" style={{ ...panel, padding: 18, fontSize: 13.5, color: C.mut, lineHeight: 1.6, marginBottom: 28 }}>
           No check yet. Run one (below) — the first is the baseline; every later one is compared with
@@ -144,7 +159,7 @@ function Cause({ cause }: { cause: SetupHealthCause }) {
   return (
     <div data-testid={`cause-${cause.fragment}`} style={{ ...panel, padding: 16 }}>
       <div style={{ fontSize: 14, color: C.text, marginBottom: 4 }}>
-        <span style={{ fontFamily: MONO }}>{cause.kind === "skill" ? `skill ${cause.name}` : `CLAUDE.md · ${cause.name}`}</span>
+        <span style={{ fontFamily: MONO }}>{pieceName(cause.kind, cause.name)}</span>
         <span style={{ color: C.mut }}> — {wordsOf(cause)}</span>
       </div>
       <div style={{ fontFamily: MONO, fontSize: 11.5, color: C.mut, marginBottom: 12 }}>
@@ -158,9 +173,32 @@ function Cause({ cause }: { cause: SetupHealthCause }) {
             in the agent's context until someone deletes the folder.
           </span>
         </div>
+      ) : cause.kind === "memory" ? (
+        <MemoryFix cause={cause} />
       ) : (
         <SectionFix cause={cause} />
       )}
+    </div>
+  );
+}
+
+/** A fact of the team's memory: turned off here, every agent stops getting it. */
+function MemoryFix({ cause }: { cause: SetupHealthCause }) {
+  const id = Number(cause.fragment.split(":")[1]);
+  const off = useMutation({ mutationFn: () => api.setMemory(id, "off") });
+  return (
+    <div className="flex items-center flex-wrap" style={{ gap: 10 }}>
+      {off.isSuccess ? (
+        <span data-testid={`memory-fact-off-${id}`} style={{ fontFamily: MONO, fontSize: 11, color: C.amber }}>
+          turned off — no agent gets it from its next session
+        </span>
+      ) : (
+        <button onClick={() => off.mutate()} disabled={off.isPending || !id} data-testid={`memory-fact-turn-off-${id}`}
+          style={btn({ color: C.mut, fontSize: 10.5, padding: "3px 10px" })}>turn this fact off</button>
+      )}
+      <span style={{ fontSize: 12, color: C.dim, lineHeight: 1.5 }}>
+        From the team's memory, given to every agent at session start. Turned off, it stays listed and can be turned back on.
+      </span>
     </div>
   );
 }
@@ -219,14 +257,14 @@ function SetupList({ check, previous }: { check: SetupHealthCheck; previous?: Se
               fontFamily: MONO, fontSize: 11, padding: "3px 8px", borderRadius: 4,
               border: `1px solid ${added ? C.amber : C.line}`, color: added ? C.amber : C.mut,
             }}>
-              {s.kind === "skill" ? `skill ${s.name}` : `CLAUDE.md · ${s.name}`}{added ? " · new since last check" : ""}
+              {pieceName(s.kind, s.name)}{added ? " · new since last check" : ""}
             </span>
           );
         })}
         {removed.map((s) => (
           <span key={s.id} style={{ fontFamily: MONO, fontSize: 11, padding: "3px 8px", borderRadius: 4,
             border: `1px dashed ${C.line}`, color: C.dim, textDecoration: "line-through" }}>
-            {s.kind === "skill" ? `skill ${s.name}` : `CLAUDE.md · ${s.name}`}
+            {pieceName(s.kind, s.name)}
           </span>
         ))}
       </div>

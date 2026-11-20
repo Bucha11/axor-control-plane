@@ -313,4 +313,62 @@ test.describe("coding agents: their menu, and trying a skill", () => {
     await view.getByTestId("memory-on").getByRole("button", { name: "see where it passed →" }).first().click();
     await expect(page).toHaveURL(/#\/explain\/ex_mem_/);
   });
+
+  test("team memory drift: agents did worse after a change — on the memory page, in Incidents, context health and Replay", async ({ page, request }) => {
+    const B = "http://127.0.0.1:8400";
+    const tag = Math.random().toString(36).slice(2, 8);
+    const repo = `r-e2e-${tag}`;
+    const session = async (node: string, dev: string, command: string, passed: boolean) => {
+      await request.post(`${B}/v1/plane/${node}/profile`, { data: {
+        kind: "coding", agent: "claude-code", developer: `dev-${dev}`, repo, repo_label: `e2e/${tag}` } });
+      const given = await (await request.get(`${B}/v1/coding/memory?repo=${repo}`)).json();
+      await request.post(`${B}/v1/coding/memory/given`, { data: { node_id: node, repo, ids: given.ids } });
+      const ts = new Date().toISOString();
+      const line = (seq: number, kind: string, payload: object) => ({ schema_version: "1.0", seq, node_id: node, kind, ts,
+        causal_root: null, gate: null, verdict: kind === "tool_call" ? "pass" : null, payload });
+      await request.post(`${B}/v1/plane/${node}/telemetry`, { data: { run_id: `${node}-r`, events: [
+        line(0, "tool_call", { tool: "Bash", args: { command } }),
+        line(1, "tool_result", { tool: "Bash", status: passed ? "ok" : "error", preview: "",
+          check: { kind: "tests", passed, command, summary: passed ? "ok" : "1 failed" } }),
+      ] } });
+    };
+    await session(`e2e-${tag}-ada`, `${tag}a`, "uv run pytest -q", true);
+    await session(`e2e-${tag}-bob`, `${tag}b`, "uv run pytest -q", true);
+    for (let n = 0; n < 5; n++) await session(`e2e-${tag}-good${n}`, `${tag}g${n}`, "uv run pytest -q", true);
+    await request.post(`${B}/v1/memory/notes`, { data: { repo, text: "Always run the tests with -x --lf." } });
+    for (let n = 0; n < 5; n++) await session(`e2e-${tag}-bad${n}`, `${tag}x${n}`, "uv run pytest -q -x --lf", false);
+
+    await setConnection(page, { mode: "demo" });
+    await goHash(page, "memory");
+    const view = page.getByTestId("team-memory");
+    await view.getByRole("tab", { name: `e2e/${tag}` }).click();
+    const drift = view.getByTestId("memory-drift");
+    await expect(drift).toContainText("Agents did worse after the team memory changed");
+    await expect(drift).toContainText("added: Always run the tests with -x --lf.");
+    await expect(view.getByTestId("memory-changes")).toContainText("worse after");
+    // Incidents
+    await goHash(page, "evidence");
+    const row = page.locator("[data-kind=memory_worse]", { hasText: `e2e/${tag}` });
+    await expect(row).toContainText("agents did worse after the team memory changed");
+    await expect(row).toContainText("Always run the tests with -x --lf.");
+    // context health points at it
+    await goHash(page, "health");
+    await expect(page.getByTestId("setup-health-memory-drift").filter({ hasText: `e2e/${tag}` })).toBeVisible();
+    // Replay: what the session was given
+    await goHash(page, `explain/e2e-${tag}-bad0-r`);
+    const mem = page.getByTestId("replay-memory");
+    await expect(mem).toContainText("given the team memory");
+    await mem.getByRole("button", { name: "what it said" }).click();
+    await expect(mem).toContainText("Always run the tests with -x --lf.");
+    // turned off from the drift card; the incident is set aside so it does not count for other tests
+    await goHash(page, "memory");
+    await view.getByRole("tab", { name: `e2e/${tag}` }).click();
+    await view.getByTestId("memory-drift").getByRole("button", { name: "turn off" }).click();
+    await expect(view.getByTestId("memory-preview")).not.toContainText("Always run the tests with -x --lf.");
+    await expect(view.getByTestId("memory-drift")).toHaveCount(0);
+    const feed = await (await request.get(`${B}/v1/incidents`)).json();
+    for (const i of feed.items.filter((x: { kind: string }) => x.kind === "memory_worse")) {
+      await request.put(`${B}/v1/incidents/status`, { data: { id: i.id, status: "not_a_problem" } });
+    }
+  });
 });
