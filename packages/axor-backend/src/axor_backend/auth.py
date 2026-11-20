@@ -163,6 +163,7 @@ _WRITE_POLICY: tuple[tuple[str, str], ...] = (
     ("/v1/trees/", "ingest"),
     # an eval run posts its own report, like a tree run its snapshot
     ("/v1/skill-evals", "ingest"),
+    ("/v1/setup-health", "ingest"),   # posted by the check, on an ingest key
     # turning a skill off for every developer is an operator's decision
     ("/v1/coding/", "operate"),
     ("/v1/plane/", "operate"),        # command / facts / cascade-stop

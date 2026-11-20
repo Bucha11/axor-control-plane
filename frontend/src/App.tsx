@@ -44,6 +44,7 @@ import Tabs from "./components/Tabs";
 import Pricing from "./tabs/Pricing";
 import Skills from "./tabs/Skills";
 import SkillEvals from "./tabs/SkillEvals";
+import SetupHealth from "./tabs/SetupHealth";
 
 // Governance first: the product is the policy membrane between an agent and its
 // tools. "Incidents" is the proof it works, not the product.
@@ -207,7 +208,7 @@ export default function App() {
       {key === "govern" && (
         <>
           {!sidebar && <SubNav items={GOVERN_VIEWS} active={governView} />}
-          {head === "health" ? <Health /> : head === "sentinel" ? <Sentinel />
+          {head === "health" ? <ContextHealth journey={menu.journey} /> : head === "sentinel" ? <Sentinel />
             : head === "trees" ? <Trees treeRun={runIdParam} />
             : runIdParam === "run" && route.segments[2]
               ? <RunControl runId={decodeURIComponent(route.segments[2])} />
@@ -251,6 +252,22 @@ export default function App() {
       {body}
       <Tour />
     </div>
+  );
+}
+
+/** Context health: a coding team's is its setup (skills, CLAUDE.md) checked
+ * in a sandbox; a production agent's is probe's drift on its live context.
+ * A journey sees its own; no journey or both sees both. */
+function ContextHealth({ journey }: { journey: Journey | null }) {
+  if (journey === "coding") return <SetupHealth />;
+  if (journey === "production") return <Health />;
+  return (
+    <>
+      <SetupHealth />
+      <div style={{ maxWidth: 860, margin: "40px auto 28px", borderTop: `1px solid ${C.line}`, paddingTop: 8,
+        fontFamily: MONO, fontSize: 10.5, color: C.dim, letterSpacing: "0.1em" }}>PRODUCTION AGENTS</div>
+      <Health />
+    </>
   );
 }
 
@@ -319,7 +336,7 @@ function Sidebar({ active, view }: { active: string; view: string }) {
             {l.key === "govern" && (
               <div className="flex flex-col" style={{ gap: 1, margin: "2px 0 6px" }}>
                 {GOVERN_VIEWS.slice(1).filter(([route]) => menu.all || menu.journey !== "coding"
-                  || route === "trees").map(([route, label]) => (
+                  || route === "trees" || route === "health").map(([route, label]) => (
                   <button key={route} onClick={() => navigate(route)}
                     aria-current={view === route ? "page" : undefined}
                     data-testid={`side-${route}`} style={item(view === route, true)}>

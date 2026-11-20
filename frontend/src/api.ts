@@ -546,6 +546,21 @@ export interface SkillEvalSkill {
   verdict: string;
 }
 
+/** A coding-agent setup health check, as axor_eval.setup_health posts it. */
+export interface SetupHealthCause {
+  family: string; fragment: string; kind: "skill" | "instructions"; name: string; words: string;
+  with: [number, number]; without: [number, number]; text: string;
+}
+export interface SetupHealthRow {
+  family: string; words: string; now: [number, number]; before: [number, number] | null; worse: boolean;
+}
+export interface SetupHealthCheck {
+  check_id: string; created_ts: string; agent: string; model: string; trials: number;
+  setup: { id: string; kind: string; name: string }[];
+  verdict: "first_check" | "worse" | "as_before"; rows: SetupHealthRow[];
+  traced: string[]; causes: SetupHealthCause[]; example?: boolean;
+}
+
 export interface SkillEval {
   eval_id: string;
   created_ts: string;
@@ -1300,6 +1315,10 @@ export const api = {
     af(`/v1/skill-evals/${encodeURIComponent(id)}`).then((r) => j<SkillEval>(r)),
   seedSkillEval: () =>
     af("/v1/demo/seed-skill-eval", { method: "POST" }).then((r) => j<{ eval_id: string }>(r)),
+  setupHealth: () =>
+    af("/v1/setup-health").then((r) => j<{ checks: SetupHealthCheck[] }>(r)),
+  seedSetupHealth: () =>
+    af("/v1/demo/seed-setup-health", { method: "POST" }).then((r) => j<{ check_id: string }>(r)),
   seedSkillTry: () =>
     af("/v1/demo/seed-skill-try", { method: "POST" }).then((r) => j<{ node: string; run: string }>(r)),
   wrapScan: (files: { path: string; content: string }[]) =>

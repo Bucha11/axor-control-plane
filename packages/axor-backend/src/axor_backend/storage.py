@@ -428,6 +428,19 @@ incident_status = Table(
     Column("ts", String(40), nullable=False),
 )
 
+# A coding-agent setup health check (axor-eval setup_health): how the team's
+# setup behaved on the test tasks, compared with the last check, and the piece
+# of the setup a change was traced to.
+setup_health = Table(
+    "setup_health", metadata,
+    Column("org_id", String(64), primary_key=True),
+    Column("check_id", String(64), primary_key=True),
+    Column("created_ts", String(40), nullable=False, index=True),
+    Column("agent", String(40), nullable=False, server_default=""),
+    Column("verdict", String(20), nullable=False, server_default=""),
+    Column("doc", Text, nullable=False),
+)
+
 skill_evals = Table(
     "skill_evals", metadata,
     Column("org_id", String(64), primary_key=True),
@@ -757,6 +770,21 @@ class Store:
             return None
         return {"tree_run": row.tree_run, "status": row.status,
                 "updated_ts": row.updated_ts, **json.loads(row.doc)}
+
+    async def put_setup_health(self, check_id: str, doc: dict, ts: str) -> None:
+        async with self.engine.begin() as conn:
+            await conn.execute(setup_health.insert().values(
+                org_id=current_org_id(), check_id=check_id, created_ts=ts,
+                agent=str(doc.get("agent", ""))[:40], verdict=str(doc.get("verdict", ""))[:20],
+                doc=json.dumps(doc, separators=(",", ":"))))
+
+    async def list_setup_health(self, limit: int = 50) -> list[dict[str, Any]]:
+        async with self.engine.connect() as conn:
+            rows = (await conn.execute(
+                select(setup_health).where(setup_health.c.org_id == current_org_id())
+                .order_by(setup_health.c.created_ts.desc()).limit(limit))).all()
+        return [{"check_id": r.check_id, "created_ts": r.created_ts, **json.loads(r.doc)}
+                for r in rows]
 
     async def put_skill_eval(self, eval_id: str, doc: dict, ts: str) -> None:
         org = current_org_id()

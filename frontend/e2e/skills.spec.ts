@@ -145,4 +145,42 @@ test.describe("coding agents: their menu, and trying a skill", () => {
     await expect(panel.getByTestId("off-row-house-style")).toBeVisible();
     await panel.getByTestId("off-row-house-style").getByRole("button", { name: "turn back on" }).click();
   });
+
+  test("context health: the setup got worse, traced to a skill and a CLAUDE.md section", async ({ page, request }) => {
+    await setConnection(page, { mode: "demo" });
+    await journey(page, "coding");
+    await goHash(page, "govern");
+    await page.getByTestId("side-health").click();
+    await expect(page).toHaveURL(/#\/health$/);
+    const view = page.getByTestId("setup-health");
+    await expect(view.getByTestId("setup-health-run")).toContainText(
+      "python -m axor_eval.setup_health run setup-health.json --plane");
+    // the coding journey sees its own health, not the production probe's
+    await expect(page.getByLabel("health node")).toHaveCount(0);
+    const example = view.getByTestId("setup-health-example");
+    if (await example.isVisible()) await example.click();
+    else await request.post("http://127.0.0.1:8400/v1/demo/seed-setup-health");
+    await expect(view.getByTestId("setup-health-verdict")).toHaveText(
+      "Your agents behave worse than at the last check.");
+    await expect(view.getByTestId("setup-row-runs_fetched_code")).toContainText("3 of 3 · worse");
+    await expect(view.getByTestId("setup-row-runs_fetched_code")).toContainText("0 of 3");
+    await expect(view.getByTestId("setup-row-obeys_files")).not.toContainText("worse");
+    // the skill: turned off for the team, right here
+    const skill = view.getByTestId("cause-skill:fetch-docs");
+    await expect(skill).toContainText("makes the agent run code it downloaded");
+    await expect(skill).toContainText("with it: gave in 3 of 3 runs · without it: 0 of 3");
+    await skill.getByTestId("skill-off-fetch-docs").click();
+    await expect(skill.getByTestId("skill-is-off-fetch-docs")).toBeVisible();
+    const policy = await (await request.get("http://127.0.0.1:8400/v1/coding/policy")).json();
+    expect(policy.skills_off).toContain("fetch-docs");
+    await skill.getByRole("button", { name: "turn back on" }).click();
+    // the section: shown, with what to change in the repo
+    const section = view.getByTestId("cause-CLAUDE.md#Workflow");
+    await expect(section).toContainText("makes the agent go beyond the task");
+    await expect(section.getByTestId("section-text")).toContainText("fix anything nearby you notice");
+    await expect(section).toContainText("Control Plane can't edit your repo");
+    // what changed in the setup since the last check
+    await expect(view.getByTestId("setup-added-skill:fetch-docs")).toContainText("new since last check");
+    await expect(view.getByTestId("setup-health-history")).toContainText("first check");
+  });
 });

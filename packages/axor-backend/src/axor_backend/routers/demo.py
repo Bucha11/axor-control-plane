@@ -230,6 +230,24 @@ async def seed_skill_eval(store: StoreDep) -> dict:
     return {"eval_id": "se-example"}
 
 
+@router.post("/seed-setup-health")
+async def seed_setup_health(store: StoreDep) -> dict:
+    """An example coding-agent setup health: a baseline check a week ago and
+    today's, which got worse and was traced to a skill and a CLAUDE.md
+    section. Made-up numbers, marked as an example."""
+    from datetime import UTC, datetime, timedelta
+
+    from axor_backend import demo
+
+    if any(c.get("example") for c in await store.list_setup_health(100)):
+        return {"check_id": "sh-example"}
+    before, latest = demo.setup_health_examples()
+    week_ago = (datetime.now(UTC) - timedelta(days=7)).isoformat()
+    await store.put_setup_health("sh-example-before", before, week_ago)
+    await store.put_setup_health("sh-example", latest, now())
+    return {"check_id": "sh-example"}
+
+
 @router.post("/fleet-reprobe", status_code=201)
 async def fleet_reprobe(request: Request, store: StoreDep) -> dict:
     """Play the example scraper's half of a heal: take the cut it was sent,
