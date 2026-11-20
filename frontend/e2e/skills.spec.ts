@@ -271,4 +271,46 @@ test.describe("coding agents: their menu, and trying a skill", () => {
     await goHash(page, `pair/${token}`);
     await expect(page.getByTestId("pair-denied")).toContainText("This pair session has ended, or the link is wrong.");
   });
+
+  test("team memory: learned from checks that passed, kept out what came from the web, given as one text", async ({ page, request }) => {
+    const B = "http://127.0.0.1:8400";
+    await setConnection(page, { mode: "demo" });
+    await journey(page, "coding");
+    await goHash(page, "govern");
+    await page.getByTestId("side-memory").click();
+    await expect(page).toHaveURL(/#\/memory$/);
+    const view = page.getByTestId("team-memory");
+    const example = view.getByTestId("memory-example");
+    if (await example.isVisible()) await example.click();
+    else { await request.post(`${B}/v1/demo/seed-memory`); await page.reload(); }
+    await expect(view.getByRole("tab", { name: "acme/api" }).or(view.getByTestId("memory-preview"))).toBeVisible();
+    const tab = view.getByRole("tab", { name: "acme/api" });
+    if (await tab.isVisible()) await tab.click();
+    const on = view.getByTestId("memory-on");
+    await expect(on).toContainText("uv run pytest -q");
+    await expect(on).toContainText("on by itself — two developers' agents confirmed it");
+    await expect(view.getByTestId("memory-preview")).toContainText("Run migrations with --dry-run first");
+    // kept out: it passed, and it came from a web page
+    const kept = view.getByTestId("memory-kept_out");
+    await expect(kept).toContainText("make test-all-integration --profile ci");
+    await expect(kept.getByTestId("memory-reason")).toContainText("it came from a web page");
+    await expect(kept.getByRole("button", { name: /turn on/ })).toHaveCount(0);
+    await expect(view.getByTestId("memory-stale")).toContainText("make typecheck");
+    // a suggested fix, turned on: now every agent gets it
+    const suggested = view.getByTestId("memory-suggested");
+    const fix = suggested.locator("[data-testid^=memory-item-]", { hasText: "fails here" });
+    await fix.getByRole("button", { name: "turn on for the team" }).click();
+    await expect(view.getByTestId("memory-preview")).toContainText("`pytest -q` fails here — `uv run pytest -q` works");
+    // what a sidecar fetches is the same text
+    const given = await (await request.get(`${B}/v1/coding/memory?repo=r-example-acme-api`)).json();
+    expect(given.text).toContain("`pytest -q` fails here");
+    expect(given.text).not.toContain("make test-all-integration");
+    // a note from a person
+    await view.getByLabel("note for every agent").fill("The payments module is frozen until the audit — don't touch it.");
+    await view.getByRole("button", { name: "add for the team" }).click();
+    await expect(view.getByTestId("memory-preview")).toContainText("payments module is frozen");
+    // back to where it passed
+    await view.getByTestId("memory-on").getByRole("button", { name: "see where it passed →" }).first().click();
+    await expect(page).toHaveURL(/#\/explain\/ex_mem_/);
+  });
 });

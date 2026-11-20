@@ -546,6 +546,21 @@ export interface SkillEvalSkill {
   verdict: string;
 }
 
+/** The team's memory: what coding agents verifiably learned in a repo. */
+export interface MemoryItem {
+  id: number; repo: string; key: string; kind: "runs" | "fix" | "note";
+  status: "suggested" | "on" | "off" | "stale" | "kept_out"; updated_ts: string;
+  doc: {
+    text: string; check_kind?: string; command?: string; failed?: string; by?: string;
+    developers: string[]; evidence: { run_id: string; node_id: string; seq: number; developer: string; ts: string; summary: string }[];
+    fails: number; last_ok_ts: string; last_fail_ts?: string; given: number; auto: boolean; reason: string;
+    decided_by?: string; decided_ts?: string;
+  };
+}
+export interface MemoryRepo {
+  repo: string; label: string; items: MemoryItem[]; preview: string; given_ids: number[]; sessions_given: number;
+}
+
 /** A pair session: someone's coding-agent session others watch live. */
 export interface PairInfo {
   token: string; node_id: string; created_by: string; created_ts: string; expires_ts: string;
@@ -1356,6 +1371,21 @@ export const api = {
     af(`/v1/skill-evals/${encodeURIComponent(id)}`).then((r) => j<SkillEval>(r)),
   seedSkillEval: () =>
     af("/v1/demo/seed-skill-eval", { method: "POST" }).then((r) => j<{ eval_id: string }>(r)),
+  memory: () => af("/v1/memory").then((r) => j<{ repos: MemoryRepo[] }>(r)),
+  setMemory: (id: number, status: "on" | "off") =>
+    af(`/v1/memory/${id}`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ status }),
+    }).then((r) => j<{ id: number; status: string }>(r)),
+  addMemoryNote: (repo: string, text: string) =>
+    af("/v1/memory/notes", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ repo, text }),
+    }).then((r) => j<{ id: number }>(r)),
+  seedMemory: () =>
+    af("/v1/demo/seed-memory", { method: "POST" }).then((r) => j<{ repo: string }>(r)),
   openPair: (nodeId: string, outside: boolean) =>
     af("/v1/pair", {
       method: "POST",

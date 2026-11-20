@@ -344,6 +344,12 @@ async def telemetry(
             derived = len(cases)
             if cases:
                 await store_evidence(ctx.store, ctx.notifier, run_id, node_id, scenario, cases)
+    # what the team's agents learned in this repository: a check that passed,
+    # a fix after one that failed (memory.py) — from what was recorded
+    if not result.replayed:
+        from axor_backend import memory
+
+        await memory.observe(ctx.store, node_id, run_id, lines)
     return {"stored": len(result.rows), "evidence": derived}
 
 
@@ -1112,7 +1118,12 @@ async def post_profile(node_id: str, body: dict, request: Request) -> None:
                                  "(at most 64)")
     if kind == "coding" and not developer:
         raise HTTPException(400, "a coding session names its developer (an opaque id)")
-    await _ctx(request).store.put_node_profile(node_id, kind, agent, developer, now())
+    repo = str(body.get("repo") or "")
+    if repo and (len(repo) > 64 or not all(c.isalnum() or c in "-_." for c in repo)):
+        raise HTTPException(400, "repo is an opaque id: letters, digits, -_. (at most 64)")
+    label = "".join(c for c in str(body.get("repo_label") or "") if c.isprintable())[:100]
+    await _ctx(request).store.put_node_profile(node_id, kind, agent, developer, now(),
+                                               repo=repo, repo_label=label if repo else "")
 
 
 @router.post("/{node_id}/reputation", status_code=201)

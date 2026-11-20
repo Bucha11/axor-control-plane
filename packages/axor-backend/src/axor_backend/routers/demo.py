@@ -191,7 +191,8 @@ async def seed_coding(store: StoreDep, cache: SubgraphCacheDep) -> dict:
     for node in sessions:
         agent = "codex" if node.startswith("codex-") else "claude-code"
         developer = demo.CODING_DEVELOPERS.get(node, "dev-example-ada")
-        await store.put_node_profile(node, "coding", agent, developer, ts)
+        await store.put_node_profile(node, "coding", agent, developer, ts,
+                                     repo=demo.CODING_REPO, repo_label=demo.CODING_REPO_LABEL)
         # reported today, as a real session's heartbeat records — the seat
         # meter counts developers whose agents were active
         await store.record_node_activity(node, today())
@@ -228,6 +229,30 @@ async def seed_skill_eval(store: StoreDep) -> dict:
     doc = {**demo.skill_eval_example(), "example": True}
     await store.put_skill_eval("se-example", doc, now())
     return {"eval_id": "se-example"}
+
+
+@router.post("/seed-memory")
+async def seed_memory(store: StoreDep, cache: SubgraphCacheDep) -> dict:
+    """An example team memory for the example sessions' repository: what two
+    developers' agents verifiably learned — learned the way a real one is,
+    from their recorded check runs through memory.observe — and a note."""
+    from datetime import UTC, datetime
+
+    from axor_backend import demo, memory
+
+    await seed_coding(store, cache)
+    repo = demo.CODING_REPO
+    if await store.memory_items_of(repo):
+        return {"repo": repo}
+    stamp = datetime.now(UTC)
+    for run_id, node, lines in demo.memory_runs(stamp):
+        await _seed(store, cache, run_id, node, "coding-demo", lines, [], created=lines[0]["ts"])
+        await memory.observe(store, node, run_id, lines)
+    ts = stamp.isoformat()
+    await store.add_memory_item(repo, f"note:{ts}", "note", "on", {
+        "text": demo.MEMORY_NOTE, "by": "ada@example.dev", "developers": [], "evidence": [],
+        "fails": 0, "last_ok_ts": ts, "given": 0, "auto": False, "reason": ""}, ts)
+    return {"repo": repo}
 
 
 @router.post("/seed-pair")

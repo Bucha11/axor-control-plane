@@ -401,6 +401,10 @@ node_profiles = Table(
     Column("agent", String(40), nullable=False, server_default=""),
     Column("developer", String(64), nullable=False, server_default="", index=True),
     Column("first_ts", String(40), nullable=False),
+    # the repository a coding session works in: an opaque id (a hash of its
+    # remote) and the label the screens show — the team's memory is per repo
+    Column("repo", String(64), nullable=False, server_default="", index=True),
+    Column("repo_label", String(100), nullable=False, server_default=""),
 )
 
 # Agent tree runs (axor-wrap `tree run`): the latest snapshot of each run —
@@ -425,6 +429,32 @@ incident_status = Table(
     Column("org_id", String(64), primary_key=True),
     Column("item_id", String(240), primary_key=True),
     Column("status", String(24), nullable=False),
+    Column("ts", String(40), nullable=False),
+)
+
+# The team's memory (memory.py): one row per thing learned in a repository;
+# `doc` holds its text, evidence, developers and counters.
+memory_items = Table(
+    "memory_items", metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("org_id", String(64), nullable=False, index=True),
+    Column("repo", String(64), nullable=False, index=True),
+    Column("key", String(512), nullable=False),
+    Column("kind", String(16), nullable=False),
+    Column("status", String(16), nullable=False),
+    Column("doc", Text, nullable=False),
+    Column("updated_ts", String(40), nullable=False),
+    UniqueConstraint("org_id", "repo", "key", name="uq_memory_items_key"),
+)
+
+# Which session was given which memory items, when.
+memory_given = Table(
+    "memory_given", metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("org_id", String(64), nullable=False, index=True),
+    Column("repo", String(64), nullable=False, index=True),
+    Column("node_id", String(200), nullable=False),
+    Column("ids", Text, nullable=False),
     Column("ts", String(40), nullable=False),
 )
 
@@ -815,6 +845,69 @@ class Store:
             return None
         return {"tree_run": row.tree_run, "status": row.status,
                 "updated_ts": row.updated_ts, **json.loads(row.doc)}
+
+    # ── the team's memory ─────────────────────────────────────────────────────
+
+    @staticmethod
+    def _memory_row(r: Any) -> dict[str, Any]:  # noqa: ANN401 - a Row
+        return {"id": r.id, "repo": r.repo, "key": r.key, "kind": r.kind, "status": r.status,
+                "doc": json.loads(r.doc), "updated_ts": r.updated_ts}
+
+    async def memory_item(self, repo: str, key: str) -> dict[str, Any] | None:
+        async with self.engine.connect() as conn:
+            r = (await conn.execute(select(memory_items).where(
+                memory_items.c.org_id == current_org_id(), memory_items.c.repo == repo,
+                memory_items.c.key == key[:512]))).first()
+        return self._memory_row(r) if r else None
+
+    async def memory_item_by_id(self, item_id: int) -> dict[str, Any] | None:
+        async with self.engine.connect() as conn:
+            r = (await conn.execute(select(memory_items).where(
+                memory_items.c.org_id == current_org_id(), memory_items.c.id == item_id))).first()
+        return self._memory_row(r) if r else None
+
+    async def add_memory_item(self, repo: str, key: str, kind: str, status: str,
+                              doc: dict, ts: str) -> int:
+        async with self.engine.begin() as conn:
+            res = await conn.execute(insert(memory_items).values(
+                org_id=current_org_id(), repo=repo, key=key[:512], kind=kind, status=status,
+                doc=json.dumps(doc), updated_ts=ts))
+        return int(res.inserted_primary_key[0])
+
+    async def update_memory_item(self, item_id: int, status: str, doc: dict, ts: str) -> None:
+        async with self.engine.begin() as conn:
+            await conn.execute(update(memory_items).where(
+                memory_items.c.org_id == current_org_id(), memory_items.c.id == item_id,
+            ).values(status=status, doc=json.dumps(doc), updated_ts=ts))
+
+    async def memory_items_of(self, repo: str | None = None) -> list[dict[str, Any]]:
+        q = select(memory_items).where(memory_items.c.org_id == current_org_id())
+        if repo is not None:
+            q = q.where(memory_items.c.repo == repo)
+        async with self.engine.connect() as conn:
+            rows = (await conn.execute(q.order_by(memory_items.c.id))).all()
+        return [self._memory_row(r) for r in rows]
+
+    async def repo_labels(self) -> dict[str, str]:
+        """Every repository a coding session reported, with its label."""
+        async with self.engine.connect() as conn:
+            rows = (await conn.execute(
+                select(node_profiles.c.repo, node_profiles.c.repo_label).where(
+                    node_profiles.c.org_id == current_org_id(),
+                    node_profiles.c.repo != ""))).all()
+        return {r.repo: r.repo_label or r.repo for r in rows}
+
+    async def add_memory_given(self, repo: str, node_id: str, ids: list[int], ts: str) -> None:
+        async with self.engine.begin() as conn:
+            await conn.execute(insert(memory_given).values(
+                org_id=current_org_id(), repo=repo, node_id=node_id, ids=json.dumps(ids), ts=ts))
+
+    async def memory_sessions_given(self, repo: str) -> int:
+        async with self.engine.connect() as conn:
+            rows = (await conn.execute(select(memory_given.c.node_id).where(
+                memory_given.c.org_id == current_org_id(), memory_given.c.repo == repo,
+            ).distinct())).all()
+        return len(rows)
 
     # ── pair sessions ─────────────────────────────────────────────────────────
 
@@ -1725,24 +1818,32 @@ class Store:
                 ))
 
     async def put_node_profile(self, node_id: str, kind: str, agent: str,
-                               developer: str, ts: str) -> None:
+                               developer: str, ts: str, repo: str = "",
+                               repo_label: str = "") -> None:
         """First word wins: a node is what it said it was when it first
-        reported, so a later profile cannot move it out of the fleet count."""
+        reported, so a later profile cannot move it out of the fleet count.
+        The repository is the exception — it is not metered, and a session
+        whose first profile came from an older sidecar learns it later."""
         org = current_org_id()
         async with self.engine.begin() as conn:
-            held = (await conn.execute(select(node_profiles.c.node_id).where(
+            held = (await conn.execute(select(node_profiles.c.node_id, node_profiles.c.repo).where(
                 node_profiles.c.org_id == org,
                 node_profiles.c.node_id == node_id))).first()
             if held is None:
                 await conn.execute(node_profiles.insert().values(
                     org_id=org, node_id=node_id, kind=kind, agent=agent,
-                    developer=developer, first_ts=ts))
+                    developer=developer, first_ts=ts, repo=repo, repo_label=repo_label))
+            elif repo and not held.repo:
+                await conn.execute(update(node_profiles).where(
+                    node_profiles.c.org_id == org, node_profiles.c.node_id == node_id,
+                ).values(repo=repo, repo_label=repo_label))
 
     async def node_kinds(self) -> dict[str, dict[str, str]]:
         async with self.engine.connect() as conn:
             rows = (await conn.execute(select(node_profiles).where(
                 node_profiles.c.org_id == current_org_id()))).all()
-        return {r.node_id: {"kind": r.kind, "agent": r.agent, "developer": r.developer}
+        return {r.node_id: {"kind": r.kind, "agent": r.agent, "developer": r.developer,
+                            "repo": r.repo, "repo_label": r.repo_label}
                 for r in rows}
 
     async def coding_profiles(self) -> list[dict[str, str]]:

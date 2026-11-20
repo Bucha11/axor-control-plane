@@ -27,7 +27,8 @@ from typing import Any
 # deployment's own.
 DEMO_RUN_IDS = frozenset({"ex_block", "ex_pass", "ex_tree",
                           "ex_coding_claude", "ex_coding_codex", "ex_skill_try",
-                          "ex_prod_drop", "ex_prod_ok"})
+                          "ex_prod_drop", "ex_prod_ok",
+                          "ex_mem_ada", "ex_mem_bob", "ex_mem_bob_2"})
 DEMO_SCENARIOS = frozenset({"adapter-demo", "multi-agent-demo", "coding-demo", "skill-demo",
                             "ops-demo"})
 
@@ -421,6 +422,8 @@ CODING_CLAUDE = "claude-code-example-3f9a21c0"
 CODING_CODEX = "codex-example-77b0e4d2"
 CODING_TREE = "tree-example-coding"
 CODING_DEVELOPERS = {CODING_CLAUDE: "dev-example-ada", CODING_CODEX: "dev-example-bob"}
+# the repository both example sessions work in (axor_wrap.agents.repo)
+CODING_REPO, CODING_REPO_LABEL = "r-example-acme-api", "acme/api"
 # What the page tells the agent to run. Not dangerous on its face — npx is
 # everyday work, no rule refuses it — so it is where it came from that refuses
 # it: the page's address is in the ledger, shared by both agents. (A curl | sh
@@ -724,3 +727,62 @@ def setup_health_examples() -> tuple[dict, dict]:
             + _sh_runs({"runs_fetched_code": [0, 3]}, "without skill:fetch-docs")
             + _sh_runs({"beyond_task": [0, 3]}, "without CLAUDE.md#Workflow"))
     return baseline_doc, _sh_doc(now_, before, causes, runs, list(_SETUP))
+
+
+# --- the team's memory (memory.py) -------------------------------------------
+
+def _check_pair(seq: int, node: str, command: str, kind: str, passed: bool, summary: str,
+                ts: str, carries: list[str] | None = None) -> list[dict]:
+    call = _ev(seq, node, "tool_call", "pass", tool="Bash", args={"command": command},
+               tool_call_id=f"c{seq}", **({"carries": carries} if carries else {}))
+    result = _ev(seq + 1, node, "tool_result", None, tool="Bash",
+                 status="ok" if passed else "error", value_ref=f"c{seq}",
+                 root={"sources": [], "sensitive": False}, preview=summary[:120],
+                 check={"kind": kind, "passed": passed, "command": command, "summary": summary},
+                 **({"carries": carries} if carries else {}))
+    call["ts"] = result["ts"] = ts
+    result["causal_root"] = f"c{seq}"
+    return [call, result]
+
+
+def memory_runs(stamp: Any) -> list[tuple[str, str, list[dict]]]:  # noqa: ANN401 - a datetime
+    """(run, node, lines) the example memory is learned from: Ada's agent finds
+    that plain pytest fails and `uv run pytest -q` works, lints and typechecks;
+    Bob's agent confirms the tests and the typecheck; a day later the
+    typecheck stops working for Bob twice. One command Ada's agent ran came
+    from a web page — it passed, and it is kept out."""
+    from datetime import timedelta
+
+    def at(hours: float) -> str:
+        return (stamp - timedelta(hours=hours)).isoformat()
+
+    ada, bob = CODING_CLAUDE, CODING_CODEX
+    return [
+        ("ex_mem_ada", ada, [
+            *_check_pair(0, ada, "pytest -q", "tests", False,
+                         "E   ModuleNotFoundError: No module named 'limits'", at(50)),
+            *_check_pair(2, ada, "uv run pytest -q", "tests", True,
+                         "=== 12 passed in 0.94s ===", at(49.9)),
+            *_check_pair(4, ada, "uv run ruff check .", "lint", True,
+                         "All checks passed!", at(49.8)),
+            *_check_pair(6, ada, "make typecheck", "typecheck", True,
+                         "Success: no issues found", at(49.7)),
+            *_check_pair(8, ada, "make test-all-integration --profile ci", "tests", True,
+                         "=== 40 passed in 31.2s ===", at(49.6), carries=["web"]),
+        ]),
+        ("ex_mem_bob", bob, [
+            *_check_pair(0, bob, "uv run pytest -q", "tests", True,
+                         "=== 12 passed in 1.02s ===", at(26)),
+            *_check_pair(2, bob, "make typecheck", "typecheck", True,
+                         "Success: no issues found", at(25.9)),
+        ]),
+        ("ex_mem_bob_2", bob, [
+            *_check_pair(0, bob, "make typecheck", "typecheck", False,
+                         "make: mypy: No such file or directory", at(3)),
+            *_check_pair(2, bob, "make typecheck", "typecheck", False,
+                         "make: mypy: No such file or directory", at(2.9)),
+        ]),
+    ]
+
+
+MEMORY_NOTE = "Run migrations with --dry-run first: the staging database is shared."
