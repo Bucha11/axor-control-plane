@@ -214,7 +214,7 @@ function PairPage({ token, withToken }: { token: string; withToken?: string }) {
           ))}
         </div>
       )}
-      <div style={{ display: "grid", gap: 16, gridTemplateColumns: withToken ? "repeat(auto-fit, minmax(380px, 1fr))" : "1fr" }}>
+      <div style={{ display: "grid", gap: 16, gridTemplateColumns: withToken ? "repeat(auto-fit, minmax(min(380px, 100%), 1fr))" : "minmax(0, 1fr)" }}>
         <PairPane token={token} />
         {withToken && <PairPane token={withToken} />}
       </div>

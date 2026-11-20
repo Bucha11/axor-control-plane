@@ -8,10 +8,34 @@ import { goHash, setConnection } from "./helpers";
 const ROUTES = [
   "home", "eval", "replay", "regression", "control", "get-started",
   "config-builder", "health", "pricing", "settings", "evidence", "catch", "explain", "prevent", "govern", "connect",
+  // the screens added since, with their example data seeded (below)
+  "pair", "memory", "trees", "sentinel", "chaos", "skills", "skill-evals", "skill-evals/se-example",
+  "settings?tab=billing", "settings?tab=connect", "settings?tab=alerts", "settings?tab=security",
+  "settings?tab=learn", "explain/ex_coding_claude",
 ];
 
 test.describe("on a phone", () => {
   test.use({ viewport: { width: 390, height: 844 } });
+
+  test.beforeAll(async ({ request }) => {
+    const B = "http://127.0.0.1:8400";
+    for (const seed of ["seed-coding", "seed-memory", "seed-setup-health", "seed-skill-eval", "seed-team-skill"]) {
+      await request.post(`${B}/v1/demo/${seed}`);
+    }
+  });
+
+  test("a pair session, and two side by side, fit a 390px screen", async ({ page, request }) => {
+    const B = "http://127.0.0.1:8400";
+    const pair = await (await request.post(`${B}/v1/demo/seed-pair`)).json();
+    const other = await (await request.post(`${B}/v1/pair`, { data: { node_id: "codex-example-77b0e4d2" } })).json();
+    for (const route of [`pair/${pair.token}`, `pair/${pair.token}?with=${other.token}`]) {
+      await goHash(page, route);
+      await page.getByTestId("pair-pane").first().waitFor();
+      const width = await page.evaluate(() => document.documentElement.scrollWidth);
+      expect(width, route).toBeLessThanOrEqual(390);
+    }
+    await request.delete(`${B}/v1/pair/${other.token}`);
+  });
 
   for (const route of ROUTES) {
     test(`${route} fits a 390px screen`, async ({ page }) => {

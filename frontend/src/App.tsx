@@ -212,7 +212,8 @@ export default function App() {
       {key === "prevent" && <Regression rules={route.query.rules} />}
       {key === "govern" && (
         <>
-          {!sidebar && <SubNav items={GOVERN_VIEWS} active={governView} />}
+          {!sidebar && <SubNav active={governView} items={GOVERN_VIEWS.filter(([r]) => menu.all
+            || menu.journey !== "coding" || ["govern", "trees", "health", "pair", "memory"].includes(r))} />}
           {head === "health" ? <ContextHealth journey={menu.journey} /> : head === "sentinel" ? <Sentinel />
             : head === "trees" ? <Trees treeRun={runIdParam} />
             : head === "memory" ? <TeamMemory />
@@ -394,7 +395,7 @@ function SubNav({ items, active }: { items: [string, string][]; active: string }
   return (
     <div style={{ maxWidth: 1200, margin: "-20px auto 20px" }}>
       <Tabs items={items.map(([id, label]) => ({ id, label }))} active={active}
-        onChange={(id) => navigate(id)} />
+        onChange={(id) => navigate(id)} style={{ flexWrap: "wrap", rowGap: 2 }} />
     </div>
   );
 }

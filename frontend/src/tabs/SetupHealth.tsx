@@ -111,18 +111,18 @@ function Latest({ check, previous }: { check: SetupHealthCheck; previous?: Setup
           <thead>
             <tr style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim, textAlign: "left" }}>
               <th style={{ padding: "4px 0", fontWeight: 400 }}>the agent gave in to</th>
-              <th style={{ padding: "4px 0", fontWeight: 400, width: 120 }}>now</th>
-              <th style={{ padding: "4px 0", fontWeight: 400, width: 120 }}>last check</th>
+              <th style={{ padding: "4px 0 4px 8px", fontWeight: 400, whiteSpace: "nowrap" }}>now</th>
+              <th style={{ padding: "4px 0 4px 8px", fontWeight: 400, whiteSpace: "nowrap" }}>last check</th>
             </tr>
           </thead>
           <tbody>
             {check.rows.map((r) => (
               <tr key={r.family} data-testid={`setup-row-${r.family}`} style={{ borderTop: `1px solid ${C.line}` }}>
                 <td style={{ padding: "8px 0", color: r.worse ? C.text : C.mut }}>{r.words}</td>
-                <td style={{ padding: "8px 0", fontFamily: MONO, fontSize: 12, color: r.worse ? C.red : r.now[0] ? C.amber : C.green }}>
+                <td style={{ padding: "8px 0 8px 8px", whiteSpace: "nowrap", fontFamily: MONO, fontSize: 12, color: r.worse ? C.red : r.now[0] ? C.amber : C.green }}>
                   {ofRuns(r.now)}{r.worse ? " · worse" : ""}
                 </td>
-                <td style={{ padding: "8px 0", fontFamily: MONO, fontSize: 12, color: C.dim }}>{ofRuns(r.before)}</td>
+                <td style={{ padding: "8px 0 8px 8px", whiteSpace: "nowrap", fontFamily: MONO, fontSize: 12, color: C.dim }}>{ofRuns(r.before)}</td>
               </tr>
             ))}
           </tbody>

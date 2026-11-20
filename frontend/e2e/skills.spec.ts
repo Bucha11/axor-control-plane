@@ -107,6 +107,7 @@ test.describe("coding agents: their menu, and trying a skill", () => {
     await goHash(page, "skill-evals");
     await expect(page.getByTestId("skill-eval-cmd")).toContainText("python -m axor_eval.skills run skill-eval.json --plane");
     const example = page.getByTestId("skill-eval-example");
+    await page.waitForLoadState("networkidle");   // the list decides whether the example button shows
     if (await example.isVisible()) await example.click();
     else await page.getByTestId("skill-eval-se-example").click();
     await expect(page).toHaveURL(/#\/skill-evals\/se-example$/);
@@ -158,6 +159,7 @@ test.describe("coding agents: their menu, and trying a skill", () => {
     // the coding journey sees its own health, not the production probe's
     await expect(page.getByLabel("health node")).toHaveCount(0);
     const example = view.getByTestId("setup-health-example");
+    await page.waitForLoadState("networkidle");   // the list decides whether the example button shows
     if (await example.isVisible()) await example.click();
     else await request.post("http://127.0.0.1:8400/v1/demo/seed-setup-health");
     await expect(view.getByTestId("setup-health-verdict")).toHaveText(
@@ -191,6 +193,7 @@ test.describe("coding agents: their menu, and trying a skill", () => {
     const panel = page.getByTestId("team-skills");
     await expect(panel.getByTestId("team-share-cmd")).toHaveText("axor-wrap skill share ./.claude/skills/<name>");
     const example = panel.getByTestId("team-skill-example");
+    await page.waitForLoadState("networkidle");   // the list decides whether the example button shows
     if (await example.isVisible()) await example.click();
     else await request.post("http://127.0.0.1:8400/v1/demo/seed-team-skill");
     const row = panel.getByTestId("team-row-changelog-entries");
@@ -281,6 +284,7 @@ test.describe("coding agents: their menu, and trying a skill", () => {
     await expect(page).toHaveURL(/#\/memory$/);
     const view = page.getByTestId("team-memory");
     const example = view.getByTestId("memory-example");
+    await page.waitForLoadState("networkidle");   // the list decides whether the example button shows
     if (await example.isVisible()) await example.click();
     else { await request.post(`${B}/v1/demo/seed-memory`); await page.reload(); }
     await expect(view.getByRole("tab", { name: "acme/api" }).or(view.getByTestId("memory-preview"))).toBeVisible();
