@@ -26,6 +26,12 @@ type Journey = "coding" | "production" | "both";
 const TRIGGERS: { id: string; label: string; for: Journey[] }[] = [
   { id: "evidence_run", label: "an agent said something its own run contradicts — a tool result it made up, tests it said passed",
     for: ["coding", "production", "both"] },
+  { id: "dangerous_let_through", label: "a dangerous call went through — it deleted something, or ran, sent or wrote what outside text said",
+    for: ["coding", "production", "both"] },
+  { id: "would_refuse", label: "a call the rules would refuse went through, because enforcement is off (observe mode)",
+    for: ["coding", "production", "both"] },
+  { id: "memory_worse", label: "agents did worse after the team memory changed", for: ["coding", "both"] },
+  { id: "setup_health_worse", label: "a context health check came out worse than the last one", for: ["coding", "both"] },
   { id: "level_transition_up", label: "an agent was restricted further (its level went up)", for: ["production", "both"] },
   { id: "behavioral_drift", label: "an agent's behaviour drifted (its health check)", for: ["production", "both"] },
   { id: "heat_threshold", label: "something an agent touched is getting suspicious across sessions (sentinel)", for: ["production", "both"] },

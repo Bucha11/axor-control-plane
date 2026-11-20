@@ -59,6 +59,10 @@ test.describe("settings", () => {
     await goHash(page, "settings?tab=alerts");
     for (const label of [
       /its own run contradicts/,
+      /a dangerous call went through/,
+      /a call the rules would refuse went through/,
+      /agents did worse after the team memory changed/,
+      /a context health check came out worse/,
       /restricted further/,
       /behaviour drifted/,
       /suspicious across sessions/,

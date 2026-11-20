@@ -344,6 +344,8 @@ async def telemetry(
             derived = len(cases)
             if cases:
                 await store_evidence(ctx.store, ctx.notifier, run_id, node_id, scenario, cases)
+    if not result.replayed:
+        await _alert_steps(ctx, node_id, run_id, lines)
     # what the team's agents learned in this repository: a check that passed,
     # a fix after one that failed (memory.py) — from what was recorded
     if not result.replayed:
@@ -351,6 +353,34 @@ async def telemetry(
 
         await memory.observe(ctx.store, node_id, run_id, lines)
     return {"stored": len(result.rows), "evidence": derived}
+
+
+async def _alert_steps(ctx: Any, node_id: str, run_id: str,  # noqa: ANN401
+                       lines: list[dict[str, Any]]) -> None:
+    """Page about a call in this batch the Incidents feed would list as
+    needing a look: dangerous and let through, or let through only because
+    enforcement was off. Read against the run so far, so a command that quotes
+    an answer from an earlier batch is still known to come from outside."""
+    notifier = getattr(ctx, "notifier", None)
+    calls = {ln.get("seq") for ln in lines if ln.get("kind") == "tool_call"}
+    if notifier is None or not calls:
+        return
+    from axor_backend import incidents, step_search
+
+    history = (await ctx.store.run_events(run_id)
+               if await ctx.store.run_event_count(run_id) <= _TURN_EVENTS else lines)
+    for step in step_search.search([(run_id, ln) for ln in reversed(history)], limit=10_000):
+        if step["kind"] != "tool_call" or step["seq"] not in calls or step["node_id"] != node_id:
+            continue
+        link = f"/#/explain/{run_id}?seq={step['seq']}&node={node_id}"
+        if step["outcome"] == "would_refuse":
+            await notifier.emit("would_refuse", node_id, {
+                "run_id": run_id, "seq": step["seq"], "tool": step["tool"],
+                "what": step["what"], "reason": step["reason"], "permalink": link})
+        elif step["outcome"] == "let_through" and (why := incidents.dangerous(step)):
+            await notifier.emit("dangerous_let_through", node_id, {
+                "run_id": run_id, "seq": step["seq"], "tool": step["tool"],
+                "what": why, "call": step["what"], "permalink": link})
 
 
 async def _note_agent_connected(ctx: Any, node_id: str) -> None:  # noqa: ANN401

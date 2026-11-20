@@ -20,7 +20,7 @@ from datetime import UTC, datetime
 from fastapi import APIRouter, HTTPException, Request
 
 from axor_backend import memory
-from axor_backend.deps import PrincipalDep, StoreDep
+from axor_backend.deps import NotifierDep, PrincipalDep, StoreDep
 
 router = APIRouter(tags=["memory"])
 
@@ -51,7 +51,8 @@ async def memory_for_agent(repo: str, request: Request, store: StoreDep) -> dict
 
 
 @router.post("/v1/coding/memory/given")
-async def memory_given(body: dict, store: StoreDep, principal: PrincipalDep) -> dict:
+async def memory_given(body: dict, store: StoreDep, principal: PrincipalDep,
+                       notifier: NotifierDep) -> dict:
     node_id, repo = str(body.get("node_id", "")), str(body.get("repo", ""))
     if not node_id or not repo:
         raise HTTPException(400, "body is {node_id, repo, ids}")
@@ -66,7 +67,27 @@ async def memory_given(body: dict, store: StoreDep, principal: PrincipalDep) -> 
         if item and item["repo"] == repo:
             doc = {**item["doc"], "given": item["doc"].get("given", 0) + 1, "last_given_ts": ts}
             await store.update_memory_item(item_id, item["status"], doc, item["updated_ts"])
+    await _alert_if_worse(store, notifier, repo)
     return {"recorded": len(ids)}
+
+
+async def _alert_if_worse(store: StoreDep, notifier: NotifierDep, repo: str) -> None:
+    """Each session given the memory adds to the comparison after the last
+    change; the first time it reads significantly worse, page — once."""
+    change = await store.last_memory_change(repo)
+    if change is None or change.get("alerted"):
+        return
+    cmp = await memory.compare(store, repo, change)
+    if cmp["verdict"] != "worse":
+        return
+    label = (await store.repo_labels()).get(repo, repo)
+    await notifier.emit("memory_worse", f"repo:{label}", {
+        "repo": label, "version": change["version"],
+        "added": [a["text"] for a in change["added"]],
+        "removed": [r["text"] for r in change["removed"]],
+        "before": cmp["before"], "after": cmp["after"], "p": cmp["p"],
+        "permalink": "/#/memory"})
+    await store.mark_memory_change(change["id"], alerted=True)
 
 
 COMPARE_CHANGES = 5

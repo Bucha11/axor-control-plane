@@ -936,6 +936,18 @@ class Store:
         return {"id": r.id, "repo": r.repo, "ts": r.ts, "version": r.version,
                 "previous": r.previous, **json.loads(r.doc)}
 
+    async def mark_memory_change(self, change_id: int, **extra: Any) -> None:  # noqa: ANN401
+        """Add to a logged change's doc (e.g. that it was alerted on)."""
+        async with self.engine.begin() as conn:
+            row = (await conn.execute(select(memory_changes.c.doc).where(
+                memory_changes.c.org_id == current_org_id(),
+                memory_changes.c.id == change_id))).first()
+            if row is None:
+                return
+            doc = {**json.loads(row.doc), **extra}
+            await conn.execute(update(memory_changes).where(
+                memory_changes.c.id == change_id).values(doc=json.dumps(doc)))
+
     async def last_memory_change(self, repo: str) -> dict[str, Any] | None:
         changes = await self.memory_changes_of(repo, 1)
         return changes[0] if changes else None

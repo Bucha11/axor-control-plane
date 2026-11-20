@@ -130,6 +130,14 @@ TRIGGERS = frozenset({
     # operator found out from a 402. `node_id` carries the licensed
     # organization, which is the subject of this one.
     "license_expiring",
+    # What the Incidents feed holds that needs a look, as it happens: a call
+    # let through that deleted, or sent out / ran / wrote what outside text
+    # said; one the rules would have refused, let through only because
+    # enforcement was off.
+    "dangerous_let_through", "would_refuse",
+    # Coding agents: agents did significantly worse after the team's memory
+    # changed (memory.compare); a setup health check got worse.
+    "memory_worse", "setup_health_worse",
 })
 
 

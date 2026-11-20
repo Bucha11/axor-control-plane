@@ -9,7 +9,7 @@ import uuid
 from fastapi import APIRouter, HTTPException
 
 from axor_backend.clock import now
-from axor_backend.deps import StoreDep
+from axor_backend.deps import NotifierDep, StoreDep
 
 router = APIRouter(prefix="/v1/setup-health", tags=["setup-health"])
 
@@ -30,9 +30,16 @@ def _validated(body: dict) -> dict:
 
 
 @router.post("", status_code=201)
-async def post_check(body: dict, store: StoreDep) -> dict:
+async def post_check(body: dict, store: StoreDep, notifier: NotifierDep) -> dict:
     check_id = f"sh-{uuid.uuid4().hex[:12]}"
-    await store.put_setup_health(check_id, _validated(body), now())
+    doc = _validated(body)
+    await store.put_setup_health(check_id, doc, now())
+    if doc.get("verdict") == "worse":
+        await notifier.emit("setup_health_worse", "setup-health", {
+            "check_id": check_id, "agent": doc.get("agent", ""),
+            "worse": [r.get("words") for r in doc.get("rows") or [] if r.get("worse")],
+            "traced_to": [c.get("words") for c in doc.get("causes") or []],
+            "permalink": "/#/health"})
     return {"check_id": check_id}
 
 

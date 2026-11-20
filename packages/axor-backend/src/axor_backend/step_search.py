@@ -121,8 +121,10 @@ def search(
                      else "let_through")
             did = what_it_did(name, args, p.get("normalized"))
             refs = p.get("arg_refs") if isinstance(p.get("arg_refs"), dict) else {}
-            from_outside = bool((p.get("driving_root") or {}).get("sources")) or any(
-                r in outside_refs.get(run_id, set()) for r in refs.values())
+            # the sidecar ships what a call's arguments carry (`carries`)
+            from_outside = (bool((p.get("driving_root") or {}).get("sources"))
+                            or bool(p.get("carries"))
+                            or any(r in outside_refs.get(run_id, set()) for r in refs.values()))
             reason = p.get("reason") or (p.get("would_deny") or {}).get("reason") or ""
         else:
             label = "outside" if (p.get("root") or {}).get("sources") else "answered"

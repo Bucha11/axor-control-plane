@@ -32,7 +32,7 @@ STATUSES = ("new", "looked_at", "kept_as_test", "rule_made", "not_a_problem")
 NEEDS_A_LOOK = ("made_up", "dangerous", "would_refuse", "memory_worse")
 
 
-def _dangerous(step: dict[str, Any]) -> str | None:
+def dangerous(step: dict[str, Any]) -> str | None:
     does, outside = step["does"], step["from_outside"]
     if "deletes" in does:
         return "deleted or wiped something"
@@ -74,7 +74,7 @@ async def incidents(store: Any, scan: int) -> list[dict[str, Any]]:  # noqa: ANN
         if s["outcome"] == "would_refuse":
             items.append({**base, "id": sid, "kind": "would_refuse", "what": s["tool"],
                           "reason": s["reason"]})
-        elif s["outcome"] == "let_through" and (why := _dangerous(s)):
+        elif s["outcome"] == "let_through" and (why := dangerous(s)):
             items.append({**base, "id": sid, "kind": "dangerous", "what": why,
                           "tool": s["tool"]})
         elif s["outcome"] == "refused":
