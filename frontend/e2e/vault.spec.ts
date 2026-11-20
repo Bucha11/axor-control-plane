@@ -27,11 +27,11 @@ test.describe("federation vault", () => {
     const vault = page.getByTestId("federation-vault");
     await expect(vault).toBeVisible();
     // pane 1: tool credentials — enrolled, scoped
-    await expect(vault.getByText("FEDERATION VAULT · TOOL CREDENTIALS")).toBeVisible();
-    await expect(vault.getByText("payments")).toBeVisible();
+    await expect(vault.getByText("TOOL CREDENTIALS · the agent never holds them")).toBeVisible();
+    await expect(vault.getByText("payments", { exact: true })).toBeVisible();
     await expect(vault.getByText(/scope: billing-agent/)).toBeVisible();
     // pane 2: signing — key with pubkey prefix + audited sign request
-    await expect(vault.getByText("FEDERATION VAULT · SIGNING KEYS")).toBeVisible();
+    await expect(vault.getByText("SIGNING COMMANDS TO AGENTS")).toBeVisible();
     await expect(vault.getByText("fed-main").first()).toBeVisible();
     await expect(vault.getByText("SIGN-REQUEST AUDIT")).toBeVisible();
     await expect(vault.getByText("signed", { exact: true }).first()).toBeVisible();
@@ -78,7 +78,7 @@ test.describe("federation vault", () => {
     await setConnection(page, { mode: "adapter" });
     await goHash(page, "settings?tab=security");
     await expect(
-      page.getByText(/this deployment stores credentials in PLAINTEXT/),
+      page.getByText(/this plane stores tool credentials in PLAINTEXT/),
     ).toBeVisible();
 
     await page.getByRole("button", { name: /enrol a credential/ }).click();

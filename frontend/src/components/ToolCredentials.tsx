@@ -137,13 +137,13 @@ export default function ToolCredentials() {
   return (
     <div className="p-4 flex-1" style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 8 }} data-testid="tool-credentials">
       <div style={{ fontSize: 10, fontFamily: MONO, color: C.dim, letterSpacing: "0.1em", marginBottom: 8 }}>
-        FEDERATION VAULT · TOOL CREDENTIALS
+        TOOL CREDENTIALS · the agent never holds them
       </div>
       <div style={{ fontFamily: MONO, fontSize: 10.5, color: C.mut, marginBottom: 10, lineHeight: 1.6 }}>
-        fetched at call time and injected at the sink by the proxy, for the tools
-        its AXOR_VAULT_TOOLS opts in — so the agent never holds the key. per-node
-        scope, fail-closed, no cache. rotation is config; the plane may revoke,
-        never grant.
+        An API key for a tool the agent calls (a billing API, a CRM) is kept here and
+        added to the request by the proxy, at the moment of the call — the agent never
+        sees it. Each is for the agents you name; if anything is off the call fails rather
+        than going without. The plane can revoke one; it cannot hand one out on its own.
       </div>
 
       {/* Whether this deployment can read what it stores. Silence here is what
@@ -169,9 +169,9 @@ export default function ToolCredentials() {
             </span>
           ) : (
             <span>
-              this deployment stores credentials in PLAINTEXT. Mint a sealing key
-              with <span style={{ color: C.text }}>axor-proxy vault keygen</span> and
-              register the public half below.
+              this plane stores tool credentials in PLAINTEXT — readable by whoever reads its
+              database. Make a sealing key with <span style={{ color: C.text }}>axor-proxy vault keygen</span> and
+              register its public half below: from then on only the proxy can open them.
             </span>
           )}
         </div>
@@ -275,7 +275,7 @@ export default function ToolCredentials() {
           keygen` on the machine that will hold them. */}
       <div className="mt-3 pt-2" style={{ borderTop: `1px solid ${C.line}` }}>
         <div style={{ fontFamily: MONO, fontSize: 9.5, color: C.dim, letterSpacing: "0.08em", marginBottom: 4 }}>
-          PUBLIC KEYS · private halves stay on the machines that hold them
+          PUBLIC KEYS · the private halves never leave the machines that made them
         </div>
         <div className="flex gap-2 items-end mb-2">
           <Field name="sealing pubkey (envelope mode)" value={sealKey} onChange={setSealKey} />

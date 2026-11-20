@@ -584,6 +584,9 @@ export default function Settings({ tab = "workspace" }: { tab?: string } = {}) {
           <Section title="KEYS FOR YOUR AGENTS">
             <AgentKeys journey={journey} menuAll={menuAll} />
           </Section>
+          <Section title="WHAT IS REPORTING">
+            <Connections coding={coding} prod={prod} />
+          </Section>
           {prod && (
             <Section title="THIS BROWSER'S CONNECTION">
               <div style={{ fontFamily: MONO, fontSize: 12, color: C.text, marginBottom: 8 }}>
@@ -830,7 +833,8 @@ function StatementLines({ st, coding, prod }: { st: BillingStatement; coding: bo
         <>governed nodes at the peak: <span style={{ color: C.text }}>{st.peak_nodes}</span>
           {st.peak_day ? ` on ${st.peak_day}` : ""} · {st.included_nodes} included
           {st.billable_nodes ? ` · ${st.billable_nodes} over` : ""}</>,
-        st.priced ? st.overage : "—", "bill-nodes")}
+        st.workspace_tier === "coding" && st.billable_nodes > 0 ? "on Team and up"
+          : st.priced ? st.overage : "—", "bill-nodes")}
       <div className="flex gap-3" style={{ fontFamily: MONO, fontSize: 12.5, padding: "6px 0 0", borderTop: `1px solid ${C.line}` }}>
         <span style={{ flex: 1, color: C.text }}>{st.provisional ? "so far this month" : "total"}</span>
         <span data-testid="bill-total" style={{ color: C.text, fontWeight: 700 }}>{st.priced ? st.total : "per contract"}</span>
@@ -1114,6 +1118,87 @@ function AgentKeys({ journey, menuAll }: { journey: Journey | null; menuAll: boo
   );
 }
 
+const ago = (ts?: string | null) => {
+  if (!ts) return "never";
+  const s = Math.max(0, (Date.now() - new Date(ts).getTime()) / 1000);
+  return s < 90 ? "just now" : s < 5400 ? `${Math.round(s / 60)} min ago` : s < 172800 ? `${Math.round(s / 3600)} h ago` : `${Math.round(s / 86400)} days ago`;
+};
+
+/** What reports to this plane: production agents one by one — when last
+ * heard from, at what level, whether they hold a key of their own — and the
+ * coding agents per developer. The example's are left out. */
+function Connections({ coding, prod }: { coding: boolean; prod: boolean }) {
+  const nodes = useQuery({ queryKey: ["nodes"], queryFn: api.nodes, refetchInterval: 15000 });
+  const apiToken = useApp((s) => s.apiToken);
+  const authStatus = useQuery({ queryKey: ["auth-status", apiToken], queryFn: api.authStatus });
+  const admin = authStatus.data?.auth_enabled === true && (authStatus.data?.scopes ?? []).includes("admin");
+  const keys = useQuery({ queryKey: ["api-keys"], queryFn: api.listKeys, enabled: admin, retry: false });
+  const bound = new Set((keys.data ?? []).map((k) => k.node_id).filter(Boolean));
+  const all = (nodes.data ?? []).filter((n) => !/example/.test(n.node_id) && !n.profile?.developer?.startsWith("dev-example-"));
+  const agents = all.filter((n) => !n.profile || n.profile.kind === "agent");
+  // coding agents per developer this month, from the seat meter (activity, not
+  // heartbeats — a session that never heartbeat is still a developer's)
+  const billing = useQuery({ queryKey: ["billing"], queryFn: api.billing, retry: false });
+  const month = billing.data?.current?.developers ?? billing.data?.if_paid?.[0]?.developers ?? [];
+  const last = new Map<string, string>();
+  for (const n of all.filter((x) => x.profile?.kind === "coding")) {
+    const t = n.reported?.updated_ts ?? "";
+    if (t > (last.get(n.profile!.developer) ?? "")) last.set(n.profile!.developer, t);
+  }
+  const devs = new Map(month.map((d) => [d.developer, {
+    sessions: d.sessions, agents: new Set(d.agents), last: last.get(d.developer) ?? "" }]));
+  const sessionCount = month.reduce((n, d) => n + d.sessions, 0);
+  const row: React.CSSProperties = { fontFamily: MONO, fontSize: 11, padding: "3px 0", borderTop: `1px solid ${C.line}` };
+  return (
+    <div data-testid="connections">
+      {prod && (
+        <div className="mb-3">
+          <div style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim, marginBottom: 4 }}>
+            PRODUCTION AGENTS · {agents.length}
+          </div>
+          {agents.length === 0 && <div style={{ fontFamily: MONO, fontSize: 11, color: C.dim }}>none has reported yet</div>}
+          {agents.slice(0, 50).map((n) => {
+            const stale = !n.reported || Date.now() - new Date(n.reported.updated_ts).getTime() > 120_000;
+            return (
+              <div key={n.node_id} data-testid={`conn-${n.node_id}`} className="flex gap-3" style={row}>
+                <span style={{ color: C.text, flex: 1, overflow: "hidden", textOverflow: "ellipsis" }}>{n.node_id}</span>
+                <span style={{ color: n.reported?.level && n.reported.level !== "NORMAL" ? C.amber : C.mut }}>{n.reported?.level?.toLowerCase() ?? "—"}</span>
+                <span style={{ color: stale ? C.amber : C.green, width: 90, textAlign: "right" }}>{ago(n.reported?.updated_ts)}</span>
+                {admin && <span style={{ color: bound.has(n.node_id) ? C.green : C.dim, width: 110, textAlign: "right" }}>
+                  {bound.has(n.node_id) ? "its own key" : "a shared key"}</span>}
+              </div>
+            );
+          })}
+          {admin && agents.some((n) => !bound.has(n.node_id)) && (
+            <div style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim, marginTop: 4 }}>
+              an agent on a shared key can speak for its neighbours — give each one its own (above, "for one production agent")
+            </div>
+          )}
+        </div>
+      )}
+      {coding && (
+        <div>
+          <div style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim, marginBottom: 4 }}>
+            CODING AGENTS THIS MONTH · {devs.size} developer{devs.size === 1 ? "" : "s"}, {sessionCount} session{sessionCount === 1 ? "" : "s"}
+          </div>
+          {devs.size === 0 && <div style={{ fontFamily: MONO, fontSize: 11, color: C.dim }}>no developer's agents have reported yet</div>}
+          {[...devs.entries()].map(([dev, d]) => (
+            <div key={dev} className="flex gap-3" style={row}>
+              <span style={{ color: C.text, flex: 1 }}>{dev.slice(0, 16)}…</span>
+              <span style={{ color: C.mut }}>{[...d.agents].join(", ")}</span>
+              <span style={{ color: C.mut, width: 90, textAlign: "right" }}>{d.sessions} session{d.sessions === 1 ? "" : "s"}</span>
+              <span style={{ color: C.dim, width: 90, textAlign: "right" }}>{d.last ? ago(d.last) : ""}</span>
+            </div>
+          ))}
+          <div style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim, marginTop: 4 }}>
+            a developer shows as an id — the plane is never told an address
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 /** Each wall of this plane, up or down, with how to raise the ones that are down. */
 function SecurityPosture() {
   const posture = useQuery({ queryKey: ["security-posture"], queryFn: api.securityPosture, retry: false });
@@ -1188,12 +1273,13 @@ function FederationVault() {
       <ToolCredentials />
       <div className="p-4 flex-1" style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 8 }}>
         <div style={{ fontSize: 10, fontFamily: MONO, color: C.dim, letterSpacing: "0.1em", marginBottom: 8 }}>
-          FEDERATION VAULT · SIGNING KEYS
+          SIGNING COMMANDS TO AGENTS
         </div>
         <div style={{ fontFamily: MONO, fontSize: 10.5, color: C.mut, marginBottom: 10, lineHeight: 1.6 }}>
-          custody signs, never surrenders — the private key never leaves; every
-          sign request is an audited operator action. pubkeys stay pinned in
-          adapter config, never fetched from here.
+          Pause, stop and cap reach an agent signed, so a forged command is refused. The
+          private key stays in this plane's vault and is never handed out; every signature
+          is logged with who asked. Agents check against the public key in their own config —
+          they never fetch one from here.
         </div>
         {keys.isError ? (
           <div style={{ fontFamily: MONO, fontSize: 11, color: C.red }}>
@@ -1232,7 +1318,7 @@ function FederationVault() {
             the browser — the vault signs, the browser holds only the token. */}
         <div className="mt-3 pt-3" style={{ borderTop: `1px solid ${C.line}` }}>
           <div style={{ fontFamily: MONO, fontSize: 9.5, color: C.dim, letterSpacing: "0.08em", marginBottom: 6 }}>
-            OPERATOR COMMAND SIGNING
+            SIGN THIS BROWSER'S COMMANDS
           </div>
           <div className="flex flex-col gap-2" data-testid="signing-controls">
             <input
@@ -1250,7 +1336,7 @@ function FederationVault() {
                 aria-label="signing key id"
                 style={{ background: C.bg, border: `1px solid ${C.line}`, borderRadius: 4, color: C.text, fontFamily: MONO, fontSize: 11, padding: "5px 8px", outline: "none", flex: 1 }}
               >
-                <option value="">— unsigned (dev only) —</option>
+                <option value="">— unsigned (a plane on your own machine only) —</option>
                 {(keys.data ?? []).map((k) => (
                   <option key={k.key_id} value={k.key_id}>{k.key_id}</option>
                 ))}
@@ -1286,8 +1372,8 @@ function FederationVault() {
             )}
             <div style={{ fontFamily: MONO, fontSize: 10, color: signedPosture ? C.green : C.amber, lineHeight: 1.6 }}>
               {signedPosture
-                ? `● signed — Control commands are canonicalized in the browser and signed by the vault under ${signingKeyId}; the operator key never enters the browser.`
-                : "○ unsigned — no signing key selected; commands go out with an empty signature and are accepted only by a dev backend (AXOR_ALLOW_UNSIGNED=1). Select or create a key to sign for real."}
+                ? `● signed — commands from this browser are signed by the vault with ${signingKeyId}; the key itself never comes to the browser.`
+                : "○ unsigned — commands from this browser go out without a signature, and only a plane that allows that (AXOR_ALLOW_UNSIGNED=1) takes them. Pick or create a key to sign them."}
             </div>
           </div>
         </div>
