@@ -9,7 +9,7 @@ test.describe("sign-up funnel", () => {
       if (r.url().endsWith("/v1/funnel") && r.method() === "POST") posted.push(r.postDataJSON());
     });
     await setConnection(page, { mode: "demo" });
-    await goHash(page, "settings");
+    await goHash(page, "settings?tab=operator");
     await expect.poll(() => posted.some((p) => p.event === "visit")).toBe(true);
     // a random tab id — nothing personal
     expect(posted[0].session_id).toMatch(/^t[0-9a-f]{24}$/);

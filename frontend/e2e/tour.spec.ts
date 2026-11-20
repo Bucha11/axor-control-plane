@@ -69,8 +69,8 @@ test.describe("tour", () => {
     await expect(page.getByRole("dialog", { name: "guided tour" })).toHaveCount(0);
   });
 
-  test("is restartable from Settings → LEARN MODE", async ({ page }) => {
-    await goHash(page, "settings");
+  test("is restartable from Settings → learn", async ({ page }) => {
+    await goHash(page, "settings?tab=learn");
     await page.getByRole("button", { name: "start tour", exact: true }).click();
     const dialog = page.getByRole("dialog", { name: "guided tour" });
     await expect(dialog.getByText("Your agents, live")).toBeVisible({ timeout: 15_000 });

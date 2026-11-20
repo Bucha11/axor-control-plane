@@ -48,7 +48,7 @@ test.describe("adoption", () => {
       ["config-builder", "outside text"],
       ["get-started", "credentials pass through untouched"],
       ["health", "which piece of its context changed it"],
-      ["settings", "dead-letter"],
+      ["settings", "the keys your agents report with"],
       ["pricing", "one ladder"],
     ];
     for (const [hash, expected] of cases) {
@@ -59,7 +59,7 @@ test.describe("adoption", () => {
 
   test("reset tips brings back dismissed coach notes", async ({ page }) => {
     await setConnection(page, { mode: "adapter" });
-    await goHash(page, "settings");
+    await goHash(page, "settings?tab=learn");
     // Turn learn on, dismiss the settings note, then reset it from the section.
     await page.getByRole("button", { name: /toggle learn mode/ }).click();
     await expect(page.getByRole("note")).toBeVisible();

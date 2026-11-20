@@ -46,6 +46,40 @@ AUDIT_PAGE = 200
 AUDIT_PAGE_MAX = 1000
 
 
+@router.get("/security/posture")
+async def security_posture(config: ConfigDep) -> dict:
+    """What this deployment's walls are, item by item, with how to raise the
+    ones that are down — the same facts the boot log warns about
+    (lifecycle.warn_about_open_posture), where an operator looks. Config only:
+    no secret, no key material."""
+    signing = ("signed" if config.operator_keys and not config.allow_unsigned
+               else "unsigned_accepted" if config.allow_unsigned else "signed_no_keys")
+    items = [
+        {"id": "auth", "ok": config.auth_enabled,
+         "what": "every request needs a token or a sign-in",
+         "fix": "set AXOR_API_TOKEN on the backend"},
+        {"id": "command_signing", "ok": signing == "signed",
+         "what": "commands to agents (pause, stop, cap) are signed by an operator key",
+         "fix": "set AXOR_OPERATOR_KEYS and turn AXOR_ALLOW_UNSIGNED off"
+                if signing == "unsigned_accepted" else "set AXOR_OPERATOR_KEYS"},
+        {"id": "vault_creds_token", "ok": config.vault_creds_token is not None,
+         "what": "dispensing tool credentials needs its own token, not just admin",
+         "fix": "set AXOR_VAULT_CREDS_TOKEN"},
+        {"id": "vault_signing_token", "ok": config.vault_signing_token is not None,
+         "what": "requesting a signature needs its own token, not just admin",
+         "fix": "set AXOR_VAULT_SIGNING_TOKEN"},
+        {"id": "retention", "ok": config.retention_days is not None,
+         "what": (f"runs are kept {config.retention_days:g} days" if config.retention_days
+                  else "runs are kept forever"),
+         "fix": "set AXOR_RETENTION_DAYS"},
+    ]
+    if config.vendor_pubkey:
+        items.append({"id": "licensed_org", "ok": bool(config.org),
+                      "what": "only a license issued to this organization activates here",
+                      "fix": "set AXOR_ORG to the name on your license"})
+    return {"items": items, "signing": signing}
+
+
 @router.get("/auth/status")
 async def auth_status(request: Request, config: ConfigDep) -> dict:
     """Whether auth is on, and (if a token was sent) whether it's valid + its

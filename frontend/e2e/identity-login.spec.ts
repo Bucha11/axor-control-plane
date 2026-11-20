@@ -235,7 +235,8 @@ test("signed in, one click fills in drift alerts to your own address", async ({ 
   await page.getByLabel("email").fill("ada@acme.io");
   await page.getByLabel("password").fill("correct horse");
   await page.getByRole("button", { name: "log in", exact: true }).click();
+  await page.getByTestId("settings-tab-alerts").click();
   await page.getByTestId("mail-me").click();
   await expect(page.getByPlaceholder(/mailto:you/)).toHaveValue("mailto:ada@acme.io");
-  await expect(page.getByLabel("Probe reports behavioral drift")).toBeChecked();
+  await expect(page.getByLabel("an agent's behaviour drifted (its health check)")).toBeChecked();
 });

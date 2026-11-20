@@ -58,6 +58,7 @@ EXPECTED: dict[tuple[str, str], str] = {
     ("POST", "/v1/coding/skill-bundles"): "ingest",
     ("POST", "/v1/pair"): "read",
     ("GET", "/v1/coding/memory"): "ingest",
+    ("GET", "/v1/security/posture"): "read",
     ("POST", "/v1/coding/memory/given"): "ingest",
     ("GET", "/v1/memory"): "read",
     ("PUT", "/v1/memory/{item_id}"): "operate",

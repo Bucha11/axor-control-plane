@@ -22,7 +22,7 @@ test.describe("federation vault", () => {
     await ctx.dispose();
 
     await setConnection(page, { mode: "adapter" });
-    await goHash(page, "settings");
+    await goHash(page, "settings?tab=security");
 
     const vault = page.getByTestId("federation-vault");
     await expect(vault).toBeVisible();
@@ -57,7 +57,7 @@ test.describe("federation vault", () => {
     await ctx.dispose();
 
     await setConnection(page, { mode: "adapter" });
-    await goHash(page, "settings");
+    await goHash(page, "settings?tab=security");
     // Scoped to the audit block: the keys pane above it lists each key's
     // authorized operators, so an unscoped locator matches the key listing
     // rather than the log — which is how a log test ends up asserting nothing.
@@ -76,7 +76,7 @@ test.describe("federation vault", () => {
 
   test("enrolling without a sealing key says the secret is stored as-is", async ({ page }) => {
     await setConnection(page, { mode: "adapter" });
-    await goHash(page, "settings");
+    await goHash(page, "settings?tab=security");
     await expect(
       page.getByText(/this deployment stores credentials in PLAINTEXT/),
     ).toBeVisible();
@@ -98,7 +98,7 @@ test.describe("federation vault", () => {
 
   test("revoking through the UI narrows the credential", async ({ page }) => {
     await setConnection(page, { mode: "adapter" });
-    await goHash(page, "settings");
+    await goHash(page, "settings?tab=security");
     await page.getByRole("button", { name: "revoke search" }).click();
     await expect(page.getByText("revoked")).toBeVisible();
   });
@@ -107,7 +107,7 @@ test.describe("federation vault", () => {
     // The PUBLIC half only. `axor-proxy vault keygen` mints the pair on the
     // machine that will hold the private one; it is never typed here.
     await setConnection(page, { mode: "adapter" });
-    await goHash(page, "settings");
+    await goHash(page, "settings?tab=security");
     await page.getByLabel("sealing pubkey (envelope mode)")
       .fill("2f".repeat(32));
     await page.getByRole("button", { name: "register" }).first().click();
@@ -118,7 +118,7 @@ test.describe("federation vault", () => {
 
   test("a registered node key is listed, so 'does this node sign?' is answerable", async ({ page }) => {
     await setConnection(page, { mode: "adapter" });
-    await goHash(page, "settings");
+    await goHash(page, "settings?tab=security");
     await page.getByLabel("node id").fill("billing-agent");
     await page.getByLabel("node pubkey (signs its dispenses)").fill("3c".repeat(32));
     await page.getByRole("button", { name: "register" }).last().click();
@@ -131,7 +131,7 @@ test.describe("federation vault", () => {
 
   test("in envelope mode the plaintext never leaves the browser", async ({ page }) => {
     await setConnection(page, { mode: "adapter" });
-    await goHash(page, "settings");
+    await goHash(page, "settings?tab=security");
     await page.getByRole("button", { name: /enrol a credential/ }).click();
     await expect(page.getByText(/sealed in this browser/)).toBeVisible();
     await page.getByLabel("tool").fill("stripe");

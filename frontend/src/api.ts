@@ -1779,6 +1779,10 @@ export const api = {
       body: JSON.stringify({ guest_token: guestToken }),
     }).then((r) => j<{ claimed: boolean; moved: Record<string, number> }>(r)),
 
+  securityPosture: () =>
+    af("/v1/security/posture").then((r) => j<{
+      items: { id: string; ok: boolean; what: string; fix: string }[]; signing: string;
+    }>(r)),
   authStatus: () =>
     af("/v1/auth/status").then((r) =>
       j<{ auth_enabled: boolean; authenticated: boolean; scopes: string[];

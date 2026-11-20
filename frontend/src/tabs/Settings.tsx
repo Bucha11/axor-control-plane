@@ -19,17 +19,19 @@ import ToolCredentials from "../components/ToolCredentials";
 import UsageAndBilling from "../components/UsageAndBilling";
 import { useStartTour } from "../components/Tour";
 
-// Every trigger the backend emits. A trigger that fires and cannot be
-// subscribed to is a notification nobody receives — which is how
+// Every trigger the backend emits, in words, and for whom. A trigger that fires
+// and cannot be subscribed to is a notification nobody receives — which is how
 // `license_expiring` and `behavioral_drift` sat here, emitted and unreachable.
-const TRIGGERS = [
-  { id: "level_transition_up", label: "degradation level rises" },
-  { id: "evidence_run", label: "run completes with an EvidenceCase" },
-  { id: "heat_threshold", label: "Sentinel heat crosses a threshold" },
-  { id: "node_stale", label: "a node goes stale" },
-  { id: "behavioral_drift", label: "Probe reports behavioral drift" },
-  { id: "regression_failed", label: "a corpus run regresses (config CI)" },
-  { id: "license_expiring", label: "the license nears expiry (30/14/7/3/1 days)" },
+type Journey = "coding" | "production" | "both";
+const TRIGGERS: { id: string; label: string; for: Journey[] }[] = [
+  { id: "evidence_run", label: "an agent said something its own run contradicts — a tool result it made up, tests it said passed",
+    for: ["coding", "production", "both"] },
+  { id: "level_transition_up", label: "an agent was restricted further (its level went up)", for: ["production", "both"] },
+  { id: "behavioral_drift", label: "an agent's behaviour drifted (its health check)", for: ["production", "both"] },
+  { id: "heat_threshold", label: "something an agent touched is getting suspicious across sessions (sentinel)", for: ["production", "both"] },
+  { id: "node_stale", label: "an agent stopped reporting", for: ["production", "both"] },
+  { id: "regression_failed", label: "a policy change breaks a case you kept (scheduled check)", for: ["production", "both"] },
+  { id: "license_expiring", label: "the license is about to expire (30, 14, 7, 3, 1 days before)", for: ["coding", "production", "both"] },
 ];
 
 const KEY_SCOPES = ["read", "ingest", "operate", "admin"];
@@ -279,12 +281,11 @@ export function IdentityLogin({ onDone, initialMode = "login" }: {
   );
 }
 
-export default function Settings() {
+export default function Settings({ tab = "workspace" }: { tab?: string } = {}) {
   const { mode, testBench } = useApp((s) => s.connection);
   const setTestBench = useApp((s) => s.setTestBench);
   const disconnect = useApp((s) => s.disconnect);
   const apiToken = useApp((s) => s.apiToken);
-  const setApiToken = useApp((s) => s.setApiToken);
   const qc = useQueryClient();
 
   const [url, setUrl] = useState("");
@@ -293,44 +294,9 @@ export default function Settings() {
   const [chanLabel, setChanLabel] = useState("");
   const [nodePattern, setNodePattern] = useState("");
   const [licenseJson, setLicenseJson] = useState("");
-  const [keyScopes, setKeyScopes] = useState<string[]>(["ingest"]);
-  const [keyLabel, setKeyLabel] = useState("");
-  const [mintedSecret, setMintedSecret] = useState<string | null>(null);
 
   const deadLetters = useQuery({ queryKey: ["dead-letters"], queryFn: api.deadLetters });
   const authStatus = useQuery({ queryKey: ["auth-status", apiToken], queryFn: api.authStatus });
-  const keys = useQuery({
-    queryKey: ["api-keys"],
-    queryFn: api.listKeys,
-    enabled: authStatus.data?.authenticated === true && (authStatus.data?.scopes ?? []).includes("admin"),
-    retry: false,
-  });
-
-  // The listing above shows what still exists, so a revoke erases the evidence
-  // that a key was ever issued. This is the log that survives one.
-  const keysAudit = useQuery({
-    queryKey: ["api-keys-audit"],
-    queryFn: () => api.keysAudit(),
-    enabled: authStatus.data?.authenticated === true && (authStatus.data?.scopes ?? []).includes("admin"),
-    retry: false,
-  });
-
-  const mintKey = useMutation({
-    mutationFn: () => api.createKey(keyScopes, keyLabel),
-    onSuccess: (r) => {
-      setMintedSecret(r.secret);
-      void qc.invalidateQueries({ queryKey: ["api-keys"] });
-      void qc.invalidateQueries({ queryKey: ["api-keys-audit"] });
-    },
-  });
-  const revokeKey = useMutation({
-    mutationFn: (keyId: string) => api.revokeKey(keyId),
-    onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: ["api-keys"] });
-      void qc.invalidateQueries({ queryKey: ["api-keys-audit"] });
-    },
-  });
-
   const licenseStatus = useQuery({ queryKey: ["license-status"], queryFn: api.licenseStatus });
   const eeActive = licenseStatus.data?.active === true;
   // undefined while the status query is in flight — the button stays disabled
@@ -371,322 +337,79 @@ export default function Settings() {
   const resetCoach = useApp((s) => s.resetCoach);
   const startTour = useStartTour();
 
+  const journey = useApp((s) => s.journey);
+  const menuAll = useApp((s) => s.menuAll);
+  const funnel = useQuery({ queryKey: ["funnel", 30], queryFn: () => api.funnelReport(30), retry: false });
+  const prod = !journey || menuAll || journey !== "coding";
+  const coding = !journey || menuAll || journey !== "production";
+  const tabs: [SettingsTab, string][] = [
+    ["workspace", "workspace"], ["connect", "connect agents"], ["alerts", "alerts"],
+    ...(prod ? [["security", "security"]] as [SettingsTab, string][] : []),
+    ["learn", "learn"],
+    ...(funnel.data ? [["operator", "operator"]] as [SettingsTab, string][] : []),
+  ];
+  const active: SettingsTab = tabs.some(([t]) => t === tab) ? tab as SettingsTab : "workspace";
+
   return (
-    <div style={{ maxWidth: 640, margin: "0 auto" }}>
-      <Coach id="settings" title="Settings — auth, alerts, license">
-        Auth is opt-in (empty token = open dev backend). Notifications are the
-        loud half of quiet-until-wrong: the UI stays calm, the webhook fires when
-        something is actually wrong — and failed deliveries land in the
-        dead-letter log instead of vanishing.
+    <div style={{ maxWidth: 680, margin: "0 auto" }}>
+      <Coach id="settings" title="Settings — your workspace, your agents' keys, alerts">
+        Workspace: who you are, your team, your plan. Connect agents: the keys your agents report with.
+        Alerts: where you hear about it when something goes wrong.
       </Coach>
-      <div className="flex items-center justify-between flex-wrap" style={{ gap: 8, margin: "0 0 20px" }}>
+      <div className="flex items-center justify-between flex-wrap" style={{ gap: 8, margin: "0 0 14px" }}>
         <h1 style={{ fontSize: 22, fontWeight: 650, margin: 0 }}>Settings</h1>
         <button onClick={() => navigate("pricing")}
           style={{ background: "none", border: "none", color: C.steel, fontFamily: MONO, fontSize: 11.5, cursor: "pointer", padding: 0 }}>
           plans &amp; pricing →
         </button>
       </div>
-
-      {/* Learn mode — the adoption layer's own controls */}
-      <Section title="LEARN MODE">
-        <div className="flex items-center justify-between flex-wrap gap-2">
-          <span style={{ fontFamily: MONO, fontSize: 11.5, color: C.mut }}>
-            coach notes on each screen — off by default, this stays quiet-until-wrong
-          </span>
-          <div className="flex items-center gap-2">
-            <button
-              onClick={() => startTour()}
-              title="a 7-stop spotlight walkthrough of the whole funnel"
-              style={btn({ color: C.steel, borderColor: C.steel, fontSize: 11, padding: "4px 12px" })}
-            >
-              start tour
-            </button>
-            <button
-              onClick={() => setLearnMode(!learnMode)}
-              style={btn({ color: learnMode ? C.steel : C.mut, borderColor: learnMode ? C.steel : C.line, fontSize: 11, padding: "4px 12px" })}
-            >
-              {learnMode ? "on" : "off"}
-            </button>
-            <button
-              onClick={resetCoach}
-              disabled={coachDismissed.length === 0}
-              title="bring back every dismissed coach note"
-              style={btn({ color: coachDismissed.length ? C.mut : C.dim, fontSize: 11, padding: "4px 12px" })}
-            >
-              reset tips{coachDismissed.length ? ` (${coachDismissed.length})` : ""}
-            </button>
-          </div>
-        </div>
-      </Section>
-
-      <FunnelPanel />
-
-      {/* Authentication (architecture section 9) */}
-      <Section title="AUTHENTICATION">
-        <IdentityLogin />
-        {authStatus.data && !authStatus.data.auth_enabled ? (
-          <div style={{ fontFamily: MONO, fontSize: 11.5, color: C.mut }}>
-            Auth is off — this backend is open (dev / self-hosted without a token).
-            Set <span style={{ color: C.text }}>AXOR_API_TOKEN</span> on the backend to
-            require a token here.
-          </div>
-        ) : (
-          <>
-            <div style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim, marginBottom: 8 }}>
-              local token or an API key — sent as the bearer on every request
-              (the live stream and export links carry it as a query param).
-            </div>
-            <div className="flex items-center gap-2 mb-2">
-              <input
-                type="password"
-                value={apiToken}
-                onChange={(e) => setApiToken(e.target.value)}
-                placeholder="backend token"
-                className="w-full"
-                style={{ background: C.bg, border: `1px solid ${C.line}`, borderRadius: 5, color: C.text, fontFamily: MONO, fontSize: 12, padding: "7px 9px", outline: "none" }}
-              />
-              <span style={{ fontFamily: MONO, fontSize: 11, whiteSpace: "nowrap",
-                color: authStatus.data?.authenticated ? C.green : C.red }}>
-                {authStatus.data?.authenticated ? "● authenticated" : "○ locked"}
-              </span>
-            </div>
-            {authStatus.data?.authenticated && (
-              <div style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim }}>
-                scopes: {(authStatus.data.scopes ?? []).join(", ") || "none"}
-              </div>
-            )}
-
-            {/* API key management (admin) */}
-            {(authStatus.data?.scopes ?? []).includes("admin") && (
-              <div className="mt-4">
-                <div style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim, letterSpacing: "0.08em", marginBottom: 8 }}>
-                  API KEYS · scoped connections (e.g. an ingest key for the proxy)
-                </div>
-                <div className="flex items-center gap-2 flex-wrap mb-2">
-                  {KEY_SCOPES.map((s) => (
-                    <button key={s}
-                      onClick={() => setKeyScopes((cur) => cur.includes(s) ? cur.filter((x) => x !== s) : [...cur, s])}
-                      style={btn({ color: keyScopes.includes(s) ? C.steel : C.dim, borderColor: keyScopes.includes(s) ? C.steel : C.line, fontSize: 10.5, padding: "4px 10px" })}>
-                      {s}
-                    </button>
-                  ))}
-                  <input value={keyLabel} onChange={(e) => setKeyLabel(e.target.value)} placeholder="label"
-                    style={{ background: C.bg, border: `1px solid ${C.line}`, borderRadius: 4, color: C.text, fontFamily: MONO, fontSize: 11, padding: "4px 8px", width: 120, outline: "none" }} />
-                  <button onClick={() => mintKey.mutate()} disabled={keyScopes.length === 0 || mintKey.isPending}
-                    style={btn({ color: C.steel, fontSize: 11 })}>
-                    {mintKey.isPending ? <Loader2 size={12} className="animate-spin" /> : null} Mint key
-                  </button>
-                </div>
-                {mintedSecret && (
-                  <div className="flex items-center gap-2 mb-2 p-2" style={{ background: C.panel2, border: `1px solid ${C.line}`, borderRadius: 5 }}>
-                    <span style={{ fontFamily: MONO, fontSize: 10.5, color: C.green, wordBreak: "break-all", flex: 1 }}>{mintedSecret}</span>
-                    <Copy size={13} color={C.mut} style={{ cursor: "pointer" }}
-                      onClick={() => void navigator.clipboard?.writeText(mintedSecret)} />
-                    <span style={{ fontFamily: MONO, fontSize: 10, color: C.dim }}>shown once</span>
-                  </div>
-                )}
-                {(keys.data ?? []).map((k) => (
-                  <div key={k.key_id} className="flex items-center gap-2 py-1">
-                    <span style={{ fontFamily: MONO, fontSize: 11, color: C.text }}>{k.key_id}</span>
-                    <span style={{ fontFamily: MONO, fontSize: 10.5, color: C.mut }}>{k.scopes.join(",")}</span>
-                    <span style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim, flex: 1 }}>
-                      {k.label}{k.node_id ? ` · bound to ${k.node_id}` : ""}
-                    </span>
-                    <button
-                      aria-label={`revoke ${k.key_id}`}
-                      disabled={revokeKey.isPending}
-                      onClick={() => {
-                        // Irreversible, and whatever holds the key stops working.
-                        if (window.confirm(`Revoke ${k.key_id}? Anything using it loses access.`)) {
-                          revokeKey.mutate(k.key_id);
-                        }
-                      }}
-                      style={{ background: "none", border: "none", padding: 0, cursor: "pointer" }}>
-                      <Trash2 size={12} color={C.dim} />
-                    </button>
-                  </div>
-                ))}
-                {(mintKey.isError || revokeKey.isError) && (
-                  <div className="mb-2" style={{ fontFamily: MONO, fontSize: 11, color: C.red }}>
-                    {mintKey.isError
-                      ? `mint failed: ${(mintKey.error as Error).message}`
-                      : `revoke failed: ${(revokeKey.error as Error).message}`}
-                  </div>
-                )}
-                {(keysAudit.data ?? []).length > 0 && (
-                  <div className="mt-3" data-testid="key-lifecycle-audit">
-                    <div style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim, letterSpacing: "0.08em", marginBottom: 6 }}>
-                      ISSUED &amp; REVOKED · newest first
-                    </div>
-                    {/* Already newest-first from the route; rendered as it arrives. */}
-                    {(keysAudit.data ?? []).map((a) => (
-                      <div key={a.audit_id} className="flex items-center gap-2 py-0.5">
-                        <span style={{ fontFamily: MONO, fontSize: 10.5, width: 46,
-                          color: a.action === "revoke" ? C.red : C.green }}>{a.action}</span>
-                        <span style={{ fontFamily: MONO, fontSize: 10.5, color: C.text }}>{a.key_id}</span>
-                        <span style={{ fontFamily: MONO, fontSize: 10.5, color: C.mut }}>
-                          {(a.scopes ?? []).join(",")}{a.node_id ? ` @${a.node_id}` : ""}
-                        </span>
-                        <span style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim, flex: 1, textAlign: "right" }}>
-                          by {a.by.id ?? a.by.kind} · {a.ts.slice(0, 19).replace("T", " ")}
-                        </span>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-            )}
-          </>
-        )}
-      </Section>
-
-      {/* Connection */}
-      <Section title="CONNECTION">
-        <div style={{ fontFamily: MONO, fontSize: 12, color: C.text, marginBottom: 8 }}>
-          {MODE_LABEL[mode]}
-        </div>
-        <label className="flex items-center gap-2" style={{ fontFamily: MONO, fontSize: 11.5, color: C.mut, cursor: "pointer" }}>
-          <input type="checkbox" checked={testBench} onChange={(e) => setTestBench(e.target.checked)} />
-          test-bench connection — enables injection & self-heal (spec decision 5)
-        </label>
-        {mode !== "none" && (
-          <button onClick={disconnect} className="mt-3" style={btn({ color: C.mut, fontSize: 11 })}>
-            disconnect
+      <div role="tablist" data-testid="settings-tabs" className="flex flex-wrap" style={{ gap: 4, marginBottom: 18, borderBottom: `1px solid ${C.line}` }}>
+        {tabs.map(([id, label]) => (
+          <button key={id} role="tab" aria-selected={active === id} data-testid={`settings-tab-${id}`}
+            onClick={() => navigate("settings", { tab: id })}
+            style={{ background: "none", border: "none", cursor: "pointer", fontFamily: MONO, fontSize: 12,
+                     padding: "6px 10px", color: active === id ? C.text : C.dim,
+                     borderBottom: `2px solid ${active === id ? C.steel : "transparent"}`, marginBottom: -1 }}>
+            {label}
           </button>
-        )}
-      </Section>
+        ))}
+      </div>
 
-      {/* Notifications */}
-      <Section title="NOTIFICATIONS · WEBHOOK OR E-MAIL">
-        <div style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim, marginBottom: 10 }}>
-          the UI is quiet; the notification channel is where wrong gets loud. We emit
-          and route — Slack/Discord/PagerDuty are webhook consumers, not a pager.
-          mailto:you@… sends mail where the deployment has it set up.
-        </div>
-        {identityEmail && (
-          <button data-testid="mail-me"
-            onClick={() => {
-              setUrl(`mailto:${identityEmail}`);
-              setSelected((cur) => (cur.includes("behavioral_drift") ? cur : [...cur, "behavioral_drift"]));
-              subscribe.reset();
-            }}
-            className="mb-2"
-            style={btn({ color: C.steel, borderColor: C.steel, fontSize: 10.5, padding: "3px 10px" })}>
-            e-mail me drift alerts ({identityEmail})
-          </button>
-        )}
-        <input
-          value={url}
-          onChange={(e) => { setUrl(e.target.value); subscribe.reset(); }}
-          placeholder="https://hooks.example/… (JSON POST) or mailto:you@…"
-          className="w-full mb-3"
-          style={{ background: C.bg, border: `1px solid ${C.line}`, borderRadius: 5, color: C.text, fontFamily: MONO, fontSize: 12, padding: "7px 9px", outline: "none" }}
-        />
-        <div className="flex flex-col gap-2 mb-3">
-          {TRIGGERS.map((t) => (
-            <label key={t.id} className="flex items-center gap-2" style={{ fontFamily: MONO, fontSize: 11.5, color: C.mut, cursor: "pointer" }}>
-              <input type="checkbox" checked={selected.includes(t.id)} onChange={() => toggle(t.id)} />
-              {t.label}
-            </label>
-          ))}
-        </div>
-        {/* Routing (EE): named channel + node glob — the org layer. Inputs
-            stay visible but disabled without a license (honest upsell). */}
-        <div className="flex items-center gap-2 mb-3 flex-wrap" style={{ opacity: eeActive ? 1 : 0.55 }}>
-          <input
-            value={chanLabel}
-            onChange={(e) => setChanLabel(e.target.value)}
-            placeholder="channel label (e.g. team-a)"
-            disabled={!eeActive}
-            style={{ background: C.bg, border: `1px solid ${C.line}`, borderRadius: 5, color: C.text, fontFamily: MONO, fontSize: 11, padding: "5px 8px", width: 170, outline: "none" }}
-          />
-          <input
-            value={nodePattern}
-            onChange={(e) => setNodePattern(e.target.value)}
-            placeholder="node pattern (e.g. team-a-*)"
-            disabled={!eeActive}
-            style={{ background: C.bg, border: `1px solid ${C.line}`, borderRadius: 5, color: C.text, fontFamily: MONO, fontSize: 11, padding: "5px 8px", width: 170, outline: "none" }}
-          />
-          <span style={{ fontFamily: MONO, fontSize: 8.5, color: C.dim, border: `1px solid ${C.line}`, borderRadius: 20, padding: "1px 6px" }}>
-            Team
-          </span>
-          {!eeActive && (
-            <span style={{ fontFamily: MONO, fontSize: 10, color: C.dim }}>
-              routing needs a license — one global webhook is free
-            </span>
+      {active === "workspace" && (
+        <>
+          <Section title="ACCOUNT">
+            <IdentityLogin />
+            {authStatus.data && !authStatus.data.auth_enabled ? (
+              <div style={{ fontFamily: MONO, fontSize: 11.5, color: C.mut, lineHeight: 1.6 }}>
+                This plane is open — no sign-in needed. That is how a plane you run on your own machine
+                starts; set <span style={{ color: C.text }}>AXOR_API_TOKEN</span> on the backend to require one.
+              </div>
+            ) : (
+              <TokenFold />
+            )}
+          </Section>
+          {coding && (
+            <Section title="PLAN & DEVELOPERS · coding agents">
+              <DeveloperUsage />
+            </Section>
           )}
-        </div>
-        <button
-          onClick={() => subscribe.mutate()}
-          disabled={!url || selected.length === 0 || subscribe.isPending}
-          style={btn({ color: C.steel, fontSize: 12 })}
-        >
-          {subscribe.isPending ? <Loader2 size={13} className="animate-spin" /> : subscribe.isSuccess ? <Check size={13} /> : null}
-          {subscribe.isSuccess ? "subscribed" : "Subscribe"}
-        </button>
-        {subscribe.isError && (
-          <div className="mt-2" style={{ fontFamily: MONO, fontSize: 11, color: C.red }}>
-            {(subscribe.error as Error).message}
-          </div>
-        )}
-
-        {(subscriptions.data ?? []).length > 0 && (
-          <>
-            <div className="mt-4" style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim, letterSpacing: "0.08em" }}>
-              ACTIVE SUBSCRIPTIONS
-            </div>
-            {(subscriptions.data ?? []).map((s, i) => (
-              <div key={i} className="flex items-center gap-2" style={{ fontFamily: MONO, fontSize: 11, color: C.mut, marginTop: 4 }}>
-                <span>
-                  {s.label ? `[${s.label}] ` : ""}{s.url} · {s.triggers.join(", ")}
-                  {s.node_pattern !== "*" ? ` · nodes: ${s.node_pattern}` : ""}
-                </span>
-                <button
-                  aria-label={`unsubscribe ${s.url}`}
-                  onClick={() => unsubscribe.mutate(s.url)}
-                  disabled={unsubscribe.isPending}
-                  style={btn({ color: C.mut, fontSize: 10, padding: "1px 7px" })}
-                >
-                  unsubscribe
-                </button>
-              </div>
-            ))}
-            {unsubscribe.isError && (
-              <div className="mt-2" style={{ fontFamily: MONO, fontSize: 11, color: C.red }}>
-                unsubscribe failed: {(unsubscribe.error as Error).message}
-              </div>
-            )}
-          </>
-        )}
-
-        <div className="mt-4" style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim, letterSpacing: "0.08em" }}>
-          DEAD-LETTER LOG
-        </div>
-        {(deadLetters.data ?? []).length === 0 ? (
-          <div style={{ fontFamily: MONO, fontSize: 11, color: C.dim, marginTop: 4 }}>
-            none — deliveries are at-least-once with retries
-          </div>
-        ) : (
-          (deadLetters.data ?? []).map((d, i) => (
-            <div key={i} style={{ fontFamily: MONO, fontSize: 11, color: C.amber, marginTop: 4 }}>
-              {d.trigger} → {d.url} · {d.error} ({d.attempts} attempts)
-              {d.created_ts ? ` · ${d.created_ts.slice(0, 19)}` : ""}
-            </div>
-          ))
-        )}
-      </Section>
-
-      {/* Their fleet history and their own bill. */}
-      <Section title="GOVERNED-NODE USAGE & BILLING">
-        <UsageAndBilling />
-      </Section>
-
-      {/* License */}
-      <Section title="ENTERPRISE LICENSE">
+          {prod && (
+            <Section title="USAGE & BILLING · production agents">
+              <UsageAndBilling />
+            </Section>
+          )}
+          <Section title="LICENSE · a plane you run yourself">
+            <details data-testid="license-fold" open={!!licenseStatus.data?.active || !!licenseStatus.data?.expired || undefined}>
+              <summary style={{ cursor: "pointer", fontFamily: MONO, fontSize: 11.5, color: C.mut }}>
+                {licenseStatus.data?.active
+                  ? `active · ${licenseStatus.data.workspace_tier} · expires ${licenseStatus.data.expires_at}`
+                  : licenseStatus.data?.expired ? "expired — open to paste a new one" : "no license — open to paste one"}
+              </summary>
+              <div className="mt-3">
         <div style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim, marginBottom: 10 }}>
-          Ed25519-signed, offline-verifiable — the same crypto that guards the command
-          channel, and it never calls us. Expiry degrades EE to read-only; safety is
-          never gated.
+          For a plane you run yourself: paste the license file you were sent. It is checked
+          here, offline — nothing calls us. When it expires the paid features turn read-only;
+          what gets blocked never depends on a license.
         </div>
         {/* The ACTIVE license, from /v1/license/status. The panel used to show
             only the response to a paste, so a deployment that had been licensed
@@ -780,9 +503,449 @@ export default function Settings() {
             )}
           </>
         )}
-      </Section>
+                    </div>
+            </details>
+          </Section>
+        </>
+      )}
 
-      <FederationVault />
+      {active === "connect" && (
+        <>
+          <Section title="KEYS FOR YOUR AGENTS">
+            <AgentKeys journey={journey} menuAll={menuAll} />
+          </Section>
+          {prod && (
+            <Section title="THIS BROWSER'S CONNECTION">
+              <div style={{ fontFamily: MONO, fontSize: 12, color: C.text, marginBottom: 8 }}>
+                {MODE_LABEL[mode]}
+              </div>
+              <label className="flex items-center gap-2" style={{ fontFamily: MONO, fontSize: 11.5, color: C.mut, cursor: "pointer" }}>
+                <input type="checkbox" checked={testBench} onChange={(e) => setTestBench(e.target.checked)} />
+                a test bench — allow test interventions on it (inject a fault, self-heal)
+              </label>
+              {mode !== "none" && (
+                <button onClick={disconnect} className="mt-3" style={btn({ color: C.mut, fontSize: 11 })}>
+                  disconnect
+                </button>
+              )}
+            </Section>
+          )}
+        </>
+      )}
+
+      {active === "alerts" && (
+        <Section title="ALERTS · WEBHOOK OR E-MAIL">
+        <div style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim, marginBottom: 10 }}>
+          Where you hear about it when something goes wrong: a webhook (JSON POST — Slack,
+          Discord or PagerDuty take one) or an e-mail address. The screens stay quiet; this is
+          where it gets loud.
+        </div>
+        {identityEmail && (
+          <button data-testid="mail-me"
+            onClick={() => {
+              setUrl(`mailto:${identityEmail}`);
+              setSelected((cur) => (cur.includes("behavioral_drift") ? cur : [...cur, "behavioral_drift"]));
+              subscribe.reset();
+            }}
+            className="mb-2"
+            style={btn({ color: C.steel, borderColor: C.steel, fontSize: 10.5, padding: "3px 10px" })}>
+            e-mail me drift alerts ({identityEmail})
+          </button>
+        )}
+        <input
+          value={url}
+          onChange={(e) => { setUrl(e.target.value); subscribe.reset(); }}
+          placeholder="https://hooks.example/… (JSON POST) or mailto:you@…"
+          className="w-full mb-3"
+          style={{ background: C.bg, border: `1px solid ${C.line}`, borderRadius: 5, color: C.text, fontFamily: MONO, fontSize: 12, padding: "7px 9px", outline: "none" }}
+        />
+        <div className="flex flex-col gap-2 mb-3">
+          {TRIGGERS.filter((t) => !journey || menuAll || t.for.includes(journey)).map((t) => (
+            <label key={t.id} className="flex items-center gap-2" style={{ fontFamily: MONO, fontSize: 11.5, color: C.mut, cursor: "pointer" }}>
+              <input type="checkbox" checked={selected.includes(t.id)} onChange={() => toggle(t.id)} />
+              {t.label}
+            </label>
+          ))}
+        </div>
+        {/* Routing (EE): named channel + node glob — the org layer. Inputs
+            stay visible but disabled without a license (honest upsell). */}
+        <div className="flex items-center gap-2 mb-3 flex-wrap" style={{ opacity: eeActive ? 1 : 0.55 }}>
+          <input
+            value={chanLabel}
+            onChange={(e) => setChanLabel(e.target.value)}
+            placeholder="channel label (e.g. team-a)"
+            disabled={!eeActive}
+            style={{ background: C.bg, border: `1px solid ${C.line}`, borderRadius: 5, color: C.text, fontFamily: MONO, fontSize: 11, padding: "5px 8px", width: 170, outline: "none" }}
+          />
+          <input
+            value={nodePattern}
+            onChange={(e) => setNodePattern(e.target.value)}
+            placeholder="node pattern (e.g. team-a-*)"
+            disabled={!eeActive}
+            style={{ background: C.bg, border: `1px solid ${C.line}`, borderRadius: 5, color: C.text, fontFamily: MONO, fontSize: 11, padding: "5px 8px", width: 170, outline: "none" }}
+          />
+          {!eeActive && (
+            <span style={{ fontFamily: MONO, fontSize: 10, color: C.dim }}>
+              a channel per team and per agent group is on a paid plan — one channel for everything is free
+            </span>
+          )}
+        </div>
+        <button
+          onClick={() => subscribe.mutate()}
+          disabled={!url || selected.length === 0 || subscribe.isPending}
+          style={btn({ color: C.steel, fontSize: 12 })}
+        >
+          {subscribe.isPending ? <Loader2 size={13} className="animate-spin" /> : subscribe.isSuccess ? <Check size={13} /> : null}
+          {subscribe.isSuccess ? "subscribed" : "Subscribe"}
+        </button>
+        {subscribe.isError && (
+          <div className="mt-2" style={{ fontFamily: MONO, fontSize: 11, color: C.red }}>
+            {(subscribe.error as Error).message}
+          </div>
+        )}
+
+        {(subscriptions.data ?? []).length > 0 && (
+          <>
+            <div className="mt-4" style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim, letterSpacing: "0.08em" }}>
+              ACTIVE SUBSCRIPTIONS
+            </div>
+            {(subscriptions.data ?? []).map((s, i) => (
+              <div key={i} className="flex items-center gap-2" style={{ fontFamily: MONO, fontSize: 11, color: C.mut, marginTop: 4 }}>
+                <span>
+                  {s.label ? `[${s.label}] ` : ""}{s.url} · {s.triggers.join(", ")}
+                  {s.node_pattern !== "*" ? ` · nodes: ${s.node_pattern}` : ""}
+                </span>
+                <button
+                  aria-label={`unsubscribe ${s.url}`}
+                  onClick={() => unsubscribe.mutate(s.url)}
+                  disabled={unsubscribe.isPending}
+                  style={btn({ color: C.mut, fontSize: 10, padding: "1px 7px" })}
+                >
+                  unsubscribe
+                </button>
+              </div>
+            ))}
+            {unsubscribe.isError && (
+              <div className="mt-2" style={{ fontFamily: MONO, fontSize: 11, color: C.red }}>
+                unsubscribe failed: {(unsubscribe.error as Error).message}
+              </div>
+            )}
+          </>
+        )}
+
+        <div className="mt-4" style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim, letterSpacing: "0.08em" }}>
+          DEAD-LETTER LOG · alerts that could not be delivered
+        </div>
+        {(deadLetters.data ?? []).length === 0 ? (
+          <div style={{ fontFamily: MONO, fontSize: 11, color: C.dim, marginTop: 4 }}>
+            none — every alert was delivered (each is retried before it lands here)
+          </div>
+        ) : (
+          (deadLetters.data ?? []).map((d, i) => (
+            <div key={i} style={{ fontFamily: MONO, fontSize: 11, color: C.amber, marginTop: 4 }}>
+              {d.trigger} → {d.url} · {d.error} ({d.attempts} attempts)
+              {d.created_ts ? ` · ${d.created_ts.slice(0, 19)}` : ""}
+            </div>
+          ))
+        )}
+      </Section>
+      )}
+
+      {active === "security" && (
+        <>
+          <Section title="HOW THIS PLANE IS PROTECTED">
+            <SecurityPosture />
+          </Section>
+          <FederationVault />
+        </>
+      )}
+
+      {active === "learn" && (
+        <Section title="LEARN">
+          <div className="flex items-center justify-between flex-wrap gap-2">
+            <span style={{ fontFamily: MONO, fontSize: 11.5, color: C.mut }}>
+              short notes on each screen that say what it is for — off by default
+            </span>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => startTour()}
+                title="a walkthrough of the whole product, stop by stop"
+                style={btn({ color: C.steel, borderColor: C.steel, fontSize: 11, padding: "4px 12px" })}
+              >
+                start tour
+              </button>
+              <button
+                onClick={() => setLearnMode(!learnMode)}
+                style={btn({ color: learnMode ? C.steel : C.mut, borderColor: learnMode ? C.steel : C.line, fontSize: 11, padding: "4px 12px" })}
+              >
+                {learnMode ? "on" : "off"}
+              </button>
+              <button
+                onClick={resetCoach}
+                disabled={coachDismissed.length === 0}
+                title="bring back every note you closed"
+                style={btn({ color: coachDismissed.length ? C.mut : C.dim, fontSize: 11, padding: "4px 12px" })}
+              >
+                reset tips{coachDismissed.length ? ` (${coachDismissed.length})` : ""}
+              </button>
+            </div>
+          </div>
+        </Section>
+      )}
+
+      {active === "operator" && <FunnelPanel />}
+    </div>
+  );
+}
+
+type SettingsTab = "workspace" | "connect" | "alerts" | "security" | "learn" | "operator";
+
+const PLANE_URL = typeof window === "undefined" ? "" : window.location.origin;
+
+/** Signing in with an access token instead — an operator's, or an API key. */
+function TokenFold() {
+  const apiToken = useApp((s) => s.apiToken);
+  const setApiToken = useApp((s) => s.setApiToken);
+  const authStatus = useQuery({ queryKey: ["auth-status", apiToken], queryFn: api.authStatus });
+  return (
+    <details className="mt-3" open={!!apiToken || undefined}>
+      <summary style={{ cursor: "pointer", fontFamily: MONO, fontSize: 11, color: C.dim }}>
+        use an access token instead {authStatus.data?.authenticated && apiToken ? "· signed in with one" : ""}
+      </summary>
+      <div className="mt-2">
+        <div style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim, marginBottom: 8 }}>
+          the operator token of a plane you run yourself, or an API key — sent with every request from this browser
+        </div>
+        <div className="flex items-center gap-2 mb-2">
+          <input type="password" value={apiToken} onChange={(e) => setApiToken(e.target.value)}
+            placeholder="access token" aria-label="access token" style={INPUT_STYLE} />
+          <span style={{ fontFamily: MONO, fontSize: 11, whiteSpace: "nowrap",
+            color: authStatus.data?.authenticated ? C.green : C.red }}>
+            {authStatus.data?.authenticated ? "● signed in" : "○ not signed in"}
+          </span>
+        </div>
+        {authStatus.data?.authenticated && (
+          <div style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim }}>
+            can: {(authStatus.data.scopes ?? []).join(", ") || "nothing"}
+          </div>
+        )}
+      </div>
+    </details>
+  );
+}
+
+/** Coding agents are paid per developer whose agents ran in a month: how many
+ * did, what the plan includes, and what the free plan holds to. */
+function DeveloperUsage() {
+  const usage = useQuery({ queryKey: ["license-usage"], queryFn: () => api.licenseUsage(6) });
+  const ent = useQuery({ queryKey: ["entitlements"], queryFn: api.entitlements, retry: false });
+  const months = usage.data?.months ?? [];
+  const tier = ent.data?.tier ?? "community";
+  const free = ent.data?.free ?? true;
+  const seats = usage.data?.developer_seats;
+  const now = months[0];
+  return (
+    <div data-testid="developer-usage" style={{ fontFamily: MONO, fontSize: 11.5, color: C.mut, lineHeight: 1.7 }}>
+      <div style={{ color: C.text, marginBottom: 6 }}>
+        {free ? "Free — one developer, one agent family (Claude Code or Codex)"
+          : `${tier[0].toUpperCase()}${tier.slice(1)} plan`}
+        {now && <span style={{ color: C.mut }}> · {now.active_developers} developer{now.active_developers === 1 ? "" : "s"} this month</span>}
+        {seats != null && seats > 0 && <span style={{ color: C.mut }}> · {seats} included</span>}
+      </div>
+      <div style={{ color: C.dim, marginBottom: 8 }}>
+        {free
+          ? "A second developer, mixing Claude Code and Codex, team skills and team memory are on Coding — $25 per developer whose agents ran that month."
+          : "Billed per developer whose agents ran that month — not per session, repository or tree."}
+        {" "}<button onClick={() => navigate("pricing")} style={{ background: "none", border: "none", padding: 0, cursor: "pointer", fontFamily: MONO, fontSize: 11.5, color: C.steel }}>plans →</button>
+      </div>
+      {months.length > 0 && (
+        <div className="flex gap-4 flex-wrap" style={{ fontSize: 10.5, color: C.dim }}>
+          {months.map((m) => (
+            <span key={m.month}>{m.month} · <span style={{ color: m.active_developers ? C.text : C.dim }}>{m.active_developers}</span></span>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+const PRESETS: { id: string; label: string; words: string; scopes: string[]; node: boolean; for: Journey[] }[] = [
+  { id: "coding", label: "for the team's coding agents", scopes: ["ingest"], node: false, for: ["coding", "both"],
+    words: "every developer puts it in their agents' environment; the axor hooks report with it" },
+  { id: "node", label: "for one production agent", scopes: ["ingest"], node: true, for: ["production", "both"],
+    words: "bound to one agent: the plane refuses it for any other, so a compromised agent cannot speak for its neighbours" },
+  { id: "ci", label: "for CI", scopes: ["read", "ingest"], node: false, for: ["coding", "production", "both"],
+    words: "posts checks (skill evals, context health) and reads results" },
+  { id: "custom", label: "custom", scopes: [], node: false, for: ["coding", "production", "both"],
+    words: "pick what it may do" },
+];
+
+/** API keys, minted for what they are for, with the lines to put them to use. */
+function AgentKeys({ journey, menuAll }: { journey: Journey | null; menuAll: boolean }) {
+  const qc = useQueryClient();
+  const apiToken = useApp((s) => s.apiToken);
+  const authStatus = useQuery({ queryKey: ["auth-status", apiToken], queryFn: api.authStatus });
+  const admin = (authStatus.data?.scopes ?? []).includes("admin");
+  const on = authStatus.data?.auth_enabled === true && authStatus.data?.authenticated === true && admin;
+  const presets = PRESETS.filter((p) => !journey || menuAll || p.for.includes(journey));
+  const [preset, setPreset] = useState(presets[0]?.id ?? "custom");
+  const p = PRESETS.find((x) => x.id === preset) ?? PRESETS[PRESETS.length - 1];
+  const [scopes, setScopes] = useState<string[]>(p.scopes);
+  const [label, setLabel] = useState("");
+  const [node, setNode] = useState("");
+  const [minted, setMinted] = useState<{ secret: string; preset: string } | null>(null);
+  const keys = useQuery({ queryKey: ["api-keys"], queryFn: api.listKeys, enabled: on, retry: false });
+  const keysAudit = useQuery({ queryKey: ["api-keys-audit"], queryFn: () => api.keysAudit(), enabled: on, retry: false });
+  const mint = useMutation({
+    mutationFn: () => api.createKey(preset === "custom" ? scopes : p.scopes, label || p.label, p.node ? node.trim() : undefined),
+    onSuccess: (r) => {
+      setMinted({ secret: r.secret, preset });
+      void qc.invalidateQueries({ queryKey: ["api-keys"] });
+      void qc.invalidateQueries({ queryKey: ["api-keys-audit"] });
+    },
+  });
+  const revoke = useMutation({
+    mutationFn: (keyId: string) => api.revokeKey(keyId),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ["api-keys"] });
+      void qc.invalidateQueries({ queryKey: ["api-keys-audit"] });
+    },
+  });
+  if (authStatus.data && !authStatus.data.auth_enabled) {
+    return (
+      <div data-testid="keys-open" style={{ fontFamily: MONO, fontSize: 11.5, color: C.mut, lineHeight: 1.7 }}>
+        This plane is open, so agents need no key — set where to report and they connect:
+        <pre style={{ background: C.bg, border: `1px solid ${C.line}`, borderRadius: 5, padding: "8px 10px", margin: "8px 0 0", color: C.text }}>
+          export AXOR_PLANE_URL={PLANE_URL}
+        </pre>
+      </div>
+    );
+  }
+  if (!on) {
+    return (
+      <div style={{ fontFamily: MONO, fontSize: 11.5, color: C.mut }}>
+        Keys are made by an admin of the workspace. Ask yours, or sign in as one.
+      </div>
+    );
+  }
+  const env = minted
+    ? minted.preset === "node"
+      ? `export AXOR_PLANE_URL=${PLANE_URL}\nexport AXOR_NODE_ID=${node.trim()}\nexport AXOR_INGEST_KEY=${minted.secret}`
+      : minted.preset === "ci"
+        ? `AXOR_PLANE_URL=${PLANE_URL}\nAXOR_API_KEY=${minted.secret}   # as CI secrets`
+        : `export AXOR_PLANE_URL=${PLANE_URL}\nexport AXOR_INGEST_KEY=${minted.secret}`
+    : "";
+  return (
+    <div data-testid="agent-keys">
+      <div className="flex gap-2 flex-wrap mb-2">
+        {presets.map((x) => (
+          <button key={x.id} onClick={() => { setPreset(x.id); setScopes(x.scopes); setMinted(null); }}
+            data-testid={`key-preset-${x.id}`}
+            style={btn({ color: preset === x.id ? C.steel : C.dim, borderColor: preset === x.id ? C.steel : C.line, fontSize: 10.5, padding: "4px 10px" })}>
+            {x.label}
+          </button>
+        ))}
+      </div>
+      <div style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim, marginBottom: 8 }}>{p.words}</div>
+      <div className="flex items-center gap-2 flex-wrap mb-2">
+        {preset === "custom" && KEY_SCOPES.map((sc) => (
+          <button key={sc} onClick={() => setScopes((cur) => cur.includes(sc) ? cur.filter((x) => x !== sc) : [...cur, sc])}
+            style={btn({ color: scopes.includes(sc) ? C.steel : C.dim, borderColor: scopes.includes(sc) ? C.steel : C.line, fontSize: 10.5, padding: "4px 10px" })}>
+            {sc}
+          </button>
+        ))}
+        {p.node && (
+          <input value={node} onChange={(e) => setNode(e.target.value)} placeholder="the agent's node id" aria-label="node id"
+            style={{ ...INPUT_STYLE, width: 200, fontSize: 11, padding: "4px 8px" }} />
+        )}
+        <input value={label} onChange={(e) => setLabel(e.target.value)} placeholder="label" aria-label="key label"
+          style={{ ...INPUT_STYLE, width: 140, fontSize: 11, padding: "4px 8px" }} />
+        <button onClick={() => mint.mutate()} data-testid="key-mint"
+          disabled={(preset === "custom" && scopes.length === 0) || (p.node && !node.trim()) || mint.isPending}
+          style={btn({ color: C.steel, fontSize: 11 })}>
+          {mint.isPending ? <Loader2 size={12} className="animate-spin" /> : null} make a key
+        </button>
+      </div>
+      {minted && (
+        <div data-testid="key-minted" className="mb-3 p-2" style={{ background: C.panel2, border: `1px solid ${C.line}`, borderRadius: 5 }}>
+          <div className="flex items-center gap-2" style={{ fontFamily: MONO, fontSize: 10, color: C.amber, marginBottom: 4 }}>
+            shown once — copy it now
+            <Copy size={12} color={C.mut} style={{ cursor: "pointer" }} onClick={() => void navigator.clipboard?.writeText(env)} />
+          </div>
+          <pre style={{ margin: 0, fontFamily: MONO, fontSize: 10.5, color: C.green, whiteSpace: "pre-wrap", wordBreak: "break-all" }}>{env}</pre>
+        </div>
+      )}
+      {(keys.data ?? []).map((k) => (
+        <div key={k.key_id} className="flex items-center gap-2 py-1">
+          <span style={{ fontFamily: MONO, fontSize: 11, color: C.text }}>{k.key_id}</span>
+          <span style={{ fontFamily: MONO, fontSize: 10.5, color: C.mut }}>{k.scopes.join(",")}</span>
+          <span style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim, flex: 1 }}>
+            {k.label}{k.node_id ? ` · only for ${k.node_id}` : ""}
+          </span>
+          <button aria-label={`revoke ${k.key_id}`} disabled={revoke.isPending}
+            onClick={() => {
+              if (window.confirm(`Revoke ${k.key_id}? Anything using it loses access.`)) revoke.mutate(k.key_id);
+            }}
+            style={{ background: "none", border: "none", padding: 0, cursor: "pointer" }}>
+            <Trash2 size={12} color={C.dim} />
+          </button>
+        </div>
+      ))}
+      {(mint.isError || revoke.isError) && (
+        <div className="mb-2" style={{ fontFamily: MONO, fontSize: 11, color: C.red }}>
+          {mint.isError ? `could not make the key: ${(mint.error as Error).message}`
+            : `could not revoke it: ${(revoke.error as Error).message}`}
+        </div>
+      )}
+      {(keysAudit.data ?? []).length > 0 && (
+        <details className="mt-3" data-testid="key-lifecycle-audit">
+          <summary style={{ cursor: "pointer", fontFamily: MONO, fontSize: 10.5, color: C.dim, letterSpacing: "0.08em" }}>
+            MADE &amp; REVOKED · newest first
+          </summary>
+          {(keysAudit.data ?? []).map((a) => (
+            <div key={a.audit_id} className="flex items-center gap-2 py-0.5">
+              <span style={{ fontFamily: MONO, fontSize: 10.5, width: 46, color: a.action === "revoke" ? C.red : C.green }}>{a.action}</span>
+              <span style={{ fontFamily: MONO, fontSize: 10.5, color: C.text }}>{a.key_id}</span>
+              <span style={{ fontFamily: MONO, fontSize: 10.5, color: C.mut }}>
+                {(a.scopes ?? []).join(",")}{a.node_id ? ` @${a.node_id}` : ""}
+              </span>
+              <span style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim, flex: 1, textAlign: "right" }}>
+                by {a.by.id ?? a.by.kind} · {a.ts.slice(0, 19).replace("T", " ")}
+              </span>
+            </div>
+          ))}
+        </details>
+      )}
+    </div>
+  );
+}
+
+/** Each wall of this plane, up or down, with how to raise the ones that are down. */
+function SecurityPosture() {
+  const posture = useQuery({ queryKey: ["security-posture"], queryFn: api.securityPosture, retry: false });
+  const sealing = useQuery({ queryKey: ["vault-sealing", ""], queryFn: api.vaultSealingKey, retry: false });
+  const items = [
+    ...(posture.data?.items ?? []),
+    ...(sealing.data ? [{ id: "vault_custody", ok: sealing.data.envelope_mode,
+      what: "tool credentials are stored sealed — the plane holds only what it cannot open",
+      fix: "make a sealing key with axor-proxy vault keygen and register its public half below" }] : []),
+  ];
+  if (!items.length) return <div style={{ fontFamily: MONO, fontSize: 11, color: C.dim }}>…</div>;
+  const down = items.filter((i) => !i.ok).length;
+  return (
+    <div data-testid="security-posture">
+      <div style={{ fontFamily: MONO, fontSize: 11.5, color: down ? C.amber : C.green, marginBottom: 8 }}>
+        {down ? `${down} of ${items.length} down — fine on your own machine, not for a deployment` : "every wall is up"}
+      </div>
+      {items.map((i) => (
+        <div key={i.id} data-testid={`posture-${i.id}`} className="flex gap-2" style={{ fontFamily: MONO, fontSize: 11, lineHeight: 1.6, padding: "2px 0" }}>
+          <span style={{ color: i.ok ? C.green : C.amber, width: 14 }}>{i.ok ? "✓" : "○"}</span>
+          <span style={{ color: i.ok ? C.mut : C.text, flex: 1 }}>
+            {i.what}
+            {!i.ok && <span style={{ color: C.dim }}> — {i.fix}</span>}
+          </span>
+        </div>
+      ))}
     </div>
   );
 }

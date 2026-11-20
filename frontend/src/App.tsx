@@ -226,7 +226,7 @@ export default function App() {
       {key === "skill-evals" && <SkillEvals evalId={runIdParam ? decodeURIComponent(runIdParam) : undefined} />}
       {key === "connect" && <Onboarding />}
       {key === "pricing" && <Pricing />}
-      {key === "settings" && <Settings />}
+      {key === "settings" && <Settings tab={route.query.tab} />}
       {!KNOWN.includes(key) && (
         <div style={{ maxWidth: 640, margin: "0 auto", fontFamily: MONO, fontSize: 12.5, color: C.mut }}>
           No page at <span style={{ color: C.text }}>#/{route.segments.join("/")}</span>.{" "}

@@ -10,7 +10,7 @@ test.describe("settings", () => {
   });
 
   test("subscribes a webhook to a trigger", async ({ page }) => {
-    await goHash(page, "settings");
+    await goHash(page, "settings?tab=alerts");
     await expect(page.getByRole("heading", { name: "Settings" })).toBeVisible();
     await page.getByPlaceholder("https://hooks.example/… (JSON POST)").fill("https://sink.e2e/hook");
     await page.getByRole("checkbox").first().check();
@@ -22,7 +22,7 @@ test.describe("settings", () => {
     // A registered webhook fired forever: removing one meant editing the
     // database, while the body it receives carries node ids, levels and a
     // permalink.
-    await goHash(page, "settings");
+    await goHash(page, "settings?tab=alerts");
     const url = `https://sink.e2e/drop-${Date.now()}`;
     await page.getByPlaceholder("https://hooks.example/… (JSON POST)").fill(url);
     await page.getByRole("checkbox").first().check();
@@ -34,7 +34,7 @@ test.describe("settings", () => {
   });
 
   test("surfaces the dead-letter log (delivery honesty)", async ({ page }) => {
-    await goHash(page, "settings");
+    await goHash(page, "settings?tab=alerts");
     // The failure-honesty log is always surfaced; its contents depend on prior
     // deliveries, so assert the section, not emptiness.
     await expect(page.getByText("DEAD-LETTER LOG")).toBeVisible();
@@ -42,6 +42,7 @@ test.describe("settings", () => {
 
   test("rejects an invalid EE license offline", async ({ page }) => {
     await goHash(page, "settings");
+    await page.getByTestId("license-fold").locator("summary").click();
     await page.getByPlaceholder('{"license": {...}, "sig": "…"}').fill('{"license":{},"sig":"deadbeef"}');
     // No vendor-key field: the key a license is checked against is the
     // deployment's (AXOR_VENDOR_PUBKEY), not something this form accepts.
@@ -55,15 +56,15 @@ test.describe("settings", () => {
     // A trigger that fires and cannot be subscribed to is a notification
     // nobody receives — which is how license_expiring and behavioral_drift sat
     // here, emitted by the backend and absent from this list.
-    await goHash(page, "settings");
+    await goHash(page, "settings?tab=alerts");
     for (const label of [
-      /degradation level rises/,
-      /run completes with an EvidenceCase/,
-      /Sentinel heat crosses a threshold/,
-      /a node goes stale/,
-      /Probe reports behavioral drift/,
-      /a corpus run regresses/,
-      /the license nears expiry/,
+      /its own run contradicts/,
+      /restricted further/,
+      /behaviour drifted/,
+      /suspicious across sessions/,
+      /stopped reporting/,
+      /a policy change breaks a case you kept/,
+      /the license is about to expire/,
     ]) {
       await expect(page.getByText(label)).toBeVisible();
     }
@@ -90,8 +91,40 @@ test.describe("settings", () => {
     // months ago showed nothing until somebody pasted again — and the fields
     // with a deadline attached were not rendered at all.
     await goHash(page, "settings");
+    await page.getByTestId("license-fold").locator("summary").click();
     await expect(page.getByText("no license active on this deployment")).toBeVisible();
     await expect(page.getByText(/no auto-renewal/)).toBeVisible();
     await expect(page.getByText(/usage not reported/)).toBeVisible();
+  });
+
+  test("tabs follow the journey: a coding team sees no security tab, plain alerts, keys with the lines to use them", async ({ page }) => {
+    await page.addInitScript(() => {
+      const raw = localStorage.getItem("axor-app");
+      const data = raw ? JSON.parse(raw) : { state: {}, version: 0 };
+      data.state.journey = "coding";
+      data.state.menuAll = false;
+      localStorage.setItem("axor-app", JSON.stringify(data));
+    });
+    await goHash(page, "settings");
+    const tabs = page.getByTestId("settings-tabs");
+    await expect(tabs.getByRole("tab", { name: "workspace" })).toHaveAttribute("aria-selected", "true");
+    await expect(tabs.getByRole("tab", { name: "security" })).toHaveCount(0);
+    await expect(page.getByTestId("developer-usage")).toContainText("developer");
+    await expect(page.getByTestId("usage-billing")).toHaveCount(0);
+    await tabs.getByRole("tab", { name: "alerts" }).click();
+    await expect(page).toHaveURL(/tab=alerts/);
+    await expect(page.getByText(/its own run contradicts/)).toBeVisible();
+    await expect(page.getByText(/restricted further/)).toHaveCount(0);
+    await tabs.getByRole("tab", { name: "connect agents" }).click();
+    await expect(page.getByTestId("keys-open")).toContainText("export AXOR_PLANE_URL=");
+  });
+
+  test("production sees how the plane is protected, wall by wall", async ({ page }) => {
+    await goHash(page, "settings?tab=security");
+    const posture = page.getByTestId("security-posture");
+    await expect(posture).toContainText("down — fine on your own machine, not for a deployment");
+    await expect(posture.getByTestId("posture-auth")).toContainText("set AXOR_API_TOKEN");
+    await expect(posture.getByTestId("posture-command_signing")).toContainText("AXOR_OPERATOR_KEYS");
+    await expect(page.getByTestId("federation-vault")).toBeVisible();
   });
 });
