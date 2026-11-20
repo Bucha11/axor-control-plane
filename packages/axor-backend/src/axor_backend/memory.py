@@ -13,7 +13,12 @@ What is kept out, whatever passed: a command whose arguments carry text from
 outside (the sidecar's ledger says which: web, mcp, a note from outside the
 team), anything the rules would never let run unattended (sending out,
 ``curl | sh``, a push, a recursive delete), anything shaped like a secret,
-and anything long. A kept-out command is listed — "kept out: it came from a
+anything long — and a check that passes without the code passing it: one that
+rewrites the expected output (``jest -u``, ``--snapshot-update``), swallows
+the failure (``|| true``, ``--exit-zero``), or leaves the failing tests out
+(``--deselect``, ``-k "not …"``, ``--passWithNoTests``, ``--collect-only``).
+Remembered, that would teach every agent of the team to make a red check
+green without fixing anything. A kept-out command is listed — "kept out: it came from a
 web page" — and never given to an agent.
 
 An item found automatically is suggested; one click turns it on, and it turns
@@ -77,6 +82,31 @@ _OUTSIDE_WORDS = {
 }
 
 
+# a check that passes without the code passing it — (pattern, what it does)
+_GAMES = (
+    (re.compile(r"(?:\b(?:jest|vitest)\b|(?:^|\s)(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?test\b)"
+                r"[^|;&]*\s-u\b"
+                r"|--update-?snapshots?\b|--updateSnapshot\b|--snapshot-update\b"
+                r"|\bUPDATE_SNAPSHOTS?=\S", re.I),
+     "it rewrites the expected output (updates snapshots) instead of passing it"),
+    (re.compile(r"\|\|\s*(?:true|:|exit\s+0)\b|;\s*(?:true|exit\s+0)\s*$|\bset\s+\+e\b"
+                r"|--exit-zero\b|--continue-on-error\b|\bcontinue-on-error\b"),
+     "it swallows the failure, so it passes whatever happened"),
+    (re.compile(r"--deselect\b|-k\s+['\"]?\s*not\b|--ignore(?:-glob)?=|--skip\b"
+                r"|--testPathIgnorePatterns\b|--pass-?[wW]ith-?[nN]o-?[tT]ests\b"
+                r"|--co\b|--collect-only\b|--no-tests\b"),
+     "it leaves tests out (deselects, skips, or only collects them)"),
+)
+
+
+def games_the_check(command: str) -> str | None:
+    """Why a check command passes without the code passing it, or None."""
+    for pattern, why in _GAMES:
+        if pattern.search(command):
+            return why
+    return None
+
+
 def kept_out(command: str, carries: list[str] | None) -> str | None:
     """Why a command is never remembered, or None."""
     if carries:
@@ -88,6 +118,8 @@ def kept_out(command: str, carries: list[str] | None) -> str | None:
         return "it looks like it holds a secret"
     if _DANGER.search(command):
         return "it sends something out, deletes or publishes — never handed to an agent as a how-to"
+    if why := games_the_check(command):
+        return f"{why} — never handed on as how to run the check"
     return None
 
 
@@ -252,8 +284,16 @@ def plan_rotation(items: list[dict], now: datetime, fresh_days: int) -> tuple[
     drop = [i["id"] for i in items if i["status"] == "suggested"
             and (_ts(i["doc"].get("last_ok_ts")) or now) < now - timedelta(days=SUGGESTED_DAYS)]
     want: dict[int, tuple[str, dict]] = {}
-    live = [i for i in items
-            if i["status"] in ("on", "replaced", "dormant") and i["kind"] != "note"]
+    # a filter added later applies to what was learned before it
+    for i in items:
+        if i["kind"] in ("runs", "fix") and i["status"] in ("suggested", "on", "replaced",
+                                                           "dormant", "stale", "off"):
+            why = kept_out(str(i["doc"].get("command") or ""), None)
+            if why:
+                want[i["id"]] = ("kept_out", {"reason": why})
+    out_now = set(want)
+    live = [i for i in items if i["id"] not in out_now
+            and i["status"] in ("on", "replaced", "dormant") and i["kind"] != "note"]
     for i in live:
         # a person who turned it on vouched for it then, as a pass would
         stamps = [t for t in (_ts(i["doc"].get("last_ok_ts")), _ts(i["doc"].get("vouched_ts")))
@@ -284,7 +324,7 @@ def plan_rotation(items: list[dict], now: datetime, fresh_days: int) -> tuple[
         if w_status in ("replaced", "dormant", "stale"):
             want[f["id"]] = (w_status, want.get(works["id"], ("", {}))[1])
     changes = {}
-    for i in live:
+    for i in [*live, *(i for i in items if i["id"] in out_now)]:
         status, extra = want[i["id"]]
         doc = {k: v for k, v in i["doc"].items() if k not in ("replaced_by", "replaced_by_id")}
         doc.update(extra)

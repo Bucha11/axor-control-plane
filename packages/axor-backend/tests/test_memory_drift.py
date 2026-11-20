@@ -171,3 +171,46 @@ async def test_fresh_days_per_workspace(client: httpx.AsyncClient) -> None:
     assert (await client.put("/v1/memory/settings", json={"fresh_days": 7})).status_code == 200
     assert (await client.get("/v1/memory")).json()["fresh_days"] == 7
     assert (await client.put("/v1/memory/settings", json={"fresh_days": 0})).status_code == 400
+
+
+# ── a check that passes without the code passing it ─────────────────────────
+
+@pytest.mark.parametrize("command,why", [
+    ("pnpm test -u", "updates snapshots"),
+    ("npx jest -u src/", "updates snapshots"),
+    ("pnpm vitest run -u", "updates snapshots"),
+    ("npm test -- --updateSnapshot", "updates snapshots"),
+    ("pytest --snapshot-update", "updates snapshots"),
+    ("UPDATE_SNAPSHOTS=1 make test", "updates snapshots"),
+    ("pytest -q || true", "swallows the failure"),
+    ("make test; exit 0", "swallows the failure"),
+    ("ruff check --exit-zero .", "swallows the failure"),
+    ("pytest --deselect tests/test_login.py::test_lockout", "leaves tests out"),
+    ("pytest -k 'not lockout'", "leaves tests out"),
+    ("pytest -k \"not slow and not lockout\"", "leaves tests out"),
+    ("pytest --ignore=tests/integration", "leaves tests out"),
+    ("jest --passWithNoTests", "leaves tests out"),
+    ("pytest --collect-only -q", "leaves tests out"),
+    ("cargo test -- --skip lockout", "leaves tests out"),
+])
+def test_a_check_that_passes_without_the_code_passing_it_is_kept_out(command: str,
+                                                                     why: str) -> None:
+    reason = memory.kept_out(command, None)
+    assert reason and why in reason and "never handed on" in reason
+
+
+@pytest.mark.parametrize("command", [
+    "pnpm test", "uv run pytest -q", "pytest -q -x --lf", "python -u -m pytest",
+    "pytest -k login", "npm test -- --runInBand", "go test ./...", "ruff check --fix .",
+    "cargo test", "make typecheck", "pytest tests/test_unit.py",
+])
+def test_ordinary_checks_are_not(command: str) -> None:
+    assert memory.kept_out(command, None) is None
+
+
+def test_a_filter_added_later_applies_to_what_was_already_learned() -> None:
+    items = [_item(1, "on", "pnpm test -u", last=1), _item(2, "on", "pnpm test", last=1),
+             _item(3, "suggested", "pytest -q || true", last=1)]
+    changes, _ = memory.plan_rotation(items, NOW, 30)
+    assert changes[1][0] == "kept_out" and "snapshots" in changes[1][1]["reason"]
+    assert changes[3][0] == "kept_out" and 2 not in changes

