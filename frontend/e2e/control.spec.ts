@@ -403,8 +403,8 @@ test.describe("cross-session reputation", () => {
 
     // the activity feed carries the call; clicking it opens that run
     const feed = page.getByTestId("fleet-activity");
-    await expect(feed.getByText("→ slow_search").first()).toBeVisible();
-    await feed.getByText("→ slow_search").first().click();
+    await expect(feed.getByText("called slow_search").first()).toBeVisible();
+    await feed.getByText("called slow_search").first().click();
     await expect(page).toHaveURL(new RegExp(`govern/run/${busy}-r1`));
   });
 });

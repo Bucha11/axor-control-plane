@@ -257,6 +257,9 @@ export interface NodeInfo {
   reputation?: ReputationSummary | null;
   /** the node's last axor-probe check; null = never checked, never "healthy" */
   probe?: { verdict: string; created_ts: string; escape_count: number } | null;
+  /** what the node said it is when it first reported; null = never said
+   * (a governed production agent, or one from before profiles) */
+  profile?: { kind: "coding" | "agent" | "tree"; agent: string; developer: string } | null;
 }
 
 // Behavioral health check (axor-probe, ui-spec 8.2). A family's state is

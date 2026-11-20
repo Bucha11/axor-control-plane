@@ -198,7 +198,7 @@ export default function App() {
       <AuthReturn />
       {key === "home" && <Home />}
       {key === "chaos" && <ChaosTests />}
-      {key === "evidence" && <Evidence />}
+      {key === "evidence" && <Evidence agent={route.query.agent} />}
       {key === "catch" && <Experiment runId={runIdParam} autostart={route.query.auto === "1"} />}
       {key === "explain" && (runIdParam
         ? <ReplayTab runId={runIdParam} cursor={route.query.cursor} seq={route.query.seq} node={route.query.node} />

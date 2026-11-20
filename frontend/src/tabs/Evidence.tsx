@@ -116,13 +116,14 @@ export function useIncidentCount(): number {
   return q.data?.needs_a_look ?? 0;
 }
 
-export default function Evidence() {
+export default function Evidence({ agent: agentParam }: { agent?: string } = {}) {
   const { mode } = useApp((s) => s.connection);
   const journey = useApp((s) => s.journey);
   const connect = useApp((s) => s.connect);
   const [kind, setKind] = useState("made_up,dangerous,would_refuse");
   const [status, setStatus] = useState("new");
-  const [agent, setAgent] = useState("");
+  // `?agent=` — arriving from an agent's row in Agents
+  const [agent, setAgent] = useState(agentParam ?? "");
   const feed = useQuery({
     queryKey: ["incidents", kind, status, agent],
     queryFn: () => api.incidents({ kind, status, agent }),

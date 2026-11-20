@@ -12,6 +12,7 @@ import { isAdapter, useApp } from "../store";
 import { C, MONO, btn } from "../theme";
 import Coach from "../components/Coach";
 import { useFaultModes } from "./ChaosTests";
+import { incidentWhat } from "./Evidence";
 import Tooltip from "../components/Tooltip";
 import { codingExampleOnly, fleetExampleOnly } from "../components/CodingOnboarding";
 import { AlertMe, KeepAsTest, SignUpForYourAgent } from "../components/AccountAction";
@@ -341,7 +342,26 @@ function ControlBody({ focusNode, testBench }: { focusNode?: string; testBench: 
   const [lens, setLens] = useState<"list" | "graph">("list");
   // a skill's dry run (axor-wrap skill try) is not an agent to operate: it
   // lives on Try a skill
-  const list = (nodes.data ?? []).filter((n) => !n.node_id.startsWith("skill-try."));
+  const everyone = (nodes.data ?? []).filter((n) => !n.node_id.startsWith("skill-try."));
+  // the menu's side: coding agents (sessions and their tree runs) or
+  // production agents — everything when no side was chosen or all was asked for
+  const journey = useApp((st) => st.journey);
+  const menuAll = useApp((st) => st.menuAll);
+  const setMenuAll = useApp((st) => st.setMenuAll);
+  const side = menuAll || !journey || journey === "both" ? null : journey;
+  const list = side ? everyone.filter((n) => (side === "coding") === isCodingNode(n)) : everyone;
+  const otherSide = everyone.length - list.length;
+  // what each agent did that needs a look (the Incidents feed, newest first)
+  const incidentsQ = useQuery({ queryKey: ["incidents", "all"], queryFn: () => api.incidents({}),
+                                refetchInterval: REFETCH_MS });
+  const lookOf = new Map<string, { label: string; more: number }>();
+  for (const i of incidentsQ.data?.items ?? []) {
+    if (i.status !== "new" || i.kind === "refused") continue;
+    const had = lookOf.get(i.node_id);
+    if (had) { had.more += 1; continue; }
+    lookOf.set(i.node_id, { more: 0, label: i.kind === "made_up" ? incidentWhat(i.what)
+      : i.kind === "would_refuse" ? `${i.what} — would have been refused` : i.what });
+  }
   const topo = useQuery({
     queryKey: ["topology"],
     queryFn: api.topology,
@@ -413,6 +433,27 @@ function ControlBody({ focusNode, testBench }: { focusNode?: string; testBench: 
   }
 
   const traced = topo.data?.nodes ?? [];
+  if (list.length === 0 && otherSide > 0) {
+    return (
+      <div style={{ maxWidth: 640, margin: "0 auto" }} data-testid="agents-other-side">
+        <h1 style={{ fontSize: 22, fontWeight: 650, margin: "0 0 6px" }}>
+          No {side === "coding" ? "coding agents" : "production agents"} yet
+        </h1>
+        <div style={{ fontFamily: MONO, fontSize: 12, color: C.mut, lineHeight: 1.7, marginBottom: 14 }}>
+          {otherSide} {side === "coding" ? "production agent" : "coding agent"}{otherSide === 1 ? " is" : "s are"} on
+          the plane.{" "}
+          <button onClick={() => setMenuAll(true)} style={{ background: "none", border: "none", padding: 0, cursor: "pointer",
+            fontFamily: MONO, fontSize: 12, color: C.steel }}>show everything</button>
+        </div>
+        {side === "coding" ? (
+          <button onClick={() => navigate("connect", { for: "coding" })}
+            style={btn({ color: C.text, borderColor: C.steel, fontSize: 12, padding: "6px 14px" })}>
+            connect Claude Code or Codex →
+          </button>
+        ) : <ExampleFleet />}
+      </div>
+    );
+  }
   if (list.length === 0) {
     return (
       <div style={{ maxWidth: 640, margin: "0 auto" }}>
@@ -484,7 +525,8 @@ function ControlBody({ focusNode, testBench }: { focusNode?: string; testBench: 
     });
   };
 
-  const statuses = new Map(list.map((n) => [n.node_id, statusesOf(n, fleetRows.get(n.node_id))]));
+  const statuses = new Map(list.map((n) => [n.node_id,
+    statusesOf(n, fleetRows.get(n.node_id), lookOf.has(n.node_id))]));
   // Counters count what the list shows: a tree is one row, so it is one unit,
   // and its statuses are its agents' together (one agent needing you puts the
   // tree in "needs you"; one running makes it running, not idle).
@@ -545,6 +587,12 @@ function ControlBody({ focusNode, testBench }: { focusNode?: string; testBench: 
         <span data-testid="fleet-count">
           {looseCount} agent{looseCount === 1 ? "" : "s"}
           {treeCount > 0 && <> · {treeCount} tree{treeCount === 1 ? "" : "s"}</>} · live
+          {otherSide > 0 && (
+            <> · <button data-testid="agents-show-other" onClick={() => setMenuAll(true)}
+              style={{ background: "none", border: "none", padding: 0, cursor: "pointer", fontFamily: MONO, fontSize: 11, color: C.steel }}>
+              {otherSide} {side === "coding" ? "production" : "coding"} agent{otherSide === 1 ? "" : "s"} not shown
+            </button></>
+          )}
         </span>
         <span style={{ marginLeft: "auto", display: "flex", gap: 12 }}>
           {(["list", "graph"] as const).map((l) => (
@@ -595,6 +643,7 @@ function ControlBody({ focusNode, testBench }: { focusNode?: string; testBench: 
             if (!tree) {
               out.push(
                 <FleetRowView key={n.node_id} n={n} row={fleetRows.get(n.node_id)} locked={lockedOf(n.node_id)}
+                  look={lookOf.get(n.node_id)}
                   st={statuses.get(n.node_id)!} first={out.length === 0} selected={sel === n.node_id}
                   onPick={() => pick(n.node_id)} />,
               );
@@ -616,6 +665,7 @@ function ControlBody({ focusNode, testBench }: { focusNode?: string; testBench: 
                 })}>
                 {members.map((m) => (
                   <FleetRowView key={m.node_id} n={m} row={fleetRows.get(m.node_id)} locked={lockedOf(m.node_id)}
+                    look={lookOf.get(m.node_id)}
                     st={statuses.get(m.node_id)!} first={false} selected={sel === m.node_id}
                     onPick={() => pick(m.node_id)} />
                 ))}
@@ -843,7 +893,7 @@ function ControlBody({ focusNode, testBench }: { focusNode?: string; testBench: 
           </>)}
         </>
       ) : (
-        <ActivityFeed />
+        <ActivityFeed only={side ? new Set(list.map((n) => n.node_id)) : undefined} />
       )}
     </aside>
     </div>
@@ -1061,12 +1111,18 @@ const STATUS_COLOR: Record<Status, string> = {
   needs_you: C.amber, running: C.green, paused: C.amber, stopped: C.red, idle: C.dim,
 };
 
-function statusesOf(n: NodeInfo, row?: FleetRow): Status[] {
+/** A coding agent's session or one of its tree runs (what the node said it is
+ * when it first reported); everything else is a production agent. */
+function isCodingNode(n: NodeInfo): boolean {
+  return n.profile?.kind === "coding" || n.profile?.kind === "tree";
+}
+
+function statusesOf(n: NodeInfo, row?: FleetRow, needsLook = false): Status[] {
   const out: Status[] = [];
   const stopped = n.desired?.state.stopped === true;
   const paused = n.desired?.state.paused === true;
   const posture = attention(n).filter((a) => a.label !== "paused" && a.label !== "stopped");
-  if (posture.length > 0 || (row?.lies ?? 0) > 0) out.push("needs_you");
+  if (posture.length > 0 || (row?.lies ?? 0) > 0 || needsLook) out.push("needs_you");
   if (stopped) out.push("stopped");
   else if (paused) out.push("paused");
   if (row?.active_run && !stopped) out.push("running");
@@ -1080,6 +1136,23 @@ function primary(st: Status[]): Status {
     if (st.includes(s)) return s;
   }
   return "idle";
+}
+
+/** "40s ago" today; past a day, the day and time — "3d ago" says nothing about when. */
+function lastActive(iso?: string | null): string {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return "—";
+  return Date.now() - d.getTime() < 86_400_000 ? ago(iso) : stamp(iso);
+}
+
+/** "14:31:07" for today, "Thu 12 Nov 14:31" for any other day. */
+function stamp(iso: string): string {
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return "";
+  const today = new Date().toDateString() === d.toDateString();
+  return today ? d.toTimeString().slice(0, 8)
+    : `${d.toLocaleDateString(undefined, { weekday: "short", day: "numeric", month: "short" })} ${d.toTimeString().slice(0, 5)}`;
 }
 
 function ago(iso?: string | null): string {
@@ -1223,9 +1296,12 @@ function FleetTotals({ totals }: { totals: { runs: number; calls: number; tainte
       {part(totals.active, "running now", C.green)}
       {part(totals.runs, "runs")}
       {part(totals.calls, "tool calls")}
-      {part(totals.tainted, "untrusted results", C.amber)}
-      {part(totals.denied, "denied", C.red)}
-      {part(totals.lies, "incidents", C.red)}
+      {part(totals.tainted, "answers from outside text", C.amber)}
+      {part(totals.denied, "refused", C.red)}
+      {totals.lies > 0 ? (
+        <button onClick={() => navigate("evidence")} style={{ background: "none", border: "none", padding: 0, cursor: "pointer",
+          fontFamily: MONO, fontSize: 11, color: C.red }}>{totals.lies} incident{totals.lies === 1 ? "" : "s"} →</button>
+      ) : part(0, "incidents")}
     </div>
   );
 }
@@ -1360,9 +1436,9 @@ function TreeGroupRow({ tree, first, open, onToggle, locked, children }: {
   );
 }
 
-function FleetRowView({ n, row, st, first, selected, onPick, locked }: {
+function FleetRowView({ n, row, st, first, selected, onPick, locked, look }: {
   n: NodeInfo; row?: FleetRow; st: Status[]; first: boolean; selected: boolean; onPick: () => void;
-  locked?: LockReason[];
+  locked?: LockReason[]; look?: { label: string; more: number };
 }) {
   const folded = useApp((s) => s.planNoticesFolded);
   const p = primary(st);
@@ -1384,9 +1460,13 @@ function FleetRowView({ n, row, st, first, selected, onPick, locked }: {
             {a.label}{a.route ? " →" : ""}
           </button>
         ))}
-        {(row?.lies ?? 0) > 0 && (
-          <span style={{ fontFamily: MONO, fontSize: 10, color: C.red, border: `1px solid ${C.red}`,
-                         borderRadius: 20, padding: "1px 8px" }}>made-up answer</span>
+        {!locked && look && (
+          <button data-testid={`agent-look-${n.node_id}`}
+            onClick={(e) => { e.stopPropagation(); navigate("evidence", { agent: n.node_id }); }}
+            style={{ fontFamily: MONO, fontSize: 10, color: C.red, background: "none", border: `1px solid ${C.red}`,
+                     borderRadius: 20, padding: "1px 8px", cursor: "pointer" }}>
+            {look.label}{look.more ? ` · +${look.more}` : ""} →
+          </button>
         )}
       </div>
       {locked ? (!folded && (
@@ -1401,11 +1481,11 @@ function FleetRowView({ n, row, st, first, selected, onPick, locked }: {
             ● running{row.current_tool ? ` · ${row.current_tool}` : ""} →
           </span>
         ) : (
-          <span>{STATUS_LABEL[p]} · last active {ago(row?.last_ts)}</span>
+          <span>{STATUS_LABEL[p]} · last active {lastActive(row?.last_ts ?? n.reported?.updated_ts)}</span>
         )}
-        {row && <span>{row.runs} run{row.runs === 1 ? "" : "s"} · {row.calls} calls</span>}
-        {row && row.tainted > 0 && <span style={{ color: C.amber }}>{row.tainted} untrusted</span>}
-        {row && row.denied > 0 && <span style={{ color: C.red }}>{row.denied} denied</span>}
+        {row && <span>last 24h: {row.runs} run{row.runs === 1 ? "" : "s"} · {row.calls} call{row.calls === 1 ? "" : "s"}</span>}
+        {row && row.tainted > 0 && <span style={{ color: C.amber }}>{row.tainted} answer{row.tainted === 1 ? "" : "s"} from outside text</span>}
+        {row && row.denied > 0 && <span style={{ color: C.red }}>{row.denied} refused</span>}
       </div>
       )}
     </div>
@@ -1449,24 +1529,29 @@ function feedLine(e: ActivityEvent): { text: string; color: string } {
   const tool = typeof p.tool === "string" ? p.tool : "";
   switch (e.kind) {
     case "tool_call":
-      return e.verdict === "deny" ? { text: `→ ${tool} denied`, color: C.red } : { text: `→ ${tool}`, color: C.text };
+      return e.verdict === "deny" ? { text: `${tool} — refused`, color: C.red }
+        : p.would_deny ? { text: `called ${tool} — would have been refused`, color: C.amber }
+          : { text: `called ${tool}`, color: C.text };
     case "tool_result": {
       const src = ((p.root as { sources?: string[] } | undefined)?.sources ?? []).join(", ");
-      return src ? { text: `← ${tool} · untrusted (${src})`, color: C.amber } : { text: `← ${tool}`, color: C.text };
+      const check = p.check as { kind?: string; passed?: boolean } | undefined;
+      if (check?.kind && check.passed === false) return { text: `${tool} — the ${check.kind} failed`, color: C.red };
+      return src ? { text: `${tool} answered · text from outside (${src})`, color: C.amber }
+        : { text: `${tool} answered`, color: C.text };
     }
-    case "claim": return { text: `answered: ${String(p.text ?? "").slice(0, 60)}`, color: C.mut };
-    case "fault_injected": return { text: `⚡ ${tool} broken on purpose`, color: C.steel };
+    case "claim": return { text: `said: ${String(p.text ?? "").slice(0, 80)}`, color: C.mut };
+    case "fault_injected": return { text: `${tool} broken on purpose (chaos test)`, color: C.steel };
     case "message_sent": {
       const to = String(p.to ?? "");
-      if (e.verdict === "deny") return { text: `→ message to ${to} denied`, color: C.red };
+      if (e.verdict === "deny") return { text: `message to ${to} — refused`, color: C.red };
       const carried = ((p.carried as { root?: { sources?: string[] } } | undefined)?.root?.sources ?? []);
       return carried.length
-        ? { text: `→ message to ${to} · carries untrusted (${carried.join(", ")})`, color: C.amber }
-        : { text: `→ message to ${to}`, color: C.text };
+        ? { text: `sent a message to ${to} · carries text from outside (${carried.join(", ")})`, color: C.amber }
+        : { text: `sent a message to ${to}`, color: C.text };
     }
-    case "message_received": return { text: `← message from ${String(p.from ?? "")}`, color: C.text };
+    case "message_received": return { text: `got a message from ${String(p.from ?? "")}`, color: C.text };
     case "node_spawned": return { text: `started ${String(p.child_id ?? "an agent")}`, color: C.mut };
-    case "denial": return { text: `denied ${tool}`, color: C.red };
+    case "denial": return { text: `${tool} — refused`, color: C.red };
     case "fact": return { text: `fact ${String(p.fact_type ?? "")}`, color: C.amber };
     default: {
       const t = describeAck(e.kind, p);
@@ -1475,13 +1560,14 @@ function feedLine(e: ActivityEvent): { text: string; color: string } {
   }
 }
 
-function ActivityFeed() {
+function ActivityFeed({ only }: { only?: Set<string> }) {
   const feed = useQuery({ queryKey: ["activity"], queryFn: api.activity, refetchInterval: 2000 });
   // a session past the free plan is not shown, here either
   const ent = useQuery({ queryKey: ["entitlements"], queryFn: api.entitlements, retry: false });
   const [find, setFind] = useState("");
   const events = (feed.data?.events ?? []).filter((e) => {
     if (ent.data?.locked[e.node_id] || ent.data?.locked_trees[e.node_id]) return false;
+    if (only && !only.has(e.node_id)) return false;
     if (!find) return true;
     const t = `${e.node_id} ${feedLine(e).text}`.toLowerCase();
     return t.includes(find.toLowerCase());
@@ -1512,7 +1598,7 @@ function ActivityFeed() {
             <div key={i} onClick={go} className="px-3 py-1.5"
               style={{ borderTop: i === 0 ? "none" : `1px solid ${C.line}`, cursor: "pointer" }}>
               <div className="flex gap-2">
-                <span style={{ color: C.dim }}>{e.ts ? new Date(e.ts).toTimeString().slice(0, 8) : ""}</span>
+                <span style={{ color: C.dim, whiteSpace: "nowrap" }}>{e.ts ? stamp(e.ts) : ""}</span>
                 <span style={{ color: C.steel, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis",
                                whiteSpace: "nowrap" }}>{e.node_id}</span>
               </div>

@@ -293,7 +293,7 @@ test("Agents with only the example fleet tells its story", async ({ page, reques
   await expect(page.getByText(/needs them wrapped in code/)).toHaveCount(0);
   await expect(page.getByRole("button", { name: "connection: example data" })).toBeVisible();
   // the activity reads as messages between agents, not event kinds
-  await expect(page.getByTestId("fleet-activity")).toContainText("→ message to tree-research");
+  await expect(page.getByTestId("fleet-activity")).toContainText("sent a message to tree-research");
   await expect(page.getByTestId("fleet-activity")).not.toContainText("message_sent");
   await story.getByTestId("story-denied").click();
   await expect(page.getByTestId("agent-panel")).toContainText("tree-orch");
