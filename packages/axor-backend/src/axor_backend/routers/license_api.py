@@ -48,8 +48,8 @@ from datetime import date, timedelta
 from fastapi import APIRouter, HTTPException
 
 from axor_backend.deps import ConfigDep, PrincipalDep, StateDep, StoreDep
-from axor_backend.ee.license import TIER_DEVELOPER_SEATS
-from axor_backend.ee.pricing import statement
+from axor_backend.ee.license import TIER_DEVELOPER_SEATS, TIER_NODE_CEILING
+from axor_backend.ee.pricing import RATE_CARD, SEAT_PRICE, money, statement
 from axor_backend.licensing import (
     active_license,
     billing_month,
@@ -280,6 +280,64 @@ async def license_usage(state: StateDep, store: StoreDep, months: int = 3) -> di
         on = date.fromisoformat(start) - timedelta(days=1)
     seats = TIER_DEVELOPER_SEATS.get(lic.workspace_tier) if lic else None
     return {"governed_node_ceiling": ceiling, "developer_seats": seats, "months": periods}
+
+
+BILLING_HISTORY = 6
+
+
+async def _month_statement(store: StoreDep, month: str, org_name: str, tier: str,
+                           included_nodes: int) -> dict:
+    start, end = billing_month(f"{month}-01")
+    usage = await store.node_usage(start, end)
+    devs = await store.developer_usage(start, end)
+    line = statement(month=month, organization=org_name, workspace_tier=tier,
+                     included_nodes=included_nodes, peak_nodes=int(usage["peak_nodes"]),
+                     peak_day=usage["peak_day"],
+                     included_developers=TIER_DEVELOPER_SEATS.get(tier, 0),
+                     active_developers=int(devs["active_developers"]))
+    return {**line.as_dict(), "developers": devs["developers"]}
+
+
+@router.get("/billing")
+async def license_billing(state: StateDep, store: StoreDep) -> dict:
+    """Everything about money in one answer, for both journeys: the plan and
+    what it includes, this month so far (provisional), the closed months'
+    statements — and, on the free plan, what this month would cost on each
+    paid rung, from this workspace's own usage. Statements are the same
+    arithmetic as /invoice (ee.pricing); nothing here charges anyone."""
+    org = current_org_id()
+    lic = active_license(state, org) or stored_license(state, org)
+    tier = lic.workspace_tier if lic else "community"
+    this_month = date.fromisoformat(today()).strftime("%Y-%m")
+    rate = RATE_CARD.get(tier)
+    plan = {
+        "tier": tier, "licensed": lic is not None,
+        "organization": lic.organization if lic else "",
+        "expires_at": lic.expires_at if lic else None,
+        "base_cents": rate[0] if rate else None, "base": money(rate[0]) if rate else None,
+        "per_node_cents": rate[1] if rate else None,
+        "seat_cents": SEAT_PRICE.get(tier), "seat": money(SEAT_PRICE.get(tier, 0)),
+        "included_nodes": lic.governed_node_ceiling if lic else TIER_NODE_CEILING["community"],
+        "included_developers": TIER_DEVELOPER_SEATS.get(tier, 0),
+        "priced": rate is not None,
+    }
+    out: dict = {"plan": plan, "current": None, "history": [], "if_paid": []}
+    if lic is not None:
+        name = lic.organization
+        out["current"] = await _month_statement(store, this_month, name, tier,
+                                                lic.governed_node_ceiling)
+        on = date.fromisoformat(f"{this_month}-01")
+        for _ in range(BILLING_HISTORY):
+            on = (on - timedelta(days=1)).replace(day=1)
+            out["history"].append(await _month_statement(
+                store, on.strftime("%Y-%m"), name, tier, lic.governed_node_ceiling))
+    else:
+        # what this month would cost on each paid rung — the user's own usage,
+        # the list prices; an estimate, said so
+        for rung in ("coding", "team", "security"):
+            est = await _month_statement(store, this_month, "", rung, TIER_NODE_CEILING[rung])
+            out["if_paid"].append({"tier": rung, **est})
+    return out
 
 
 @router.get("/invoice")

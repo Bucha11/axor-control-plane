@@ -29,4 +29,6 @@ async def test_the_example_shows_the_shared_ledger_a_tree_and_the_seat_meter(
     tree = (await client.get("/v1/trees/tree-example-coding")).json()
     assert tree["status"] == "running" and len(tree["nodes"]["read"]["runs"]) == 5
     month = (await client.get("/v1/license/usage?months=1")).json()["months"][0]
-    assert month["active_developers"] == 2 and month["peak_nodes"] == 0
+    # the example's developers are never metered: nobody pays a seat for
+    # looking at the product (the entitlements skip them for the same reason)
+    assert month["active_developers"] == 0 and month["peak_nodes"] == 0

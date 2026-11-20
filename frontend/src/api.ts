@@ -547,6 +547,23 @@ export interface SkillEvalSkill {
   verdict: string;
 }
 
+/** Money, in one answer (GET /v1/license/billing). */
+export interface BillingStatement {
+  month: string; workspace_tier: string; tier?: string; base: string; base_cents: number;
+  included_nodes: number; peak_nodes: number; peak_day: string | null; billable_nodes: number;
+  overage: string; overage_cents: number; included_developers: number; active_developers: number;
+  billable_developers: number; seats: string; seat_cents: number; total: string; total_cents: number;
+  provisional: boolean; priced: boolean; note: string; computed_on: string;
+  developers: { developer: string; sessions: number; agents: string[] }[];
+}
+export interface BillingReport {
+  plan: { tier: string; licensed: boolean; organization: string; expires_at: string | null;
+          base: string | null; base_cents: number | null; per_node_cents: number | null;
+          seat: string; seat_cents: number | null; included_nodes: number; included_developers: number;
+          priced: boolean };
+  current: BillingStatement | null; history: BillingStatement[]; if_paid: BillingStatement[];
+}
+
 /** The team's memory: what coding agents verifiably learned in a repo. */
 export interface MemoryItem {
   id: number; repo: string; key: string; kind: "runs" | "fix" | "note";
@@ -1601,6 +1618,7 @@ export const api = {
       method: "PUT", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ agent }),
     }).then((r) => j<{ agent_family: string }>(r)),
+  billing: () => af("/v1/license/billing").then((r) => j<BillingReport>(r)),
   licenseUsage: (months = 3) =>
     af(`/v1/license/usage?months=${months}`).then((r) => j<UsageReport>(r)),
   licenseInvoice: (month?: string) =>

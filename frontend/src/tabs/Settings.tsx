@@ -6,7 +6,7 @@ import { useEffect, useState } from "react";
 import { track } from "../funnel";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Check, Copy, Loader2, Trash2 } from "lucide-react";
-import { api } from "../api";
+import { api, BillingStatement } from "../api";
 import {
   IdentityError, emailAvailable, forgotPassword, here, login, logout, oauthProviders,
   oauthStartUrl, signup, signupAvailable, type OAuthProvider,
@@ -343,7 +343,7 @@ export default function Settings({ tab = "workspace" }: { tab?: string } = {}) {
   const prod = !journey || menuAll || journey !== "coding";
   const coding = !journey || menuAll || journey !== "production";
   const tabs: [SettingsTab, string][] = [
-    ["workspace", "workspace"], ["connect", "connect agents"], ["alerts", "alerts"],
+    ["workspace", "workspace"], ["billing", "billing"], ["connect", "connect agents"], ["alerts", "alerts"],
     ...(prod ? [["security", "security"]] as [SettingsTab, string][] : []),
     ["learn", "learn"],
     ...(funnel.data ? [["operator", "operator"]] as [SettingsTab, string][] : []),
@@ -388,16 +388,6 @@ export default function Settings({ tab = "workspace" }: { tab?: string } = {}) {
               <TokenFold />
             )}
           </Section>
-          {coding && (
-            <Section title="PLAN & DEVELOPERS · coding agents">
-              <DeveloperUsage />
-            </Section>
-          )}
-          {prod && (
-            <Section title="USAGE & BILLING · production agents">
-              <UsageAndBilling />
-            </Section>
-          )}
           <Section title="LICENSE · a plane you run yourself">
             <details data-testid="license-fold" open={!!licenseStatus.data?.active || !!licenseStatus.data?.expired || undefined}>
               <summary style={{ cursor: "pointer", fontFamily: MONO, fontSize: 11.5, color: C.mut }}>
@@ -506,6 +496,22 @@ export default function Settings({ tab = "workspace" }: { tab?: string } = {}) {
                     </div>
             </details>
           </Section>
+        </>
+      )}
+
+      {active === "billing" && (
+        <>
+          <Billing coding={coding} prod={prod} />
+          {coding && (
+            <Section title="DEVELOPERS PER MONTH · coding agents">
+              <DeveloperUsage />
+            </Section>
+          )}
+          {prod && (
+            <Section title="GOVERNED NODES PER MONTH · production agents">
+              <UsageAndBilling />
+            </Section>
+          )}
         </>
       )}
 
@@ -698,7 +704,7 @@ export default function Settings({ tab = "workspace" }: { tab?: string } = {}) {
   );
 }
 
-type SettingsTab = "workspace" | "connect" | "alerts" | "security" | "learn" | "operator";
+type SettingsTab = "workspace" | "billing" | "connect" | "alerts" | "security" | "learn" | "operator";
 
 const PLANE_URL = typeof window === "undefined" ? "" : window.location.origin;
 
@@ -734,37 +740,161 @@ function TokenFold() {
   );
 }
 
+const TIER_NAME: Record<string, string> = {
+  community: "Free", coding: "Coding", team: "Team", security: "Security Workspace", enterprise: "Enterprise",
+};
+
+/** One month's money, line by line: the plan, developers past what it
+ * includes, governed nodes past what it includes. */
+function StatementLines({ st, coding, prod }: { st: BillingStatement; coding: boolean; prod: boolean }) {
+  const row = (what: React.ReactNode, amount: string, testid?: string) => (
+    <div data-testid={testid} className="flex gap-3" style={{ fontFamily: MONO, fontSize: 11.5, padding: "3px 0", borderTop: `1px solid ${C.line}` }}>
+      <span style={{ flex: 1, color: C.mut }}>{what}</span>
+      <span style={{ color: C.text }}>{amount}</span>
+    </div>
+  );
+  const devs = st.active_developers;
+  return (
+    <div>
+      {row(<>{TIER_NAME[st.workspace_tier] ?? st.workspace_tier} plan</>, st.priced ? st.base : "contracted")}
+      {(coding || devs > 0) && row(
+        <>developers whose agents ran: <span style={{ color: C.text }}>{devs}</span>
+          {st.included_developers ? ` · ${st.included_developers} included` : ""}
+          {st.billable_developers ? ` · ${st.billable_developers} × $25` : ""}</>,
+        st.priced ? st.seats : "—", "bill-developers")}
+      {(prod || st.peak_nodes > 0) && row(
+        <>governed nodes at the peak: <span style={{ color: C.text }}>{st.peak_nodes}</span>
+          {st.peak_day ? ` on ${st.peak_day}` : ""} · {st.included_nodes} included
+          {st.billable_nodes ? ` · ${st.billable_nodes} over` : ""}</>,
+        st.priced ? st.overage : "—", "bill-nodes")}
+      <div className="flex gap-3" style={{ fontFamily: MONO, fontSize: 12.5, padding: "6px 0 0", borderTop: `1px solid ${C.line}` }}>
+        <span style={{ flex: 1, color: C.text }}>{st.provisional ? "so far this month" : "total"}</span>
+        <span data-testid="bill-total" style={{ color: C.text, fontWeight: 700 }}>{st.priced ? st.total : "per contract"}</span>
+      </div>
+      {st.provisional && (
+        <div style={{ fontFamily: MONO, fontSize: 10, color: C.dim, marginTop: 3 }}>
+          the month is still running — a new developer or a higher peak can still add to it
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Billing for both journeys: the plan, this month so far, the closed months —
+ * on the free plan, what this month would cost on each paid plan. */
+function Billing({ coding, prod }: { coding: boolean; prod: boolean }) {
+  const q = useQuery({ queryKey: ["billing"], queryFn: api.billing, retry: false });
+  const [open, setOpen] = useState<string | null>(null);
+  if (q.isError) {
+    return (
+      <Section title="PLAN">
+        <div style={{ fontFamily: MONO, fontSize: 11.5, color: C.mut }}>
+          Billing is for a workspace with an account — sign in, or create one, to see it.
+        </div>
+      </Section>
+    );
+  }
+  if (!q.data) return null;
+  const { plan, current, history, if_paid } = q.data;
+  const rungs = if_paid.filter((e) =>
+    e.tier === "coding" ? coding : e.tier === "security" ? prod : true);
+  return (
+    <>
+      <Section title="PLAN">
+        <div data-testid="billing-plan" style={{ fontFamily: MONO, fontSize: 12, color: C.text, lineHeight: 1.7 }}>
+          {TIER_NAME[plan.tier] ?? plan.tier}
+          <span style={{ color: C.mut }}>
+            {plan.tier === "community" ? " — $0: one developer and one agent family, one governed node"
+              : plan.tier === "coding" ? ` — ${plan.seat} per developer whose agents ran that month`
+                : plan.priced ? ` — ${plan.base} a month · ${plan.included_developers} developers and ${plan.included_nodes} governed nodes included, then ${plan.seat} per developer`
+                  : " — contracted"}
+          </span>
+        </div>
+        {plan.licensed && (
+          <div style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim }}>
+            {plan.organization}{plan.expires_at ? ` · until ${plan.expires_at}` : ""}
+          </div>
+        )}
+        <button onClick={() => navigate("pricing")} className="mt-2"
+          style={{ background: "none", border: "none", padding: 0, cursor: "pointer", fontFamily: MONO, fontSize: 11.5, color: C.steel }}>
+          {plan.tier === "community" ? "see the paid plans →" : "change plan →"}
+        </button>
+      </Section>
+
+      {current && (
+        <Section title={`THIS MONTH · ${current.month}`}>
+          <div data-testid="billing-current"><StatementLines st={current} coding={coding} prod={prod} /></div>
+        </Section>
+      )}
+
+      {rungs.length > 0 && (
+        <Section title={`ON A PAID PLAN, THIS MONTH WOULD BE · from your own usage`}>
+          <div data-testid="billing-if-paid" className="flex flex-col" style={{ gap: 14 }}>
+            {rungs.map((e) => (
+              <div key={e.tier} data-testid={`if-paid-${e.tier}`}>
+                <div style={{ fontFamily: MONO, fontSize: 11.5, color: C.text, marginBottom: 4 }}>{TIER_NAME[e.tier ?? ""] ?? e.tier}</div>
+                <StatementLines st={e} coding={coding} prod={prod} />
+              </div>
+            ))}
+            <div style={{ fontFamily: MONO, fontSize: 10, color: C.dim }}>
+              an estimate at list prices — nothing is charged on the free plan
+            </div>
+          </div>
+        </Section>
+      )}
+
+      {history.length > 0 && (
+        <Section title="STATEMENTS · closed months">
+          <div data-testid="billing-history">
+            {history.map((h) => (
+              <div key={h.month} style={{ borderTop: `1px solid ${C.line}` }}>
+                <button onClick={() => setOpen(open === h.month ? null : h.month)}
+                  className="flex gap-3 w-full"
+                  style={{ background: "none", border: "none", cursor: "pointer", padding: "5px 0", fontFamily: MONO, fontSize: 11.5 }}>
+                  <span style={{ color: C.text, width: 70, textAlign: "left" }}>{h.month}</span>
+                  <span style={{ color: C.mut, flex: 1, textAlign: "left" }}>
+                    {coding ? `${h.active_developers} developer${h.active_developers === 1 ? "" : "s"}` : ""}
+                    {coding && prod ? " · " : ""}{prod ? `peak ${h.peak_nodes} nodes` : ""}
+                  </span>
+                  <span style={{ color: C.text }}>{h.priced ? h.total : "per contract"}</span>
+                </button>
+                {open === h.month && (
+                  <div className="pb-2">
+                    <StatementLines st={h} coding={coding} prod={prod} />
+                    {h.developers.length > 0 && (
+                      <div style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim, marginTop: 6 }}>
+                        developers (as the plane knows them — an id each, never an address):{" "}
+                        {h.developers.map((d) => `${d.developer.slice(0, 12)}… ${d.sessions} session${d.sessions === 1 ? "" : "s"}`).join(" · ")}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        </Section>
+      )}
+    </>
+  );
+}
+
 /** Coding agents are paid per developer whose agents ran in a month: how many
  * did, what the plan includes, and what the free plan holds to. */
 function DeveloperUsage() {
   const usage = useQuery({ queryKey: ["license-usage"], queryFn: () => api.licenseUsage(6) });
-  const ent = useQuery({ queryKey: ["entitlements"], queryFn: api.entitlements, retry: false });
   const months = usage.data?.months ?? [];
-  const tier = ent.data?.tier ?? "community";
-  const free = ent.data?.free ?? true;
-  const seats = usage.data?.developer_seats;
-  const now = months[0];
   return (
     <div data-testid="developer-usage" style={{ fontFamily: MONO, fontSize: 11.5, color: C.mut, lineHeight: 1.7 }}>
-      <div style={{ color: C.text, marginBottom: 6 }}>
-        {free ? "Free — one developer, one agent family (Claude Code or Codex)"
-          : `${tier[0].toUpperCase()}${tier.slice(1)} plan`}
-        {now && <span style={{ color: C.mut }}> · {now.active_developers} developer{now.active_developers === 1 ? "" : "s"} this month</span>}
-        {seats != null && seats > 0 && <span style={{ color: C.mut }}> · {seats} included</span>}
-      </div>
       <div style={{ color: C.dim, marginBottom: 8 }}>
-        {free
-          ? "A second developer, mixing Claude Code and Codex, team skills and team memory are on Coding — $25 per developer whose agents ran that month."
-          : "Billed per developer whose agents ran that month — not per session, repository or tree."}
-        {" "}<button onClick={() => navigate("pricing")} style={{ background: "none", border: "none", padding: 0, cursor: "pointer", fontFamily: MONO, fontSize: 11.5, color: C.steel }}>plans →</button>
+        A developer counts once a month when their agents (Claude Code, Codex) report — however many
+        sessions, repositories or trees. The example sessions never count.
       </div>
-      {months.length > 0 && (
-        <div className="flex gap-4 flex-wrap" style={{ fontSize: 10.5, color: C.dim }}>
-          {months.map((m) => (
-            <span key={m.month}>{m.month} · <span style={{ color: m.active_developers ? C.text : C.dim }}>{m.active_developers}</span></span>
-          ))}
-        </div>
-      )}
+      <div className="flex gap-4 flex-wrap" style={{ fontSize: 11 }}>
+        {months.map((m) => (
+          <span key={m.month} style={{ color: C.dim }}>{m.month} · <span style={{ color: m.active_developers ? C.text : C.dim }}>
+            {m.active_developers} developer{m.active_developers === 1 ? "" : "s"}</span></span>
+        ))}
+      </div>
     </div>
   );
 }

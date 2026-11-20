@@ -1930,7 +1930,11 @@ class Store:
 
     async def developer_usage(self, start_day: str, end_day: str) -> dict[str, Any]:
         """Developers whose coding agents reported in the range — the seat
-        count — and their sessions per agent. Ids are opaque hashes."""
+        count — and their sessions per agent. Ids are opaque hashes. The
+        example sessions the demo seeds are never counted: nobody pays a seat
+        for looking at the product."""
+        from axor_backend.ee.entitlements import EXAMPLE_DEVELOPER_PREFIX
+
         async with self.engine.connect() as conn:
             rows = (await conn.execute(
                 select(node_profiles.c.developer, node_profiles.c.agent,
@@ -1942,7 +1946,8 @@ class Store:
                        node_activity.c.day >= start_day,
                        node_activity.c.day <= end_day,
                        node_profiles.c.kind == "coding",
-                       node_profiles.c.developer != ""))).all()
+                       node_profiles.c.developer != "",
+                       ~node_profiles.c.developer.startswith(EXAMPLE_DEVELOPER_PREFIX)))).all()
         sessions: dict[str, set[str]] = {}
         agents: dict[str, set[str]] = {}
         for r in rows:

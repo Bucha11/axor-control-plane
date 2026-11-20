@@ -73,7 +73,7 @@ test.describe("settings", () => {
   test("the meter and the statement drawn from it are visible", async ({ page }) => {
     // Measured, priced, tested — and reachable only by curl, so a customer
     // could not see their own fleet history or their own bill.
-    await goHash(page, "settings");
+    await goHash(page, "settings?tab=billing");
     const usage = page.getByTestId("usage-billing");
     await expect(usage).toBeVisible();
     await expect(usage.getByText(/A month is billed on its PEAK/)).toBeVisible();
@@ -109,8 +109,13 @@ test.describe("settings", () => {
     const tabs = page.getByTestId("settings-tabs");
     await expect(tabs.getByRole("tab", { name: "workspace" })).toHaveAttribute("aria-selected", "true");
     await expect(tabs.getByRole("tab", { name: "security" })).toHaveCount(0);
+    await tabs.getByRole("tab", { name: "billing" }).click();
+    await expect(page.getByTestId("billing-plan")).toContainText("Free");
     await expect(page.getByTestId("developer-usage")).toContainText("developer");
     await expect(page.getByTestId("usage-billing")).toHaveCount(0);
+    // on the free plan: what this month would cost, from this workspace's own usage
+    await expect(page.getByTestId("if-paid-coding")).toContainText("developers whose agents ran");
+    await expect(page.getByTestId("if-paid-security")).toHaveCount(0);
     await tabs.getByRole("tab", { name: "alerts" }).click();
     await expect(page).toHaveURL(/tab=alerts/);
     await expect(page.getByText(/its own run contradicts/)).toBeVisible();
@@ -126,5 +131,14 @@ test.describe("settings", () => {
     await expect(posture.getByTestId("posture-auth")).toContainText("set AXOR_API_TOKEN");
     await expect(posture.getByTestId("posture-command_signing")).toContainText("AXOR_OPERATOR_KEYS");
     await expect(page.getByTestId("federation-vault")).toBeVisible();
+  });
+
+  test("billing for production: the plan, and what this month would cost on Team and Security", async ({ page }) => {
+    await goHash(page, "settings?tab=billing");
+    await expect(page.getByTestId("billing-plan")).toContainText("Free");
+    await expect(page.getByTestId("if-paid-team").getByTestId("bill-nodes")).toContainText("governed nodes at the peak");
+    await expect(page.getByTestId("if-paid-team").getByTestId("bill-total")).toContainText("$");
+    await expect(page.getByTestId("if-paid-security")).toBeVisible();
+    await expect(page.getByTestId("usage-billing")).toBeVisible();
   });
 });

@@ -193,8 +193,8 @@ async def seed_coding(store: StoreDep, cache: SubgraphCacheDep) -> dict:
         developer = demo.CODING_DEVELOPERS.get(node, "dev-example-ada")
         await store.put_node_profile(node, "coding", agent, developer, ts,
                                      repo=demo.CODING_REPO, repo_label=demo.CODING_REPO_LABEL)
-        # reported today, as a real session's heartbeat records — the seat
-        # meter counts developers whose agents were active
+        # reported today, as a real session's heartbeat records; the seat
+        # meter skips example developers — nobody is billed for the demo
         await store.record_node_activity(node, today())
     await store.put_node_profile(demo.CODING_TREE, "tree", "", "", ts)
     snapshot = demo.coding_tree_snapshot()
