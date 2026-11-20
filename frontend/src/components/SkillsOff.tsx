@@ -5,7 +5,7 @@
 // context until someone removes it, and that is said where the switch is.
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { api } from "../api";
+import { api, TeamSkill } from "../api";
 import { C, MONO, btn } from "../theme";
 
 export function useSkillsOff() {
@@ -15,8 +15,125 @@ export function useSkillsOff() {
     mutationFn: ({ name, off }: { name: string; off: boolean }) => api.setSkillOff(name, off),
     onSuccess: () => void qc.invalidateQueries({ queryKey: ["coding-skills"] }),
   });
+  const team = useMutation({
+    mutationFn: ({ name, on }: { name: string; on: boolean }) => api.setSkillTeam(name, on),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ["coding-skills"] }),
+  });
   const off = new Set((q.data?.off ?? []).map((s) => s.skill));
-  return { off, attempts: q.data?.attempts ?? {}, list: q.data?.off ?? [], set, error: set.error as Error | null };
+  return { off, attempts: q.data?.attempts ?? {}, list: q.data?.off ?? [], set,
+           error: (set.error ?? team.error) as Error | null, shared: q.data?.team ?? [], team };
+}
+
+const day = (ts: string) => ts.slice(0, 16).replace("T", " ");
+
+/** On a skill a team member shared: on for the team, or a newer upload. */
+export function TeamSwitch({ name }: { name: string }) {
+  const { shared, team, off } = useSkillsOff();
+  const s = shared.find((t) => t.name === name);
+  if (!s || off.has(name)) return null;
+  const newer = s.live && s.live.version !== s.latest.version;
+  if (s.live && !newer) {
+    return (
+      <span data-testid={`team-is-on-${name}`} style={{ fontFamily: MONO, fontSize: 11, color: C.green }}>
+        on for the team ·{" "}
+        <button onClick={() => team.mutate({ name, on: false })} style={link}>take off the team</button>
+      </span>
+    );
+  }
+  return (
+    <button data-testid={`team-on-${name}`} onClick={() => team.mutate({ name, on: true })}
+      disabled={team.isPending} style={btn({ color: C.green, borderColor: C.green, fontSize: 10.5, padding: "3px 10px" })}>
+      {newer ? "turn the new version on for the team" : "turn on for the team"}
+    </button>
+  );
+}
+
+function CheckLine({ s }: { s: TeamSkill }) {
+  const c = s.latest.check;
+  if (!c) {
+    return <span style={{ color: C.dim }}>not read on this plane (its axor-wrap has no skill check)</span>;
+  }
+  const { danger, warn } = c.summary;
+  if (!danger && !warn) return <span style={{ color: C.green }}>nothing risky in its files</span>;
+  return (
+    <span style={{ color: danger ? C.red : C.amber }}>
+      {danger ? `${danger} dangerous` : ""}{danger && warn ? " · " : ""}{warn ? `${warn} to look at` : ""}
+      {" — "}{c.findings.filter((f) => f.severity !== "info").slice(0, 2).map((f) => f.what).join("; ")}
+    </span>
+  );
+}
+
+/** Skills shared for the team: what each is, whether it is on, and how to
+ * share one. On, every developer's sidecar installs it. */
+export function TeamSkillsPanel() {
+  const qc = useQueryClient();
+  const { shared } = useSkillsOff();
+  const [open, setOpen] = useState<string | null>(null);
+  const example = useMutation({
+    mutationFn: api.seedTeamSkill,
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ["coding-skills"] }),
+  });
+  return (
+    <section data-testid="team-skills" className="mb-8">
+      <div style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim, letterSpacing: "0.1em", marginBottom: 8 }}>
+        SHARED WITH THE TEAM
+      </div>
+      <div style={{ fontSize: 13, color: C.mut, lineHeight: 1.6, marginBottom: 10 }}>
+        A skill that works for one of you, for all of you. Turned on, every developer's axor sidecar
+        installs it into the agent's skills folder
+        (<span style={{ fontFamily: MONO, color: C.text }}>~/.claude/skills/&lt;name&gt;</span>,{" "}
+        <span style={{ fontFamily: MONO, color: C.text }}>~/.codex/skills/&lt;name&gt;</span>) within about
+        30 seconds or when a session starts, and keeps it at the version turned on: a new upload reaches
+        nobody until it is turned on again. Taken off the team, the copies go. A developer's own skill
+        of the same name is never overwritten. After turning one on, run a context health check.
+      </div>
+      {shared.length > 0 && (
+        <div className="mb-3" style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 8 }}>
+          {shared.map((s, i) => (
+            <div key={s.name} data-testid={`team-row-${s.name}`} className="px-4 py-3"
+              style={{ borderTop: i ? `1px solid ${C.line}` : "none" }}>
+              <div className="flex items-center gap-3 flex-wrap">
+                <span style={{ fontFamily: MONO, fontSize: 12.5, color: C.text }}>{s.name}</span>
+                <span style={{ fontSize: 12.5, color: C.mut, flex: 1, minWidth: 200 }}>{s.description}</span>
+                <TeamSwitch name={s.name} />
+              </div>
+              <div className="flex gap-3 flex-wrap" style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim, marginTop: 6, lineHeight: 1.6 }}>
+                <span>
+                  {s.live ? `on since ${day(s.live.ts)}${s.live.by ? ` · by ${s.live.by}` : ""}`
+                    : `shared ${day(s.latest.ts)}${s.latest.by ? ` by ${s.latest.by}` : ""} · not on`}
+                </span>
+                {s.live && s.live.version !== s.latest.version && (
+                  <span style={{ color: C.amber }}>a newer upload {day(s.latest.ts)} — the team still has the earlier one</span>
+                )}
+                <span>{s.latest.files.length} file{s.latest.files.length === 1 ? "" : "s"}</span>
+                <CheckLine s={s} />
+                <button onClick={() => setOpen(open === s.name ? null : s.name)} style={{ ...link, fontSize: 10.5 }}>
+                  {open === s.name ? "hide SKILL.md" : "read SKILL.md"}
+                </button>
+              </div>
+              {open === s.name && (
+                <pre data-testid={`team-md-${s.name}`} style={{ background: C.bg, border: `1px solid ${C.line}`, borderRadius: 6,
+                  padding: "10px 12px", margin: "8px 0 0", fontFamily: MONO, fontSize: 11, color: C.text,
+                  whiteSpace: "pre-wrap", lineHeight: 1.55 }}>{s.skill_md}</pre>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+      <div style={{ fontFamily: MONO, fontSize: 11.5, color: C.mut, lineHeight: 1.7 }}>
+        to share one: <span data-testid="team-share-cmd" style={{ color: C.text }}>axor-wrap skill share ./.claude/skills/&lt;name&gt;</span>
+        <span style={{ color: C.dim }}> (with AXOR_PLANE_URL and AXOR_INGEST_KEY set) · AXOR_TEAM_SKILLS=0 on a machine opts it out</span>
+        {!shared.length && (
+          <>
+            {" · "}
+            <button onClick={() => example.mutate()} data-testid="team-skill-example" style={{ ...link, fontSize: 11.5 }}>
+              {example.isPending ? "loading…" : "see an example →"}
+            </button>
+          </>
+        )}
+      </div>
+    </section>
+  );
 }
 
 const link: React.CSSProperties = {
@@ -25,8 +142,10 @@ const link: React.CSSProperties = {
 
 /** The switch on one skill. */
 export function SkillSwitch({ name }: { name: string }) {
-  const { off, attempts, set } = useSkillsOff();
+  const { off, attempts, set, shared } = useSkillsOff();
   const isOff = off.has(name);
+  // on for the team, the way out is "take off the team" beside it
+  if (!isOff && shared.some((t) => t.name === name && t.live)) return null;
   if (!isOff) {
     return (
       <button data-testid={`skill-off-${name}`} onClick={() => set.mutate({ name, off: true })}

@@ -183,4 +183,38 @@ test.describe("coding agents: their menu, and trying a skill", () => {
     await expect(view.getByTestId("setup-added-skill:fetch-docs")).toContainText("new since last check");
     await expect(view.getByTestId("setup-health-history")).toContainText("first check");
   });
+
+  test("a skill that helps, turned on for the team: the policy names it, the sidecars fetch it", async ({ page, request }) => {
+    await setConnection(page, { mode: "demo" });
+    await request.post("http://127.0.0.1:8400/v1/demo/seed-skill-eval");
+    await goHash(page, "skill-evals");
+    const panel = page.getByTestId("team-skills");
+    await expect(panel.getByTestId("team-share-cmd")).toHaveText("axor-wrap skill share ./.claude/skills/<name>");
+    const example = panel.getByTestId("team-skill-example");
+    if (await example.isVisible()) await example.click();
+    else await request.post("http://127.0.0.1:8400/v1/demo/seed-team-skill");
+    const row = panel.getByTestId("team-row-changelog-entries");
+    await expect(row).toContainText("not on");
+    await row.getByRole("button", { name: "read SKILL.md" }).click();
+    await expect(row.getByTestId("team-md-changelog-entries")).toContainText("## Unreleased");
+    await row.getByTestId("team-on-changelog-entries").click();
+    await expect(row.getByTestId("team-is-on-changelog-entries")).toBeVisible();
+    await expect(row).toContainText("on since");
+    // what every developer's sidecar fetches, and then installs
+    const policy = await (await request.get("http://127.0.0.1:8400/v1/coding/policy")).json();
+    const on = policy.skills_team.find((t: { name: string }) => t.name === "changelog-entries");
+    expect(on.version).toBeTruthy();
+    const bundle = await (await request.get("http://127.0.0.1:8400/v1/coding/skill-bundles/changelog-entries")).json();
+    expect(bundle.files.map((f: { path: string }) => f.path)).toEqual(["SKILL.md", "templates/entry.md"]);
+    // the eval that showed it helps carries the same switch
+    await goHash(page, "skill-evals/se-example");
+    const card = page.getByTestId("skill-card-changelog-entries");
+    await expect(card.getByTestId("team-is-on-changelog-entries")).toBeVisible();
+    await expect(card.getByTestId("skill-off-changelog-entries")).toHaveCount(0);
+    await card.getByRole("button", { name: "take off the team" }).click();
+    await expect(card.getByTestId("team-on-changelog-entries")).toBeVisible();
+    await expect(card.getByTestId("skill-off-changelog-entries")).toBeVisible();
+    const after = await (await request.get("http://127.0.0.1:8400/v1/coding/policy")).json();
+    expect(after.skills_team.map((t: { name: string }) => t.name)).not.toContain("changelog-entries");
+  });
 });

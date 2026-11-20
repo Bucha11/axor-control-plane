@@ -93,6 +93,8 @@ _READ_POLICY: tuple[tuple[str, str], ...] = (
     # What every coding-agent sidecar fetches — on a developer's ingest key,
     # the only credential it holds (the skills it must refuse).
     ("/v1/coding/policy", "ingest"),
+    # ...and the skills turned on for the team, which it installs
+    ("/v1/coding/skill-bundles/", "ingest"),
     # Listing keys is credential enumeration: ids, scopes, labels, dates.
     ("/v1/keys", "admin"),
     # Every enrolment with the nodes allowed to dispense it — the map of which
@@ -164,7 +166,9 @@ _WRITE_POLICY: tuple[tuple[str, str], ...] = (
     # an eval run posts its own report, like a tree run its snapshot
     ("/v1/skill-evals", "ingest"),
     ("/v1/setup-health", "ingest"),   # posted by the check, on an ingest key
-    # turning a skill off for every developer is an operator's decision
+    # sharing a skill reaches nobody by itself: a developer's key may upload
+    ("/v1/coding/skill-bundles", "ingest"),
+    # turning a skill off — or on — for every developer is an operator's decision
     ("/v1/coding/", "operate"),
     ("/v1/plane/", "operate"),        # command / facts / cascade-stop
     ("/v1/keys", "admin"),            # mint / revoke API keys

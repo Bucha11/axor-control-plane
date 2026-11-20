@@ -11,7 +11,7 @@ import { Check, ChevronDown, ChevronRight, Copy, Loader2 } from "lucide-react";
 import { api, SkillEval, SkillEvalArm, SkillEvalCompare, SkillEvalSkill, SkillEvalTask } from "../api";
 import { navigate } from "../router";
 import { C, MONO, btn } from "../theme";
-import { SkillSwitch, SkillsOffPanel } from "../components/SkillsOff";
+import { SkillSwitch, SkillsOffPanel, TeamSkillsPanel, TeamSwitch } from "../components/SkillsOff";
 
 const PLANE_URL = typeof window === "undefined" ? "" : window.location.origin;
 
@@ -100,6 +100,7 @@ function EvalList() {
         </div>
       )}
 
+      <TeamSkillsPanel />
       <SkillsOffPanel />
       <HowToRun />
       {!rows.some((r) => r.eval_id === "se-example") && (
@@ -217,6 +218,7 @@ function SkillCard({ s, single }: { s: SkillEvalSkill; single: boolean }) {
         <span style={{ fontFamily: MONO, fontSize: 14, color: C.text }}>{s.skill}</span>
         <span style={{ fontSize: 14, fontWeight: 600, color: verdictColor(s.verdict) }}>{s.verdict}</span>
         <span style={{ flex: 1 }} />
+        <TeamSwitch name={s.skill} />
         <SkillSwitch name={s.skill} />
       </div>
       <div style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim, marginBottom: 8 }}>

@@ -546,6 +546,15 @@ export interface SkillEvalSkill {
   verdict: string;
 }
 
+/** A skill shared for the team: the latest upload and the version on. */
+export interface TeamSkill {
+  name: string; description: string; skill_md: string;
+  latest: { version: string; by: string; ts: string; files: string[];
+            check: { summary: { danger: number; warn: number; info: number };
+                     findings: { severity: string; what: string; where: string; snippet: string }[] } | null };
+  live: { version: string; by: string; ts: string } | null;
+}
+
 /** A coding-agent setup health check, as axor_eval.setup_health posts it. */
 export interface SetupHealthCause {
   family: string; fragment: string; kind: "skill" | "instructions"; name: string; words: string;
@@ -1303,7 +1312,17 @@ export const api = {
     af("/v1/coding/skills").then((r) => j<{
       off: { skill: string; ts: string; by: string }[];
       attempts: Record<string, number>;
+      team?: TeamSkill[];
     }>(r)),
+  // A shared skill on (or off) for the team: every sidecar installs it.
+  setSkillTeam: (name: string, team: boolean) =>
+    af(`/v1/coding/skills/${encodeURIComponent(name)}`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ team }),
+    }).then((r) => j<{ name: string; team: boolean; version: string | null }>(r)),
+  seedTeamSkill: () =>
+    af("/v1/demo/seed-team-skill", { method: "POST" }).then((r) => j<{ name: string }>(r)),
   setSkillOff: (name: string, off: boolean) =>
     af(`/v1/coding/skills/${encodeURIComponent(name)}`, {
       method: "PUT",

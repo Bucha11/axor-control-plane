@@ -22,12 +22,12 @@ async def client(tmp_path: pathlib.Path) -> AsyncIterator[httpx.AsyncClient]:
 
 
 async def test_a_skill_turned_off_is_in_every_sidecars_policy(client: httpx.AsyncClient) -> None:
-    assert (await client.get("/v1/coding/policy")).json() == {"skills_off": []}
+    assert (await client.get("/v1/coding/policy")).json() == {"skills_off": [], "skills_team": []}
     r = await client.put("/v1/coding/skills/test-first", json={"off": True})
     assert r.status_code == 200 and r.json() == {"skills_off": ["test-first"]}
     await client.put("/v1/coding/skills/house-style", json={"off": True})
     assert (await client.get("/v1/coding/policy")).json() == {
-        "skills_off": ["house-style", "test-first"]}
+        "skills_off": ["house-style", "test-first"], "skills_team": []}
     await client.put("/v1/coding/skills/house-style", json={"off": False})
     listed = (await client.get("/v1/coding/skills")).json()
     assert [x["skill"] for x in listed["off"]] == ["test-first"] and listed["off"][0]["ts"]

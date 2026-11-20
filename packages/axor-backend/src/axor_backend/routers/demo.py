@@ -230,6 +230,25 @@ async def seed_skill_eval(store: StoreDep) -> dict:
     return {"eval_id": "se-example"}
 
 
+@router.post("/seed-team-skill")
+async def seed_team_skill(store: StoreDep) -> dict:
+    """An example shared skill — changelog-entries, the one the example skill
+    eval found helps — uploaded and not yet on for the team."""
+    from axor_backend.routers.coding_api import share_skill
+
+    if await store.team_skill("changelog-entries") is None:
+        await share_skill({"name": "changelog-entries", "files": [
+            {"path": "SKILL.md", "content": (
+                "---\nname: changelog-entries\ndescription: Record every user-visible change "
+                "in CHANGELOG.md under Unreleased, one line, in the project's voice.\n---\n\n"
+                "When you change behaviour a user can see, add one line to CHANGELOG.md under "
+                "`## Unreleased` — Added, Changed or Fixed — in the style of the lines already "
+                "there. Use templates/entry.md. Don't touch released sections.\n")},
+            {"path": "templates/entry.md", "content": "- {what changed, for whom} ({issue})\n"},
+        ]}, store, None)
+    return {"name": "changelog-entries"}
+
+
 @router.post("/seed-setup-health")
 async def seed_setup_health(store: StoreDep) -> dict:
     """An example coding-agent setup health: a baseline check a week ago and

@@ -428,6 +428,17 @@ incident_status = Table(
     Column("ts", String(40), nullable=False),
 )
 
+# A skill shared for the team: the latest upload, and the version turned on
+# for the team (what every developer's sidecar installs), kept apart so a new
+# upload reaches nobody until someone turns it on.
+team_skills = Table(
+    "team_skills", metadata,
+    Column("org_id", String(64), primary_key=True),
+    Column("name", String(64), primary_key=True),
+    Column("latest", Text, nullable=False),
+    Column("live", Text, nullable=True),
+)
+
 # A coding-agent setup health check (axor-eval setup_health): how the team's
 # setup behaved on the test tasks, compared with the last check, and the piece
 # of the setup a change was traced to.
@@ -770,6 +781,34 @@ class Store:
             return None
         return {"tree_run": row.tree_run, "status": row.status,
                 "updated_ts": row.updated_ts, **json.loads(row.doc)}
+
+    async def team_skills(self) -> list[dict[str, Any]]:
+        """Every shared skill: ``{name, latest, live}`` (live None when off)."""
+        async with self.engine.connect() as conn:
+            rows = (await conn.execute(
+                select(team_skills).where(team_skills.c.org_id == current_org_id())
+                .order_by(team_skills.c.name))).all()
+        return [{"name": r.name, "latest": json.loads(r.latest),
+                 "live": json.loads(r.live) if r.live else None} for r in rows]
+
+    async def team_skill(self, name: str) -> dict[str, Any] | None:
+        async with self.engine.connect() as conn:
+            r = (await conn.execute(select(team_skills).where(
+                team_skills.c.org_id == current_org_id(), team_skills.c.name == name))).first()
+        if r is None:
+            return None
+        return {"name": r.name, "latest": json.loads(r.latest),
+                "live": json.loads(r.live) if r.live else None}
+
+    async def put_team_skill(self, name: str, latest: dict, live: dict | None) -> None:
+        values = {"latest": json.dumps(latest, separators=(",", ":")),
+                  "live": json.dumps(live, separators=(",", ":")) if live else None}
+        async with self.engine.begin() as conn:
+            where = (team_skills.c.org_id == current_org_id()) & (team_skills.c.name == name)
+            done = await conn.execute(update(team_skills).where(where).values(**values))
+            if done.rowcount == 0:
+                await conn.execute(insert(team_skills).values(
+                    org_id=current_org_id(), name=name, **values))
 
     async def put_setup_health(self, check_id: str, doc: dict, ts: str) -> None:
         async with self.engine.begin() as conn:

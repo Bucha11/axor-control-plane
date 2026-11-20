@@ -61,7 +61,7 @@ const LOOP: { key: string; label: string; hint: string; for: Journey[] }[] = [
   { key: "explain", label: "Replay", hint: "Find the step — by when, which agent, what it did — and see where it came from.", for: ["coding", "production", "both"] },
   { key: "prevent", label: "Safe to ship?", hint: "Check a policy change against every case you've caught, before it ships.", for: ["production", "both"] },
   { key: "skills", label: "Try a skill", hint: "Before installing a skill for Claude Code or Codex: what it asks the agent to do, and what an agent actually does with it.", for: ["coding", "both"] },
-  { key: "skill-evals", label: "Skill evals", hint: "Which of your skills help, and what they cost: the same tasks with no skill, all, each alone and all but one.", for: ["coding", "both"] },
+  { key: "skill-evals", label: "Skill evals", hint: "Which of your skills help, and what they cost — and the ones that do, shared with the whole team in one click.", for: ["coding", "both"] },
 ];
 
 /** The sections this person's menu shows: their journey's, or all of them
