@@ -47,6 +47,7 @@ import SkillEvals from "./tabs/SkillEvals";
 import SetupHealth from "./tabs/SetupHealth";
 import Pair from "./tabs/Pair";
 import TeamMemory from "./tabs/TeamMemory";
+import Invite from "./tabs/Invite";
 
 // Governance first: the product is the policy membrane between an agent and its
 // tools. "Incidents" is the proof it works, not the product.
@@ -108,7 +109,7 @@ const ALIAS: Record<string, string> = {
   "get-started": "connect",
   "config-builder": "policy",
 };
-const KNOWN = ["home", "chaos", "evidence", "catch", "explain", "prevent", "govern", "policy", "skills", "skill-evals", "connect", "pricing", "settings"];
+const KNOWN = ["invite", "home", "chaos", "evidence", "catch", "explain", "prevent", "govern", "policy", "skills", "skill-evals", "connect", "pricing", "settings"];
 
 function NavLink({ id, label, hint, active }: { id: string; label: string; hint: string; active: boolean }) {
   return (
@@ -227,6 +228,7 @@ export default function App() {
       {key === "connect" && <Onboarding />}
       {key === "pricing" && <Pricing />}
       {key === "settings" && <Settings tab={route.query.tab} />}
+      {key === "invite" && runIdParam && <Invite token={decodeURIComponent(runIdParam)} />}
       {!KNOWN.includes(key) && (
         <div style={{ maxWidth: 640, margin: "0 auto", fontFamily: MONO, fontSize: 12.5, color: C.mut }}>
           No page at <span style={{ color: C.text }}>#/{route.segments.join("/")}</span>.{" "}

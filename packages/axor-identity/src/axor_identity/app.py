@@ -74,7 +74,10 @@ _DUMMY_HASH = hash_password("timing-uniformity-placeholder")
 class SignupBody(BaseModel):
     email: EmailStr
     password: str = Field(min_length=8)
-    org_name: str = Field(min_length=1)
+    # a new workspace's name — or, with ``invite``, none: the account joins the
+    # inviting organization instead of starting one
+    org_name: str = ""
+    invite: str | None = None
     # where the verification link should open (an app page); see _safe_return
     return_to: str | None = None
 
@@ -92,6 +95,12 @@ class RefreshBody(BaseModel):
 class MemberBody(BaseModel):
     email: EmailStr
     role: str
+
+
+class InviteBody(BaseModel):
+    role: str = "member"
+    email: EmailStr | None = None       # for one address; None = whoever has the link
+    return_to: str | None = None        # the app page the link opens (see _safe_return)
 
 
 class LinkBody(BaseModel):
@@ -116,6 +125,7 @@ class ResetBody(BaseModel):
 _VERIFY_TTL = 24 * 3600
 _RESET_TTL = 3600
 _MAIL_GAP = 60
+_INVITE_TTL = 7 * 24 * 3600
 
 
 class ExchangeBody(BaseModel):
@@ -238,6 +248,10 @@ def create_app(database_url: str | None = None, *,
     # ── auth ──────────────────────────────────────────────────────────────────
     @app.post("/v1/signup", status_code=201)
     async def signup(body: SignupBody) -> dict:
+        if body.invite:
+            return await _signup_invited(body)
+        if not body.org_name.strip():
+            raise HTTPException(422, "a new workspace needs a name")
         # The gate runs before the e-mail is even looked at, so a refused signup
         # cannot be used to probe which addresses are registered.
         if signup_mode == "closed":
@@ -328,6 +342,121 @@ def create_app(database_url: str | None = None, *,
             raise HTTPException(409, "already a member")
         await store.add_membership(target["user_id"], org_id, body.role, _now_iso())
         return {"user_id": target["user_id"], "org_id": org_id, "role": body.role}
+
+    @app.get("/v1/orgs/{org_id}/members")
+    async def list_members(org_id: str, caller: Claims = Depends(_caller)) -> dict:
+        if caller.org != org_id:
+            raise HTTPException(403, "a member of this organization required")
+        return {"members": await store.org_members(org_id)}
+
+    # ── invites ───────────────────────────────────────────────────────────────
+    # A link an admin sends; whoever opens it signs up (or in) and joins the
+    # organization with the role it names. Single use, seven days, revocable;
+    # bound to one address when the admin names one. It is how a team joins a
+    # workspace: adding a member used to need them to have signed up first.
+
+    async def _open_invite(token: str) -> dict:
+        record = await store.invite_by_hash(digest(token))
+        if record is None or record["revoked"] or record["used_by"] \
+                or record["expires_ts"] <= _now_iso():
+            raise HTTPException(404, "this invitation has expired, was used, or was withdrawn")
+        return record
+
+    @app.post("/v1/orgs/{org_id}/invites", status_code=201)
+    async def create_invite(org_id: str, body: InviteBody,
+                            caller: Claims = Depends(_caller)) -> dict:
+        if caller.org != org_id or not role_at_least(caller.role, "admin"):
+            raise HTTPException(403, "admin of this organization required")
+        if body.role not in _ASSIGNABLE:
+            raise HTTPException(422, f"role must be one of {sorted(_ASSIGNABLE)}")
+        email = _norm_email(body.email) if body.email else None
+        if email:
+            existing = await store.get_user_by_email(email)
+            if existing and await store.role_in_org(existing["user_id"], org_id):
+                raise HTTPException(409, "already a member")
+        raw = secrets.token_urlsafe(24)
+        invite_id = "inv_" + secrets.token_hex(6)
+        expires = _expiry(_INVITE_TTL)
+        await store.create_invite(invite_id, digest(raw), org_id, body.role, email,
+                                  caller.user_id, _now_iso(), expires)
+        target = _safe_return(body.return_to or "/") if (public_url and body.return_to) else None
+        link = _with_query(target, axor_invite=raw) if target else None
+        mailed = False
+        if email and link and mail is not None:
+            org = await store.get_org(org_id)
+            inviter = await store.get_user(caller.user_id)
+            try:
+                await mail.send(email, f"Join {org['name'] if org else 'a workspace'} on Axor",
+                                f"{inviter['email'] if inviter else 'Someone'} invited you to "
+                                f"{org['name'] if org else 'their workspace'} on Axor, as "
+                                f"{body.role}:\n\n{link}\n\nThe link works once, for seven "
+                                "days.")
+                mailed = True
+            except Exception as exc:  # noqa: BLE001 - the link still works
+                logging.getLogger("axor_identity.mail").warning("invite mail failed: %s", exc)
+        return {"invite_id": invite_id, "token": raw, "link": link, "role": body.role,
+                "email": email, "expires_ts": expires, "mailed": mailed}
+
+    @app.get("/v1/orgs/{org_id}/invites")
+    async def list_invites(org_id: str, caller: Claims = Depends(_caller)) -> dict:
+        if caller.org != org_id or not role_at_least(caller.role, "admin"):
+            raise HTTPException(403, "admin of this organization required")
+        return {"invites": await store.open_invites(org_id, _now_iso())}
+
+    @app.delete("/v1/orgs/{org_id}/invites/{invite_id}", status_code=204)
+    async def revoke_invite(org_id: str, invite_id: str,
+                            caller: Claims = Depends(_caller)) -> None:
+        if caller.org != org_id or not role_at_least(caller.role, "admin"):
+            raise HTTPException(403, "admin of this organization required")
+        if not await store.revoke_invite(org_id, invite_id):
+            raise HTTPException(404, "no open invitation by that id")
+
+    @app.get("/v1/invites/{token}")
+    async def invite_info(token: str) -> dict:
+        """What the link is for — shown before anyone signs up. No address of
+        the inviter: the org's name and the role are enough to decide."""
+        record = await _open_invite(token)
+        org = await store.get_org(record["org_id"])
+        return {"org_name": org["name"] if org else "", "role": record["role"],
+                "for_email": record["email"], "expires_ts": record["expires_ts"]}
+
+    async def _join(record: dict, token: str, user: dict) -> dict:
+        if record["email"] and record["email"] != user["email"]:
+            raise HTTPException(403, "this invitation is for another address")
+        if not await store.use_invite(digest(token), user["user_id"], _now_iso()):
+            raise HTTPException(404, "this invitation has expired, was used, or was withdrawn")
+        role = await store.role_in_org(user["user_id"], record["org_id"])
+        if role is None:
+            role = record["role"]
+            await store.add_membership(user["user_id"], record["org_id"], role, _now_iso())
+        org = await store.get_org(record["org_id"])
+        return await _issue_session(user, record["org_id"], role,
+                                    org["tier"] if org else "community")
+
+    @app.post("/v1/invites/{token}/accept")
+    async def accept_invite(token: str, caller: Claims = Depends(_caller)) -> dict:
+        """Join with an account one already has; the answer is a session in
+        the organization joined."""
+        record = await _open_invite(token)
+        user = await store.get_user(caller.user_id)
+        if user is None:
+            raise HTTPException(404, "user not found")
+        return await _join(record, token, user)
+
+    async def _signup_invited(body: SignupBody) -> dict:
+        """A new account that joins the inviting organization — allowed
+        whatever the signup mode: an admin chose to let this one in."""
+        record = await _open_invite(body.invite or "")
+        email = _norm_email(body.email)
+        if record["email"] and record["email"] != email:
+            raise HTTPException(403, "this invitation is for another address")
+        if await store.get_user_by_email(email):
+            raise HTTPException(409, "email already registered — sign in, then open the link")
+        user_id = "usr_" + secrets.token_hex(8)
+        await store.create_user(user_id, email, hash_password(body.password), _now_iso())
+        user = {"user_id": user_id, "email": email}
+        await _send_link(user, "verify", body.return_to, quiet=True)
+        return await _join(record, body.invite or "", user)
 
     # ── sign in with GitHub / Google ──────────────────────────────────────────
     def _provider(name: str) -> Provider:

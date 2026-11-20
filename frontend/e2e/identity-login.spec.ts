@@ -72,32 +72,66 @@ test.describe("identity login (Settings)", () => {
     await expect(page.getByRole("button", { name: "log in", exact: true })).toBeVisible();
   });
 
-  test("an admin sees the org and can add a member", async ({ page }) => {
+  test("an admin sees the team and invites someone with a link", async ({ page }) => {
     await page.route("**/identity/v1/login", jsonRoute(200, SESSION));
     await page.route("**/identity/v1/me", jsonRoute(200, {
       user: SESSION.user,
       active_org: "org_1",
       role: "owner",
-      memberships: [{ org_id: "org_1", role: "owner", name: "Acme", tier: "community" }],
+      memberships: [{ org_id: "org_1", role: "owner", name: "Acme", tier: "coding" }],
     }));
-    let added: unknown = null;
-    await page.route("**/identity/v1/orgs/org_1/members", async (route) => {
-      added = route.request().postDataJSON();
-      await route.fulfill({
-        status: 201, contentType: "application/json",
-        body: JSON.stringify({ user_id: "usr_2", org_id: "org_1", role: "viewer" }),
-      });
+    await page.route("**/identity/v1/orgs/org_1/members", jsonRoute(200, { members: [
+      { user_id: "usr_1", email: "ada@acme.io", role: "owner", since: "2026-01-01" }] }));
+    let made: unknown = null;
+    await page.route("**/identity/v1/orgs/org_1/invites", async (route) => {
+      if (route.request().method() === "POST") {
+        made = route.request().postDataJSON();
+        await route.fulfill({ status: 201, contentType: "application/json", body: JSON.stringify({
+          invite_id: "inv_1", token: "tok-abc", role: "viewer", email: "bob@acme.io",
+          expires_ts: "2026-12-01T00:00:00Z", mailed: false }) });
+      } else {
+        await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ invites: [] }) });
+      }
     });
     await goHash(page, "settings");
     await page.getByLabel("email", { exact: true }).fill("ada@acme.io");
     await page.getByLabel("password").fill("correct horse");
     await page.getByRole("button", { name: "log in", exact: true }).click();
-    await expect(page.getByText("org Acme")).toBeVisible();
-    await page.getByLabel("member email").fill("bob@acme.io");
-    await page.getByLabel("member role").selectOption("viewer");
-    await page.getByRole("button", { name: "add", exact: true }).click();
-    await expect(page.getByText("added usr_2 as viewer")).toBeVisible();
-    expect(added).toEqual({ email: "bob@acme.io", role: "viewer" });
+    await expect(page.getByText("workspace Acme")).toBeVisible();
+    await expect(page.getByTestId("team")).toContainText("ada@acme.io");
+    await page.getByLabel("invite email").fill("bob@acme.io");
+    await page.getByLabel("invite role").selectOption("viewer");
+    await page.getByTestId("invite-make").click();
+    await expect(page.getByTestId("invite-made")).toContainText("#/invite/tok-abc");
+    expect(made).toMatchObject({ email: "bob@acme.io", role: "viewer" });
+  });
+
+  test("an invitation link: a new account joins the workspace", async ({ page }) => {
+    await page.route("**/identity/v1/invites/tok-abc", jsonRoute(200, {
+      org_name: "Acme", role: "member", for_email: null, expires_ts: "2026-12-01T00:00:00Z" }));
+    let signed: unknown = null;
+    await page.route("**/identity/v1/signup", async (route) => {
+      signed = route.request().postDataJSON();
+      await route.fulfill({ status: 201, contentType: "application/json", body: JSON.stringify({
+        ...SESSION, user: { user_id: "usr_2", email: "sam@acme.io" },
+        org: { org_id: "org_1", role: "member", tier: "coding" } }) });
+    });
+    await goHash(page, "invite/tok-abc");
+    const inv = page.getByTestId("invite");
+    await expect(inv).toContainText("Join Acme");
+    await expect(inv).toContainText("invited as member");
+    await inv.getByLabel("email").fill("sam@acme.io");
+    await inv.getByLabel("password").fill("correct horse battery");
+    await inv.getByTestId("invite-join").click();
+    await expect(page).toHaveURL(/#\/govern/);
+    expect(signed).toMatchObject({ email: "sam@acme.io", invite: "tok-abc" });
+  });
+
+  test("a used or withdrawn invitation says so", async ({ page }) => {
+    await page.route("**/identity/v1/invites/tok-old", jsonRoute(404, {
+      detail: "this invitation has expired, was used, or was withdrawn" }));
+    await goHash(page, "invite/tok-old");
+    await expect(page.getByTestId("invite-gone")).toContainText("was withdrawn");
   });
 
   test("logging out revokes the refresh token server-side", async ({ page }) => {

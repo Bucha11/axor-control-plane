@@ -108,6 +108,24 @@ email_tokens = Table(
 )
 
 
+# An invitation to an org: a single-use link (only its hash is kept), for a
+# role, optionally for one address, until it expires or is revoked.
+invites = Table(
+    "invites", metadata,
+    Column("invite_id", String(24), primary_key=True),      # shown in lists
+    Column("token_hash", String(64), nullable=False, unique=True),
+    Column("org_id", String(64), nullable=False, index=True),
+    Column("role", String(24), nullable=False),
+    Column("email", String(320), nullable=True),            # for one address, or anyone
+    Column("created_by", String(64), nullable=False),
+    Column("created_ts", String(40), nullable=False),
+    Column("expires_ts", String(40), nullable=False),
+    Column("used_by", String(64), nullable=True),
+    Column("used_ts", String(40), nullable=True),
+    Column("revoked", Boolean, nullable=False, default=False),
+)
+
+
 def make_engine(url: str) -> AsyncEngine:
     return create_async_engine(url)
 
@@ -250,6 +268,56 @@ class Store:
                 .order_by(memberships.c.created_ts))).all()
         return [{"org_id": r.org_id, "role": r.role, "name": r.name, "tier": r.tier}
                 for r in rows]
+
+    async def org_members(self, org_id: str) -> list[dict[str, Any]]:
+        async with self.engine.connect() as conn:
+            rows = (await conn.execute(
+                select(memberships.c.user_id, memberships.c.role, memberships.c.created_ts,
+                       users.c.email)
+                .select_from(memberships.join(users, memberships.c.user_id == users.c.user_id))
+                .where(memberships.c.org_id == org_id)
+                .order_by(memberships.c.created_ts))).all()
+        return [{"user_id": r.user_id, "email": r.email, "role": r.role, "since": r.created_ts}
+                for r in rows]
+
+    # ── invites ───────────────────────────────────────────────────────────────
+    async def create_invite(self, invite_id: str, token_hash: str, org_id: str, role: str,
+                            email: str | None, created_by: str, ts: str,
+                            expires: str) -> None:
+        async with self.engine.begin() as conn:
+            await conn.execute(insert(invites).values(
+                invite_id=invite_id, token_hash=token_hash, org_id=org_id, role=role,
+                email=email, created_by=created_by, created_ts=ts, expires_ts=expires,
+                revoked=False))
+
+    async def invite_by_hash(self, token_hash: str) -> dict[str, Any] | None:
+        async with self.engine.connect() as conn:
+            row = (await conn.execute(select(invites).where(
+                invites.c.token_hash == token_hash))).first()
+        return dict(row._mapping) if row else None
+
+    async def open_invites(self, org_id: str, now: str) -> list[dict[str, Any]]:
+        async with self.engine.connect() as conn:
+            rows = (await conn.execute(select(invites).where(
+                invites.c.org_id == org_id, invites.c.used_by.is_(None),
+                invites.c.revoked.is_(False), invites.c.expires_ts > now,
+            ).order_by(invites.c.created_ts.desc()))).all()
+        return [{k: v for k, v in dict(r._mapping).items() if k != "token_hash"} for r in rows]
+
+    async def use_invite(self, token_hash: str, user_id: str, ts: str) -> bool:
+        """Single use: True only for the request that took it."""
+        async with self.engine.begin() as conn:
+            res = await conn.execute(update(invites).where(
+                invites.c.token_hash == token_hash, invites.c.used_by.is_(None),
+                invites.c.revoked.is_(False)).values(used_by=user_id, used_ts=ts))
+        return (res.rowcount or 0) == 1
+
+    async def revoke_invite(self, org_id: str, invite_id: str) -> bool:
+        async with self.engine.begin() as conn:
+            res = await conn.execute(update(invites).where(
+                invites.c.org_id == org_id, invites.c.invite_id == invite_id,
+                invites.c.used_by.is_(None)).values(revoked=True))
+        return (res.rowcount or 0) == 1
 
     # ── refresh tokens ────────────────────────────────────────────────────────
     async def store_refresh(self, token_hash: str, user_id: str, org_id: str,

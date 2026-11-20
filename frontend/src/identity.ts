@@ -67,6 +67,26 @@ export function signup(email: string, password: string, orgName: string): Promis
   return post<Session>("/v1/signup", { email, password, org_name: orgName, return_to: here() });
 }
 
+/** A new account that joins the organization an invitation is for. */
+export function signupInvited(email: string, password: string, invite: string): Promise<Session> {
+  return post<Session>("/v1/signup", { email, password, invite, return_to: here() });
+}
+
+export interface InviteInfo { org_name: string; role: string; for_email: string | null; expires_ts: string }
+
+/** What an invitation link is for — before anyone signs up. */
+export async function inviteInfo(token: string): Promise<InviteInfo> {
+  let resp: Response;
+  try {
+    resp = await fetch(`${IDENTITY_BASE}/v1/invites/${encodeURIComponent(token)}`);
+  } catch {
+    throw new IdentityError(0, "cannot reach the identity service");
+  }
+  const body = await resp.json().catch(() => ({}));
+  if (!resp.ok) throw new IdentityError(resp.status, String(body?.detail ?? "this invitation cannot be opened"));
+  return body as InviteInfo;
+}
+
 /** This page, as a way back for an e-mailed link or a provider sign-in. */
 export function here(): string {
   const params = new URLSearchParams(window.location.search);
@@ -168,15 +188,16 @@ export function oauthExchange(code: string): Promise<Session & { created: boolea
 
 /** What a provider sign-in or an e-mailed link left in the address bar,
  * removed from it so a reload or a copied link does not carry it. */
-export function takeAuthReturn(): { code?: string; error?: string; verify?: string; reset?: string } | null {
+export function takeAuthReturn(): { code?: string; error?: string; verify?: string; reset?: string; invite?: string } | null {
   const params = new URLSearchParams(window.location.search);
   const got = {
     code: params.get("axor_login") ?? undefined,
     error: params.get("axor_login_error") ?? undefined,
     verify: params.get("axor_verify") ?? undefined,
     reset: params.get("axor_reset") ?? undefined,
+    invite: params.get("axor_invite") ?? undefined,
   };
-  if (!got.code && !got.error && !got.verify && !got.reset) return null;
+  if (!got.code && !got.error && !got.verify && !got.reset && !got.invite) return null;
   window.history.replaceState(null, "", here());
   return got;
 }

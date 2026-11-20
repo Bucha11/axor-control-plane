@@ -1083,6 +1083,26 @@ export const api = {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ return_to: returnTo }),
     }).then((r) => j<{ sent_to: string }>(r)),
+  orgMembers: (orgId: string) =>
+    af(`${IDENTITY_BASE}/v1/orgs/${encodeURIComponent(orgId)}/members`).then((r) =>
+      j<{ members: { user_id: string; email: string; role: string; since: string }[] }>(r)),
+  orgInvites: (orgId: string) =>
+    af(`${IDENTITY_BASE}/v1/orgs/${encodeURIComponent(orgId)}/invites`).then((r) =>
+      j<{ invites: { invite_id: string; role: string; email: string | null; created_ts: string; expires_ts: string }[] }>(r)),
+  createInvite: (orgId: string, role: string, email: string | null, returnTo: string) =>
+    af(`${IDENTITY_BASE}/v1/orgs/${encodeURIComponent(orgId)}/invites`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ role, email: email || null, return_to: returnTo }),
+    }).then((r) => j<{ invite_id: string; token: string; role: string; email: string | null;
+                       expires_ts: string; mailed: boolean }>(r)),
+  revokeInvite: (orgId: string, inviteId: string) =>
+    af(`${IDENTITY_BASE}/v1/orgs/${encodeURIComponent(orgId)}/invites/${encodeURIComponent(inviteId)}`,
+      { method: "DELETE" }).then((r) => { if (!r.ok) throw new Error(`${r.status}`); }),
+  acceptInvite: (token: string) =>
+    af(`${IDENTITY_BASE}/v1/invites/${encodeURIComponent(token)}/accept`, { method: "POST" })
+      .then((r) => j<{ access_token: string; refresh_token: string; user: { email: string };
+                       org: { org_id: string; role: string; tier: string } }>(r)),
   addOrgMember: (orgId: string, email: string, role: string) =>
     af(`${IDENTITY_BASE}/v1/orgs/${encodeURIComponent(orgId)}/members`, {
       method: "POST",

@@ -74,12 +74,6 @@ function EmailStatus() {
 
 function OrgMembers() {
   const me = useQuery({ queryKey: ["identity-me"], queryFn: api.identityMe });
-  const [email, setEmail] = useState("");
-  const [role, setRole] = useState("member");
-  const add = useMutation({
-    mutationFn: () => api.addOrgMember(me.data!.active_org, email.trim(), role),
-    onSuccess: () => setEmail(""),
-  });
   if (me.isPending) return null;
   if (me.isError) {
     return (
@@ -94,39 +88,103 @@ function OrgMembers() {
   return (
     <div className="mb-3" style={{ fontFamily: MONO, fontSize: 11, color: C.mut, display: "flex", flexDirection: "column", gap: 6 }}>
       <div>
-        org <span style={{ color: C.text }}>{active?.name ?? d.active_org}</span> · role{" "}
+        workspace <span style={{ color: C.text }}>{active?.name ?? d.active_org}</span> · you are{" "}
         <span style={{ color: C.text }}>{d.role}</span>
-        {active && <> · tier {active.tier}</>}
         {d.memberships.length > 1 && (
           <span style={{ color: C.dim }}>
             {" "}· also in {d.memberships.filter((m) => m.org_id !== d.active_org).map((m) => m.name).join(", ")}
-            {" "}(sign in with that org id to switch)
+            {" "}(sign in with that workspace's id to switch)
           </span>
         )}
       </div>
+      <Team orgId={d.active_org} isAdmin={isAdmin} />
+    </div>
+  );
+}
+
+const inviteUrl = (token: string) =>
+  `${window.location.origin}${window.location.pathname}#/invite/${encodeURIComponent(token)}`;
+
+/** Who is in the workspace, and — for an admin — inviting someone, account or
+ * not: a single-use link for a role, mailed when an address is given and the
+ * install sends mail. */
+function Team({ orgId, isAdmin }: { orgId: string; isAdmin: boolean }) {
+  const qc = useQueryClient();
+  const members = useQuery({ queryKey: ["org-members", orgId], queryFn: () => api.orgMembers(orgId), retry: false });
+  const invites = useQuery({ queryKey: ["org-invites", orgId], queryFn: () => api.orgInvites(orgId),
+                             enabled: isAdmin, retry: false });
+  const [email, setEmail] = useState("");
+  const [role, setRole] = useState("member");
+  const [made, setMade] = useState<{ link: string; mailed: boolean; email: string | null } | null>(null);
+  const [copied, setCopied] = useState(false);
+  const invite = useMutation({
+    mutationFn: () => api.createInvite(orgId, role, email.trim() || null, here()),
+    onSuccess: (r) => {
+      setMade({ link: inviteUrl(r.token), mailed: r.mailed, email: r.email });
+      setCopied(false);
+      setEmail("");
+      void qc.invalidateQueries({ queryKey: ["org-invites", orgId] });
+    },
+  });
+  const revoke = useMutation({
+    mutationFn: (id: string) => api.revokeInvite(orgId, id),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ["org-invites", orgId] }),
+  });
+  return (
+    <div data-testid="team" className="mt-2">
+      <div style={{ color: C.dim, letterSpacing: "0.08em", fontSize: 10.5, marginBottom: 4 }}>TEAM</div>
+      {(members.data?.members ?? []).map((m) => (
+        <div key={m.user_id} className="flex gap-3" style={{ padding: "2px 0" }}>
+          <span style={{ color: C.text, flex: 1 }}>{m.email}</span>
+          <span>{m.role}</span>
+        </div>
+      ))}
       {isAdmin && (
-        <form
-          onSubmit={(e) => {
-            e.preventDefault();
-            if (email.trim() && !add.isPending) add.mutate();
-          }}
-          className="flex items-center gap-2"
-        >
-          <input type="email" value={email} placeholder="add member by email (must have signed up)"
-            onChange={(e) => setEmail(e.target.value)} aria-label="member email"
-            style={{ ...INPUT_STYLE, flex: 1 }} />
-          <select value={role} onChange={(e) => setRole(e.target.value)} aria-label="member role"
-            style={{ ...INPUT_STYLE, width: 100 }}>
-            {["admin", "member", "viewer"].map((r) => <option key={r} value={r}>{r}</option>)}
-          </select>
-          <button type="submit" disabled={!email.trim() || add.isPending}
-            style={btn({ color: C.text, borderColor: C.steel, fontSize: 11, padding: "4px 10px" })}>
-            {add.isPending ? "adding…" : "add"}
-          </button>
-        </form>
+        <>
+          <form onSubmit={(e) => { e.preventDefault(); if (!invite.isPending) invite.mutate(); }}
+            className="flex items-center gap-2 mt-2">
+            <input type="email" value={email} placeholder="their e-mail (optional — or send the link yourself)"
+              onChange={(e) => setEmail(e.target.value)} aria-label="invite email"
+              style={{ ...INPUT_STYLE, flex: 1 }} />
+            <select value={role} onChange={(e) => setRole(e.target.value)} aria-label="invite role"
+              style={{ ...INPUT_STYLE, width: 100 }}>
+              {["member", "admin", "viewer"].map((r) => <option key={r} value={r}>{r}</option>)}
+            </select>
+            <button type="submit" disabled={invite.isPending} data-testid="invite-make"
+              style={btn({ color: C.text, borderColor: C.steel, fontSize: 11, padding: "4px 10px" })}>
+              {invite.isPending ? "…" : "invite"}
+            </button>
+          </form>
+          {made && (
+            <div data-testid="invite-made" className="mt-1 p-2" style={{ background: C.panel2, border: `1px solid ${C.line}`, borderRadius: 5 }}>
+              <div style={{ color: C.mut, marginBottom: 4 }}>
+                {made.mailed ? `mailed to ${made.email} — or send this link:` : "send this link — it works once, for seven days:"}
+                <button type="button" onClick={() => { void navigator.clipboard?.writeText(made.link); setCopied(true); }}
+                  style={{ background: "none", border: "none", padding: "0 0 0 8px", cursor: "pointer", color: C.steel, fontFamily: MONO, fontSize: 11 }}>
+                  {copied ? "copied" : "copy"}
+                </button>
+              </div>
+              <div style={{ color: C.green, wordBreak: "break-all" }}>{made.link}</div>
+            </div>
+          )}
+          {invite.isError && <span style={{ color: C.red }}>{(invite.error as Error).message}</span>}
+          {(invites.data?.invites ?? []).length > 0 && (
+            <div className="mt-2" data-testid="invites-open">
+              <div style={{ color: C.dim, fontSize: 10.5 }}>waiting to be accepted</div>
+              {(invites.data?.invites ?? []).map((i) => (
+                <div key={i.invite_id} className="flex gap-3" style={{ padding: "2px 0" }}>
+                  <span style={{ flex: 1 }}>{i.email ?? "anyone with the link"} · {i.role}</span>
+                  <span style={{ color: C.dim }}>until {i.expires_ts.slice(0, 10)}</span>
+                  <button type="button" onClick={() => revoke.mutate(i.invite_id)}
+                    style={{ background: "none", border: "none", padding: 0, cursor: "pointer", color: C.mut, fontFamily: MONO, fontSize: 11 }}>
+                    withdraw
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+        </>
       )}
-      {add.isSuccess && <span style={{ color: C.green }}>added {add.data.user_id} as {add.data.role}</span>}
-      {add.isError && <span style={{ color: C.red }}>{(add.error as Error).message}</span>}
     </div>
   );
 }
