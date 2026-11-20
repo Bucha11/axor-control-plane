@@ -18,7 +18,7 @@ REPO = "r-acme-api"
 
 @pytest.fixture(autouse=True)
 def _team_plan(monkeypatch: pytest.MonkeyPatch) -> None:
-    """These tests are about what agents get: a workspace on the Team plan."""
+    """These tests are about what agents get: a workspace on a paid plan."""
     monkeypatch.setattr(memory, "given_on_plan", lambda state, repo: True)
 
 @pytest.fixture
@@ -191,7 +191,7 @@ async def test_example_memory(client: httpx.AsyncClient) -> None:
     assert "Run migrations with --dry-run first" in repo["preview"]
 
 
-async def test_below_the_team_plan_agents_get_nothing_and_learning_goes_on(
+async def test_on_the_free_plan_agents_get_nothing_and_learning_goes_on(
         client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.undo()          # the real plan check: this workspace has no license
     await _session(client, "ada-1", "dev-ada")
@@ -200,12 +200,12 @@ async def test_below_the_team_plan_agents_get_nothing_and_learning_goes_on(
     await _check(client, "bob-1", "b1", "uv run pytest -q", True)
     given = (await client.get("/v1/coding/memory", params={"repo": REPO})).json()
     assert given["text"] == "" and given["ids"] == [] and given["items"] == []
-    assert given["plan_required"] == "team"
+    assert given["plan_required"] == "coding"
     body = (await client.get("/v1/memory")).json()
     repo = next(r for r in body["repos"] if r["repo"] == REPO)
     # what it learned is kept, and shown as what agents would get
     assert repo["given"] is False and "uv run pytest -q" in repo["preview"]
-    assert repo["changes"] == [] and body["plan_tier"] == "team"
+    assert repo["changes"] == [] and body["plan_tier"] == "coding"
     # the example repository is always given — it shows the product
     await client.post("/v1/demo/seed-memory")
     example = (await client.get("/v1/coding/memory",

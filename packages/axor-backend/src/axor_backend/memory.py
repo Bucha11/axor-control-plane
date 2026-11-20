@@ -63,10 +63,12 @@ FRESH_SETTING = "memory_fresh_days"
 SUGGESTED_DAYS = 14
 NOTE_ASK_DAYS = 90
 MIN_SESSIONS = 5              # per side, before a comparison says anything
-# agents are given the team's memory on this workspace tier and above; below
-# it the plane keeps learning (an upgrade gives agents what was learned) and
-# gives nothing. The example repository is always given: it shows the product.
-PLAN_TIER = "team"
+# agents are given the team's memory on this workspace tier and above — Coding,
+# the plan for a team of developers (Team and up include everything in it).
+# Below it — one developer, free — the plane keeps learning (an upgrade gives
+# agents what was learned) and gives nothing. The example repository is always
+# given: it shows the product.
+PLAN_TIER = "coding"
 WORSE_P = 0.05
 MAX_COMMAND = 200
 TEXT_LIMIT = 1500

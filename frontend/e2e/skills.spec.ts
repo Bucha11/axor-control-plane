@@ -374,7 +374,7 @@ test.describe("coding agents: their menu, and trying a skill", () => {
     }
   });
 
-  test("team memory below the Team plan: learned and shown, given to no agent", async ({ page, request }) => {
+  test("team memory on the free plan: learned and shown, given to no agent", async ({ page, request }) => {
     const B = "http://127.0.0.1:8400";
     const tag = Math.random().toString(36).slice(2, 8);
     const repo = `r-free-${tag}`;
@@ -392,13 +392,13 @@ test.describe("coding agents: their menu, and trying a skill", () => {
     }
     const given = await (await request.get(`${B}/v1/coding/memory?repo=${repo}`)).json();
     expect(given.text).toBe("");
-    expect(given.plan_required).toBe("team");
+    expect(given.plan_required).toBe("coding");
     await setConnection(page, { mode: "demo" });
     await goHash(page, "memory");
     const view = page.getByTestId("team-memory");
     await view.getByRole("tab", { name: `free/${tag}` }).click();
-    await expect(view.getByTestId("memory-plan")).toContainText("Team memory is on the Team plan");
-    await expect(view.getByTestId("memory-preview")).toContainText("WOULD GET ON THE TEAM PLAN");
+    await expect(view.getByTestId("memory-plan")).toContainText("Team memory comes with the Coding plan");
+    await expect(view.getByTestId("memory-preview")).toContainText("WOULD GET ON THE CODING PLAN");
     await expect(view.getByTestId("memory-preview")).toContainText("pnpm test");
     await view.getByTestId("memory-plan").getByRole("button", { name: "see plans →" }).click();
     await expect(page).toHaveURL(/#\/pricing/);
