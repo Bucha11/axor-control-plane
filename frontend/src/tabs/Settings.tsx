@@ -123,6 +123,14 @@ function Team({ orgId, isAdmin }: { orgId: string; isAdmin: boolean }) {
   const [role, setRole] = useState("member");
   const [made, setMade] = useState<{ link: string; mailed: boolean; email: string | null } | null>(null);
   const [copied, setCopied] = useState(false);
+  // the free plan is one developer: a second one is the moment to offer the
+  // paid plan, not a silent invite whose sessions then show up locked
+  const ent = useQuery({ queryKey: ["entitlements"], queryFn: api.entitlements, retry: false });
+  const developers = (members.data?.members ?? []).filter((m) => m.role !== "viewer").length
+    + (invites.data?.invites ?? []).filter((i) => i.role !== "viewer").length;
+  const needsSeat = ent.data?.free === true && ent.data.developers !== null
+    && developers >= ent.data.developers && role !== "viewer";
+  const [offer, setOffer] = useState(false);
   const invite = useMutation({
     mutationFn: () => api.createInvite(orgId, role, email.trim() || null, here()),
     onSuccess: (r) => {
@@ -190,7 +198,11 @@ function Team({ orgId, isAdmin }: { orgId: string; isAdmin: boolean }) {
       )}
       {isAdmin && (
         <>
-          <form onSubmit={(e) => { e.preventDefault(); if (!invite.isPending) invite.mutate(); }}
+          <form onSubmit={(e) => {
+            e.preventDefault();
+            if (needsSeat) { setOffer(true); return; }
+            if (!invite.isPending) invite.mutate();
+          }}
             className="flex items-center gap-2 mt-2">
             <input type="email" value={email} placeholder="their e-mail (optional — or send the link yourself)"
               onChange={(e) => setEmail(e.target.value)} aria-label="invite email"
@@ -204,6 +216,25 @@ function Team({ orgId, isAdmin }: { orgId: string; isAdmin: boolean }) {
               {invite.isPending ? "…" : "invite"}
             </button>
           </form>
+          {offer && needsSeat && (
+            <div data-testid="invite-upgrade" className="mt-2 p-3" style={{ background: C.panel2, border: `1px solid ${C.amber}`, borderRadius: 6 }}>
+              <div style={{ color: C.text, marginBottom: 4 }}>A second developer is on the Coding plan.</div>
+              <div style={{ color: C.mut, marginBottom: 8 }}>
+                $25 per developer per month — every developer's agents governed, shared skills and team memory.
+              </div>
+              <div className="flex gap-3 items-center flex-wrap">
+                <button type="button" data-testid="invite-upgrade-go" onClick={() => navigate("pricing?for=coding")}
+                  style={btn({ color: C.text, borderColor: C.amber, fontSize: 11, padding: "4px 12px" })}>
+                  upgrade →
+                </button>
+                <button type="button" data-testid="invite-as-viewer"
+                  onClick={() => { setRole("viewer"); setOffer(false); }}
+                  style={{ background: "none", border: "none", padding: 0, cursor: "pointer", color: C.steel, fontFamily: MONO, fontSize: 11 }}>
+                  or invite them as a viewer — free, they watch
+                </button>
+              </div>
+            </div>
+          )}
           {made && (
             <div data-testid="invite-made" className="mt-1 p-2" style={{ background: C.panel2, border: `1px solid ${C.line}`, borderRadius: 5 }}>
               <div style={{ color: C.mut, marginBottom: 4 }}>
@@ -328,7 +359,7 @@ export function IdentityLogin({ onDone, initialMode = "login" }: {
       style={{ display: "flex", flexDirection: "column", gap: 8 }}
     >
       <div style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim, letterSpacing: "0.08em" }}>
-        SIGN IN · axor identity
+        {mode === "signup" ? "CREATE YOUR WORKSPACE" : mode === "forgot" ? "RESET YOUR PASSWORD" : "SIGN IN"}
       </div>
       {providers.length > 0 && (
         <>
@@ -495,7 +526,8 @@ export default function Settings({ tab = "workspace" }: { tab?: string } = {}) {
               <TokenFold />
             )}
           </Section>
-          <Section title="LICENSE · a plane you run yourself">
+          {/* a hosted plane (it offers guests) has no license to paste */}
+          {(!authStatus.data?.guest_sessions || licenseStatus.data?.active) && <Section title="LICENSE · a plane you run yourself">
             <details data-testid="license-fold" open={!!licenseStatus.data?.active || !!licenseStatus.data?.expired || undefined}>
               <summary style={{ cursor: "pointer", fontFamily: MONO, fontSize: 11.5, color: C.mut }}>
                 {licenseStatus.data?.active
@@ -602,7 +634,7 @@ export default function Settings({ tab = "workspace" }: { tab?: string } = {}) {
         )}
                     </div>
             </details>
-          </Section>
+          </Section>}
         </>
       )}
 
@@ -822,7 +854,10 @@ const PLANE_URL = typeof window === "undefined" ? "" : window.location.origin;
 function TokenFold() {
   const apiToken = useApp((s) => s.apiToken);
   const setApiToken = useApp((s) => s.setApiToken);
+  const identityEmail = useApp((s) => s.identityEmail);
   const authStatus = useQuery({ queryKey: ["auth-status", apiToken], queryFn: api.authStatus });
+  // signed in with an account: its token is not a thing to show or paste
+  if (identityEmail) return null;
   return (
     <details className="mt-3" open={!!apiToken || undefined}>
       <summary style={{ cursor: "pointer", fontFamily: MONO, fontSize: 11, color: C.dim }}>

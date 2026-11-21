@@ -24,10 +24,12 @@ export default function Invite({ token }: { token: string }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const joined = (access: string, refresh: string, who: string) => {
+  // joined: straight to connecting their own machine, for what the team does
+  const joined = async (access: string, refresh: string, who: string) => {
     setSession(access, refresh, who);
     void qc.invalidateQueries();
-    navigate("govern");
+    const journey = await api.workspace().then((w) => w.journey).catch(() => null);
+    navigate("connect", journey ? { for: journey } : {});
   };
   const join = async (how: "accept" | "signup" | "login") => {
     setBusy(true);

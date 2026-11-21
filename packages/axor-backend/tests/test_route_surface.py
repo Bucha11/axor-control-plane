@@ -176,6 +176,9 @@ EXPECTED: dict[tuple[str, str], str] = {
     ("DELETE", "/v1/keys/mine/{key_id}"): "ingest",
     # an admin takes a removed teammate's keys away (role checked in the route)
     ("DELETE", "/v1/keys/of/{user_id}"): "operate",
+    # what the workspace is for (routers/workspace_api)
+    ("GET", "/v1/workspace"): "read",
+    ("PUT", "/v1/workspace/journey"): "operate",
     # ── plane (protocol v0.3): the node dials OUT; operator commands come in ─
     ("POST", "/v1/plane/{node_id}/command"): "operate",
     ("POST", "/v1/plane/{node_id}/cascade-stop"): "operate",

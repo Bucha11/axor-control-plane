@@ -1730,6 +1730,15 @@ class Store:
             key=lambda c: c["version"],
         )
 
+    async def touch_reported(self, node_id: str, ts: str) -> None:
+        """Move a node's last-reported time to ``ts`` and change nothing else —
+        an example asked for again is a fresh one (examples.hidden_examples)."""
+        async with self.engine.begin() as conn:
+            await conn.execute(update(reported_state).where(
+                reported_state.c.node_id == node_id,
+                reported_state.c.org_id == current_org_id(),
+            ).values(updated_ts=ts))
+
     async def upsert_reported(
         self, node_id: str, applied_version: int, level: str,
         budget_remaining: int | None, ts: str,
@@ -2134,7 +2143,7 @@ class Store:
             "key_id": row.key_id, "hashed_secret": row.hashed_secret,
             "scopes": [s for s in row.scopes.split(",") if s],
             "label": row.label, "created_ts": row.created_ts,
-            "org_id": row.org_id, "node_id": row.node_id,
+            "org_id": row.org_id, "node_id": row.node_id, "created_by": row.created_by,
         }
 
     async def list_api_keys(self, created_by: str | None = None) -> list[dict[str, Any]]:

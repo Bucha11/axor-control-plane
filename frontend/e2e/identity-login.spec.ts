@@ -149,6 +149,7 @@ test.describe("identity login (Settings)", () => {
   });
 
   test("an invitation link: a new account joins the workspace", async ({ page }) => {
+    await page.route("**/v1/workspace", jsonRoute(200, { journey: "coding" }));
     await page.route("**/identity/v1/invites/tok-abc", jsonRoute(200, {
       org_name: "Acme", role: "member", for_email: null, expires_ts: "2026-12-01T00:00:00Z" }));
     let signed: unknown = null;
@@ -165,8 +166,43 @@ test.describe("identity login (Settings)", () => {
     await inv.getByLabel("email").fill("sam@acme.io");
     await inv.getByLabel("password").fill("correct horse battery");
     await inv.getByTestId("invite-join").click();
-    await expect(page).toHaveURL(/#\/govern/);
+    // straight to connecting their own machine, for what the team does
+    await expect(page).toHaveURL(/#\/connect\?for=coding/);
     expect(signed).toMatchObject({ email: "sam@acme.io", invite: "tok-abc" });
+  });
+
+  test("on the free plan, inviting a second developer offers the paid plan", async ({ page }) => {
+    await page.route("**/identity/v1/login", jsonRoute(200, SESSION));
+    await page.route("**/identity/v1/me", jsonRoute(200, {
+      user: SESSION.user, active_org: "org_1", role: "owner",
+      memberships: [{ org_id: "org_1", role: "owner", name: "Acme", tier: "coding" }],
+    }));
+    await page.route("**/identity/v1/orgs/org_1/members", jsonRoute(200, { members: [
+      { user_id: "usr_1", email: "ada@acme.io", role: "owner", since: "2026-01-01" }] }));
+    let invited = false;
+    await page.route("**/identity/v1/orgs/org_1/invites", async (route) => {
+      if (route.request().method() === "POST") invited = true;
+      await route.fulfill({ status: route.request().method() === "POST" ? 201 : 200, contentType: "application/json",
+        body: JSON.stringify(route.request().method() === "POST"
+          ? { invite_id: "i", token: "tok-v", role: "viewer", email: null, expires_ts: "2026-12-01T00:00:00Z", mailed: false }
+          : { invites: [] }) });
+    });
+    await page.route("**/v1/license/entitlements", jsonRoute(200, {
+      tier: "community", free: true, developers: 1, agent_families: 1, agent_family: null,
+      locked: {}, locked_trees: {}, reasons: {} }));
+    await goHash(page, "settings");
+    await page.getByLabel("email", { exact: true }).fill("ada@acme.io");
+    await page.getByLabel("password").fill("correct horse");
+    await page.getByRole("button", { name: "log in", exact: true }).click();
+    await page.getByTestId("invite-make").click();
+    await expect(page.getByTestId("invite-upgrade")).toContainText("A second developer is on the Coding plan");
+    expect(invited).toBe(false);
+    // a viewer watches, and is free
+    await page.getByTestId("invite-as-viewer").click();
+    await expect(page.getByLabel("invite role")).toHaveValue("viewer");
+    await page.getByTestId("invite-make").click();
+    await expect(page.getByTestId("invite-made")).toBeVisible();
+    expect(invited).toBe(true);
   });
 
   test("a used or withdrawn invitation says so", async ({ page }) => {

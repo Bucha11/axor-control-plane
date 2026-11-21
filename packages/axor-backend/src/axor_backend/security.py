@@ -87,12 +87,19 @@ async def resolve_principal(request: Request) -> Principal | None:
         # A key carries the org it was minted under, so the connection using it
         # reads and writes that org's data (None → the public tenant), and the
         # node it was minted FOR, if any.
+        # A person's own key (POST /v1/keys/mine) speaks for that person: what
+        # it shares and the sessions it reports are theirs, shown by their email
+        # rather than a key id or a machine hash.
+        person = record.get("created_by")
+        label = str(record.get("label") or "")
         return Principal(
             kind="key",
             key_id=key_id,
             scopes=frozenset(record["scopes"]),
             org=record.get("org_id"),
             node_id=record.get("node_id"),
+            user_id=person,
+            email=label.split(" · ", 1)[0] if person and "@" in label else None,
         )
     # axor-identity login: a human's access token, verified locally against the
     # JWKS. The org scopes the principal to a tenant; the role maps to the scope

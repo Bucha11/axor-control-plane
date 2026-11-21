@@ -39,6 +39,7 @@ from axor_backend.routers import (
     trees_api,
     vault,
     version,
+    workspace_api,
 )
 
 ALL_ROUTERS: tuple[APIRouter, ...] = (
@@ -53,6 +54,7 @@ ALL_ROUTERS: tuple[APIRouter, ...] = (
     coding_api.router,
     pair_api.router,
     memory_api.router,
+    workspace_api.router,
     analysis.router,
     vault.router,
     lab.router,

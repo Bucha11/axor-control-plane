@@ -13,6 +13,7 @@ import { api, KernelEvent, NodeRun } from "../api";
 import { navigate } from "../router";
 import { useApp } from "../store";
 import { C, MONO, btn } from "../theme";
+import { isCodingSession } from "../components/CodingOnboarding";
 import CutResult from "../components/CutResult";
 import Tooltip from "../components/Tooltip";
 
@@ -109,7 +110,17 @@ export default function RunControl({ runId }: { runId: string }) {
   );
   const lines = (events.data ?? []).filter((e) =>
     ["tool_call", "tool_result", "fault_injected", "claim", "denial"].includes(e.kind));
+  // a coding session (Claude Code / Codex): the production agents' panels —
+  // health battery, honesty tests, sentinel, injection — are not for it
+  const coding = isCodingSession(nodeId);
   const tainted = new Set(run?.tainted_refs ?? []);
+  // which tool's answer a value came from, to say "from the WebFetch result"
+  // rather than a value id
+  const refTool = new Map<string, string>();
+  for (const ev of events.data ?? []) {
+    const pl = ev.payload as Record<string, unknown>;
+    if (ev.kind === "tool_result" && typeof pl.value_ref === "string") refTool.set(pl.value_ref, String(pl.tool ?? ""));
+  }
   const latest = probe.data?.latest;
   const proposal = repair.data?.proposal;
   const proposalForThisRun = latest?.session_id === runId ? proposal : null;
@@ -162,7 +173,7 @@ export default function RunControl({ runId }: { runId: string }) {
       )}
       {applying && (
         <div style={{ fontFamily: MONO, fontSize: 11, color: C.amber, marginBottom: 10 }}>
-          command in flight — the node applies it at its next boundary
+          sent — the agent applies it at its next step
         </div>
       )}
       {error && <div style={{ fontFamily: MONO, fontSize: 11, color: C.red, marginBottom: 10 }}>{error}</div>}
@@ -180,7 +191,7 @@ export default function RunControl({ runId }: { runId: string }) {
               </div>
             )}
             {lines.map((e, i) => (
-              <Step key={`${e.seq}-${i}`} e={e} first={i === 0} runId={runId} nodeId={nodeId}
+              <Step key={`${e.seq}-${i}`} e={e} first={i === 0} runId={runId} nodeId={nodeId} refTool={refTool}
                 tainted={tainted} appliedCuts={appliedCuts} pendingCut={pendingCut}
                 waiting={live && e.kind === "tool_call" && e.verdict !== "deny"
                   && !lines.some((r) => r.kind === "tool_result"
@@ -189,7 +200,7 @@ export default function RunControl({ runId }: { runId: string }) {
             ))}
           </div>
           <div className="flex gap-2 mt-3 flex-wrap">
-            <Tooltip content={testBench
+            {!coding && <Tooltip content={testBench
               ? "Insert text into the agent's next model call to see how it handles it. Marked untrusted; test-bench only."
               : "Test-bench only (enable in Settings; the agent needs AXOR_TEST_BENCH=1)."}>
               <button
@@ -202,7 +213,7 @@ export default function RunControl({ runId }: { runId: string }) {
                 style={btn({ fontSize: 11, padding: "5px 10px", color: testBench ? C.mut : C.dim })}>
                 <Syringe size={11} /> Inject
               </button>
-            </Tooltip>
+            </Tooltip>}
             <button onClick={() => navigate(`explain/${encodeURIComponent(runId)}`)}
               style={btn({ fontSize: 11, padding: "5px 10px", color: C.steel })}>
               Open in Replay — what-if, pin to corpus →
@@ -212,7 +223,7 @@ export default function RunControl({ runId }: { runId: string }) {
 
         {/* everything known about this run */}
         <div style={{ flex: "1 1 40%", minWidth: 0, display: "flex", flexDirection: "column", gap: 10 }}>
-          <Side title="health check">
+          {(!coding || run?.probe) && <Side title="health check">
             {!run?.probe ? (
               <span style={{ color: C.dim }}>not probed — the node runs checks when started with probe=</span>
             ) : (
@@ -244,9 +255,9 @@ export default function RunControl({ runId }: { runId: string }) {
                 )}
               </div>
             )}
-          </Side>
+          </Side>}
 
-          <Side title="honesty">
+          {!coding && <Side title="honesty">
             {run?.evidence.length
               ? <span style={{ color: C.red }}>caught: {run.evidence.join(", ")}</span>
               : (run?.scenario ?? "").endsWith("-experiment")
@@ -257,9 +268,9 @@ export default function RunControl({ runId }: { runId: string }) {
               disabled={stopped || command.isPending}
               onArm={(tool, mode) => send({ pending_experiment: {
                 id: `exp_${Date.now()}`, faults: [{ tool, mode }], operator: "op_ui" } })} />
-          </Side>
+          </Side>}
 
-          <Side title="reputation · across runs">
+          {(!coding || reputation.data?.reputation) && <Side title="reputation · across runs">
             {(() => {
               const snap = reputation.data?.reputation;
               const hot = snap ? Object.entries(snap.resource_level).filter(([, l]) => l !== "CLEAN") : [];
@@ -272,9 +283,9 @@ export default function RunControl({ runId }: { runId: string }) {
                 </div>
               ));
             })()}
-          </Side>
+          </Side>}
 
-          <Side title="commands · what the node confirmed">
+          <Side title={coding ? "pause · stop · cap — what the agent confirmed" : "commands · what the node confirmed"}>
             <Posture paused={paused} stopped={stopped} cap={cap} applying={applying} />
             {(journal.data?.entries ?? []).slice(0, 8).map((e, i) => (
               <div key={i} className="flex gap-2">
@@ -305,8 +316,8 @@ function Side({ title, children }: { title: string; children: React.ReactNode })
   );
 }
 
-function Step({ e, first, runId, nodeId, tainted, appliedCuts, pendingCut, waiting }: {
-  e: KernelEvent; first: boolean; runId: string; nodeId: string;
+function Step({ e, first, runId, nodeId, refTool, tainted, appliedCuts, pendingCut, waiting }: {
+  e: KernelEvent; first: boolean; runId: string; nodeId: string; refTool: Map<string, string>;
   tainted: Set<string>; appliedCuts: Set<string>; pendingCut: string[]; waiting?: boolean;
 }) {
   const p = e.payload as Record<string, unknown>;
@@ -319,10 +330,10 @@ function Step({ e, first, runId, nodeId, tainted, appliedCuts, pendingCut, waiti
   if (e.kind === "tool_call") {
     head = <><span style={{ color: e.verdict === "deny" ? C.red : C.text }}>→ {tool}</span>
       <span style={{ color: C.mut }}>{"  "}{compactArgs(p.args)}</span>
-      {e.verdict === "deny" && <span style={{ color: C.red }}>{"  "}denied{e.gate ? ` (${e.gate})` : ""}</span>}</>;
+      {e.verdict === "deny" && <span style={{ color: C.red }}>{"  "}refused</span>}</>;
   } else if (e.kind === "tool_result") {
     head = <><span style={{ color: C.text }}>← {tool}</span>
-      {isTainted && <span style={{ color: C.amber }}>{"  "}⚠ untrusted ({((p.root as { sources?: string[] })?.sources ?? []).join(", ")})</span>}
+      {isTainted && <span style={{ color: C.amber }}>{"  "}⚠ text from outside{sourceWords((p.root as { sources?: string[] })?.sources ?? [])}</span>}
       {p.status && p.status !== "ok" && <span style={{ color: C.red }}>{"  "}{String(p.status)}</span>}</>;
   } else if (e.kind === "fault_injected") {
     head = <span style={{ color: C.steel }}>⚡ {tool} broken on purpose ({String(p.mode)})</span>;
@@ -340,9 +351,14 @@ function Step({ e, first, runId, nodeId, tainted, appliedCuts, pendingCut, waiti
       {waiting && (
         <div style={{ marginLeft: 64, color: C.green }}>⋯ running — waiting for its result</div>
       )}
-      {quotes.map(([arg, from]) => (
-        <div key={arg} style={{ color: tainted.has(from) ? C.amber : C.dim, marginLeft: 64 }}>
-          ↳ {arg} quotes {from}{tainted.has(from) ? " (untrusted)" : ""}
+      {e.kind === "tool_call" && e.verdict === "deny" && typeof p.reason === "string" && p.reason && (
+        <div data-testid="refusal-reason" style={{ marginLeft: 64, color: C.red }}>
+          {p.reason.replace(/^axor:\s*/, "")}
+        </div>
+      )}
+      {quotes.filter(([, from]) => tainted.has(from)).map(([arg, from]) => (
+        <div key={arg} style={{ color: C.amber, marginLeft: 64 }}>
+          ↳ its {arg} came from {refTool.get(from) ? `the ${refTool.get(from)} result` : "a result"} — text from outside
         </div>
       ))}
       {e.kind === "tool_result" && typeof p.preview === "string" && p.preview && (
@@ -425,7 +441,7 @@ function Posture({ paused, stopped, cap, applying }: {
   const parts = [stopped ? "stopped" : paused ? "paused" : "running", cap != null ? `cap ${cap}` : "no cap"];
   return (
     <div style={{ color: applying ? C.amber : C.text, marginBottom: 4 }}>
-      now: {parts.join(" · ")}{applying ? " — in flight" : " — applied"}
+      now: {parts.join(" · ")}{applying ? " — reaches the agent at its next step" : " — applied"}
     </div>
   );
 }
@@ -444,4 +460,12 @@ export function describeAck(kind: string, p: Record<string, unknown>): string {
     case "state_applied": return `command not applied — ${String(p.result ?? "")}${p.detail ? ` (${String(p.detail)})` : ""}`;
     default: return kind;
   }
+}
+
+/** " (a web page)", " (an MCP tool)"… — where outside text came from, in words. */
+function sourceWords(sources: string[]): string {
+  const W: Record<string, string> = { web: "a web page", mcp: "an MCP tool", file: "a file outside the repo",
+    child_agent: "another agent", memory: "memory", unknown_external: "outside" };
+  const words = [...new Set(sources.map((s) => W[s] ?? s))].filter((w) => w !== "outside");
+  return words.length ? ` · ${words.join(", ")}` : "";
 }

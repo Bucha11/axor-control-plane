@@ -23,6 +23,7 @@ from axor_backend.deps import (
     SubgraphCacheDep,
 )
 from axor_backend.evidence import batch_has_claim, derive_for_run
+from axor_backend.examples import without_examples
 from axor_backend.limits import check_batch
 from axor_backend.tenancy import current_org_id, topic
 
@@ -131,7 +132,8 @@ async def set_evidence(
 
 @router.get("/runs")
 async def list_runs(store: StoreDep) -> list[dict]:
-    return await store.list_runs()
+    # the product's example runs go once the workspace's own agents report
+    return await without_examples(store, await store.list_runs())
 
 
 # How many of the newest tool events a search reads. Bounded so a tenant with

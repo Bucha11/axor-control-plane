@@ -47,6 +47,7 @@ from axor_backend.errors import (
     ConcurrentUpdate,
     StaleVersion,
 )
+from axor_backend.examples import hidden_examples, is_example_node
 from axor_backend.limits import check_batch
 from axor_backend.signing import signed_payload
 from axor_backend.tenancy import current_org_id, topic
@@ -1146,6 +1147,12 @@ async def post_profile(node_id: str, body: dict, request: Request) -> None:
             or len(developer) > 64:
         raise HTTPException(400, "developer is an opaque id: letters, digits, -_. "
                                  "(at most 64)")
+    # a person's own key reports for that person: the developer is them, by
+    # their email — not an id the machine derived (two machines, one person;
+    # one machine, two people)
+    principal = getattr(request.state, "principal", None)
+    if kind in ("coding", "tree") and getattr(principal, "email", None):
+        developer = str(principal.email)[:64]
     if kind == "coding" and not developer:
         raise HTTPException(400, "a coding session names its developer (an opaque id)")
     repo = str(body.get("repo") or "")
@@ -1343,6 +1350,7 @@ async def nodes(request: Request) -> list[dict]:
     # what each node said it is (coding session, production agent, tree run):
     # the menu shows coding agents and production agents apart
     profile_by_node = await ctx.store.node_kinds()
+    hidden = await hidden_examples(ctx.store)
     out = []
     for node_id in await ctx.store.list_nodes():
         current = desired_by_node.get(node_id)
@@ -1356,6 +1364,10 @@ async def nodes(request: Request) -> list[dict]:
             "reputation": _reputation_summary(reputation_by_node.get(node_id)),
             "probe": probe_by_node.get(node_id),
             "profile": profile_by_node.get(node_id),
+            # the product's own example, not this workspace's work — and
+            # whether the workspace's own agents have since moved it aside
+            "example": is_example_node(node_id),
+            "example_hidden": node_id in hidden,
         })
     return out
 

@@ -13,7 +13,7 @@
 // the machinery instead of the job, and hid the first step (get started) and a
 // static mock (expert) behind the same "more".
 import { useEffect, useRef, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Circle, GraduationCap, Plug, Settings as SettingsIcon } from "lucide-react";
 import { api } from "./api";
 import { C, MONO } from "./theme";
@@ -252,6 +252,7 @@ export default function App() {
           <div style={{ padding: "0 24px" }}>{body}</div>
         </main>
         <Tour />
+        <WorkspaceJourney />
       </div>
     );
   }
@@ -260,8 +261,35 @@ export default function App() {
       {header}
       {body}
       <Tour />
+      <WorkspaceJourney />
     </div>
   );
+}
+
+/** What the workspace is for is the workspace's, not this browser's: a
+ * teammate who joins sees what the team chose; the first choice made in a
+ * workspace that has none becomes it. */
+function WorkspaceJourney() {
+  const qc = useQueryClient();
+  const journey = useApp((s) => s.journey);
+  const setJourney = useApp((s) => s.setJourney);
+  const apiToken = useApp((s) => s.apiToken);
+  const auth = useQuery({ queryKey: ["auth-status", apiToken], queryFn: api.authStatus, staleTime: 60_000 });
+  const signedIn = auth.data?.authenticated === true && !auth.data?.guest;
+  const ws = useQuery({ queryKey: ["workspace", apiToken], queryFn: api.workspace, enabled: signedIn,
+                        retry: false, staleTime: 60_000 });
+  const theirs = ws.data?.journey ?? null;
+  useEffect(() => {
+    if (theirs && theirs !== journey) setJourney(theirs);
+    // only when the workspace's answer arrives or changes
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [theirs]);
+  useEffect(() => {
+    if (signedIn && ws.isSuccess && !theirs && journey) {
+      void api.setWorkspaceJourney(journey).then(() => qc.invalidateQueries({ queryKey: ["workspace"] }));
+    }
+  }, [signedIn, ws.isSuccess, theirs, journey, qc]);
+  return null;
 }
 
 /** Context health: a coding team's is its setup (skills, CLAUDE.md) checked
@@ -587,7 +615,9 @@ function AccountButton() {
           maxWidth: guest ? 260 : 180, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
         }}
       >
-        {email || (guest ? `save your work · guest, ${guestTimeLeft(guestExpiresAt)}` : "sign in")}
+        {email || (guest
+          ? <><span className="hide-narrow">save your work · </span>guest, {guestTimeLeft(guestExpiresAt)}</>
+          : "sign in")}
       </button>
       {open && (
         <div

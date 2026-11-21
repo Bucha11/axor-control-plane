@@ -298,7 +298,7 @@ export default function ControlTab({ focusNode }: { focusNode?: string }) {
     <>
       {/* decided once the list is in: a note that unfolds and then folds
           itself takes the button out from under the pointer */}
-      {!isAdapter(mode) && fleet.isSuccess
+      {!isAdapter(mode) && fleet.isSuccess && !hasRealWork(fleet.data ?? [])
         && !codingExampleOnly((fleet.data ?? []).map((n) => n.node_id))
         && !fleetExampleOnly((fleet.data ?? []).map((n) => n.node_id)) && (hasAgents ? (
         // agents are already on screen: one line, the example tools folded away
@@ -341,7 +341,10 @@ function ControlBody({ focusNode, testBench }: { focusNode?: string; testBench: 
   const [lens, setLens] = useState<"list" | "graph">("list");
   // a skill's dry run (axor-wrap skill try) is not an agent to operate: it
   // lives on Try a skill
-  const everyone = (nodes.data ?? []).filter((n) => !n.node_id.startsWith("skill-try."));
+  // once the workspace's own agents report, the examples loaded before stop
+  // showing beside them (an example asked for after that still shows)
+  const everyone = (nodes.data ?? []).filter((n) => !n.node_id.startsWith("skill-try.")
+    && !n.example_hidden);
   // the menu's side: coding agents (sessions and their tree runs) or
   // production agents — everything when no side was chosen or all was asked for
   const journey = useApp((st) => st.journey);
@@ -376,7 +379,8 @@ function ControlBody({ focusNode, testBench }: { focusNode?: string; testBench: 
   // which is not an agent to operate (see `everyone` above)
   const topoData = topo.data && {
     ...topo.data,
-    nodes: topo.data.nodes.filter((n) => !n.node_id.startsWith("skill-try.")),
+    nodes: topo.data.nodes.filter((n) => !n.node_id.startsWith("skill-try.")
+      && !(nodes.data ?? []).some((x) => x.node_id === n.node_id && x.example_hidden)),
     edges: topo.data.edges.filter((e) => !e.from.startsWith("skill-try.") && !e.to.startsWith("skill-try.")),
   };
   const [more, setMore] = useState(false);
@@ -1480,14 +1484,15 @@ function feedLine(e: ActivityEvent): { text: string; color: string } {
   const tool = typeof p.tool === "string" ? p.tool : "";
   switch (e.kind) {
     case "tool_call":
-      return e.verdict === "deny" ? { text: `${tool} — refused`, color: C.red }
+      return e.verdict === "deny"
+        ? { text: `${tool} — refused${typeof p.reason === "string" && p.reason ? `: ${shortReason(p.reason)}` : ""}`, color: C.red }
         : p.would_deny ? { text: `called ${tool} — would have been refused`, color: C.amber }
           : { text: `called ${tool}`, color: C.text };
     case "tool_result": {
       const src = ((p.root as { sources?: string[] } | undefined)?.sources ?? []).join(", ");
       const check = p.check as { kind?: string; passed?: boolean } | undefined;
       if (check?.kind && check.passed === false) return { text: `${tool} — the ${check.kind} failed`, color: C.red };
-      return src ? { text: `${tool} answered · text from outside (${src})`, color: C.amber }
+      return src ? { text: `${tool} answered · text from outside (${src.replace("unknown_external", "outside")})`, color: C.amber }
         : { text: `${tool} answered`, color: C.text };
     }
     case "claim": return { text: `said: ${String(p.text ?? "").slice(0, 80)}`, color: C.mut };
@@ -1513,6 +1518,8 @@ function feedLine(e: ActivityEvent): { text: string; color: string } {
 
 function ActivityFeed({ only }: { only?: Set<string> }) {
   const feed = useQuery({ queryKey: ["activity"], queryFn: api.activity, refetchInterval: 2000 });
+  const nodesQ = useQuery({ queryKey: ["nodes"], queryFn: api.nodes });
+  const examples = new Set((nodesQ.data ?? []).filter((n) => n.example_hidden).map((n) => n.node_id));
   // a session past the free plan is not shown, here either
   const ent = useQuery({ queryKey: ["entitlements"], queryFn: api.entitlements, retry: false });
   const [find, setFind] = useState("");
@@ -1520,6 +1527,7 @@ function ActivityFeed({ only }: { only?: Set<string> }) {
     if (ent.data?.locked[e.node_id] || ent.data?.locked_trees[e.node_id]) return false;
     // a skill's dry run is shown on Try a skill, not among the agents' work
     if (e.node_id.startsWith("skill-try.")) return false;
+    if (examples.has(e.node_id)) return false;
     if (only && !only.has(e.node_id)) return false;
     if (!find) return true;
     const t = `${e.node_id} ${feedLine(e).text}`.toLowerCase();
@@ -1562,4 +1570,14 @@ function ActivityFeed({ only }: { only?: Set<string> }) {
       </div>
     </div>
   );
+}
+
+/** Whether this workspace's own agents report here — then the examples go. */
+export function hasRealWork(nodes: { node_id: string; example?: boolean }[]): boolean {
+  return nodes.some((n) => !n.example && !n.node_id.startsWith("skill-try."));
+}
+
+/** The refusal the agent was told, cut to its first clause. */
+function shortReason(reason: string): string {
+  return reason.replace(/^axor:\s*/, "").split(/ — |\. /)[0].slice(0, 90);
 }

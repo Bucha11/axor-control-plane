@@ -8,6 +8,7 @@ from fastapi import APIRouter, HTTPException
 from axor_backend import incidents
 from axor_backend.clock import now
 from axor_backend.deps import StoreDep
+from axor_backend.examples import without_examples
 from axor_backend.routers.runs import SEARCH_SCAN
 
 router = APIRouter(prefix="/v1/incidents", tags=["incidents"])
@@ -24,7 +25,8 @@ def _when(ts: object) -> datetime | None:
 @router.get("")
 async def list_incidents(store: StoreDep, kind: str = "", status: str = "", agent: str = "",
                          since: str = "") -> dict:
-    items = await incidents.incidents(store, SEARCH_SCAN)
+    # the product's examples stop counting once the workspace's own agents report
+    items = await without_examples(store, await incidents.incidents(store, SEARCH_SCAN))
     new = {k: sum(1 for i in items if i["kind"] == k and i["status"] == "new")
            for k in incidents.KINDS}
     lo = _when(since) if since else None

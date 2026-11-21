@@ -47,18 +47,23 @@ export function codingExampleOnly(ids: string[]): boolean {
   return example && !production;
 }
 
-function Block({ text, id, copied, onCopy }: {
+function Block({ text, id, copied, onCopy, unready }: {
   text: string; id: string; copied: string | null; onCopy: (id: string, text: string) => void;
+  // a command not ready to run (its key is not made yet): shown, not copyable
+  unready?: boolean;
 }) {
   return (
     <div className="flex items-start gap-2 mb-2" style={{
       background: C.bg, border: `1px solid ${C.line}`, borderRadius: 6, padding: "8px 10px",
     }}>
-      <pre data-testid={`cmd-${id}`} style={{ margin: 0, flex: 1, fontFamily: MONO, fontSize: 11.5, color: C.text, whiteSpace: "pre-wrap" }}>{text}</pre>
-      <button onClick={() => onCopy(id, text)} aria-label="copy"
-        style={btn({ color: C.mut, fontSize: 10, padding: "2px 6px" })}>
-        {copied === id ? <Check size={11} /> : <Copy size={11} />}
-      </button>
+      <pre data-testid={`cmd-${id}`} style={{ margin: 0, flex: 1, fontFamily: MONO, fontSize: 11.5,
+        color: unready ? C.dim : C.text, whiteSpace: "pre-wrap", wordBreak: "break-all" }}>{text}</pre>
+      {!unready && (
+        <button onClick={() => onCopy(id, text)} aria-label="copy"
+          style={btn({ color: C.mut, fontSize: 10, padding: "2px 6px" })}>
+          {copied === id ? <Check size={11} /> : <Copy size={11} />}
+        </button>
+      )}
     </div>
   );
 }
@@ -170,7 +175,7 @@ export default function CodingOnboarding({ then }: { then?: () => void }) {
         </div>
       ) : (
         <>
-          <Block id="connect" copied={copied} onCopy={copy} text={connectCmd} />
+          <Block id="connect" copied={copied} onCopy={copy} text={connectCmd} unready={needsKey && !key} />
           {needsKey && !key && (
             <button onClick={() => mint.mutate()} disabled={mint.isPending} data-testid="mint-coding-key"
               style={btn({ color: C.steel, borderColor: C.steel, fontSize: 10.5, padding: "4px 10px" })}>

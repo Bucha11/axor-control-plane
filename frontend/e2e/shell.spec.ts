@@ -158,6 +158,6 @@ test.describe("shell", () => {
   test("the connection badge reflects the persisted mode", async ({ page }) => {
     await setConnection(page, { mode: "adapter" });
     await goHash(page, "home");
-    await expect(page.getByText("adapter · full governance").first()).toBeVisible();
+    await expect(page.getByText("connected · your agents").first()).toBeVisible();
   });
 });

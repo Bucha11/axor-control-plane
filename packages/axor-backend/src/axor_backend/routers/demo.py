@@ -145,6 +145,9 @@ async def seed_fleet(
                 node, applied_version=0, level="NORMAL",
                 budget_remaining=None, ts=now(),
             )
+        else:
+            # asked for again: a fresh example, not one real work has moved aside
+            await store.touch_reported(node, now())
     seeded: list[str] = ["ex_tree"]
     if await store.reputation(demo.FLEET_SENTINEL_NODE) is None:
         at = time.time()
@@ -188,6 +191,9 @@ async def seed_coding(store: StoreDep, cache: SubgraphCacheDep) -> dict:
         if await store.get_reported(node) is None:
             await store.upsert_reported(node, applied_version=0, level="NORMAL",
                                         budget_remaining=None, ts=ts)
+        else:
+            # asked for again: a fresh example, not one real work has moved aside
+            await store.touch_reported(node, ts)
     for node in sessions:
         agent = "codex" if node.startswith("codex-") else "claude-code"
         developer = demo.CODING_DEVELOPERS.get(node, "dev-example-ada")
@@ -215,6 +221,9 @@ async def seed_skill_try(store: StoreDep, cache: SubgraphCacheDep) -> dict:
     if await store.get_reported(demo.SKILL_TRY) is None:
         await store.upsert_reported(demo.SKILL_TRY, applied_version=0, level="NORMAL",
                                     budget_remaining=None, ts=stamp)
+    else:
+        # asked for again: a fresh example, not one real work has moved aside
+        await store.touch_reported(demo.SKILL_TRY, stamp)
     await store.put_node_profile(demo.SKILL_TRY, "coding", "claude-code", "dev-example-ada", stamp)
     return {"node": demo.SKILL_TRY, "run": "ex_skill_try"}
 
@@ -370,5 +379,8 @@ async def seed_prod_incident(store: StoreDep, cache: SubgraphCacheDep) -> dict:
     if await store.get_reported(demo.OPS_AGENT) is None:
         await store.upsert_reported(demo.OPS_AGENT, applied_version=0, level="NORMAL",
                                     budget_remaining=None, ts=now())
+    else:
+        # asked for again: a fresh example, not one real work has moved aside
+        await store.touch_reported(demo.OPS_AGENT, now())
     return {"seeded": ["ex_prod_drop", "ex_prod_ok"], "node": demo.OPS_AGENT,
             "at": start.isoformat()}

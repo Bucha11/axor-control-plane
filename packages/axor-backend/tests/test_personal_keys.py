@@ -129,3 +129,22 @@ async def test_a_removed_teammate_loses_their_keys(
     assert gone.status_code == 401
     still = await client.get("/v1/coding/policy", headers=_bearer(kept["secret"]))
     assert still.status_code == 200
+
+
+async def test_a_personal_key_speaks_for_its_person(
+        client: httpx.AsyncClient, priv: Ed25519PrivateKey) -> None:  # noqa: F811
+    """What a member's machine reports and shares is theirs, by their email —
+    not a key id, not a hash the machine derived."""
+    dev2 = _bearer(_mint(priv, role="member", sub="usr_dev2", eml="dev2@acme.io"))
+    owner = _bearer(_mint(priv, role="owner"))
+    agent = _bearer((await client.post("/v1/keys/mine", headers=dev2)).json()["secret"])
+    profile = {"kind": "coding", "agent": "claude-code", "developer": "dev-machinehash"}
+    r = await client.post("/v1/plane/claude-code-box-1/profile", json=profile, headers=agent)
+    assert r.status_code < 300, r.text
+    beat = {"events": [{"schema_version": "1.0", "seq": 0, "node_id": "claude-code-box-1",
+                        "kind": "heartbeat", "ts": "t", "causal_root": None, "gate": None,
+                        "verdict": None, "payload": {"applied_version": 0, "level": "NORMAL",
+                                                     "budget_remaining": None}}]}
+    await client.post("/v1/plane/claude-code-box-1/telemetry", json=beat, headers=agent)
+    nodes = {n["node_id"]: n for n in (await client.get("/v1/plane/nodes", headers=owner)).json()}
+    assert nodes["claude-code-box-1"]["profile"]["developer"] == "dev2@acme.io"

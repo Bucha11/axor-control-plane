@@ -122,7 +122,7 @@ export const MODE_LABEL: Record<ConnectionMode, string> = {
   none: "not connected",
   demo: "demo-mode · mock tools",
   proxy: "proxy · your tools",
-  adapter: "adapter · full governance",
+  adapter: "connected · your agents",
 };
 
 // Keys whose values are credentials; everything else is UI preference.
