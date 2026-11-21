@@ -98,6 +98,8 @@ _READ_POLICY: tuple[tuple[str, str], ...] = (
     # ...and the notes a pair session sent its agent
     ("/v1/coding/notes/", "ingest"),
     ("/v1/coding/memory", "ingest"),     # the team's memory, given at session start
+    # A member's own keys (routers/keys: only what they minted themselves).
+    ("/v1/keys/mine", "ingest"),
     # Listing keys is credential enumeration: ids, scopes, labels, dates.
     ("/v1/keys", "admin"),
     # Every enrolment with the nodes allowed to dispense it — the map of which
@@ -181,6 +183,8 @@ _WRITE_POLICY: tuple[tuple[str, str], ...] = (
     # turning a skill off — or on — for every developer is an operator's decision
     ("/v1/coding/", "operate"),
     ("/v1/plane/", "operate"),        # command / facts / cascade-stop
+    # a member mints / revokes an ingest-only key for their own machine
+    ("/v1/keys/mine", "ingest"),
     ("/v1/keys", "admin"),            # mint / revoke API keys
     ("/v1/regression/schedule", "operate"),  # EE schedule is operator config
     ("/v1/regression", "read"),       # replay-only, no state change

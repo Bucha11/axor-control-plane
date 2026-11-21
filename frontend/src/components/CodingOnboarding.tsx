@@ -81,7 +81,8 @@ export default function CodingOnboarding({ then }: { then?: () => void }) {
   const authOn = auth.data?.auth_enabled ?? null;
   const signedIn = !!email || (!!token && !isGuestToken(token));
   const mint = useMutation({
-    mutationFn: () => api.createKey(["ingest"], "coding agents"),
+    // the developer's own key — any member may mint one, the owner sees them all
+    mutationFn: () => api.createMyKey(),
     onSuccess: (k) => setKey(k.secret),
   });
   const nodes = useQuery({ queryKey: ["nodes"], queryFn: api.nodes, refetchInterval: 3000 });

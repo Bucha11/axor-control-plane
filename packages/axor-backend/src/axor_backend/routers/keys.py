@@ -243,6 +243,60 @@ async def create_key(body: dict, request: Request, store: StoreDep) -> dict:
     return {"key_id": key_id, "secret": secret, "scopes": scopes, "node_id": node_id}
 
 
+# ── a member's own key ──────────────────────────────────────────────────────
+#
+# Minting keys is an owner's act (`/v1/keys`, scope admin), which left every
+# other developer of a team unable to connect their own machine: the Connect
+# page offered "create the key" and answered 403. A signed-in member may mint
+# a key for themselves — ingest only, the authority their agents report with
+# and nothing more, labelled with their email — and list and revoke the ones
+# they minted. The owner sees them all in the key list and may revoke any.
+
+MINE_SCOPES = ["ingest"]
+
+
+def _person(request: Request) -> Principal | None:
+    """The signed-in person, or None when auth is off. A key may not mint
+    keys for itself: a personal key is a person's."""
+    caller = getattr(request.state, "principal", None)
+    if caller is None:
+        return None
+    if caller.kind != "user" or not caller.user_id:
+        raise HTTPException(403, "a personal key is minted by a signed-in person")
+    return caller
+
+
+@router.post("/keys/mine", status_code=201)
+async def create_my_key(request: Request, store: StoreDep) -> dict:
+    caller = _person(request)
+    label = f"{caller.email or caller.user_id} · coding agents" if caller else "coding agents"
+    key_id, secret = auth_mod.generate_key()
+    await store.create_api_key(
+        key_id, hash_secret(secret), MINE_SCOPES, label[:MAX_LABEL], now(),
+        created_by=caller.user_id if caller else None,
+    )
+    await _audit(store, "mint", request, key_id=key_id, scopes=MINE_SCOPES,
+                 node_id=None, label=label, personal=True)
+    return {"key_id": key_id, "secret": secret, "scopes": MINE_SCOPES, "node_id": None}
+
+
+@router.get("/keys/mine")
+async def list_my_keys(request: Request, store: StoreDep) -> list[dict]:
+    caller = _person(request)
+    if caller is None:
+        return []
+    return await store.list_api_keys(created_by=caller.user_id)
+
+
+@router.delete("/keys/mine/{key_id}")
+async def delete_my_key(key_id: str, request: Request, store: StoreDep) -> dict:
+    caller = _person(request)
+    if caller is None or not await store.delete_api_key(key_id, created_by=caller.user_id):
+        raise HTTPException(404, "no key of yours with that id")
+    await _audit(store, "revoke", request, key_id=key_id, personal=True)
+    return {"revoked": key_id}
+
+
 @router.get("/keys")
 async def list_keys(store: StoreDep) -> list[dict]:
     return await store.list_api_keys()

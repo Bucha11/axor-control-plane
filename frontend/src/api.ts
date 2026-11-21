@@ -1842,6 +1842,16 @@ export const api = {
     }).then((r) =>
       j<{ key_id: string; secret: string; scopes: string[]; node_id: string | null }>(r),
     ),
+  // A member's own key for their machine: ingest only, minted and revoked by
+  // them (an owner sees every key in listKeys).
+  createMyKey: () =>
+    af("/v1/keys/mine", { method: "POST" }).then((r) =>
+      j<{ key_id: string; secret: string; scopes: string[]; node_id: string | null }>(r)),
+  myKeys: () =>
+    af("/v1/keys/mine").then((r) =>
+      j<{ key_id: string; label: string; created_ts: string; scopes: string[] }[]>(r)),
+  revokeMyKey: (keyId: string) =>
+    af(`/v1/keys/mine/${encodeURIComponent(keyId)}`, { method: "DELETE" }).then((r) => j<{ revoked: string }>(r)),
   revokeKey: (keyId: string) =>
     af(`/v1/keys/${encodeURIComponent(keyId)}`, { method: "DELETE" }).then((r) => j<{ revoked: string }>(r)),
   // Every mint and revoke, newest first. `listKeys` answers "what exists now",

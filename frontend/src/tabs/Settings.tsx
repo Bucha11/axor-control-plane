@@ -978,6 +978,49 @@ const PRESETS: { id: string; label: string; words: string; scopes: string[]; nod
     words: "pick what it may do" },
 ];
 
+/** A member's own keys: one per machine, ingest only, theirs to revoke. */
+function MyKeys() {
+  const qc = useQueryClient();
+  const mine = useQuery({ queryKey: ["my-keys"], queryFn: api.myKeys, retry: false });
+  const [secret, setSecret] = useState<string | null>(null);
+  const mint = useMutation({
+    mutationFn: api.createMyKey,
+    onSuccess: (r) => { setSecret(r.secret); void qc.invalidateQueries({ queryKey: ["my-keys"] }); },
+  });
+  const revoke = useMutation({
+    mutationFn: api.revokeMyKey,
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ["my-keys"] }),
+  });
+  return (
+    <div data-testid="my-keys" style={{ fontFamily: MONO, fontSize: 11.5, color: C.mut }}>
+      <div style={{ marginBottom: 8 }}>A key for your machine: your agents report here with it, and nothing else.</div>
+      {secret ? (
+        <>
+          <pre data-testid="my-key-connect" style={{ background: C.bg, border: `1px solid ${C.line}`, borderRadius: 5,
+            padding: "8px 10px", margin: "0 0 4px", color: C.text, whiteSpace: "pre-wrap", wordBreak: "break-all" }}>
+            axor-wrap connect {PLANE_URL} --key {secret}
+          </pre>
+          <div style={{ color: C.amber, fontSize: 10.5, marginBottom: 8 }}>shown once — run it on your machine now</div>
+        </>
+      ) : (
+        <button data-testid="my-key-create" onClick={() => mint.mutate()} disabled={mint.isPending}
+          style={btn({ color: C.steel, borderColor: C.steel, fontSize: 10.5, padding: "4px 10px", marginBottom: 8 })}>
+          {mint.isPending ? "…" : "create a key for this machine"}
+        </button>
+      )}
+      {mint.isError && <div style={{ color: C.red }}>{(mint.error as Error).message}</div>}
+      {(mine.data ?? []).map((k) => (
+        <div key={k.key_id} className="flex gap-3 items-center" style={{ fontSize: 11, marginTop: 4 }}>
+          <span style={{ color: C.text }}>{k.key_id}</span>
+          <span style={{ color: C.dim }}>{k.created_ts.slice(0, 10)}</span>
+          <button onClick={() => revoke.mutate(k.key_id)} style={{ background: "none", border: "none", padding: 0,
+            cursor: "pointer", fontFamily: MONO, fontSize: 11, color: C.steel }}>revoke</button>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 /** API keys, minted for what they are for, with the lines to put them to use. */
 function AgentKeys({ journey, menuAll }: { journey: Journey | null; menuAll: boolean }) {
   const qc = useQueryClient();
@@ -1021,9 +1064,9 @@ function AgentKeys({ journey, menuAll }: { journey: Journey | null; menuAll: boo
     );
   }
   if (!on) {
-    return (
+    return authStatus.data?.authenticated ? <MyKeys /> : (
       <div style={{ fontFamily: MONO, fontSize: 11.5, color: C.mut }}>
-        Keys are made by an admin of the workspace. Ask yours, or sign in as one.
+        Sign in to make a key for your machine.
       </div>
     );
   }

@@ -567,6 +567,9 @@ api_keys = Table(
     # plane then refuses to let that key speak for any other node. NULL = an
     # unbound fleet-wide operator key, the pre-0008 behaviour.
     Column("node_id", String(128), nullable=True),
+    # The person who minted it for themselves (POST /v1/keys/mine, migration
+    # 0030): they may list and revoke it. NULL = an operator-minted key.
+    Column("created_by", String(64), nullable=True),
 )
 
 
@@ -2107,14 +2110,14 @@ class Store:
     async def create_api_key(
         self, key_id: str, hashed_secret: str, scopes: list[str],
         label: str, ts: str, org: str | None = None,
-        node_id: str | None = None,
+        node_id: str | None = None, created_by: str | None = None,
     ) -> None:
         async with self.engine.begin() as conn:
             await conn.execute(insert(api_keys).values(
                 key_id=key_id, hashed_secret=hashed_secret,
                 scopes=",".join(scopes), label=label, created_ts=ts,
                 org_id=org if org is not None else current_org_id(),
-                node_id=node_id,
+                node_id=node_id, created_by=created_by,
             ))
 
     async def get_api_key(self, key_id: str) -> dict[str, Any] | None:
@@ -2134,25 +2137,27 @@ class Store:
             "org_id": row.org_id, "node_id": row.node_id,
         }
 
-    async def list_api_keys(self) -> list[dict[str, Any]]:
+    async def list_api_keys(self, created_by: str | None = None) -> list[dict[str, Any]]:
+        """The org's keys; with ``created_by``, only the ones that person minted."""
+        q = select(api_keys).where(api_keys.c.org_id == current_org_id())
+        if created_by is not None:
+            q = q.where(api_keys.c.created_by == created_by)
         async with self.engine.connect() as conn:
-            rows = (await conn.execute(
-                select(api_keys).where(api_keys.c.org_id == current_org_id())
-            )).all()
+            rows = (await conn.execute(q)).all()
         return [
             {"key_id": r.key_id, "scopes": [s for s in r.scopes.split(",") if s],
-             "label": r.label, "created_ts": r.created_ts, "node_id": r.node_id}
+             "label": r.label, "created_ts": r.created_ts, "node_id": r.node_id,
+             "created_by": r.created_by}
             for r in rows
         ]
 
-    async def delete_api_key(self, key_id: str) -> bool:
+    async def delete_api_key(self, key_id: str, created_by: str | None = None) -> bool:
+        """Revoke a key; with ``created_by``, only if that person minted it."""
+        cond = [api_keys.c.key_id == key_id, api_keys.c.org_id == current_org_id()]
+        if created_by is not None:
+            cond.append(api_keys.c.created_by == created_by)
         async with self.engine.begin() as conn:
-            result = await conn.execute(
-                delete(api_keys).where(
-                    api_keys.c.key_id == key_id,
-                    api_keys.c.org_id == current_org_id(),
-                )
-            )
+            result = await conn.execute(delete(api_keys).where(*cond))
         return bool(result.rowcount)
 
     # ── pins (regression corpus, decision 11) ─────────────────────────────────

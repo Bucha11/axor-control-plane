@@ -128,6 +128,29 @@ test.describe("settings", () => {
     await expect(page.getByTestId("keys-open")).toContainText("axor-wrap connect http");
   });
 
+  test("a member makes a key for their own machine — not only the owner", async ({ page }) => {
+    await page.route("**/v1/auth/status", (r) => r.fulfill({ status: 200, contentType: "application/json",
+      body: JSON.stringify({ auth_enabled: true, authenticated: true, scopes: ["read", "ingest"] }) }));
+    let made = false;
+    await page.route("**/v1/keys/mine", (r) => {
+      if (r.request().method() === "POST") {
+        made = true;
+        return r.fulfill({ status: 201, contentType: "application/json",
+          body: JSON.stringify({ key_id: "k_dev2", secret: "ak_dev2secret", scopes: ["ingest"], node_id: null }) });
+      }
+      return r.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(made
+        ? [{ key_id: "k_dev2", label: "dev2@acme.io · coding agents", created_ts: "2026-11-21T18:00:00Z", scopes: ["ingest"] }]
+        : []) });
+    });
+    await goHash(page, "settings?tab=connect");
+    const mine = page.getByTestId("my-keys");
+    await expect(mine).toContainText("A key for your machine");
+    await page.getByTestId("my-key-create").click();
+    await expect(page.getByTestId("my-key-connect")).toContainText("axor-wrap connect http");
+    await expect(page.getByTestId("my-key-connect")).toContainText("--key ak_dev2secret");
+    await expect(mine).toContainText("k_dev2");
+  });
+
   test("production sees how the plane is protected, wall by wall", async ({ page }) => {
     await goHash(page, "settings?tab=security");
     const posture = page.getByTestId("security-posture");
