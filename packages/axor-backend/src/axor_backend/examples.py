@@ -22,7 +22,10 @@ def is_example_node(node_id: str) -> bool:
 async def hidden_examples(store: object) -> set[str]:
     """The examples to leave out: those loaded before the workspace's own agents
     last reported. Work that starts (or resumes) moves the examples aside; an
-    example asked for after that shows until the agents report again."""
+    example asked for after that shows until the agents report again.
+
+    An example is as fresh as the last time it was loaded: its reported row, or
+    its newest run — the adapter examples are runs only and never report."""
     reported = await store.all_reported()  # type: ignore[attr-defined]
     nodes = await store.list_nodes()  # type: ignore[attr-defined]
     real = [str((reported.get(n) or {}).get("updated_ts") or "") for n in nodes
@@ -30,8 +33,13 @@ async def hidden_examples(store: object) -> set[str]:
     latest = max(real, default="")
     if not latest:
         return set()
-    return {n for n in nodes if is_example_node(n)
-            and str((reported.get(n) or {}).get("updated_ts") or "") < latest}
+    loaded: dict[str, str] = {n: str((reported.get(n) or {}).get("updated_ts") or "")
+                              for n in nodes if is_example_node(n)}
+    for run in await store.list_runs():  # type: ignore[attr-defined]
+        node = str(run.get("node_id") or "")
+        if is_example_node(node):
+            loaded[node] = max(loaded.get(node, ""), str(run.get("created_ts") or ""))
+    return {n for n, ts in loaded.items() if ts < latest}
 
 
 async def without_examples(store: object, rows: list[dict], key: str = "node_id") -> list[dict]:
