@@ -57,6 +57,24 @@ jobs:
        startsWith(github.event.workflow_run.head_branch, 'v'))
     environment: production
     steps:
+      # Without these the job used to reach `ssh` with an empty host and fail
+      # on ssh's usage text — which says nothing about what is missing.
+      - name: Check the deploy secrets
+        env:
+          HOST: ${{ secrets.DEPLOY_HOST }}
+          USER: ${{ secrets.DEPLOY_USER }}
+          KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+        run: |
+          missing=""
+          [ -n "$HOST" ] || missing="$missing DEPLOY_HOST"
+          [ -n "$USER" ] || missing="$missing DEPLOY_USER"
+          [ -n "$KEY" ] || missing="$missing DEPLOY_SSH_KEY"
+          [ -n "$KNOWN_HOSTS" ] || missing="$missing DEPLOY_KNOWN_HOSTS"
+          if [ -n "$missing" ]; then
+            echo "::error::Deploy secrets not set:$missing. Add them under Settings → Secrets and variables → Actions (repository secrets, or secrets of the 'production' environment), then re-run this workflow."
+            exit 1
+          fi
       - name: Configure SSH
         env:
           KEY: ${{ secrets.DEPLOY_SSH_KEY }}
