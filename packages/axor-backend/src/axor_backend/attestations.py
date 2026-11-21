@@ -63,8 +63,15 @@ def record_from_fact(fact: dict[str, Any], ref: str = "") -> AttestationRecord:
 
     ``prior_heat`` is 0.0 and ``org`` empty on purpose: the plane has no heat to
     discharge, and its keyring is one operator keyset per deployment, so
-    Sentinel's cross-keyset revocation check is the documented no-op rather than
-    a second, invented notion of who may revoke.
+    Sentinel's cross-keyset revocation check is the documented no-op (both
+    sides empty, so equal) rather than a second, invented notion of who may
+    revoke.
+
+    ``resource_id`` is the run: the scope is ``(run_id, causal_root)`` and the
+    run is the resource the branch lives in. Sentinel 0.4.2 requires one — a
+    record without it was keyed under "" and covered nothing. An attestation
+    that vouches for nothing is a note on the node, so its resource is the node
+    (``plane.py`` refuses one that vouches for something without a run).
     """
     return AttestationRecord(
         attestation_id=str(fact.get("fact_id") or ""),
@@ -73,6 +80,7 @@ def record_from_fact(fact: dict[str, Any], ref: str = "") -> AttestationRecord:
         causal_root=ref or str(fact.get("causal_root") or ""),
         prior_heat=0.0,
         revokes=str(fact["revokes"]) if fact.get("revokes") else None,
+        resource_id=str(fact.get("run_id") or "node"),
     )
 
 

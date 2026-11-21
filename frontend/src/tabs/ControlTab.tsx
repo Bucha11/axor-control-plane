@@ -372,6 +372,13 @@ function ControlBody({ focusNode, testBench }: { focusNode?: string; testBench: 
     // nodes connected yet" while it held the whole tree.
     enabled: lens === "graph" || list.length === 0,
   });
+  // the topology draws every node that traced here — a skill's dry run too,
+  // which is not an agent to operate (see `everyone` above)
+  const topoData = topo.data && {
+    ...topo.data,
+    nodes: topo.data.nodes.filter((n) => !n.node_id.startsWith("skill-try.")),
+    edges: topo.data.edges.filter((e) => !e.from.startsWith("skill-try.") && !e.to.startsWith("skill-try.")),
+  };
   const [more, setMore] = useState(false);
   const [cmdError, setCmdError] = useState<string | null>(null);
   const [filter, setFilter] = useState<Status | "all">("all");
@@ -431,7 +438,7 @@ function ControlBody({ focusNode, testBench }: { focusNode?: string; testBench: 
     );
   }
 
-  const traced = topo.data?.nodes ?? [];
+  const traced = topoData?.nodes ?? [];
   if (list.length === 0 && otherSide > 0) {
     return (
       <div style={{ maxWidth: 640, margin: "0 auto" }} data-testid="agents-other-side">
@@ -466,10 +473,10 @@ function ControlBody({ focusNode, testBench }: { focusNode?: string; testBench: 
         </div>
         <ExampleFleet />
         <SpawnGoverned switchToAdapter />
-        {topo.data && traced.length > 0 && (
+        {topoData && traced.length > 0 && (
           <div className="mt-4">
             <TopologyGraph
-              payload={topo.data}
+              payload={topoData}
               selected={sel}
               onSelect={(id) => setSel(sel === id ? null : id)}
             />
@@ -480,7 +487,7 @@ function ControlBody({ focusNode, testBench }: { focusNode?: string; testBench: 
           // no controls, instead of a click that visibly does nothing.
           const picked = traced.find((n) => n.node_id === sel);
           if (!picked) return null;
-          const edges = topo.data?.edges ?? [];
+          const edges = topoData?.edges ?? [];
           const out = edges.filter((e) => e.from === picked.node_id);
           const denied = out.reduce((n, e) => n + e.denied, 0);
           return (
@@ -607,20 +614,20 @@ function ControlBody({ focusNode, testBench }: { focusNode?: string; testBench: 
         </span>
       </div>
 
-      {lens === "graph" && topo.data && (
+      {lens === "graph" && topoData && (
         <TopologyGraph
-          payload={topo.data}
+          payload={topoData}
           selected={sel}
           onSelect={(id) => { setSel(sel === id ? null : id); setMore(false); setCmdError(null); }}
         />
       )}
-      {lens === "graph" && topo.data && sel &&
-        topo.data.nodes.find((n) => n.node_id === sel)?.kind === "peer" && (
-        <PeerCard node={topo.data.nodes.find((n) => n.node_id === sel)!} />
+      {lens === "graph" && topoData && sel &&
+        topoData.nodes.find((n) => n.node_id === sel)?.kind === "peer" && (
+        <PeerCard node={topoData.nodes.find((n) => n.node_id === sel)!} />
       )}
       {/* a traced node that does not report has no panel: its reputation
           stays here, by the graph */}
-      {sel && !node && topo.data?.nodes.find((n) => n.node_id === sel)?.kind !== "peer" && (
+      {sel && !node && topoData?.nodes.find((n) => n.node_id === sel)?.kind !== "peer" && (
         <ReputationCard nodeId={sel} />
       )}
 
@@ -1511,6 +1518,8 @@ function ActivityFeed({ only }: { only?: Set<string> }) {
   const [find, setFind] = useState("");
   const events = (feed.data?.events ?? []).filter((e) => {
     if (ent.data?.locked[e.node_id] || ent.data?.locked_trees[e.node_id]) return false;
+    // a skill's dry run is shown on Try a skill, not among the agents' work
+    if (e.node_id.startsWith("skill-try.")) return false;
     if (only && !only.has(e.node_id)) return false;
     if (!find) return true;
     const t = `${e.node_id} ${feedLine(e).text}`.toLowerCase();

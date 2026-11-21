@@ -33,13 +33,13 @@ async def test_proxy_run_uploads_and_becomes_a_shareable_evidencecase(
     # 3. The EvidenceCase can leave the product — a revocable share link…
     token = (await http.post(f"/v1/runs/{run_id}/cases/0/share")).json()["token"]
     page = await http.get(f"/v1/share/{token}")
-    assert page.status_code == 200 and "EvidenceCase" in page.text
+    assert page.status_code == 200 and "caught by Axor" in page.text
     assert (await http.delete(f"/v1/share/{token}")).status_code == 200
     assert (await http.get(f"/v1/share/{token}")).status_code == 404  # revoked
 
     # 4. …and an HTML + PDF receipt.
     html = await http.get(f"/v1/runs/{run_id}/cases/0/export")
-    assert html.status_code == 200 and "EvidenceCase" in html.text
+    assert html.status_code == 200 and "caught by Axor" in html.text
     pdf = await http.get(f"/v1/runs/{run_id}/cases/0/export", params={"format": "pdf"})
     assert pdf.status_code == 200
     assert pdf.content.startswith(b"%PDF-1.4") and pdf.content.rstrip().endswith(b"%%EOF")
@@ -72,9 +72,12 @@ async def test_seeded_corpus_drives_replay_graph_and_regression(
                         params={"focus": "v_mail", "k": 3})).json()
     assert {"src": "v_mail", "dst": "v_sum"} in g["edges"]
 
-    # Two-sided regression: golden is safe; breaking the legit flow is not.
+    # Two-sided regression: golden holds both pins; breaking the legit flow
+    # regresses. Not `safe_to_ship` itself: demo pins alone never make it true
+    # (corpus.py), and whether this server holds pins of its own depends on
+    # which e2e tests ran before this one.
     good = (await http.post("/v1/regression", json={"config": cfg})).json()
-    assert good["safe_to_ship"] is True
+    assert good["regressed"] == 0 and good["escaped"] == 0
     broken = dict(cfg, allowed_tools=[t for t in cfg["allowed_tools"] if t != "notes_write"])
     bad = (await http.post("/v1/regression", json={"config": broken})).json()
     assert bad["safe_to_ship"] is False
