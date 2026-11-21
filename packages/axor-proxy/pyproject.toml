@@ -29,15 +29,18 @@ dependencies = [
   # changes are STRICT-only and this proxy compiles no STRICT governor. 111
   # tests pass against an installed 0.12.0; the only failure was
   # tests/test_core_compatibility.py refusing the version it ran on.
-  "axor-core>=0.10,<0.13",
+  # 0.13: ceiling only again (a replay fix, a ledger fix, a new integrity signal).
+  "axor-core>=0.10,<0.14",
   # 0.2 moves with the backend's `wrap` extra: same library, same protocol
   # v0.3 snapshot verification, and a workspace that pinned the two apart would
   # be the conflict this repository just spent a commit removing.
-  "axor-wrap[plane]>=0.2,<0.3",
+  # <0.4: 0.3 changes nothing the proxy uses, and the backend's `wrap` extra
+  # needs it.
+  "axor-wrap[plane]>=0.2,<0.4",
   # 0.2 carries `audit.from_trace`: this proxy reads its cases off the trace it
   # recorded, with the same derivation the control plane runs over the uploaded
   # run, instead of calling the audit layers from its own run state.
-  "axor-eval>=0.2,<0.3",
+  "axor-eval>=0.2,<0.4",
   "httpx>=0.27",
   # Sealed boxes (X25519 + XSalsa20-Poly1305) for envelope-mode credentials:
   # the node opens what the plane stores and cannot. `cryptography`, which

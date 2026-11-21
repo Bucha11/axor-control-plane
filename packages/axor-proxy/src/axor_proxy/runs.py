@@ -53,7 +53,19 @@ def build_governor(manifests: list[dict[str, Any]], node_id: str) -> object:
     from axor_core.governor import ToolCallGovernor
     from axor_wrap.compile import governor_kwargs
 
-    return ToolCallGovernor(**governor_kwargs(manifests), node_id=node_id)
+    kwargs = governor_kwargs(manifests)
+    # integrity_default="clean", explicitly. axor-core 0.13 defaults to context
+    # integrity: after an untrusted read, a value the agent writes is untrusted
+    # unless it comes from the user's task or the operator's allowlist. A proxy
+    # sees the agent's tool calls, never the user's prompt, so it cannot register
+    # the task — and every send after the first untrusted read would be refused.
+    # Until the proxy can learn the task, it keeps the legacy default: a value is
+    # refused when it carries text from an untrusted answer. An allowlist in the
+    # manifests still decides destinations whatever this setting.
+    try:
+        return ToolCallGovernor(**kwargs, node_id=node_id, integrity_default="clean")
+    except TypeError:  # a kernel from before integrity defaults: clean already
+        return ToolCallGovernor(**kwargs, node_id=node_id)
 
 
 @dataclass(frozen=True)
