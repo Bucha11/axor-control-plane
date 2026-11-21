@@ -158,16 +158,7 @@ export default function CodingOnboarding({ then }: { then?: () => void }) {
       <Block id="install" copied={copied} onCopy={copy} text="uv tool install 'axor-wrap[plane]'" />
       <div style={hint}>no uv? <span style={{ color: C.mut }}>pipx install 'axor-wrap[plane]'</span></div>
 
-      {step(3, "IN EACH REPOSITORY")}
-      <Block id="repo" copied={copied} onCopy={copy}
-        text={agents.map((a) => `axor-wrap agents install ${a}`).join("\n") || "# pick an agent above"} />
-      {agents.map((a) => (
-        <div key={a} style={hint}>
-          {AGENTS.find((x) => x.id === a)!.label}: {AGENTS.find((x) => x.id === a)!.note}
-        </div>
-      ))}
-
-      {step(4, "CONNECT THIS MACHINE — ONCE")}
+      {step(3, "CONNECT THIS MACHINE — ONCE")}
       {needsKey && authOn && !signedIn ? (
         <div data-testid="coding-signin" style={{ border: `1px solid ${C.line}`, borderRadius: 8, padding: 14 }}>
           <div style={{ fontFamily: MONO, fontSize: 11, color: C.mut, lineHeight: 1.6, marginBottom: 10 }}>
@@ -196,6 +187,15 @@ export default function CodingOnboarding({ then }: { then?: () => void }) {
           )}
         </>
       )}
+
+      {step(4, "IN EACH REPOSITORY")}
+      <Block id="repo" copied={copied} onCopy={copy}
+        text={agents.map((a) => `axor-wrap agents install ${a}`).join("\n") || "# pick an agent above"} />
+      {agents.map((a) => (
+        <div key={a} style={hint}>
+          {AGENTS.find((x) => x.id === a)!.label}: {AGENTS.find((x) => x.id === a)!.note}
+        </div>
+      ))}
 
       {step(5, "START A SESSION")}
       <div data-testid="coding-sessions" className="p-3" style={{ background: C.panel, border: `1px solid ${sessions.length ? C.green : C.line}`, borderRadius: 8, fontFamily: MONO, fontSize: 11.5 }}>
