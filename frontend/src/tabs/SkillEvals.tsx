@@ -7,13 +7,12 @@
 // agent opened it at all, and its token cost; per arm, solved and spend.
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Check, ChevronDown, ChevronRight, Copy, Loader2 } from "lucide-react";
+import { ChevronDown, ChevronRight, Loader2 } from "lucide-react";
 import { api, SkillEval, SkillEvalArm, SkillEvalCompare, SkillEvalSkill, SkillEvalTask } from "../api";
 import { navigate } from "../router";
 import { C, MONO, btn } from "../theme";
 import { SkillSwitch, SkillsOffPanel, TeamSkillsPanel, TeamSwitch } from "../components/SkillsOff";
-
-const PLANE_URL = typeof window === "undefined" ? "" : window.location.origin;
+import { HowItWorks, MachineCommand } from "../components/MachineCommand";
 
 const label: React.CSSProperties = {
   fontFamily: MONO, fontSize: 10.5, color: C.dim, letterSpacing: "0.1em", marginBottom: 8,
@@ -65,11 +64,13 @@ function EvalList() {
   return (
     <>
       <h1 style={{ fontSize: 22, fontWeight: 650, margin: "0 0 6px" }}>Skill evals</h1>
-      <div style={{ fontSize: 14, color: C.mut, lineHeight: 1.6, marginBottom: 22 }}>
-        Which of your skills help, and what they cost. Your agent runs the same tasks with no skill,
-        with all of them, with each one alone and with all but one; a task counts as solved when its
-        tests pass — not when the agent says so. Per skill: what it does alone, what it adds on top of
-        the others, whether the agent opened it, and its tokens.
+      <div style={{ fontSize: 14, color: C.mut, lineHeight: 1.5, marginBottom: 22 }}>
+        Which skills help, and what they cost.
+        <HowItWorks>
+          <li>Your agent runs the same tasks with no skill, with all, with each alone, and with all but one.</li>
+          <li>Solved means the task's tests pass — not that the agent says so.</li>
+          <li>Per skill: what it does alone, what it adds to the others, whether the agent opened it, tokens.</li>
+        </HowItWorks>
       </div>
 
       {rows.length > 0 && (
@@ -122,13 +123,7 @@ function short(v: string): string {
 }
 
 function HowToRun() {
-  const [copied, setCopied] = useState(false);
-  const cmd = [
-    "pip install --upgrade axor-eval",
-    `export AXOR_PLANE_URL=${PLANE_URL}`,
-    "export AXOR_INGEST_KEY=<your key — the same one your coding agents use>",
-    "python -m axor_eval.skills run skill-eval.json --plane",
-  ].join("\n");
+  const cmd = "pip install --upgrade axor-eval\npython -m axor_eval.skills run skill-eval.json --plane";
   const spec = `{
   "skills": ["./skills/changelog-entries", "./skills/test-first"],
   "repo": "./fixture-repo",
@@ -140,28 +135,14 @@ function HowToRun() {
   return (
     <section>
       <div style={label}>RUN ONE</div>
-      <div style={{ fontSize: 13.5, color: C.mut, lineHeight: 1.6, marginBottom: 10 }}>
-        On your machine, with Claude Code or Codex logged in. Describe the skills, a repository to start
-        from, and tasks with a check command (exit 0 = solved); the report shows up here.
+      <div style={{ fontSize: 13.5, color: C.mut, lineHeight: 1.5, marginBottom: 10 }}>
+        On your machine: the skills, a repository, and tasks with a check command.
       </div>
-      <div className="flex gap-3 flex-wrap">
-        <div style={{ position: "relative", flex: "1 1 340px" }}>
-          <pre data-testid="skill-eval-cmd" style={{ background: C.panel2, border: `1px solid ${C.line}`, borderRadius: 6,
-            padding: "10px 12px", fontFamily: MONO, fontSize: 11.5, color: C.text, margin: 0, whiteSpace: "pre-wrap" }}>{cmd}</pre>
-          <button aria-label="copy" onClick={() => { void navigator.clipboard?.writeText(cmd); setCopied(true); setTimeout(() => setCopied(false), 1500); }}
-            style={{ position: "absolute", top: 8, right: 8, background: "none", border: "none", color: C.dim, cursor: "pointer" }}>
-            {copied ? <Check size={12} /> : <Copy size={12} />}
-          </button>
-        </div>
-        <pre style={{ flex: "1 1 300px", background: C.panel2, border: `1px solid ${C.line}`, borderRadius: 6,
-          padding: "10px 12px", fontFamily: MONO, fontSize: 11, color: C.mut, margin: 0, whiteSpace: "pre-wrap" }}>
-          <span style={{ color: C.dim }}>skill-eval.json{"\n"}</span>{spec}
-        </pre>
-      </div>
-      <div style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim, marginTop: 6, lineHeight: 1.6 }}>
-        arms: no skill, all, each alone, all but one — {"tasks × arms × trials"} agent runs, printed before it
-        starts · --trials, --agent codex, --model, --md report.md
-      </div>
+      <MachineCommand testId="skill-eval-cmd" cmd={cmd} />
+      <pre style={{ background: C.panel2, border: `1px solid ${C.line}`, borderRadius: 6, marginTop: 10,
+        padding: "10px 12px", fontFamily: MONO, fontSize: 11, color: C.mut, whiteSpace: "pre-wrap" }}>
+        <span style={{ color: C.dim }}>skill-eval.json{"\n"}</span>{spec}
+      </pre>
     </section>
   );
 }

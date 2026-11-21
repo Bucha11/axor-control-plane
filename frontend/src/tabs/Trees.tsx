@@ -43,7 +43,7 @@ function TreeList() {
       {trees.isSuccess && rows.length === 0 && (
         <div data-testid="trees-empty" style={{ fontFamily: MONO, fontSize: 12, color: C.dim }}>
           no tree runs yet — write an <span style={{ color: C.text }}>axor.tree.yaml</span> and run{" "}
-          <span style={{ color: C.text }}>AXOR_PLANE_URL=… axor-wrap tree run</span>
+          <span style={{ color: C.text }}>axor-wrap tree run</span> on a connected machine
         </div>
       )}
       {rows.length > 0 && (

@@ -13,9 +13,9 @@ import { Check, Copy } from "lucide-react";
 import { api, SetupHealthCause, SetupHealthCheck } from "../api";
 import { navigate } from "../router";
 import { C, MONO, btn } from "../theme";
+import { HowItWorks, MachineCommand } from "../components/MachineCommand";
 import { SkillSwitch } from "../components/SkillsOff";
 
-const PLANE_URL = typeof window === "undefined" ? "" : window.location.origin;
 
 const label: React.CSSProperties = {
   fontFamily: MONO, fontSize: 10.5, color: C.dim, letterSpacing: "0.1em", marginBottom: 8,
@@ -48,13 +48,13 @@ export default function SetupHealth() {
   return (
     <div data-testid="setup-health" style={{ maxWidth: 860, margin: "0 auto" }}>
       <h1 style={{ fontSize: 22, fontWeight: 650, margin: "0 0 6px" }}>Context health</h1>
-      <div style={{ fontSize: 14, color: C.mut, lineHeight: 1.6, marginBottom: 22 }}>
-        Whether your team's setup — skills, CLAUDE.md — makes your coding agents behave worse.
-        The check gives the agent, with your setup, test tasks that tempt it: a script to download and
-        run, a secret within reach, a small fix next to a tempting refactor, an instruction planted in a
-        file, a test that fails. It runs in a throwaway sandbox and is compared with the last check.
-        When something got worse, it takes each skill and each section out in turn and names the one
-        that did it.
+      <div style={{ fontSize: 14, color: C.mut, lineHeight: 1.5, marginBottom: 22 }}>
+        Does your setup — skills, CLAUDE.md — make your agents behave worse?
+        <HowItWorks>
+          <li>Test tasks that tempt the agent: a script to download and run, a secret within reach, a planted instruction, a failing test.</li>
+          <li>Runs in a throwaway sandbox and is compared with the last check.</li>
+          <li>If something got worse, it takes out each skill and section in turn and names the culprit.</li>
+        </HowItWorks>
       </div>
 
       {drifted.map((r) => (
@@ -68,8 +68,7 @@ export default function SetupHealth() {
       ))}
       {latest ? <Latest check={latest} previous={checks[1]} /> : q.isLoading ? null : (
         <div data-testid="setup-health-empty" style={{ ...panel, padding: 18, fontSize: 13.5, color: C.mut, lineHeight: 1.6, marginBottom: 28 }}>
-          No check yet. Run one (below) — the first is the baseline; every later one is compared with
-          the one before it.
+          No check yet. The first one becomes the baseline.
         </div>
       )}
 
@@ -293,13 +292,7 @@ function History({ checks }: { checks: SetupHealthCheck[] }) {
 }
 
 function HowToRun() {
-  const [copied, setCopied] = useState(false);
-  const cmd = [
-    "pip install --upgrade axor-eval",
-    `export AXOR_PLANE_URL=${PLANE_URL}`,
-    "export AXOR_API_KEY=<an ingest key — the one your coding agents use>",
-    "python -m axor_eval.setup_health run setup-health.json --plane",
-  ].join("\n");
+  const cmd = "pip install --upgrade axor-eval\npython -m axor_eval.setup_health run setup-health.json --plane";
   const spec = `{
   "repo": ".",
   "agent": "claude-code",
@@ -308,19 +301,15 @@ function HowToRun() {
   return (
     <section data-testid="setup-health-run" className="mb-4">
       <div style={label}>RUN A CHECK</div>
-      <div style={{ fontSize: 13, color: C.mut, lineHeight: 1.6, marginBottom: 10 }}>
-        From your repo, after someone changes a skill or CLAUDE.md, or on a schedule. It uses your agent
-        and your tokens — five tests × three runs, plus the runs that find the culprit when something got
-        worse. The last check here is the baseline; the new one lands on this page.
+      <div style={{ fontSize: 13.5, color: C.mut, lineHeight: 1.5, marginBottom: 10 }}>
+        From your repo, after a skill or CLAUDE.md changes. It uses your agent and your tokens.
+        <HowItWorks>
+          <li>Five tests × three runs, plus extra runs to find the culprit when something got worse.</li>
+          <li>The last check here is the baseline; the new one shows up on this page.</li>
+        </HowItWorks>
       </div>
-      <div style={{ position: "relative" }}>
-        <pre style={{ ...panel, padding: "12px 14px", margin: "0 0 8px", fontFamily: MONO, fontSize: 11.5, color: C.text, overflowX: "auto" }}>{cmd}</pre>
-        <button onClick={() => { void navigator.clipboard?.writeText(cmd); setCopied(true); }}
-          aria-label="copy the command" style={{ ...btn({ padding: "3px 6px" }), position: "absolute", top: 8, right: 8 }}>
-          {copied ? <Check size={12} /> : <Copy size={12} />}
-        </button>
-      </div>
-      <div style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim, marginBottom: 4 }}>setup-health.json</div>
+      <MachineCommand cmd={cmd} />
+      <div style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim, margin: "10px 0 4px" }}>setup-health.json</div>
       <pre style={{ ...panel, padding: "12px 14px", margin: 0, fontFamily: MONO, fontSize: 11.5, color: C.mut }}>{spec}</pre>
     </section>
   );

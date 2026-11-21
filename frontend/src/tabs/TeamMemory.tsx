@@ -12,6 +12,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, MemoryChange, MemoryItem, MemoryRepo } from "../api";
 import { navigate } from "../router";
 import { C, MONO, btn } from "../theme";
+import { HowItWorks } from "../components/MachineCommand";
 
 const label: React.CSSProperties = {
   fontFamily: MONO, fontSize: 10.5, color: C.dim, letterSpacing: "0.1em", marginBottom: 8,
@@ -51,14 +52,12 @@ export default function TeamMemory() {
   return (
     <div data-testid="team-memory" style={{ maxWidth: 860, margin: "0 auto" }}>
       <h1 style={{ fontSize: 22, fontWeight: 650, margin: "0 0 6px" }}>Team memory</h1>
-      <div style={{ fontSize: 14, color: C.mut, lineHeight: 1.6, marginBottom: 22 }}>
-        What your team's coding agents verifiably learned in each repository — how to run the tests,
-        which command fails here and which works — given to every agent at the start of its next session
-        there. Only what the sidecars recorded counts: a command that passed, never what an agent said it
-        learned. A command that came from a web page, one that sends, deletes or holds a secret, or one
-        that turns a check green without fixing anything (<code style={{ fontFamily: MONO, fontSize: 12.5 }}>jest -u</code>,{" "}
-        <code style={{ fontFamily: MONO, fontSize: 12.5 }}>|| true</code>,{" "}
-        <code style={{ fontFamily: MONO, fontSize: 12.5 }}>-k "not …"</code>) is never handed on.
+      <div style={{ fontSize: 14, color: C.mut, lineHeight: 1.5, marginBottom: 22 }}>
+        What your agents learned in each repo, given to every agent next session.
+        <HowItWorks>
+          <li>Only commands that actually passed — never what an agent claims it learned.</li>
+          <li>Never handed on: commands from a web page, ones that send, delete or touch secrets, and ones that fake a green check (<code style={{ fontFamily: MONO, fontSize: 12 }}>jest -u</code>, <code style={{ fontFamily: MONO, fontSize: 12 }}>|| true</code>).</li>
+        </HowItWorks>
       </div>
 
       {repos.length > 1 && (
@@ -88,8 +87,7 @@ export default function TeamMemory() {
         </div>
       )}
       <div className="mt-6" style={{ fontSize: 12, color: C.dim, lineHeight: 1.6 }}>
-        Agents get it through the axor hooks: Claude Code at session start, Codex with its first prompt.
-        <span style={{ fontFamily: MONO }}> AXOR_TEAM_MEMORY=0</span> keeps it out of one machine's agents.
+        Agents get it when a session starts.
       </div>
     </div>
   );

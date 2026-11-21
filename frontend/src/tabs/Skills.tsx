@@ -10,13 +10,12 @@
 // try`, a session on a copy with Axor enforcing as in real work).
 import { useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Check, ChevronDown, ChevronRight, Circle, Copy, Loader2, Play, Upload } from "lucide-react";
+import { ChevronDown, ChevronRight, Circle, Loader2, Play, Upload } from "lucide-react";
 import { api, KernelEvent, SkillReport } from "../api";
 import { navigate } from "../router";
 import { C, MONO, btn } from "../theme";
 import { SkillsOffPanel } from "../components/SkillsOff";
-
-const PLANE_URL = typeof window === "undefined" ? "" : window.location.origin;
+import { HowItWorks, MachineCommand } from "../components/MachineCommand";
 const TRY_PREFIX = "skill-try.";
 
 // An example skill to check without having one at hand: what a helpful-looking
@@ -83,19 +82,20 @@ export default function Skills() {
   return (
     <div style={{ maxWidth: 680, margin: "0 auto" }}>
       <h1 style={{ fontSize: 22, fontWeight: 650, margin: "0 0 6px" }}>Try a skill</h1>
-      <div style={{ fontSize: 14, color: C.mut, lineHeight: 1.6, marginBottom: 24 }}>
-        Claude Code and Codex read a skill as their own instructions. Axor refuses the dangerous
-        part whoever asked — a download that is run, a secret read, a file sent out, a force push —
-        but not everything a skill can ask is dangerous on its face, and what a script it ships does
-        inside is not seen. So look before you install: what it asks the agent to do, then what an
-        agent actually does with it.
+      <div style={{ fontSize: 14, color: C.mut, lineHeight: 1.5, marginBottom: 24 }}>
+        Look before you install: what a skill asks, then what an agent does with it.
+        <HowItWorks>
+          <li>Your agent follows a skill as its own instructions.</li>
+          <li>Axor refuses the dangerous part anyway: running a download, reading secrets, sending files out, force-pushing.</li>
+          <li>The rest is up to you — and what a script inside it does isn't visible.</li>
+        </HowItWorks>
       </div>
       <CheckSkill />
       <RunSkill />
       <DryRuns />
       <div className="mt-8"><SkillsOffPanel /></div>
       <div data-testid="skills-to-evals" className="mt-8" style={{ fontFamily: MONO, fontSize: 11.5, color: C.mut }}>
-        safe is one question; whether it helps — and what it costs in tokens — is another:{" "}
+        does it actually help?{" "}
         <button onClick={() => navigate("skill-evals")} style={link}>Skill evals →</button>
       </div>
     </div>
@@ -166,8 +166,7 @@ function CheckReport({ report }: { report: SkillReport }) {
           : <><span style={{ color: C.green }}>{name}:</span> nothing here downloads and runs code, reads secrets or sends anything out</>}
       </div>
       <div style={{ fontFamily: MONO, fontSize: 11.5, color: C.dim, marginBottom: 12, lineHeight: 1.6 }}>
-        <span style={{ color: C.green }}>Refused</span> is what Axor stops in every session, whoever asked.
-        The rest runs if the agent follows the skill — including whatever a script it ships does inside.
+        <span style={{ color: C.green }}>refused</span> — Axor stops it every time · the rest runs if the agent follows the skill
       </div>
       <div style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 8 }}>
         {report.findings.filter((f) => more || f.severity !== "info").map((f, i) => (
@@ -211,22 +210,12 @@ function CheckReport({ report }: { report: SkillReport }) {
 
 function RunSkill() {
   const [agent, setAgent] = useState<"claude-code" | "codex">("claude-code");
-  const [copied, setCopied] = useState(false);
-  const auth = useQuery({ queryKey: ["auth-status"], queryFn: api.authStatus, staleTime: 60_000 });
-  const needsKey = auth.data?.auth_enabled !== false;
-  const cmd = [
-    "pip install --upgrade axor-wrap",
-    `export AXOR_PLANE_URL=${PLANE_URL}`,
-    needsKey ? "export AXOR_INGEST_KEY=<your key — the same one your coding agents use>" : null,
-    `axor-wrap skill try ./my-skill${agent === "codex" ? " --agent codex" : ""}`,
-  ].filter(Boolean).join("\n");
+  const cmd = `pip install --upgrade axor-wrap\naxor-wrap skill try ./my-skill${agent === "codex" ? " --agent codex" : ""}`;
   return (
     <section className="mb-8">
       <div style={label}>2 · WHAT AN AGENT ACTUALLY DOES WITH IT</div>
-      <div style={{ fontSize: 13.5, color: C.mut, lineHeight: 1.6, marginBottom: 10 }}>
-        On your machine: {agent === "codex" ? "Codex" : "Claude Code"} uses the skill once, on a
-        copy of your repository, with Axor on as in real work — the dangerous calls are refused, not
-        just noted, and you see which and why. The copy is thrown away; the run shows up below.
+      <div style={{ fontSize: 13.5, color: C.mut, lineHeight: 1.5, marginBottom: 10 }}>
+        A dry run on a throwaway copy of your repo. Dangerous calls are refused; the run shows up below.
       </div>
       <div className="flex gap-2 mb-2">
         {(["claude-code", "codex"] as const).map((a) => (
@@ -237,18 +226,7 @@ function RunSkill() {
           }}>{a === "codex" ? "Codex" : "Claude Code"}</button>
         ))}
       </div>
-      <div style={{ position: "relative" }}>
-        <pre data-testid="skill-try-cmd" style={{ background: C.panel2, border: `1px solid ${C.line}`, borderRadius: 6,
-          padding: "10px 12px", fontFamily: MONO, fontSize: 11.5, color: C.text, margin: 0, whiteSpace: "pre-wrap" }}>{cmd}</pre>
-        <button onClick={() => { void navigator.clipboard?.writeText(cmd); setCopied(true); setTimeout(() => setCopied(false), 1500); }}
-          aria-label="copy" style={{ position: "absolute", top: 8, right: 8, background: "none", border: "none",
-            color: C.dim, cursor: "pointer" }}>
-          {copied ? <Check size={12} /> : <Copy size={12} />}
-        </button>
-      </div>
-      <div style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim, marginTop: 6 }}>
-        --task "…" asks for something specific · --keep keeps the copy to look at what it changed
-      </div>
+      <MachineCommand testId="skill-try-cmd" cmd={cmd} />
     </section>
   );
 }

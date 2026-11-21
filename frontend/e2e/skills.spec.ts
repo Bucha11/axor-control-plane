@@ -140,7 +140,11 @@ test.describe("coding agents: their menu, and trying a skill", () => {
     // the list says what it can and cannot do, and turns it back on
     await page.getByRole("button", { name: /all skill evals/ }).click();
     const panel = page.getByTestId("skills-off");
-    await expect(panel).toContainText("stay in the agent's context until the folder is removed");
+    await expect(panel).toContainText("No agent on the team can use it");
+    // the detail is one click away, not a wall of text
+    await expect(panel).not.toContainText("until the skill's folder is deleted");
+    await panel.getByText("how it works").click();
+    await expect(panel).toContainText("until the skill's folder is deleted");
     await expect(panel.getByTestId("off-row-test-first")).toContainText("0 refused attempts");
     await panel.getByTestId("off-row-test-first").getByRole("button", { name: "turn back on" }).click();
     await expect(panel.getByTestId("off-row-test-first")).toHaveCount(0);
@@ -195,7 +199,9 @@ test.describe("coding agents: their menu, and trying a skill", () => {
     await request.post("http://127.0.0.1:8400/v1/demo/seed-skill-eval");
     await goHash(page, "skill-evals");
     const panel = page.getByTestId("team-skills");
-    await expect(panel.getByTestId("team-share-cmd")).toHaveText("axor-wrap skill share ./.claude/skills/<name>");
+    await expect(panel.getByTestId("team-share-cmd")).toHaveText("axor-wrap skill share ./.claude/skills/my-skill");
+    // no environment variables on the page: the machine's connection is set once
+    await expect(page.getByText(/AXOR_[A-Z_]+/)).toHaveCount(0);
     const example = panel.getByTestId("team-skill-example");
     await page.waitForLoadState("networkidle");   // the list decides whether the example button shows
     if (await example.isVisible()) await example.click();

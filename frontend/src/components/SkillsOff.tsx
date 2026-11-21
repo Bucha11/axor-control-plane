@@ -7,6 +7,7 @@ import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, TeamSkill } from "../api";
 import { C, MONO, btn } from "../theme";
+import { HowItWorks, MachineCommand } from "./MachineCommand";
 
 export function useSkillsOff() {
   const qc = useQueryClient();
@@ -78,14 +79,14 @@ export function TeamSkillsPanel() {
       <div style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim, letterSpacing: "0.1em", marginBottom: 8 }}>
         SHARED WITH THE TEAM
       </div>
-      <div style={{ fontSize: 13, color: C.mut, lineHeight: 1.6, marginBottom: 10 }}>
-        A skill that works for one of you, for all of you. Turned on, every developer's axor sidecar
-        installs it into the agent's skills folder
-        (<span style={{ fontFamily: MONO, color: C.text }}>~/.claude/skills/&lt;name&gt;</span>,{" "}
-        <span style={{ fontFamily: MONO, color: C.text }}>~/.codex/skills/&lt;name&gt;</span>) within about
-        30 seconds or when a session starts, and keeps it at the version turned on: a new upload reaches
-        nobody until it is turned on again. Taken off the team, the copies go. A developer's own skill
-        of the same name is never overwritten. After turning one on, run a context health check.
+      <div style={{ fontSize: 13.5, color: C.mut, lineHeight: 1.5, marginBottom: 10 }}>
+        Turn a skill on — every developer's agent gets it. Take it off — it's removed.
+        <HowItWorks testId="team-skills-how">
+          <li>Arrives within 30 seconds, or when a session starts.</li>
+          <li>Stays at the version you turned on. A new upload waits until you turn it on again.</li>
+          <li>A developer's own skill with the same name is never overwritten.</li>
+          <li>After turning one on, run a context health check.</li>
+        </HowItWorks>
       </div>
       {shared.length > 0 && (
         <div className="mb-3" style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 8 }}>
@@ -120,18 +121,14 @@ export function TeamSkillsPanel() {
           ))}
         </div>
       )}
-      <div style={{ fontFamily: MONO, fontSize: 11.5, color: C.mut, lineHeight: 1.7 }}>
-        to share one: <span data-testid="team-share-cmd" style={{ color: C.text }}>axor-wrap skill share ./.claude/skills/&lt;name&gt;</span>
-        <span style={{ color: C.dim }}> (with AXOR_PLANE_URL and AXOR_INGEST_KEY set) · AXOR_TEAM_SKILLS=0 on a machine opts it out</span>
-        {!shared.length && (
-          <>
-            {" · "}
-            <button onClick={() => example.mutate()} data-testid="team-skill-example" style={{ ...link, fontSize: 11.5 }}>
-              {example.isPending ? "loading…" : "see an example →"}
-            </button>
-          </>
-        )}
-      </div>
+      <div style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim, marginBottom: 6 }}>share one</div>
+      <MachineCommand testId="team-share-cmd" cmd="axor-wrap skill share ./.claude/skills/my-skill" />
+      {!shared.length && (
+        <button onClick={() => example.mutate()} data-testid="team-skill-example"
+          style={{ ...link, fontSize: 11.5, marginTop: 8 }}>
+          {example.isPending ? "loading…" : "see an example →"}
+        </button>
+      )}
     </section>
   );
 }
@@ -175,11 +172,13 @@ export function SkillsOffPanel() {
       <div style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim, letterSpacing: "0.1em", marginBottom: 8 }}>
         TURNED OFF FOR THE TEAM
       </div>
-      <div style={{ fontSize: 13, color: C.mut, lineHeight: 1.6, marginBottom: 10 }}>
-        Every developer's agent is refused a turned-off skill — calling it, reading its files, running
-        its scripts — within about 30 seconds. Its name and description stay in the agent's context
-        until the folder is removed (<span style={{ fontFamily: MONO, color: C.text }}>.claude/skills/&lt;name&gt;</span>);
-        only agents with the axor hooks are covered.
+      <div style={{ fontSize: 13.5, color: C.mut, lineHeight: 1.5, marginBottom: 10 }}>
+        No agent on the team can use it: no calls, no reading its files.
+        <HowItWorks>
+          <li>Takes effect within 30 seconds.</li>
+          <li>The agent still sees its name until the skill's folder is deleted.</li>
+          <li>Covers agents connected to Axor.</li>
+        </HowItWorks>
       </div>
       {list.length > 0 && (
         <div className="mb-3" style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 8 }}>

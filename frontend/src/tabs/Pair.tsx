@@ -12,6 +12,7 @@ import { Check, Copy } from "lucide-react";
 import { api, PairFeed, PairNote, PairStep } from "../api";
 import { navigate } from "../router";
 import { C, MONO, btn } from "../theme";
+import { HowItWorks } from "../components/MachineCommand";
 
 const label: React.CSSProperties = {
   fontFamily: MONO, fontSize: 10.5, color: C.dim, letterSpacing: "0.1em", marginBottom: 8,
@@ -87,11 +88,13 @@ function PairHome({ node }: { node?: string }) {
   return (
     <div data-testid="pair-home" style={{ maxWidth: 860, margin: "0 auto" }}>
       <h1 style={{ fontSize: 22, fontWeight: 650, margin: "0 0 6px" }}>Pair sessions</h1>
-      <div style={{ fontSize: 14, color: C.mut, lineHeight: 1.6, marginBottom: 22 }}>
-        Pairing, for agents. Start a pair on your agent's session and send the link: whoever opens it
-        watches each step as it happens — what it ran, what failed, what it said — and can write the
-        agent a note. The note reaches the agent at its next step. Two sessions side by side, if you're
-        both driving one.
+      <div style={{ fontSize: 14, color: C.mut, lineHeight: 1.5, marginBottom: 22 }}>
+        Send a link — they watch your agent live and can leave it a note.
+        <HowItWorks>
+          <li>Every step as it happens: what it ran, what failed, what it said.</li>
+          <li>A note reaches the agent at its next step.</li>
+          <li>Two sessions side by side, if you both drive one.</li>
+        </HowItWorks>
       </div>
 
       <section className="mb-8">
