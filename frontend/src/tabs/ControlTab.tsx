@@ -298,7 +298,7 @@ export default function ControlTab({ focusNode }: { focusNode?: string }) {
     <>
       {/* decided once the list is in: a note that unfolds and then folds
           itself takes the button out from under the pointer */}
-      {!isAdapter(mode) && fleet.isSuccess && !hasRealWork(fleet.data ?? [])
+      {!isAdapter(mode) && fleet.isSuccess
         && !codingExampleOnly((fleet.data ?? []).map((n) => n.node_id))
         && !fleetExampleOnly((fleet.data ?? []).map((n) => n.node_id)) && (hasAgents ? (
         // agents are already on screen: one line, the example tools folded away

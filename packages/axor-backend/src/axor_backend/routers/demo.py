@@ -104,6 +104,10 @@ async def seed_tree_run(
 
     await _seed(store, cache, "ex_tree", demo.TREE_ORCH, "multi-agent-demo",
                 demo.TREE_EVENTS, demo.TREE_EVIDENCE)
+    for node in (demo.TREE_ORCH, demo.TREE_RESEARCH, demo.TREE_WRITER, demo.TREE_SCRAPER):
+        if await store.get_reported(node) is not None:
+            # asked for again: a fresh example, not one real work has moved aside
+            await store.touch_reported(node, now())
     return {"seeded": ["ex_tree"], "config": demo.TREE_CONFIG}
 
 

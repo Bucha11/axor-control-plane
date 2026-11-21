@@ -343,8 +343,8 @@ test.describe("cross-session reputation", () => {
     const timeline = page.getByTestId("run-timeline");
     await expect(page.getByText("● done")).toBeVisible();
     await expect(timeline.getByText("→ fetch")).toBeVisible();
-    await expect(timeline.getByText(/untrusted \(web\)/)).toBeVisible();
-    await expect(timeline.getByText("↳ text quotes tc9 (untrusted)")).toBeVisible();
+    await expect(timeline.getByText(/text from outside · a web page/)).toBeVisible();
+    await expect(timeline.getByText("↳ its text came from the fetch result — text from outside")).toBeVisible();
     await expect(timeline.getByText("Posted it.")).toBeVisible();
     await expect(page.getByText("drift detected · 3 escaped")).toBeVisible();
 

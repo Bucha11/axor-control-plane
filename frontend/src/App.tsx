@@ -274,13 +274,19 @@ function WorkspaceJourney() {
   const journey = useApp((s) => s.journey);
   const setJourney = useApp((s) => s.setJourney);
   const apiToken = useApp((s) => s.apiToken);
+  const identityEmail = useApp((s) => s.identityEmail);
   const auth = useQuery({ queryKey: ["auth-status", apiToken], queryFn: api.authStatus, staleTime: 60_000 });
-  const signedIn = auth.data?.authenticated === true && !auth.data?.guest;
+  // a workspace is a team's: signed in with an account on a plane with sign-in.
+  // An open local plane is one person's, and this browser's choice is enough.
+  const signedIn = auth.data?.auth_enabled === true && auth.data?.authenticated === true
+    && !auth.data?.guest && !!identityEmail;
   const ws = useQuery({ queryKey: ["workspace", apiToken], queryFn: api.workspace, enabled: signedIn,
                         retry: false, staleTime: 60_000 });
   const theirs = ws.data?.journey ?? null;
   useEffect(() => {
-    if (theirs && theirs !== journey) setJourney(theirs);
+    // a browser that has not chosen takes the team's choice (a teammate who
+    // just joined); one that has chosen keeps it
+    if (theirs && !journey) setJourney(theirs);
     // only when the workspace's answer arrives or changes
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [theirs]);
