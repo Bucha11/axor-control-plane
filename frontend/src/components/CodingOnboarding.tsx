@@ -180,7 +180,7 @@ export default function CodingOnboarding({ then }: { then?: () => void }) {
           <div style={{ ...hint, marginTop: 6 }}>
             {key ? <span style={{ color: C.amber }}>the key is shown once — copy it now. </span> : null}
             {needsKey
-              ? "the key lets your agents report here and nothing else."
+              ? "your own key: your agents report with it, and it can see and steer them — never manage people or keys."
               : "this plane is open — no key needed."}
           </div>
           {mint.isError && (

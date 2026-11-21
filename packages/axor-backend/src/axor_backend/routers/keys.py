@@ -248,11 +248,12 @@ async def create_key(body: dict, request: Request, store: StoreDep) -> dict:
 # Minting keys is an owner's act (`/v1/keys`, scope admin), which left every
 # other developer of a team unable to connect their own machine: the Connect
 # page offered "create the key" and answered 403. A signed-in member may mint
-# a key for themselves — ingest only, the authority their agents report with
-# and nothing more, labelled with their email — and list and revoke the ones
-# they minted. The owner sees them all in the key list and may revoke any.
+# a key for themselves, labelled with their email, carrying what their role
+# carries — a member's is an operator key: it reports, reads the plane and
+# steers agents — never `admin`. They list and revoke the ones they minted; the
+# owner sees them all and changes or revokes any.
 
-MINE_SCOPES = ["ingest"]
+MINE_SCOPES = ["read", "ingest", "operate"]
 
 
 def _person(request: Request) -> Principal | None:
@@ -270,14 +271,16 @@ def _person(request: Request) -> Principal | None:
 async def create_my_key(request: Request, store: StoreDep) -> dict:
     caller = _person(request)
     label = f"{caller.email or caller.user_id} · coding agents" if caller else "coding agents"
+    # what the person's role carries, up to operator: a key is never more
+    scopes = [s for s in MINE_SCOPES if caller is None or caller.may(s)]
     key_id, secret = auth_mod.generate_key()
     await store.create_api_key(
-        key_id, hash_secret(secret), MINE_SCOPES, label[:MAX_LABEL], now(),
+        key_id, hash_secret(secret), scopes, label[:MAX_LABEL], now(),
         created_by=caller.user_id if caller else None,
     )
-    await _audit(store, "mint", request, key_id=key_id, scopes=MINE_SCOPES,
+    await _audit(store, "mint", request, key_id=key_id, scopes=scopes,
                  node_id=None, label=label, personal=True)
-    return {"key_id": key_id, "secret": secret, "scopes": MINE_SCOPES, "node_id": None}
+    return {"key_id": key_id, "secret": secret, "scopes": scopes, "node_id": None}
 
 
 @router.get("/keys/mine")
@@ -295,6 +298,27 @@ async def delete_my_key(key_id: str, request: Request, store: StoreDep) -> dict:
         raise HTTPException(404, "no key of yours with that id")
     await _audit(store, "revoke", request, key_id=key_id, personal=True)
     return {"revoked": key_id}
+
+
+@router.delete("/keys/of/{user_id}")
+async def revoke_keys_of(user_id: str, request: Request, store: StoreDep) -> dict:
+    """Every key a teammate minted for themselves, revoked — when an admin
+    takes them off the workspace or makes them a viewer (identity keeps the
+    people, this plane the keys, so the Team page calls both). An admin's or
+    the owner's act: a member operates agents, not other people's access."""
+    caller = getattr(request.state, "principal", None)
+    allowed = caller is None or caller.kind == auth_mod.MASTER or (
+        caller.kind == "user" and caller.role in ("admin", "owner"))
+    if not allowed:
+        # an operate key — a member's own, say — never revokes anyone's access
+        raise HTTPException(403, "an admin of this workspace takes a teammate's keys away")
+    revoked = []
+    for k in await store.list_api_keys(created_by=user_id):
+        if await store.delete_api_key(k["key_id"], created_by=user_id):
+            await _audit(store, "revoke", request, key_id=k["key_id"], personal=True,
+                         reason="teammate removed or made a viewer")
+            revoked.append(k["key_id"])
+    return {"revoked": revoked}
 
 
 @router.get("/keys")

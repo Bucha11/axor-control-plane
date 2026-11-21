@@ -1857,6 +1857,10 @@ export const api = {
   myKeys: () =>
     af("/v1/keys/mine").then((r) =>
       j<{ key_id: string; label: string; created_ts: string; scopes: string[] }[]>(r)),
+  // a removed teammate's (or a new viewer's) own keys, revoked — identity keeps
+  // the people, the plane the keys, so the Team page calls both
+  revokeKeysOf: (userId: string) =>
+    af(`/v1/keys/of/${encodeURIComponent(userId)}`, { method: "DELETE" }).then((r) => j<{ revoked: string[] }>(r)),
   revokeMyKey: (keyId: string) =>
     af(`/v1/keys/mine/${encodeURIComponent(keyId)}`, { method: "DELETE" }).then((r) => j<{ revoked: string }>(r)),
   // a key's role, changed in place: same secret, different authority

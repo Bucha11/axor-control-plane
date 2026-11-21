@@ -186,8 +186,10 @@ _WRITE_POLICY: tuple[tuple[str, str], ...] = (
     # turning a skill off — or on — for every developer is an operator's decision
     ("/v1/coding/", "operate"),
     ("/v1/plane/", "operate"),        # command / facts / cascade-stop
-    # a member mints / revokes an ingest-only key for their own machine
+    # a member mints / revokes a key for their own machine
     ("/v1/keys/mine", "ingest"),
+    # an admin takes a removed teammate's keys away (routers/keys)
+    ("/v1/keys/of/", "operate"),
     ("/v1/keys", "admin"),            # mint / revoke API keys
     ("/v1/regression/schedule", "operate"),  # EE schedule is operator config
     ("/v1/regression", "read"),       # replay-only, no state change
@@ -387,9 +389,13 @@ MASTER = "master"
 
 # An axor-identity role grants a SET of scopes (least-privilege ladder). A human
 # who logs in never mints API keys unless they own/administer the org.
+# A member is a developer of the team: they steer agents (pause / stop / cap)
+# and decide the team's skills and memory — operate — and their own key
+# carries the same. An admin also manages people; only the owner mints keys
+# of any authority and changes a key's role.
 ROLE_SCOPES: dict[str, frozenset[str]] = {
     "viewer": frozenset({"read"}),
-    "member": frozenset({"read", "ingest"}),
+    "member": frozenset({"read", "ingest", "operate"}),
     "admin": frozenset({"read", "ingest", "operate"}),
     "owner": frozenset({"read", "ingest", "operate", "admin"}),
 }

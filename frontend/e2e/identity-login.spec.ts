@@ -127,6 +127,11 @@ test.describe("identity login (Settings)", () => {
       await route.fulfill({ status: 200, contentType: "application/json", body: "{}" });
     });
     await page.route("**/identity/v1/orgs/org_1/invites", jsonRoute(200, { invites: [] }));
+    // taken off the workspace, their own keys on the plane go too
+    await page.route("**/v1/keys/of/usr_2", async (route) => {
+      calls.push(`keys ${route.request().method()}`);
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ revoked: ["k1"] }) });
+    });
     await goHash(page, "settings");
     await page.getByLabel("email", { exact: true }).fill("ada@acme.io");
     await page.getByLabel("password").fill("correct horse");
@@ -140,7 +145,7 @@ test.describe("identity login (Settings)", () => {
     page.once("dialog", (d) => void d.accept());
     await page.getByLabel("remove sam@acme.io").click();
     await expect(team).not.toContainText("sam@acme.io");
-    expect(calls).toEqual(["PUT admin", "DELETE"]);
+    expect(calls).toEqual(["PUT admin", "DELETE", "keys DELETE"]);
   });
 
   test("an invitation link: a new account joins the workspace", async ({ page }) => {

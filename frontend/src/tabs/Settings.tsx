@@ -137,13 +137,27 @@ function Team({ orgId, isAdmin }: { orgId: string; isAdmin: boolean }) {
     onSuccess: () => void qc.invalidateQueries({ queryKey: ["org-invites", orgId] }),
   });
   const me = useApp((s) => s.identityEmail);
+  // a viewer has no key and a removed teammate no access: their own keys go too
   const setRole2 = useMutation({
-    mutationFn: ({ userId, to }: { userId: string; to: string }) => api.setMemberRole(orgId, userId, to),
-    onSuccess: () => void qc.invalidateQueries({ queryKey: ["org-members", orgId] }),
+    mutationFn: async ({ userId, to }: { userId: string; to: string }) => {
+      const r = await api.setMemberRole(orgId, userId, to);
+      if (to === "viewer") await api.revokeKeysOf(userId);
+      return r;
+    },
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ["org-members", orgId] });
+      void qc.invalidateQueries({ queryKey: ["api-keys"] });
+    },
   });
   const remove = useMutation({
-    mutationFn: (userId: string) => api.removeMember(orgId, userId),
-    onSuccess: () => void qc.invalidateQueries({ queryKey: ["org-members", orgId] }),
+    mutationFn: async (userId: string) => {
+      await api.removeMember(orgId, userId);
+      return api.revokeKeysOf(userId);
+    },
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ["org-members", orgId] });
+      void qc.invalidateQueries({ queryKey: ["api-keys"] });
+    },
   });
   return (
     <div data-testid="team" className="mt-2">
@@ -162,7 +176,7 @@ function Team({ orgId, isAdmin }: { orgId: string; isAdmin: boolean }) {
                   {["admin", "member", "viewer"].map((r) => <option key={r} value={r}>{r}</option>)}
                 </select>
                 <button aria-label={`remove ${m.email}`} disabled={remove.isPending}
-                  onClick={() => { if (window.confirm(`Take ${m.email} off this workspace?`)) remove.mutate(m.user_id); }}
+                  onClick={() => { if (window.confirm(`Take ${m.email} off this workspace? Their keys are revoked too.`)) remove.mutate(m.user_id); }}
                   style={{ background: "none", border: "none", padding: 0, cursor: "pointer", color: C.dim, fontFamily: MONO, fontSize: 11 }}>
                   remove
                 </button>
@@ -1052,7 +1066,7 @@ function MyKeys() {
   });
   return (
     <div data-testid="my-keys" style={{ fontFamily: MONO, fontSize: 11.5, color: C.mut }}>
-      <div style={{ marginBottom: 8 }}>A key for your machine: your agents report here with it, and nothing else.</div>
+      <div style={{ marginBottom: 8 }}>A key for your machine, with what your role can do: your agents report, and you see and steer them.</div>
       {secret ? (
         <>
           <pre data-testid="my-key-connect" style={{ background: C.bg, border: `1px solid ${C.line}`, borderRadius: 5,
