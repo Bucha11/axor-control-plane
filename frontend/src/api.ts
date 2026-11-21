@@ -248,7 +248,7 @@ export interface NodeInfo {
   node_id: string;
   // the product's own example (a demo seed), not this workspace's work
   example?: boolean;
-  // ...loaded before the workspace's own agents last reported: left out
+  // ...and the workspace's own agents have reported: left out, for good
   example_hidden?: boolean;
   desired: { version: number; state: Record<string, unknown> } | null;
   reported: {
@@ -1856,7 +1856,8 @@ export const api = {
   // A member's own key for their machine: ingest only, minted and revoked by
   // them (an owner sees every key in listKeys).
   // what the workspace is for: the menu and onboarding follow it, for every teammate
-  workspace: () => af("/v1/workspace").then((r) => j<{ journey: "coding" | "production" | "both" | null }>(r)),
+  workspace: () => af("/v1/workspace").then((r) =>
+    j<{ journey: "coding" | "production" | "both" | null; work_started?: boolean }>(r)),
   setWorkspaceJourney: (journey: string) =>
     af("/v1/workspace/journey", {
       method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ journey }),

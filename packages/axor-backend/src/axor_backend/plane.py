@@ -47,7 +47,7 @@ from axor_backend.errors import (
     ConcurrentUpdate,
     StaleVersion,
 )
-from axor_backend.examples import hidden_examples, is_example_node
+from axor_backend.examples import is_example_node, work_started
 from axor_backend.limits import check_batch
 from axor_backend.signing import signed_payload
 from axor_backend.tenancy import current_org_id, topic
@@ -1350,7 +1350,7 @@ async def nodes(request: Request) -> list[dict]:
     # what each node said it is (coding session, production agent, tree run):
     # the menu shows coding agents and production agents apart
     profile_by_node = await ctx.store.node_kinds()
-    hidden = await hidden_examples(ctx.store)
+    started = await work_started(ctx.store) is not None
     out = []
     for node_id in await ctx.store.list_nodes():
         current = desired_by_node.get(node_id)
@@ -1364,10 +1364,10 @@ async def nodes(request: Request) -> list[dict]:
             "reputation": _reputation_summary(reputation_by_node.get(node_id)),
             "probe": probe_by_node.get(node_id),
             "profile": profile_by_node.get(node_id),
-            # the product's own example, not this workspace's work — and
-            # whether the workspace's own agents have since moved it aside
+            # the product's own example, not this workspace's work — hidden
+            # for good once the workspace's own agents first reported
             "example": is_example_node(node_id),
-            "example_hidden": node_id in hidden,
+            "example_hidden": started and is_example_node(node_id),
         })
     return out
 

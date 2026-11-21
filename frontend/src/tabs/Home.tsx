@@ -2,6 +2,7 @@
 // its way in, an example to explore and a recording. The same page once
 // something is connected, with a line back to it.
 import { useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { ArrowRight } from "lucide-react";
 import { api } from "../api";
 import { C, MONO } from "../theme";
@@ -28,6 +29,11 @@ function FirstVisit() {
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const setJourney = useApp((s) => s.setJourney);
+  // once the workspace's own agents report, the examples are gone from every
+  // list: offering to load one would open screens that do not show it
+  const apiToken = useApp((s) => s.apiToken);
+  const ws = useQuery({ queryKey: ["workspace", apiToken], queryFn: api.workspace, staleTime: 60_000 });
+  const started = ws.data?.work_started === true;
   const explore = async (which: Side) => {
     setJourney(which);
     setLoading(true);
@@ -78,11 +84,13 @@ function FirstVisit() {
             <ArrowRight size={18} />
           </button>
           <div style={{ fontSize: 13, color: C.mut, marginBottom: 6, lineHeight: 1.8 }}>
-            Not ready to install anything?{" "}
-            <button data-testid="home-example-coding" onClick={() => void explore("coding")} disabled={loading} style={link}>
-              {loading ? "loading the example…" : "Explore example coding agents →"}
-            </button>
-            <br />
+            {!started && <>
+              Not ready to install anything?{" "}
+              <button data-testid="home-example-coding" onClick={() => void explore("coding")} disabled={loading} style={link}>
+                {loading ? "loading the example…" : "Explore example coding agents →"}
+              </button>
+              <br />
+            </>}
             Also run your own agent in production?{" "}
             <button data-testid="home-both" onClick={() => navigate("connect?for=both")} style={link}>
               Govern both on one plane →
@@ -114,15 +122,17 @@ function FirstVisit() {
             <ArrowRight size={18} />
           </button>
           <div style={{ fontSize: 13, color: C.mut, marginBottom: 6, lineHeight: 1.8 }}>
-            Not ready to install anything?{" "}
-            <button data-testid="home-example-fleet" onClick={() => void explore("production")} disabled={loading} style={link}>
-              {loading ? "loading the example fleet…" : "Explore an example fleet →"}
-            </button>
-            {" "}or{" "}
-            <button onClick={() => { connect("demo"); navigate("catch", { auto: "1" }); }} style={link}>
-              watch it catch a made-up answer →
-            </button>
-            <br />
+            {!started && <>
+              Not ready to install anything?{" "}
+              <button data-testid="home-example-fleet" onClick={() => void explore("production")} disabled={loading} style={link}>
+                {loading ? "loading the example fleet…" : "Explore an example fleet →"}
+              </button>
+              {" "}or{" "}
+              <button onClick={() => { connect("demo"); navigate("catch", { auto: "1" }); }} style={link}>
+                watch it catch a made-up answer →
+              </button>
+              <br />
+            </>}
             Your developers use Claude Code or Codex too?{" "}
             <button data-testid="home-both" onClick={() => navigate("connect?for=both")} style={link}>
               Govern both on one plane →

@@ -96,6 +96,10 @@ export default defineConfig({
       env: {
         AXOR_DATABASE_URL: `sqlite+aiosqlite:///${RUN_DB}`,
         AXOR_ALLOW_UNSIGNED: "1",
+        // one database for the whole suite: the specs that walk the examples
+        // run after specs whose agents report. Hiding them is unit-tested
+        // (test_examples.py); here the examples stay, as on a demo plane.
+        AXOR_KEEP_EXAMPLES: "1",
         // The licensing trust root is deployment config, so the Settings panel
         // is inert without it — pin a throwaway key so the license path is
         // exercisable here. Nothing is signed with it: the point is that a

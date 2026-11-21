@@ -100,6 +100,7 @@ def create_app(
     app = FastAPI(title="axor-backend", lifespan=lifespan)
     app.state.config = config
     app.state.store = Store(make_engine(config.database_url))
+    app.state.store.keep_examples = config.keep_examples
     app.state.broadcast = Broadcast()
     app.state.keyring = OperatorKeyring(config.operator_keys or {})
     app.state.allow_unsigned = config.allow_unsigned

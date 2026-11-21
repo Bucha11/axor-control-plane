@@ -1,7 +1,8 @@
 """Which nodes are the product's own examples (demo seeds), not anyone's work.
 
-Once a workspace's own agents report, the screens stop showing the examples
-beside them: example data reads as real data the moment real data is there.
+Once a workspace's own agents first report, the screens stop showing the
+examples for good: example data reads as real data the moment real data is
+there. A run page opened by its id still opens.
 The ids are the ones demo.py seeds; tests/test_examples.py keeps the two in step.
 """
 from __future__ import annotations
@@ -19,30 +20,37 @@ def is_example_node(node_id: str) -> bool:
             or (node_id.startswith("skill-try.") and node_id.endswith(".example")))
 
 
-async def hidden_examples(store: object) -> set[str]:
-    """The examples to leave out: those loaded before the workspace's own agents
-    last reported. Work that starts (or resumes) moves the examples aside; an
-    example asked for after that shows until the agents report again.
+WORK_STARTED = "workspace_work_started"
 
-    An example is as fresh as the last time it was loaded: its reported row, or
-    its newest run — the adapter examples are runs only and never report."""
+
+def is_real_node(node_id: str) -> bool:
+    # a skill dry run is the product trying a skill, not the team's agents at work
+    return not is_example_node(node_id) and not node_id.startswith("skill-try.")
+
+
+async def work_started(store: object) -> str | None:
+    """When the workspace's own agents first reported, or None if they have not.
+
+    Written once, when a real node first reports (``Store.upsert_reported``),
+    and kept: the examples do not come back when a node is deleted or an
+    example is reseeded. A workspace whose agents reported before the flag
+    existed gets it on the first look."""
+    if getattr(store, "keep_examples", False):
+        return None   # a demo plane (AXOR_KEEP_EXAMPLES): the examples stay
+    since = await store.get_setting(WORK_STARTED)  # type: ignore[attr-defined]
+    if since:
+        return str(since)
     reported = await store.all_reported()  # type: ignore[attr-defined]
-    nodes = await store.list_nodes()  # type: ignore[attr-defined]
-    real = [str((reported.get(n) or {}).get("updated_ts") or "") for n in nodes
-            if not is_example_node(n) and not n.startswith("skill-try.")]
-    latest = max(real, default="")
-    if not latest:
-        return set()
-    loaded: dict[str, str] = {n: str((reported.get(n) or {}).get("updated_ts") or "")
-                              for n in nodes if is_example_node(n)}
-    for run in await store.list_runs():  # type: ignore[attr-defined]
-        node = str(run.get("node_id") or "")
-        if is_example_node(node):
-            loaded[node] = max(loaded.get(node, ""), str(run.get("created_ts") or ""))
-    return {n for n, ts in loaded.items() if ts < latest}
+    real = sorted(str((r or {}).get("updated_ts") or "")
+                  for n, r in reported.items() if is_real_node(n))
+    if not real:
+        return None
+    await store.set_setting(WORK_STARTED, real[0] or "unknown")  # type: ignore[attr-defined]
+    return real[0] or "unknown"
 
 
 async def without_examples(store: object, rows: list[dict], key: str = "node_id") -> list[dict]:
-    """``rows`` minus the examples real work has moved aside."""
-    hidden = await hidden_examples(store)
-    return [r for r in rows if str(r.get(key) or "") not in hidden] if hidden else rows
+    """``rows`` minus the product's examples, once the workspace's own work started."""
+    if not await work_started(store):
+        return rows
+    return [r for r in rows if not is_example_node(str(r.get(key) or ""))]

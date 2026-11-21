@@ -23,9 +23,9 @@ def test_a_real_session_is_not_one() -> None:
         assert not is_example_node(node), node
 
 
-async def test_examples_step_aside_once_real_work_reports_and_come_back_when_asked(
-        tmp_path: pathlib.Path) -> None:
-    """The adapter examples are runs only — no reported row — and still go."""
+async def test_examples_go_for_good_once_real_work_reports(tmp_path: pathlib.Path) -> None:
+    """The adapter examples are runs only — no reported row — and go too; a
+    reseed or a deleted node does not bring any of them back."""
     app = create_app(database_url=f"sqlite+aiosqlite:///{tmp_path}/e.db",
                      operator_keys={}, allow_unsigned=True)
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app),
@@ -33,14 +33,34 @@ async def test_examples_step_aside_once_real_work_reports_and_come_back_when_ask
         async def runs() -> set[str]:
             return {r["run_id"] for r in (await c.get("/v1/runs")).json()}
 
+        async def flagged() -> dict[str, bool]:
+            nodes = (await c.get("/v1/plane/nodes")).json()
+            return {n["node_id"]: n["example_hidden"] for n in nodes if n["example"]}
+
         assert (await c.post("/v1/demo/seed-adapter-runs")).status_code == 200
-        assert (await c.post("/v1/demo/seed-tree-run")).status_code == 200
+        assert (await c.post("/v1/demo/seed-fleet")).status_code == 200
         assert {"ex_block", "ex_pass", "ex_tree"} <= await runs()   # nothing real yet
+        assert (await c.get("/v1/workspace")).json()["work_started"] is False
+        assert await flagged() and not any((await flagged()).values())
 
         await app.state.store.upsert_reported("support-bot", applied_version=0, level="NORMAL",
                                               budget_remaining=None, ts=now())
         assert not {"ex_block", "ex_pass", "ex_tree"} & await runs()
+        assert all((await flagged()).values())
+        assert (await c.get("/v1/workspace")).json()["work_started"] is True
 
         assert (await c.post("/v1/demo/seed-adapter-runs")).status_code == 200
-        assert {"ex_block", "ex_pass"} <= await runs()
-        assert "ex_tree" not in await runs()
+        assert not {"ex_block", "ex_pass"} & await runs()
+        assert (await c.get("/v1/runs/ex_block/events")).json()   # its page still opens
+
+
+async def test_a_demo_plane_keeps_its_examples(tmp_path: pathlib.Path) -> None:
+    app = create_app(database_url=f"sqlite+aiosqlite:///{tmp_path}/d.db",
+                     operator_keys={}, allow_unsigned=True)
+    app.state.store.keep_examples = True
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app),
+                                 base_url="http://cp.test") as c, app.router.lifespan_context(app):
+        await c.post("/v1/demo/seed-adapter-runs")
+        await app.state.store.upsert_reported("support-bot", applied_version=0, level="NORMAL",
+                                              budget_remaining=None, ts=now())
+        assert {"ex_block", "ex_pass"} <= {r["run_id"] for r in (await c.get("/v1/runs")).json()}

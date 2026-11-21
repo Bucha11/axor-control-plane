@@ -282,7 +282,9 @@ function WorkspaceJourney() {
     && !auth.data?.guest && !!identityEmail;
   const ws = useQuery({ queryKey: ["workspace", apiToken], queryFn: api.workspace, enabled: signedIn,
                         retry: false, staleTime: 60_000 });
-  const theirs = ws.data?.journey ?? null;
+  // the query is shared (Home and the tour read work_started from it), so the
+  // answer can be there on an open plane too: only a signed-in team's counts
+  const theirs = signedIn ? ws.data?.journey ?? null : null;
   useEffect(() => {
     // a browser that has not chosen takes the team's choice (a teammate who
     // just joined); one that has chosen keeps it

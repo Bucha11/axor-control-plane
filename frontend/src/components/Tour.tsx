@@ -11,6 +11,7 @@
 // Home offers — so no stop is an empty page. The step is persisted: a reload
 // resumes.
 import { useCallback, useEffect, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { X } from "lucide-react";
 import { api } from "../api";
 import { navigate } from "../router";
@@ -25,6 +26,7 @@ interface TourStep {
   title: string;
   body: string;
   cta?: { label: string; route: string }; // the last step: the way in
+  example?: true;        // only the examples show it: skipped once the workspace's own agents report
 }
 
 const sel = (testId: string) => `[data-testid="${testId}"]`;
@@ -34,7 +36,7 @@ const LEARN = "Lost later? “learn” at the top puts a short note on every scr
 export const TOURS: Record<TourSide, TourStep[]> = {
   coding: [
     {
-      route: "govern", target: sel("coding-example-story"), title: "Your coding agents, on one plane",
+      route: "govern", target: sel("coding-example-story"), example: true, title: "Your coding agents, on one plane",
       body: "Example data: Claude Code and Codex in one repository. Claude Code read a docs page — what it brought back stays marked “from the web”. Codex then tried to run the command that page suggested and was refused at the shell, though Codex never saw the page. Every session shows up here live: pause it, stop it, cap it.",
     },
     {
@@ -73,7 +75,7 @@ export const TOURS: Record<TourSide, TourStep[]> = {
   ],
   production: [
     {
-      route: "govern", target: sel("fleet-example-story"), title: "Your agents, live",
+      route: "govern", target: sel("fleet-example-story"), example: true, title: "Your agents, live",
       body: "Example data: four production agents. Read what happened to each and what Axor did about it — every line opens that agent.",
     },
     {
@@ -152,7 +154,13 @@ const CARD_H_GUESS = 190; // for above/below placement only
 export default function Tour() {
   const stepIdx = useApp((s) => s.tourStep);
   const setTourStep = useApp((s) => s.setTourStep);
-  const TOUR = TOURS[useApp((s) => s.tourSide)];
+  const side = useApp((s) => s.tourSide);
+  // once the workspace's own agents report, the examples are gone from the
+  // lists: the tour walks the real screens and skips the stops only examples fill
+  const apiToken = useApp((s) => s.apiToken);
+  const ws = useQuery({ queryKey: ["workspace", apiToken], queryFn: api.workspace, staleTime: 60_000,
+                        enabled: stepIdx != null });
+  const TOUR = ws.data?.work_started ? TOURS[side].filter((s) => !s.example) : TOURS[side];
   const step = stepIdx == null ? TOUR[0] : TOUR[Math.min(stepIdx, TOUR.length - 1)];
   const active = stepIdx != null;
   const [rect, setRect] = useState<DOMRect | null>(null);

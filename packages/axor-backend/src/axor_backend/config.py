@@ -90,6 +90,9 @@ class AppConfig:
     # meaningful with auth on; off by default — a self-hosted plane has no
     # anonymous public to welcome.
     guest_sessions: bool = False
+    # A demo plane keeps the product's examples beside real work instead of
+    # hiding them once the workspace's own agents report (examples.py).
+    keep_examples: bool = False
 
     @property
     def auth_enabled(self) -> bool:
@@ -164,6 +167,7 @@ class AppConfig:
             ),
             org=(org if org is not None else env.text("AXOR_ORG")),
             guest_sessions=env.flag("AXOR_GUEST_SESSIONS"),
+            keep_examples=env.flag("AXOR_KEEP_EXAMPLES"),
             usage_reporting=(
                 usage_reporting
                 if usage_reporting is not None

@@ -4,6 +4,19 @@ import { expect, test } from "@playwright/test";
 import { goHash } from "./helpers";
 
 test.describe("tour", () => {
+  test("once the workspace's own agents report, Home offers no example and the tour skips the example-only stop", async ({ page }) => {
+    await page.route("**/v1/workspace", (route) =>
+      route.fulfill({ json: { journey: null, work_started: true } }));
+    await goHash(page, "home?for=production");
+    await expect(page.getByTestId("home-connect-production")).toBeVisible();
+    await expect(page.getByTestId("home-example-fleet")).toHaveCount(0);
+    await page.getByRole("button", { name: "Take the tour" }).click();
+    const dialog = page.getByRole("dialog", { name: "guided tour" });
+    await expect(dialog.getByText("Pause, stop, cap", { exact: true })).toBeVisible({ timeout: 15_000 });
+    await expect(dialog.getByText("1 / 8")).toBeVisible();
+    await page.unrouteAll({ behavior: "ignoreErrors" });
+  });
+
   test("production: the example fleet, policy, caught lies, replay, safe to ship — then the way in", async ({ page }) => {
     await goHash(page, "home?for=production");
     await page.getByRole("button", { name: "Take the tour" }).click();

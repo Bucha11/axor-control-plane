@@ -11,6 +11,7 @@ from __future__ import annotations
 from fastapi import APIRouter, HTTPException
 
 from axor_backend.deps import StoreDep
+from axor_backend.examples import work_started
 
 router = APIRouter(prefix="/v1")
 
@@ -32,7 +33,10 @@ async def journey_of(store: object) -> str | None:
 
 @router.get("/workspace")
 async def get_workspace(store: StoreDep) -> dict:
-    return {"journey": await journey_of(store)}
+    # work_started: the workspace's own agents have reported, so the screens
+    # (and the tour) show them instead of the product's examples
+    return {"journey": await journey_of(store),
+            "work_started": await work_started(store) is not None}
 
 
 @router.put("/workspace/journey")

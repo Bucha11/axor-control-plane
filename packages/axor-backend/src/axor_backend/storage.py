@@ -653,6 +653,8 @@ async def init_db(engine: AsyncEngine) -> None:
 class Store:
     def __init__(self, engine: AsyncEngine) -> None:
         self.engine = engine
+        # a demo plane shows the examples beside real work (config.keep_examples)
+        self.keep_examples = False
 
     # ── runs & events ─────────────────────────────────────────────────────────
 
@@ -1730,15 +1732,6 @@ class Store:
             key=lambda c: c["version"],
         )
 
-    async def touch_reported(self, node_id: str, ts: str) -> None:
-        """Move a node's last-reported time to ``ts`` and change nothing else —
-        an example asked for again is a fresh one (examples.hidden_examples)."""
-        async with self.engine.begin() as conn:
-            await conn.execute(update(reported_state).where(
-                reported_state.c.node_id == node_id,
-                reported_state.c.org_id == current_org_id(),
-            ).values(updated_ts=ts))
-
     async def upsert_reported(
         self, node_id: str, applied_version: int, level: str,
         budget_remaining: int | None, ts: str,
@@ -1772,6 +1765,13 @@ class Store:
                         reported_state.c.org_id == current_org_id(),
                     ).values(**values)
                 )
+        if row is None:
+            from axor_backend.examples import WORK_STARTED, is_real_node
+
+            # the workspace's own agents reported for the first time: the
+            # screens stop showing the product's examples (examples.py)
+            if is_real_node(node_id) and not await self.get_setting(WORK_STARTED):
+                await self.set_setting(WORK_STARTED, ts)
 
     async def get_reported(self, node_id: str) -> dict[str, Any] | None:
         async with self.engine.connect() as conn:
