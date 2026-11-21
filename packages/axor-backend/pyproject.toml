@@ -23,7 +23,11 @@ dependencies = [
   # `kernel: axor-core@0.11.0` — the CP refusing to claim reproduction under a
   # different build, which is the mechanism working. Regenerate that fixture
   # from an axor-lab checkout on 0.12.0.
-  "axor-core>=0.12,<0.13",
+  #
+  # 0.13 the same way, whole, for the same reason: the release this plane's
+  # coding-agent journey ships with (code fetched by name is refused on an
+  # untrusted name; a structured tool answer is tracked leaf by leaf).
+  "axor-core>=0.13,<0.14",
   # 0.2 is the first release carrying `audit.from_trace` — the one derivation of
   # an EvidenceCase from a recorded trace. The audit used to run only inside the
   # proxy, from its own in-memory run state, so a run that arrived here any
@@ -34,7 +38,9 @@ dependencies = [
   # not import each other (P-34), so this backend is the only component that
   # can join them — and the only one that can notice their two copies of the
   # verdict vocabulary diverging.
-  "axor-eval>=0.2,<0.3",
+  # 0.3: setup health with the team's memory — the reports /v1/setup-health
+  # receives name the repository the way the sidecar does.
+  "axor-eval>=0.3,<0.4",
   # Attestation semantics — append-only, revocation-as-an-event, same-keyset
   # revocation, the required reason. Imported, not restated: a plane that
   # decided for itself what a valid attestation is would be a second answer to
@@ -78,7 +84,7 @@ dependencies = [
 # test_signed_snapshot.py SKIP (they probe the signature and refuse to pass
 # against an adapter that ignores the field), so the floor is what makes this
 # plane's half verifiable end to end rather than only on this side of the wire.
-wrap = ["axor-wrap>=0.2,<0.3"]
+wrap = ["axor-wrap>=0.3,<0.4"]
 # Accepting axor-identity login tokens. Absent, identity login is simply off
 # (operator master token + scoped API keys still work); the routes never 501
 # — resolve_principal only reaches the verifier when a JWKS is configured.
