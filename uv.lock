@@ -165,7 +165,7 @@ wheels = [
 
 [[package]]
 name = "axor-backend"
-version = "0.4.0"
+version = "0.4.1"
 source = { editable = "packages/axor-backend" }
 dependencies = [
     { name = "aiosqlite" },
@@ -300,7 +300,7 @@ wheels = [
 
 [[package]]
 name = "axor-proxy"
-version = "0.4.0"
+version = "0.4.1"
 source = { editable = "packages/axor-proxy" }
 dependencies = [
     { name = "anyio" },

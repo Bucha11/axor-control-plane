@@ -969,7 +969,7 @@ function DeveloperUsage() {
 
 const PRESETS: { id: string; label: string; words: string; scopes: string[]; node: boolean; for: Journey[] }[] = [
   { id: "coding", label: "for the team's coding agents", scopes: ["ingest"], node: false, for: ["coding", "both"],
-    words: "every developer puts it in their agents' environment; the axor hooks report with it" },
+    words: "each developer connects their machine with it once" },
   { id: "node", label: "for one production agent", scopes: ["ingest"], node: true, for: ["production", "both"],
     words: "bound to one agent: the plane refuses it for any other, so a compromised agent cannot speak for its neighbours" },
   { id: "ci", label: "for CI", scopes: ["read", "ingest"], node: false, for: ["coding", "production", "both"],
@@ -1012,10 +1012,11 @@ function AgentKeys({ journey, menuAll }: { journey: Journey | null; menuAll: boo
   if (authStatus.data && !authStatus.data.auth_enabled) {
     return (
       <div data-testid="keys-open" style={{ fontFamily: MONO, fontSize: 11.5, color: C.mut, lineHeight: 1.7 }}>
-        This plane is open, so agents need no key — set where to report and they connect:
+        This plane is open — no key needed. A developer's machine:
         <pre style={{ background: C.bg, border: `1px solid ${C.line}`, borderRadius: 5, padding: "8px 10px", margin: "8px 0 0", color: C.text }}>
-          export AXOR_PLANE_URL={PLANE_URL}
+          axor-wrap connect {PLANE_URL}
         </pre>
+        <div style={{ marginTop: 8 }}>A production agent's process: <span style={{ color: C.text }}>AXOR_PLANE_URL={PLANE_URL}</span></div>
       </div>
     );
   }
@@ -1030,8 +1031,8 @@ function AgentKeys({ journey, menuAll }: { journey: Journey | null; menuAll: boo
     ? minted.preset === "node"
       ? `export AXOR_PLANE_URL=${PLANE_URL}\nexport AXOR_NODE_ID=${node.trim()}\nexport AXOR_INGEST_KEY=${minted.secret}`
       : minted.preset === "ci"
-        ? `AXOR_PLANE_URL=${PLANE_URL}\nAXOR_API_KEY=${minted.secret}   # as CI secrets`
-        : `export AXOR_PLANE_URL=${PLANE_URL}\nexport AXOR_INGEST_KEY=${minted.secret}`
+        ? `AXOR_PLANE_URL=${PLANE_URL}\nAXOR_INGEST_KEY=${minted.secret}   # as CI secrets`
+        : `axor-wrap connect ${PLANE_URL} --key ${minted.secret}`
     : "";
   return (
     <div data-testid="agent-keys">

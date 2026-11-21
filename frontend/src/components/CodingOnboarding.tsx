@@ -100,10 +100,9 @@ export default function CodingOnboarding({ then }: { then?: () => void }) {
     setAgents((cur) => (cur.includes(a) ? cur.filter((x) => x !== a) : [...cur, a]));
 
   const needsKey = authOn !== false;
-  const env = [
-    `export AXOR_PLANE_URL=${PLANE_URL}`,
-    needsKey ? `export AXOR_INGEST_KEY=${key ?? "<the key — create it below>"}` : null,
-  ].filter(Boolean).join("\n");
+  // one command, once per machine: axor-wrap saves the plane and the key, and
+  // every axor command on the machine reads them — nothing to export
+  const connectCmd = `axor-wrap connect ${PLANE_URL}${needsKey ? ` --key ${key ?? "<create the key below>"}` : ""}`;
   // on to the next part of "both" is not a connection: nothing reported yet
   const goAgents = () => { if (then) { then(); return; } connect("adapter", []); navigate("govern"); };
 
@@ -168,7 +167,7 @@ export default function CodingOnboarding({ then }: { then?: () => void }) {
         </div>
       ))}
 
-      {step(4, "CONNECT THEM TO THIS WORKSPACE")}
+      {step(4, "CONNECT THIS MACHINE — ONCE")}
       {needsKey && authOn && !signedIn ? (
         <div data-testid="coding-signin" style={{ border: `1px solid ${C.line}`, borderRadius: 8, padding: 14 }}>
           <div style={{ fontFamily: MONO, fontSize: 11, color: C.mut, lineHeight: 1.6, marginBottom: 10 }}>
@@ -179,7 +178,7 @@ export default function CodingOnboarding({ then }: { then?: () => void }) {
         </div>
       ) : (
         <>
-          <Block id="env" copied={copied} onCopy={copy} text={env} />
+          <Block id="connect" copied={copied} onCopy={copy} text={connectCmd} />
           {needsKey && !key && (
             <button onClick={() => mint.mutate()} disabled={mint.isPending} data-testid="mint-coding-key"
               style={btn({ color: C.steel, borderColor: C.steel, fontSize: 10.5, padding: "4px 10px" })}>
@@ -189,9 +188,8 @@ export default function CodingOnboarding({ then }: { then?: () => void }) {
           <div style={{ ...hint, marginTop: 6 }}>
             {key ? <span style={{ color: C.amber }}>the key is shown once — copy it now. </span> : null}
             {needsKey
-              ? "the key lets your agents report here and nothing else. "
-              : "this plane is open — no key needed. "}
-            Put these in your shell profile (~/.zshrc, ~/.bashrc) so every terminal has them.
+              ? "the key lets your agents report here and nothing else."
+              : "this plane is open — no key needed."}
           </div>
           {mint.isError && (
             <div style={{ ...hint, color: C.red }}>could not create a key ({(mint.error as Error).message})</div>

@@ -21,7 +21,9 @@ test.describe("three ways in", () => {
     await page.getByTestId("pick-codex").click();
     await expect(install).toContainText("axor-wrap agents install codex");
     await expect(page.getByTestId("coding-both-note")).toContainText("paid plan");
-    await expect(page.getByTestId("cmd-env")).toContainText("AXOR_PLANE_URL=");
+    // the machine connects with one command — no env vars to export
+    await expect(page.getByTestId("cmd-connect")).toContainText("axor-wrap connect http");
+    await expect(page.getByText(/AXOR_[A-Z_]+/)).toHaveCount(0);
     // no tool declaration, no base URL to repoint
     await expect(page.getByText("What tools does your agent use?")).toHaveCount(0);
   });
@@ -35,14 +37,14 @@ test.describe("three ways in", () => {
     await goHash(page, "connect?for=coding");
     await expect(page.getByTestId("coding-signin")).toContainText("needs an account");
     await expect(page.getByTestId("mint-coding-key")).toHaveCount(0);
-    await expect(page.getByTestId("cmd-env")).toHaveCount(0);
+    await expect(page.getByTestId("cmd-connect")).toHaveCount(0);
   });
 
   test("on an open plane no key is asked for", async ({ page }) => {
     await setConnection(page, { mode: "none" });
     await goHash(page, "connect?for=coding");
     await expect(page.getByText(/this plane is open — no key needed/)).toBeVisible();
-    await expect(page.getByTestId("cmd-env")).not.toContainText("AXOR_INGEST_KEY");
+    await expect(page.getByTestId("cmd-connect")).not.toContainText("--key");
     await expect(page.getByTestId("coding-skip")).toBeVisible();
   });
 

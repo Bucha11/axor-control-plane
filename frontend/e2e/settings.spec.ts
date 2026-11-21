@@ -125,7 +125,7 @@ test.describe("settings", () => {
     await expect(page.getByText(/its own run contradicts/)).toBeVisible();
     await expect(page.getByText(/restricted further/)).toHaveCount(0);
     await tabs.getByRole("tab", { name: "connect agents" }).click();
-    await expect(page.getByTestId("keys-open")).toContainText("export AXOR_PLANE_URL=");
+    await expect(page.getByTestId("keys-open")).toContainText("axor-wrap connect http");
   });
 
   test("production sees how the plane is protected, wall by wall", async ({ page }) => {
