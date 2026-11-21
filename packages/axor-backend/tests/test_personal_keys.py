@@ -54,3 +54,54 @@ async def test_a_viewer_cannot_mint_one(
         client: httpx.AsyncClient, priv: Ed25519PrivateKey) -> None:  # noqa: F811
     viewer = _bearer(_mint(priv, role="viewer"))
     assert (await client.post("/v1/keys/mine", headers=viewer)).status_code == 403
+
+
+async def test_an_agent_key_is_steered_not_only_heard(
+        client: httpx.AsyncClient, priv: Ed25519PrivateKey) -> None:  # noqa: F811
+    """What the agent's own tools read on an ingest key: its desired state
+    (pause / stop / cap), the plan (a mixed tree), the last health check."""
+    from axor_backend.auth import Principal, required_scope
+
+    agent_key = Principal(kind="key", key_id="k", scopes=frozenset({"ingest"}))
+    viewer = Principal(kind="user", key_id="u", scopes=frozenset({"read"}))
+    # the desired-state subscription is an endless SSE stream, so the decision
+    # is checked here rather than by opening it
+    need = required_scope("GET", "/v1/plane/claude-code-dev2-1/desired")
+    assert agent_key.may(need) and viewer.may(need)
+    member = _bearer(_mint(priv, role="member", sub="usr_dev2", eml="dev2@acme.io"))
+    agent = _bearer((await client.post("/v1/keys/mine", headers=member)).json()["secret"])
+    assert (await client.get("/v1/license/entitlements", headers=agent)).status_code == 200
+    assert (await client.get("/v1/setup-health/latest", headers=agent)).status_code in (200, 404)
+    # ...and still nothing a person reads
+    assert (await client.get("/v1/plane/nodes", headers=agent)).status_code == 403
+
+
+async def test_a_node_bound_key_reads_only_its_own_desired_state(
+        client: httpx.AsyncClient, priv: Ed25519PrivateKey) -> None:  # noqa: F811
+    owner = _bearer(_mint(priv, role="owner"))
+    key = (await client.post("/v1/keys", json={"scopes": ["ingest"], "node_id": "agent-a"},
+                             headers=owner)).json()["secret"]
+    async with client.stream("GET", "/v1/plane/agent-b/desired", headers=_bearer(key)) as r:
+        assert r.status_code == 403
+
+
+async def test_the_owner_changes_a_keys_role(
+        client: httpx.AsyncClient, priv: Ed25519PrivateKey) -> None:  # noqa: F811
+    member = _bearer(_mint(priv, role="member", sub="usr_dev2", eml="dev2@acme.io"))
+    owner = _bearer(_mint(priv, role="owner"))
+    made = (await client.post("/v1/keys/mine", headers=member)).json()
+    agent = _bearer(made["secret"])
+    assert (await client.get("/v1/runs", headers=agent)).status_code == 403
+    # a member cannot raise their own key
+    up = {"scopes": ["read", "ingest"]}
+    mine = await client.put(f"/v1/keys/{made['key_id']}", json=up, headers=member)
+    assert mine.status_code == 403
+    r = await client.put(f"/v1/keys/{made['key_id']}", json=up, headers=owner)
+    assert r.status_code == 200 and r.json()["scopes"] == ["read", "ingest"]
+    # the same secret, on the same machine, now reads the plane too
+    assert (await client.get("/v1/runs", headers=agent)).status_code == 200
+    listed = {k["key_id"]: k for k in (await client.get("/v1/keys", headers=owner)).json()}
+    assert listed[made["key_id"]]["scopes"] == ["read", "ingest"]
+    audit = (await client.get("/v1/keys/audit", headers=owner)).json()
+    assert audit[0]["action"] == "change" and audit[0]["was"] == ["ingest"]
+    assert (await client.put("/v1/keys/nope", json=up, headers=owner)).status_code == 404

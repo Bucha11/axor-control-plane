@@ -316,6 +316,24 @@ async def keys_audit(
     )
 
 
+@router.put("/keys/{key_id}")
+async def set_key_scopes(key_id: str, body: dict, request: Request, store: StoreDep) -> dict:
+    """Change what a key may do — its role — in place: a developer's key raised
+    to read the plane too, an operator key lowered to report-only. The secret
+    and the machine holding it stay the same. Within the caller's own
+    authority, like minting; a node binding stays as it was."""
+    scopes = _scopes_of(body)
+    caller = getattr(request.state, "principal", None)
+    keys = {k["key_id"]: k for k in await store.list_api_keys()}
+    if key_id not in keys:
+        raise HTTPException(404, "unknown key")
+    _delegable(caller, scopes, keys[key_id]["node_id"])
+    await store.set_api_key_scopes(key_id, scopes)
+    await _audit(store, "change", request, key_id=key_id, scopes=sorted(scopes),
+                 was=sorted(keys[key_id]["scopes"]))
+    return {"key_id": key_id, "scopes": scopes}
+
+
 @router.delete("/keys/{key_id}")
 async def delete_key(key_id: str, request: Request, store: StoreDep) -> dict:
     if not await store.delete_api_key(key_id):

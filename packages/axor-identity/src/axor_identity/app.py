@@ -97,6 +97,10 @@ class MemberBody(BaseModel):
     role: str
 
 
+class RoleBody(BaseModel):
+    role: str
+
+
 class InviteBody(BaseModel):
     role: str = "member"
     email: EmailStr | None = None       # for one address; None = whoever has the link
@@ -348,6 +352,39 @@ def create_app(database_url: str | None = None, *,
         if caller.org != org_id:
             raise HTTPException(403, "a member of this organization required")
         return {"members": await store.org_members(org_id)}
+
+    # ── a member's role, changed or taken away ────────────────────────────────
+    # An admin (or the owner) sets anyone's role among admin / member / viewer,
+    # or removes them. Never their own — a slip would lock them out — and never
+    # the owner's: the owner created the workspace and is its one way back in.
+    # The new role reaches the member at their next token refresh (minutes).
+
+    async def _changeable(org_id: str, user_id: str, caller: Claims) -> None:
+        if caller.org != org_id or not role_at_least(caller.role, "admin"):
+            raise HTTPException(403, "admin of this organization required")
+        if user_id == caller.user_id:
+            raise HTTPException(409, "you cannot change your own role")
+        current = await store.role_in_org(user_id, org_id)
+        if current is None:
+            raise HTTPException(404, "not a member of this organization")
+        if current == "owner":
+            raise HTTPException(409, "the owner's role cannot be changed")
+
+    @app.put("/v1/orgs/{org_id}/members/{user_id}")
+    async def set_member_role(org_id: str, user_id: str, body: RoleBody,
+                              caller: Claims = Depends(_caller)) -> dict:
+        if body.role not in _ASSIGNABLE:
+            raise HTTPException(422, f"role must be one of {sorted(_ASSIGNABLE)}")
+        await _changeable(org_id, user_id, caller)
+        await store.set_member_role(user_id, org_id, body.role)
+        return {"user_id": user_id, "org_id": org_id, "role": body.role}
+
+    @app.delete("/v1/orgs/{org_id}/members/{user_id}")
+    async def remove_member(org_id: str, user_id: str,
+                            caller: Claims = Depends(_caller)) -> dict:
+        await _changeable(org_id, user_id, caller)
+        await store.remove_member(user_id, org_id)
+        return {"removed": user_id}
 
     # ── invites ───────────────────────────────────────────────────────────────
     # A link an admin sends; whoever opens it signs up (or in) and joins the

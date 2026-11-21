@@ -1086,6 +1086,13 @@ export const api = {
   orgMembers: (orgId: string) =>
     af(`${IDENTITY_BASE}/v1/orgs/${encodeURIComponent(orgId)}/members`).then((r) =>
       j<{ members: { user_id: string; email: string; role: string; since: string }[] }>(r)),
+  setMemberRole: (orgId: string, userId: string, role: string) =>
+    af(`${IDENTITY_BASE}/v1/orgs/${encodeURIComponent(orgId)}/members/${encodeURIComponent(userId)}`, {
+      method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ role }),
+    }).then((r) => j<{ role: string }>(r)),
+  removeMember: (orgId: string, userId: string) =>
+    af(`${IDENTITY_BASE}/v1/orgs/${encodeURIComponent(orgId)}/members/${encodeURIComponent(userId)}`,
+       { method: "DELETE" }).then((r) => j<{ removed: string }>(r)),
   orgInvites: (orgId: string) =>
     af(`${IDENTITY_BASE}/v1/orgs/${encodeURIComponent(orgId)}/invites`).then((r) =>
       j<{ invites: { invite_id: string; role: string; email: string | null; created_ts: string; expires_ts: string }[] }>(r)),
@@ -1852,6 +1859,11 @@ export const api = {
       j<{ key_id: string; label: string; created_ts: string; scopes: string[] }[]>(r)),
   revokeMyKey: (keyId: string) =>
     af(`/v1/keys/mine/${encodeURIComponent(keyId)}`, { method: "DELETE" }).then((r) => j<{ revoked: string }>(r)),
+  // a key's role, changed in place: same secret, different authority
+  setKeyScopes: (keyId: string, scopes: string[]) =>
+    af(`/v1/keys/${encodeURIComponent(keyId)}`, {
+      method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ scopes }),
+    }).then((r) => j<{ key_id: string; scopes: string[] }>(r)),
   revokeKey: (keyId: string) =>
     af(`/v1/keys/${encodeURIComponent(keyId)}`, { method: "DELETE" }).then((r) => j<{ revoked: string }>(r)),
   // Every mint and revoke, newest first. `listKeys` answers "what exists now",

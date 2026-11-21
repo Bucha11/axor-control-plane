@@ -106,6 +106,43 @@ test.describe("identity login (Settings)", () => {
     expect(made).toMatchObject({ email: "bob@acme.io", role: "viewer" });
   });
 
+  test("an admin changes a teammate's role, or takes them off — never the owner's", async ({ page }) => {
+    await page.route("**/identity/v1/login", jsonRoute(200, SESSION));
+    await page.route("**/identity/v1/me", jsonRoute(200, {
+      user: SESSION.user, active_org: "org_1", role: "owner",
+      memberships: [{ org_id: "org_1", role: "owner", name: "Acme", tier: "coding" }],
+    }));
+    let members = [
+      { user_id: "usr_1", email: "ada@acme.io", role: "owner", since: "2026-01-01" },
+      { user_id: "usr_2", email: "sam@acme.io", role: "member", since: "2026-02-01" }];
+    await page.route("**/identity/v1/orgs/org_1/members", (route) =>
+      route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ members }) }));
+    const calls: string[] = [];
+    await page.route("**/identity/v1/orgs/org_1/members/usr_2", async (route) => {
+      const m = route.request().method();
+      calls.push(m === "PUT" ? `PUT ${route.request().postDataJSON().role}` : m);
+      members = m === "PUT"
+        ? members.map((x) => x.user_id === "usr_2" ? { ...x, role: route.request().postDataJSON().role } : x)
+        : members.filter((x) => x.user_id !== "usr_2");
+      await route.fulfill({ status: 200, contentType: "application/json", body: "{}" });
+    });
+    await page.route("**/identity/v1/orgs/org_1/invites", jsonRoute(200, { invites: [] }));
+    await goHash(page, "settings");
+    await page.getByLabel("email", { exact: true }).fill("ada@acme.io");
+    await page.getByLabel("password").fill("correct horse");
+    await page.getByRole("button", { name: "log in", exact: true }).click();
+    const team = page.getByTestId("team");
+    await expect(team).toContainText("sam@acme.io");
+    // the owner's own row is not a control
+    await expect(page.getByLabel("role of ada@acme.io")).toHaveCount(0);
+    await page.getByLabel("role of sam@acme.io").selectOption("admin");
+    await expect(page.getByLabel("role of sam@acme.io")).toHaveValue("admin");
+    page.once("dialog", (d) => void d.accept());
+    await page.getByLabel("remove sam@acme.io").click();
+    await expect(team).not.toContainText("sam@acme.io");
+    expect(calls).toEqual(["PUT admin", "DELETE"]);
+  });
+
   test("an invitation link: a new account joins the workspace", async ({ page }) => {
     await page.route("**/identity/v1/invites/tok-abc", jsonRoute(200, {
       org_name: "Acme", role: "member", for_email: null, expires_ts: "2026-12-01T00:00:00Z" }));

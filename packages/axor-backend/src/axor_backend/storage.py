@@ -2151,6 +2151,15 @@ class Store:
             for r in rows
         ]
 
+    async def set_api_key_scopes(self, key_id: str, scopes: list[str]) -> bool:
+        async with self.engine.begin() as conn:
+            result = await conn.execute(
+                update(api_keys).where(
+                    api_keys.c.key_id == key_id, api_keys.c.org_id == current_org_id(),
+                ).values(scopes=",".join(scopes))
+            )
+        return bool(result.rowcount)
+
     async def delete_api_key(self, key_id: str, created_by: str | None = None) -> bool:
         """Revoke a key; with ``created_by``, only if that person minted it."""
         cond = [api_keys.c.key_id == key_id, api_keys.c.org_id == current_org_id()]

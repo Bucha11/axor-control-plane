@@ -280,6 +280,19 @@ class Store:
         return [{"user_id": r.user_id, "email": r.email, "role": r.role, "since": r.created_ts}
                 for r in rows]
 
+    async def set_member_role(self, user_id: str, org_id: str, role: str) -> bool:
+        async with self.engine.begin() as conn:
+            result = await conn.execute(update(memberships).where(
+                memberships.c.user_id == user_id, memberships.c.org_id == org_id,
+            ).values(role=role))
+        return bool(result.rowcount)
+
+    async def remove_member(self, user_id: str, org_id: str) -> bool:
+        async with self.engine.begin() as conn:
+            result = await conn.execute(delete(memberships).where(
+                memberships.c.user_id == user_id, memberships.c.org_id == org_id))
+        return bool(result.rowcount)
+
     # ── invites ───────────────────────────────────────────────────────────────
     async def create_invite(self, invite_id: str, token_hash: str, org_id: str, role: str,
                             email: str | None, created_by: str, ts: str,

@@ -136,15 +136,44 @@ function Team({ orgId, isAdmin }: { orgId: string; isAdmin: boolean }) {
     mutationFn: (id: string) => api.revokeInvite(orgId, id),
     onSuccess: () => void qc.invalidateQueries({ queryKey: ["org-invites", orgId] }),
   });
+  const me = useApp((s) => s.identityEmail);
+  const setRole2 = useMutation({
+    mutationFn: ({ userId, to }: { userId: string; to: string }) => api.setMemberRole(orgId, userId, to),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ["org-members", orgId] }),
+  });
+  const remove = useMutation({
+    mutationFn: (userId: string) => api.removeMember(orgId, userId),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ["org-members", orgId] }),
+  });
   return (
     <div data-testid="team" className="mt-2">
       <div style={{ color: C.dim, letterSpacing: "0.08em", fontSize: 10.5, marginBottom: 4 }}>TEAM</div>
-      {(members.data?.members ?? []).map((m) => (
-        <div key={m.user_id} className="flex gap-3" style={{ padding: "2px 0" }}>
-          <span style={{ color: C.text, flex: 1 }}>{m.email}</span>
-          <span>{m.role}</span>
-        </div>
-      ))}
+      {(members.data?.members ?? []).map((m) => {
+        // an admin sets anyone's role but their own and the owner's
+        const editable = isAdmin && m.role !== "owner" && m.email !== me;
+        return (
+          <div key={m.user_id} data-testid={`member-${m.email}`} className="flex gap-3 items-center" style={{ padding: "2px 0" }}>
+            <span style={{ color: C.text, flex: 1 }}>{m.email}</span>
+            {editable ? (
+              <>
+                <select value={m.role} aria-label={`role of ${m.email}`} disabled={setRole2.isPending}
+                  onChange={(e) => setRole2.mutate({ userId: m.user_id, to: e.target.value })}
+                  style={{ ...INPUT_STYLE, width: 90, padding: "1px 4px" }}>
+                  {["admin", "member", "viewer"].map((r) => <option key={r} value={r}>{r}</option>)}
+                </select>
+                <button aria-label={`remove ${m.email}`} disabled={remove.isPending}
+                  onClick={() => { if (window.confirm(`Take ${m.email} off this workspace?`)) remove.mutate(m.user_id); }}
+                  style={{ background: "none", border: "none", padding: 0, cursor: "pointer", color: C.dim, fontFamily: MONO, fontSize: 11 }}>
+                  remove
+                </button>
+              </>
+            ) : <span>{m.role}</span>}
+          </div>
+        );
+      })}
+      {(setRole2.isError || remove.isError) && (
+        <div style={{ color: C.red, fontSize: 11 }}>{((setRole2.error ?? remove.error) as Error).message}</div>
+      )}
       {isAdmin && (
         <>
           <form onSubmit={(e) => { e.preventDefault(); if (!invite.isPending) invite.mutate(); }}
@@ -978,6 +1007,36 @@ const PRESETS: { id: string; label: string; words: string; scopes: string[]; nod
     words: "pick what it may do" },
 ];
 
+// What a key may do, said as a role. The owner changes it in place: the same
+// secret on the same machine, a different authority.
+const KEY_ROLES: { id: string; label: string; scopes: string[] }[] = [
+  { id: "agent", label: "agent — reports", scopes: ["ingest"] },
+  { id: "agent+read", label: "agent + reads the plane", scopes: ["read", "ingest"] },
+  { id: "operator", label: "operator — steers agents", scopes: ["read", "ingest", "operate"] },
+  { id: "admin", label: "admin — everything", scopes: ["read", "ingest", "operate", "admin"] },
+];
+
+function KeyRole({ keyId, scopes }: { keyId: string; scopes: string[] }) {
+  const qc = useQueryClient();
+  const set = useMutation({
+    mutationFn: (to: string[]) => api.setKeyScopes(keyId, to),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ["api-keys"] });
+      void qc.invalidateQueries({ queryKey: ["api-keys-audit"] });
+    },
+  });
+  const have = [...scopes].sort().join(",");
+  const role = KEY_ROLES.find((r) => [...r.scopes].sort().join(",") === have);
+  return (
+    <select value={role?.id ?? "custom"} aria-label={`role of ${keyId}`} disabled={set.isPending}
+      onChange={(e) => { const r = KEY_ROLES.find((x) => x.id === e.target.value); if (r) set.mutate(r.scopes); }}
+      style={{ ...INPUT_STYLE, width: 170, padding: "1px 4px", fontSize: 10.5 }}>
+      {!role && <option value="custom" disabled>{scopes.join(",")}</option>}
+      {KEY_ROLES.map((r) => <option key={r.id} value={r.id}>{r.label}</option>)}
+    </select>
+  );
+}
+
 /** A member's own keys: one per machine, ingest only, theirs to revoke. */
 function MyKeys() {
   const qc = useQueryClient();
@@ -1120,7 +1179,7 @@ function AgentKeys({ journey, menuAll }: { journey: Journey | null; menuAll: boo
       {(keys.data ?? []).map((k) => (
         <div key={k.key_id} className="flex items-center gap-2 py-1">
           <span style={{ fontFamily: MONO, fontSize: 11, color: C.text }}>{k.key_id}</span>
-          <span style={{ fontFamily: MONO, fontSize: 10.5, color: C.mut }}>{k.scopes.join(",")}</span>
+          <KeyRole keyId={k.key_id} scopes={k.scopes} />
           <span style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim, flex: 1 }}>
             {k.label}{k.node_id ? ` · only for ${k.node_id}` : ""}
           </span>

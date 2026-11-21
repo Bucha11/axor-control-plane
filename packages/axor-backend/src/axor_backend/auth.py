@@ -38,6 +38,9 @@ import secrets
 from dataclasses import dataclass
 
 SCOPES = frozenset({"read", "ingest", "operate", "admin"})
+# A requirement either scope meets: what a person reading the plane and an
+# agent's own key both need (see _AGENT_READS).
+READ_OR_INGEST = "read|ingest"
 
 
 def policy_path(path: str, root_path: str = "") -> str:
@@ -233,8 +236,27 @@ _OPEN_ROUTES: tuple[tuple[str, str], ...] = (
 )
 
 
+# Reads an agent's own credential (ingest) must reach for its tools to work.
+# Without them a coding agent's key — the one the Connect page mints — could
+# report but not be steered: its desired-state subscription (pause / stop /
+# cap) answered 403, `tree run` could not ask the plan, and a context-health
+# check had no baseline. Matched before the read table.
+_AGENT_READS: tuple[tuple[str, str], ...] = (
+    ("/v1/plane/", "/desired"),        # the node's own desired state (pause/stop/cap)
+)
+_AGENT_READ_PREFIXES: tuple[str, ...] = (
+    "/v1/license/entitlements",        # what the plan allows (a mixed tree is paid)
+    "/v1/setup-health/latest",         # the baseline the next check compares with
+)
+
+
 def required_scope(method: str, path: str) -> str:
     if method in _READ_METHODS:
+        for prefix, suffix in _AGENT_READS:
+            if path.startswith(prefix) and path.endswith(suffix):
+                return READ_OR_INGEST
+        if path.startswith(_AGENT_READ_PREFIXES):
+            return READ_OR_INGEST
         for prefix, scope in _READ_POLICY:
             if path.startswith(prefix):
                 return scope
@@ -295,9 +317,14 @@ def plane_node_of(method: str, path: str) -> str | None:
     not. Returns the ``{node_id}`` path segment so the caller can check it
     against a node-bound credential.
     """
-    if method in _READ_METHODS or not path.startswith(_PLANE_PREFIX):
+    if not path.startswith(_PLANE_PREFIX):
         return None
-    if not path.endswith(_SPEAKS_AS_NODE_SUFFIXES):
+    # a node's own desired state is read AS that node: a node-bound key
+    # subscribes to its own pause/stop, never a neighbour's
+    if method in _READ_METHODS:
+        if not path.endswith("/desired"):
+            return None
+    elif not path.endswith(_SPEAKS_AS_NODE_SUFFIXES):
         return None
     node_id, _, suffix = path[len(_PLANE_PREFIX):].rpartition("/")
     # Exactly one segment, matching the `{node_id}` the router binds. Without
@@ -342,7 +369,9 @@ class Principal:
     node_id: str | None = None
 
     def may(self, scope: str) -> bool:
-        return scope in self.scopes
+        """Whether this principal meets ``scope`` — one scope, or alternatives
+        joined by ``|`` (READ_OR_INGEST)."""
+        return any(s in self.scopes for s in scope.split("|"))
 
     def may_speak_for(self, node_id: str) -> bool:
         """Whether this principal may post telemetry/facts/health AS `node_id`.

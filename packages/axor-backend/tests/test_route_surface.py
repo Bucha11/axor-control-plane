@@ -77,7 +77,7 @@ EXPECTED: dict[tuple[str, str], str] = {
     ("GET", "/v1/coding/skill-bundles/{name}"): "ingest",
     ("POST", "/v1/demo/seed-team-skill"): "operate",
     ("GET", "/v1/setup-health"): "read",
-    ("GET", "/v1/setup-health/latest"): "read",
+    ("GET", "/v1/setup-health/latest"): "read|ingest",
     ("POST", "/v1/demo/seed-setup-health"): "operate",
     ("PUT", "/v1/incidents/status"): "operate",
     ("GET", "/v1/chaos/tools/{node_id}"): "read",
@@ -157,7 +157,7 @@ EXPECTED: dict[tuple[str, str], str] = {
     # per-node line on their invoice. Their data, so `read` — the same bar as
     # the license status it sits next to.
     ("GET", "/v1/license/usage"): "read",
-    ("GET", "/v1/license/entitlements"): "read",
+    ("GET", "/v1/license/entitlements"): "read|ingest",
     ("PUT", "/v1/license/agent-family"): "admin",
     # The statement drawn from that usage. Their own bill, so `read` — the same
     # bar as the usage it is computed from.
@@ -169,6 +169,7 @@ EXPECTED: dict[tuple[str, str], str] = {
     # here. Same scope: reading who was ever issued what is enumeration too.
     ("GET", "/v1/keys/audit"): "admin",
     ("DELETE", "/v1/keys/{key_id}"): "admin",
+    ("PUT", "/v1/keys/{key_id}"): "admin",   # a key's role, changed in place
     # a member's own ingest-only key (routers/keys: create_my_key)
     ("POST", "/v1/keys/mine"): "ingest",
     ("GET", "/v1/keys/mine"): "ingest",
@@ -177,7 +178,7 @@ EXPECTED: dict[tuple[str, str], str] = {
     ("POST", "/v1/plane/{node_id}/command"): "operate",
     ("POST", "/v1/plane/{node_id}/cascade-stop"): "operate",
     ("POST", "/v1/plane/{node_id}/facts"): "operate",
-    ("GET", "/v1/plane/{node_id}/desired"): "read",
+    ("GET", "/v1/plane/{node_id}/desired"): "read|ingest",
     ("POST", "/v1/plane/{node_id}/telemetry"): "ingest",
     ("POST", "/v1/plane/{node_id}/consumed"): "ingest",
     ("POST", "/v1/plane/{node_id}/probe-report"): "ingest",

@@ -151,6 +151,27 @@ test.describe("settings", () => {
     await expect(mine).toContainText("k_dev2");
   });
 
+  test("the owner changes what a key may do, in place", async ({ page }) => {
+    await page.route("**/v1/auth/status", (r) => r.fulfill({ status: 200, contentType: "application/json",
+      body: JSON.stringify({ auth_enabled: true, authenticated: true, scopes: ["read", "ingest", "operate", "admin"] }) }));
+    let scopes = ["ingest"];
+    let put: unknown = null;
+    await page.route("**/v1/keys", (r) => r.fulfill({ status: 200, contentType: "application/json",
+      body: JSON.stringify([{ key_id: "k_dev2", scopes, label: "dev2@acme.io · coding agents",
+                              created_ts: "2026-11-21T18:00:00Z", node_id: null }]) }));
+    await page.route("**/v1/keys/k_dev2", async (r) => {
+      put = r.request().postDataJSON();
+      scopes = (put as { scopes: string[] }).scopes;
+      await r.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ key_id: "k_dev2", scopes }) });
+    });
+    await goHash(page, "settings?tab=connect");
+    const role = page.getByLabel("role of k_dev2");
+    await expect(role).toHaveValue("agent");
+    await role.selectOption("agent+read");
+    await expect(role).toHaveValue("agent+read");
+    expect(put).toEqual({ scopes: ["read", "ingest"] });
+  });
+
   test("production sees how the plane is protected, wall by wall", async ({ page }) => {
     await goHash(page, "settings?tab=security");
     const posture = page.getByTestId("security-posture");
