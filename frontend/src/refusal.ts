@@ -3,7 +3,9 @@
 // the same thing for the same refusal.
 
 export function refusalWords(rawIn: string, gate = ""): string {
-  const raw = rawIn.replace(/^axor:\s*/, "");
+  // what to do about it ("run it yourself", "allow it in .axor/rules.json") is
+  // said beside the reason, not inside it
+  const raw = rawIn.replace(/^axor:\s*/, "").split(/\s+If you want it, run it yourself:|\s+Read it; if you trust it/)[0];
   if (/Refused by the axor rule/.test(raw)) return raw.split(" Refused by the axor rule")[0];
   if (/turned off from the Control Plane|paused from the Control Plane|stopped from the Control Plane/.test(raw)) return raw;
   if (gate === "taint_floor" || gate === "taint_enforcement" || /taint enforcement/.test(raw)) {

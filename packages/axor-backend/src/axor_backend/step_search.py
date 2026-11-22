@@ -142,7 +142,8 @@ def search(
             "ts": line.get("ts"), "kind": kind, "tool": name, "outcome": label,
             "does": did, "from_outside": from_outside,
             "what": _summary(args) if kind == "tool_call" else preview[:200],
-            "reason": str(reason)[:300],
+            # whole enough to keep the "how to allow it" a refusal ends with
+            "reason": str(reason)[:600],
         })
         if len(found) >= limit:
             break

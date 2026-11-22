@@ -395,11 +395,13 @@ function Step({ e, first, runId, nodeId, refTool, tainted, appliedCuts, pendingC
       {e.kind === "tool_call" && e.verdict === "deny" && typeof p.reason === "string" && p.reason && (
         <div data-testid="refusal-reason" style={{ marginLeft: 64, color: C.red }}>
           {refusalWords(p.reason, e.gate ?? "")}
-          {/if this repository needs it/.test(p.reason) && (
-            <div style={{ color: C.dim }}>
-              to allow it here: {p.reason.split(/if this repository needs it,?\s*/)[1]}
-            </div>
-          )}
+          {(() => {
+            const reason = p.reason as string;
+            const meant = reason.split(/If you want it, run it yourself:\s*/)[1];
+            const allow = reason.split(/if this repository needs it,?\s*|or allow skill scripts in this repository:\s*/)[1];
+            const hint = meant ? `if you meant it, run it yourself: ${meant}` : allow ? `to allow it here: ${allow}` : "";
+            return hint ? <div style={{ color: C.dim }}>{hint}</div> : null;
+          })()}
         </div>
       )}
       {quotes.filter(([, from]) => tainted.has(from)).map(([arg, from]) => (

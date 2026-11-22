@@ -929,6 +929,8 @@ async def fleet(request: Request) -> dict:
     if await work_started(ctx.store):
         # the totals are the workspace's own: the examples left the screens
         nodes = [n for n in nodes if not is_example_node(n)]
+    # ...and its agents' work: a skill's dry run is a try, counted on Try a skill
+    nodes = [n for n in nodes if not n.startswith("skill-try.")]
     probes: dict[str, dict] = {}
     for nid in nodes:
         for p in await ctx.store.probe_report_history(nid, limit=200):

@@ -66,7 +66,9 @@ async def incidents(store: Any, scan: int) -> list[dict[str, Any]]:  # noqa: ANN
             })
     refused: dict[str, dict[str, Any]] = {}
     for s in step_search.search(await store.recent_tool_lines(scan), limit=10_000):
-        if s["kind"] != "tool_call":
+        # a skill's dry run is a try the developer ran on purpose: its story is
+        # on Try a skill, not here among the agents' work
+        if s["kind"] != "tool_call" or str(s["node_id"]).startswith("skill-try."):
             continue
         base = {"ts": s["ts"], "node_id": s["node_id"], "run_id": s["run_id"], "seq": s["seq"],
                 "anchor_node": s["node_id"], "detail": s["what"], "count": 1}
