@@ -490,7 +490,27 @@ pair_sessions = Table(
     Column("expires_ts", String(40), nullable=False),
     Column("closed_ts", String(40), nullable=True),
     Column("outside", Boolean, nullable=False, default=False),
+    # who joined: outside guests, and teammates ({"who", "ts", "team": true,
+    # "told": bool} — the developer is told in their agent once)
     Column("guests", Text, nullable=False, server_default="[]"),
+    # teammates the developer invited by name: the pair is in their list
+    Column("invited", Text, nullable=False, server_default="[]"),
+)
+
+# A teammate asks to pair on someone's live session; the developer lets them
+# in (a pair opened for them) or not. Told to the developer in their agent once.
+pair_requests = Table(
+    "pair_requests", metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("org_id", String(64), nullable=False, index=True),
+    Column("node_id", String(128), nullable=False, index=True),
+    Column("by", String(255), nullable=False),
+    Column("developer", String(64), nullable=False, index=True),
+    Column("ts", String(40), nullable=False),
+    Column("status", String(16), nullable=False, server_default="pending"),
+    Column("decided_ts", String(40), nullable=True),
+    Column("token", String(64), nullable=True),
+    Column("told", Boolean, nullable=False, default=False),
 )
 
 # A note from a pair session to the agent: queued here, fetched by the
@@ -1009,14 +1029,91 @@ class Store:
         return {"token": r.token, "org_id": r.org_id, "node_id": r.node_id,
                 "created_by": r.created_by, "created_ts": r.created_ts,
                 "expires_ts": r.expires_ts, "closed_ts": r.closed_ts,
-                "outside": bool(r.outside), "guests": json.loads(r.guests or "[]")}
+                "outside": bool(r.outside), "guests": json.loads(r.guests or "[]"),
+                "invited": json.loads(getattr(r, "invited", None) or "[]")}
 
     async def create_pair(self, token: str, node_id: str, by: str, ts: str,
-                          expires: str, outside: bool) -> None:
+                          expires: str, outside: bool, invited: list[str] | None = None) -> None:
         async with self.engine.begin() as conn:
             await conn.execute(insert(pair_sessions).values(
                 token=token, org_id=current_org_id(), node_id=node_id, created_by=by,
-                created_ts=ts, expires_ts=expires, outside=outside, guests="[]"))
+                created_ts=ts, expires_ts=expires, outside=outside, guests="[]",
+                invited=json.dumps(sorted(set(invited or [])))))
+
+    # ── asking to pair ──────────────────────────────────────────────────────
+
+    async def add_pair_request(self, node_id: str, by: str, developer: str, ts: str) -> int:
+        """One pending request per person and session: asking again is the same one."""
+        org = current_org_id()
+        async with self.engine.begin() as conn:
+            held = (await conn.execute(select(pair_requests.c.id).where(
+                pair_requests.c.org_id == org, pair_requests.c.node_id == node_id,
+                pair_requests.c.by == by, pair_requests.c.status == "pending"))).first()
+            if held is not None:
+                return int(held.id)
+            res = await conn.execute(insert(pair_requests).values(
+                org_id=org, node_id=node_id, by=by, developer=developer, ts=ts,
+                status="pending", told=False))
+            return int(res.inserted_primary_key[0])
+
+    async def pair_requests_of(self, *, developer: str = "", by: str = "",
+                               since: str = "") -> list[dict[str, Any]]:
+        q = select(pair_requests).where(pair_requests.c.org_id == current_org_id())
+        if developer:
+            q = q.where(pair_requests.c.developer == developer)
+        if by:
+            q = q.where(pair_requests.c.by == by)
+        if since:
+            q = q.where(pair_requests.c.ts >= since)
+        async with self.engine.connect() as conn:
+            rows = (await conn.execute(q.order_by(pair_requests.c.ts.desc()))).all()
+        return [{"id": r.id, "node_id": r.node_id, "by": r.by, "developer": r.developer,
+                 "ts": r.ts, "status": r.status, "decided_ts": r.decided_ts,
+                 "token": r.token, "told": bool(r.told)} for r in rows]
+
+    async def decide_pair_request(self, request_id: int, status: str, ts: str,
+                                  token: str | None = None) -> None:
+        async with self.engine.begin() as conn:
+            await conn.execute(update(pair_requests).where(
+                pair_requests.c.org_id == current_org_id(), pair_requests.c.id == request_id,
+            ).values(status=status, decided_ts=ts, token=token))
+
+    async def untold_pair_requests(self, node_id: str) -> list[dict[str, Any]]:
+        """Pending requests on this session the developer has not been told of —
+        marked told as they are read (the sidecar says each once)."""
+        org = current_org_id()
+        async with self.engine.begin() as conn:
+            rows = (await conn.execute(select(pair_requests).where(
+                pair_requests.c.org_id == org, pair_requests.c.node_id == node_id,
+                pair_requests.c.status == "pending",
+                pair_requests.c.told.is_(False)))).all()
+            if rows:
+                await conn.execute(update(pair_requests).where(
+                    pair_requests.c.id.in_([r.id for r in rows])).values(told=True))
+        return [{"id": r.id, "by": r.by, "ts": r.ts} for r in rows]
+
+    async def untold_joins(self, node_id: str) -> list[str]:
+        """Who joined a pair on this session since the developer was last told
+        — marked told as they are read."""
+        org = current_org_id()
+        out: list[str] = []
+        async with self.engine.begin() as conn:
+            rows = (await conn.execute(select(pair_sessions).where(
+                pair_sessions.c.org_id == org, pair_sessions.c.node_id == node_id,
+                pair_sessions.c.closed_ts.is_(None)))).all()
+            for r in rows:
+                guests = json.loads(r.guests or "[]")
+                fresh = [g for g in guests if not g.get("told")]
+                if not fresh:
+                    continue
+                out += [str(g.get("who") or "someone") + ("" if g.get("team") else
+                                                           " (from outside the team)")
+                        for g in fresh]
+                for g in guests:
+                    g["told"] = True
+                await conn.execute(update(pair_sessions).where(
+                    pair_sessions.c.token == r.token).values(guests=json.dumps(guests)))
+        return out
 
     async def pair_by_token(self, token: str) -> dict[str, Any] | None:
         """ACROSS tenants: the link names the session, whoever opens it."""
@@ -1036,8 +1133,9 @@ class Store:
         return [self._pair_row(r) for r in rows]
 
     async def update_pair(self, token: str, **values: Any) -> None:  # noqa: ANN401
-        if "guests" in values:
-            values["guests"] = json.dumps(values["guests"])
+        for key in ("guests", "invited"):
+            if key in values:
+                values[key] = json.dumps(values[key])
         async with self.engine.begin() as conn:
             await conn.execute(update(pair_sessions).where(
                 pair_sessions.c.token == token).values(**values))

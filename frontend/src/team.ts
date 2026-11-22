@@ -24,3 +24,10 @@ export function useCanAdmin(): boolean {
   const role = me.data?.memberships.find((m) => m.org_id === me.data?.active_org)?.role ?? me.data?.role;
   return !email || role === "owner" || role === "admin";
 }
+
+/** Whether a coding session is the signed-in person's own: its developer is
+ *  them. An open plane (nobody signed in) has one operator, whose all are. */
+export function useMine(): (developer?: string | null) => boolean {
+  const email = (useApp((s) => s.identityEmail) || "").toLowerCase();
+  return (developer) => !email || !developer || developer.toLowerCase() === email;
+}

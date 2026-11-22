@@ -193,3 +193,74 @@ async def test_a_node_bound_key_reads_only_its_own_notes(
     mine = await client.get("/v1/coding/notes/claude-code-ada-1", headers=bound)
     assert mine.status_code == 200
     assert (await client.get("/v1/coding/notes/someone-else", headers=bound)).status_code == 403
+
+
+async def test_only_the_developer_opens_a_pair_and_only_who_is_invited_sees_it(
+        client: httpx.AsyncClient, priv: Ed25519PrivateKey) -> None:
+    ada = _user(priv, "org_acme", "ada@acme.io", role="member")
+    sam = _user(priv, "org_acme", "sam@acme.io", role="member")
+    boss = _user(priv, "org_acme", "boss@acme.io", role="owner")
+    kim = _user(priv, "org_acme", "kim@acme.io", role="member")
+    await _session(client, ada)
+    for who in (sam, boss):
+        r = await client.post("/v1/pair", json={"node_id": "claude-code-ada-1"}, headers=who)
+        assert r.status_code == 403 and r.json()["detail"]["code"] == "not_your_session"
+    r = await client.post("/v1/pair", headers=ada,
+                          json={"node_id": "claude-code-ada-1", "invite": ["kim@acme.io"]})
+    token = r.json()["token"]
+    # nobody else sees the link; the invited teammate does
+    assert (await client.get("/v1/pair", headers=sam)).json()["pairs"] == []
+    assert (await client.get("/v1/pair", headers=boss)).json()["pairs"] == []
+    seen = (await client.get("/v1/pair", headers=kim)).json()["pairs"]
+    assert [p["token"] for p in seen] == [token]
+    assert (await client.delete(f"/v1/pair/{token}", headers=kim)).status_code == 403
+
+
+async def test_asking_to_pair_tells_the_developer_and_they_let_you_in(
+        client: httpx.AsyncClient, priv: Ed25519PrivateKey) -> None:
+    ada = _user(priv, "org_acme", "ada@acme.io", role="member")
+    sam = _user(priv, "org_acme", "sam@acme.io", role="member")
+    await _session(client, ada)
+    r = await client.post("/v1/pair/requests", json={"node_id": "claude-code-ada-1"}, headers=sam)
+    assert r.status_code == 201
+    rid = r.json()["id"]
+    # asking twice is the same request
+    again = await client.post("/v1/pair/requests", headers=sam,
+                              json={"node_id": "claude-code-ada-1"})
+    assert again.json()["id"] == rid
+    # the developer's sidecar is told, once
+    news = (await client.get("/v1/coding/notes/claude-code-ada-1", headers=ada)).json()["news"]
+    assert len(news) == 1 and "sam@acme.io asks to pair" in news[0]
+    second = await client.get("/v1/coding/notes/claude-code-ada-1", headers=ada)
+    assert second.json()["news"] == []
+    to_me = (await client.get("/v1/pair/requests", headers=ada)).json()["to_me"]
+    assert [x["by"] for x in to_me] == ["sam@acme.io"]
+    # only the developer decides
+    assert (await client.post(f"/v1/pair/requests/{rid}", json={"accept": True},
+                              headers=sam)).status_code == 403
+    token = (await client.post(f"/v1/pair/requests/{rid}", json={"accept": True},
+                               headers=ada)).json()["token"]
+    mine = (await client.get("/v1/pair/requests", headers=sam)).json()["mine"]
+    assert mine[0]["status"] == "accepted" and mine[0]["token"] == token
+    feed = (await client.get(f"/v1/pair/{token}/feed", headers=sam)).json()
+    assert feed["pair"]["yours"] is False and feed["pair"]["joined"] == ["sam@acme.io"]
+    news = (await client.get("/v1/coding/notes/claude-code-ada-1", headers=ada)).json()["news"]
+    assert len(news) == 1 and "sam@acme.io joined a pair session" in news[0]
+
+
+async def test_a_teammate_does_not_pause_someone_elses_session(
+        client: httpx.AsyncClient, priv: Ed25519PrivateKey) -> None:
+    ada = _user(priv, "org_acme", "ada@acme.io", role="member")
+    sam = _user(priv, "org_acme", "sam@acme.io", role="member")
+    admin = _user(priv, "org_acme", "lee@acme.io", role="admin")
+    await _session(client, ada)
+    node = "claude-code-ada-1"
+    r = await client.post(f"/v1/plane/{node}/command", headers=sam,
+                          json={"version": 1, "state": {"paused": True}})
+    assert r.status_code == 403 and r.json()["detail"]["code"] == "not_your_session"
+    assert (await client.post(f"/v1/plane/{node}/cascade-stop", headers=sam,
+                              json={"version": 1})).status_code == 403
+    for who, v in ((ada, 1), (admin, 2)):
+        r = await client.post(f"/v1/plane/{node}/command", headers=who,
+                              json={"version": v, "state": {"paused": v == 1}})
+        assert r.status_code == 202, r.text

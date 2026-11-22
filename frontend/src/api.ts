@@ -611,7 +611,15 @@ export interface MemoryRepo {
 /** A pair session: someone's coding-agent session others watch live. */
 export interface PairInfo {
   token: string; node_id: string; created_by: string; created_ts: string; expires_ts: string;
-  outside: boolean; guests: { who: string; org: string; ts: string }[];
+  outside: boolean; guests: { who: string; org?: string; ts: string; team?: boolean }[];
+  invited: string[]; title?: string; agent?: string; developer?: string;
+  // opened by me (the session's developer), or one I was let into
+  yours?: boolean;
+}
+/** A teammate asking to pair on a developer's session. */
+export interface PairRequest {
+  id: number; node_id: string; by: string; developer: string; ts: string;
+  status: "pending" | "accepted" | "declined"; token?: string | null;
 }
 export interface PairStep {
   id: number; ts: string; kind: "tool_call" | "tool_result" | "claim" | "task";
@@ -626,6 +634,7 @@ export interface PairNote {
 export interface PairFeed {
   pair: { node_id: string; agent: string; title?: string; created_by: string; created_ts: string; expires_ts: string;
           outside: boolean; guests: string[]; you: "teammate" | "guest"; paused: boolean;
+          joined?: string[]; invited?: string[]; yours?: boolean;
           stopped: boolean; desired_version: number; level: string };
   steps: PairStep[]; cursor: number; notes: PairNote[];
 }
@@ -1491,12 +1500,25 @@ export const api = {
     }).then((r) => j<{ id: number }>(r)),
   seedMemory: () =>
     af("/v1/demo/seed-memory", { method: "POST" }).then((r) => j<{ repo: string }>(r)),
-  openPair: (nodeId: string, outside: boolean) =>
+  openPair: (nodeId: string, outside: boolean, invite: string[] = []) =>
     af("/v1/pair", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ node_id: nodeId, outside }),
+      body: JSON.stringify({ node_id: nodeId, outside, invite }),
     }).then((r) => j<{ token: string; node_id: string; outside: boolean; expires_ts: string }>(r)),
+  // asking to pair on a teammate's session; the developer lets you in, or not
+  pairRequests: () => af("/v1/pair/requests").then((r) =>
+    j<{ to_me: PairRequest[]; mine: PairRequest[] }>(r)),
+  askToPair: (nodeId: string) =>
+    af("/v1/pair/requests", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ node_id: nodeId }),
+    }).then((r) => j<{ id: number; status: string }>(r)),
+  decidePairRequest: (id: number, accept: boolean) =>
+    af(`/v1/pair/requests/${id}`, {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ accept }),
+    }).then((r) => j<{ id: number; status: string; token?: string }>(r)),
   pairs: () => af("/v1/pair").then((r) => j<{ pairs: PairInfo[] }>(r)),
   closePair: (token: string) =>
     af(`/v1/pair/${encodeURIComponent(token)}`, { method: "DELETE" }).then((r) => j<{ closed: boolean }>(r)),

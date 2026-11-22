@@ -80,6 +80,26 @@ async def _require_plan(ctx: Any, node_id: str) -> None:  # noqa: ANN401
                                   "detail": REASONS[reasons[0]]})
 
 
+async def _require_yours(ctx: Any, request: Request, node_id: str) -> None:  # noqa: ANN401
+    """A coding session (or tree run) is its developer's: they pause, stop, cap
+    or replan it — and an owner or admin, who answers for the team's agents.
+    A teammate does not act on someone else's session. An open plane or an
+    operator key has one operator, who may."""
+    principal = getattr(request.state, "principal", None)
+    if getattr(principal, "kind", None) != "user" or not getattr(principal, "email", None):
+        return
+    if getattr(principal, "role", None) in ("owner", "admin"):
+        return
+    profile = (await ctx.store.node_kinds()).get(node_id) or {}
+    if profile.get("kind") not in ("coding", "tree"):
+        return
+    dev = str(profile.get("developer") or "")
+    if dev and dev.lower() != str(principal.email).lower():
+        raise HTTPException(403, {"code": "not_your_session",
+                                  "detail": f"this is {dev}'s session — they, or an owner or "
+                                            f"admin, pause and stop it. Ask to pair to watch it."})
+
+
 @router.post("/{node_id}/command", status_code=202)
 async def command(node_id: str, body: dict, request: Request) -> dict:
     ctx = _ctx(request)
@@ -87,6 +107,7 @@ async def command(node_id: str, body: dict, request: Request) -> dict:
     if not isinstance(delta, dict) or not delta:
         raise HTTPException(400, "command requires a non-empty `state` delta")
     await _require_plan(ctx, node_id)
+    await _require_yours(ctx, request, node_id)
     if "pending_experiment" in delta:
         _check_experiment(delta["pending_experiment"])
     version = body.get("version")
@@ -188,6 +209,7 @@ async def cascade_stop(node_id: str, request: Request, body: dict | None = None)
     keeps the legacy backend-side BFS over the self-reported `parent` field
     (deprecated: structure should derive from traced spawn events)."""
     ctx = _ctx(request)
+    await _require_yours(ctx, request, node_id)
     if not ctx.keyring.empty:
         body = body or {}
         delta = {"stopped": True, "cascade": True}

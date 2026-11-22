@@ -253,7 +253,8 @@ test.describe("coding agents: their menu, and trying a skill", () => {
     await expect(page).toHaveURL(/#\/pair\/[A-Za-z0-9_-]+$/);
     const token = page.url().split("/pair/")[1];
     const pane = page.getByTestId("pair-pane");
-    await expect(pane.getByTestId("pair-who")).toContainText("you're here as a teammate");
+    // the developer's own session: only they hold the agent
+    await expect(pane.getByTestId("pair-who")).toContainText("only you hold the agent");
     const feed = pane.getByTestId("pair-feed");
     await expect(feed).toContainText("ran pytest -q tests/auth");
     await expect(feed).toContainText("tests failed — === 1 failed, 11 passed in 0.82s ===");

@@ -1,14 +1,21 @@
 """Pair sessions: someone's coding-agent session, watched live by others who
 can send the agent a note.
 
-A developer opens a pair on their own session (``POST /v1/pair``) and gets a
-link. Whoever opens it signed in sees the session's steps as they happen and
-can write a note; the developer's axor sidecar fetches the notes and gives
-them to the agent at its next step (``GET /v1/coding/notes/{node}``), then
-says when (``POST …/delivered``), so the pair sees the note land.
+Only by invitation. A developer opens a pair on their OWN session (``POST
+/v1/pair``) — nobody else can, an owner or admin neither — naming teammates to
+invite, and gets a link. A teammate who wants to watch asks (``POST
+/v1/pair/requests``); the developer is told in their own agent and lets them
+in, or not. Whoever is let in sees the session's steps as they happen and can
+write a note; the developer's axor sidecar fetches the notes and gives them to
+the agent at its next step (``GET /v1/coding/notes/{node}``), then says when
+(``POST …/delivered``), so the pair sees the note land. The developer is told
+in their agent who joined, and every note their agent was given.
+
+The list of pairs (``GET /v1/pair``) is the caller's: those they opened and
+those they were invited to — never another developer's link.
 
 Who may open the link:
-- anyone in the same workspace;
+- a teammate the developer invited, or sent the link to;
 - someone from outside it — their own account, any plan, a free one too —
   only if the pair was opened for people outside the team AND the inviting
   workspace is on a paid plan. That is checked on every read, not once: a
@@ -66,36 +73,140 @@ def _plan_required(detail: str) -> HTTPException:
 
 # ── the developer's side ─────────────────────────────────────────────────────
 
+def _person(principal: Any) -> bool:  # noqa: ANN401
+    """A signed-in person — the only caller whose sessions are "theirs". An open
+    plane (no identity) or an operator key has one operator: whoever runs it."""
+    return getattr(principal, "kind", None) == "user" and bool(getattr(principal, "email", ""))
+
+
+def _mine(principal: Any, profile: dict) -> bool:  # noqa: ANN401
+    if not _person(principal):
+        return True
+    dev = str(profile.get("developer") or "").lower()
+    return not dev or dev == str(principal.email).lower()
+
+
+def not_yours(profile: dict) -> HTTPException:
+    dev = profile.get("developer") or "its developer"
+    return HTTPException(403, {"code": "not_your_session",
+                               "detail": f"this is {dev}'s session — only they open a pair "
+                                         f"on it. Ask to pair: they are told in their agent "
+                                         f"and let you in."})
+
+
+async def _open(store: Any, node_id: str, by: str, outside: bool,  # noqa: ANN401
+                invited: list[str]) -> dict:
+    token = secrets.token_urlsafe(16)
+    now = _now()
+    await store.create_pair(token, node_id, by, now.isoformat(),
+                            (now + PAIR_TTL).isoformat(), outside, invited)
+    return {"token": token, "node_id": node_id, "outside": outside, "invited": invited,
+            "expires_ts": (now + PAIR_TTL).isoformat()}
+
+
 @router.post("/v1/pair", status_code=201)
 async def open_pair(body: dict, request: Request, store: StoreDep,
                     principal: PrincipalDep) -> dict:
     node_id = str(body.get("node_id", ""))
-    if not node_id or node_id not in await store.node_kinds():
+    profile = (await store.node_kinds()).get(node_id)
+    if not node_id or profile is None:
         raise HTTPException(404, "no coding session by that id in this workspace")
+    if not _mine(principal, profile):
+        raise not_yours(profile)
     outside = bool(body.get("outside"))
     if outside and not _paid(request, current_org_id()):
         raise _plan_required("inviting people from outside the team is on the paid plan — "
                              "teammates can join on any plan")
-    token = secrets.token_urlsafe(16)
-    now = _now()
-    await store.create_pair(token, node_id, _who(principal), now.isoformat(),
-                            (now + PAIR_TTL).isoformat(), outside)
-    return {"token": token, "node_id": node_id, "outside": outside,
-            "expires_ts": (now + PAIR_TTL).isoformat()}
+    invited = [str(e).strip().lower() for e in body.get("invite") or [] if str(e).strip()][:20]
+    return await _open(store, node_id, _who(principal), outside, invited)
+
+
+def _visible(pair: dict, principal: Any) -> bool:  # noqa: ANN401
+    """Whose pair this is to see in a list: the one who opened it, a teammate
+    invited by name, or one already let in by its link."""
+    if not _person(principal):
+        return True
+    me = str(principal.email).lower()
+    return (str(pair["created_by"]).lower() == me or me in pair["invited"]
+            or any(str(g.get("who", "")).lower() == me for g in pair["guests"]))
 
 
 @router.get("/v1/pair")
-async def list_pairs(store: StoreDep) -> dict:
-    return {"pairs": await store.list_pairs(_now().isoformat())}
+async def list_pairs(store: StoreDep, principal: PrincipalDep) -> dict:
+    pairs = [p for p in await store.list_pairs(_now().isoformat()) if _visible(p, principal)]
+    kinds = await store.node_kinds()
+    for p in pairs:
+        prof = kinds.get(p["node_id"], {})
+        p["title"], p["agent"] = prof.get("title", ""), prof.get("agent", "")
+        p["developer"] = prof.get("developer", "")
+        p["yours"] = not _person(principal) or \
+            str(p["created_by"]).lower() == str(principal.email).lower()
+    return {"pairs": pairs}
 
 
 @router.delete("/v1/pair/{token}")
-async def close_pair(token: str, store: StoreDep) -> dict:
+async def close_pair(token: str, store: StoreDep, principal: PrincipalDep) -> dict:
     pair = await store.pair_by_token(token)
     if pair is None or pair["org_id"] != current_org_id():
         raise HTTPException(404, "no such pair session in this workspace")
+    if _person(principal) and str(pair["created_by"]).lower() != str(principal.email).lower():
+        raise HTTPException(403, "only whoever opened the pair session ends it")
     await store.update_pair(token, closed_ts=_now().isoformat())
     return {"closed": True}
+
+
+# ── asking to pair ───────────────────────────────────────────────────────────
+
+@router.post("/v1/pair/requests", status_code=201)
+async def ask_to_pair(body: dict, store: StoreDep, principal: PrincipalDep) -> dict:
+    """A teammate asks to watch someone's session. The developer is told in
+    their agent, and sees it on Pair sessions, where they let them in."""
+    node_id = str(body.get("node_id", ""))
+    profile = (await store.node_kinds()).get(node_id)
+    if not node_id or profile is None or profile.get("kind") != "coding":
+        raise HTTPException(404, "no coding session by that id in this workspace")
+    if not _person(principal):
+        raise HTTPException(403, "sign in to ask to pair — the developer is told who asks")
+    if _mine(principal, profile):
+        raise HTTPException(400, "this is your own session — open a pair on it")
+    rid = await store.add_pair_request(node_id, _who(principal), str(profile.get("developer")),
+                                       _now().isoformat())
+    return {"id": rid, "status": "pending"}
+
+
+@router.get("/v1/pair/requests")
+async def pair_requests(store: StoreDep, principal: PrincipalDep) -> dict:
+    """Requests to me (on my sessions), and mine (with the link once I am let in)."""
+    since = (_now() - PAIR_TTL).isoformat()
+    if not _person(principal):
+        return {"to_me": [r for r in await store.pair_requests_of(since=since)
+                          if r["status"] == "pending"], "mine": []}
+    me = str(principal.email)
+    to_me = [r for r in await store.pair_requests_of(developer=me, since=since)
+             if r["status"] == "pending"]
+    for r in to_me:
+        r.pop("token", None)
+    return {"to_me": to_me, "mine": await store.pair_requests_of(by=me, since=since)}
+
+
+@router.post("/v1/pair/requests/{request_id}")
+async def decide_request(request_id: int, body: dict, store: StoreDep,
+                         principal: PrincipalDep) -> dict:
+    found = [r for r in await store.pair_requests_of() if r["id"] == request_id]
+    if not found:
+        raise HTTPException(404, "no such request")
+    req = found[0]
+    profile = (await store.node_kinds()).get(req["node_id"], {})
+    if not _mine(principal, profile):
+        raise not_yours(profile)
+    if req["status"] != "pending":
+        return {"id": request_id, "status": req["status"]}
+    if not body.get("accept"):
+        await store.decide_pair_request(request_id, "declined", _now().isoformat())
+        return {"id": request_id, "status": "declined"}
+    pair = await _open(store, req["node_id"], _who(principal), False, [req["by"]])
+    await store.decide_pair_request(request_id, "accepted", _now().isoformat(), pair["token"])
+    return {"id": request_id, "status": "accepted", "token": pair["token"]}
 
 
 # ── whoever holds the link ───────────────────────────────────────────────────
@@ -109,6 +220,13 @@ async def _let_in(token: str, request: Request, store: StoreDep,
         raise HTTPException(404, "this pair session has ended, or the link is wrong")
     if _org_of(principal) == pair["org_id"]:
         set_current_org(pair["org_id"])
+        who = _who(principal)
+        if _person(principal) and who.lower() != str(pair["created_by"]).lower() and not any(
+                str(g.get("who", "")).lower() == who.lower() for g in pair["guests"]):
+            # a teammate let in: the developer is told in their agent, once
+            guests = [*pair["guests"], {"who": who, "ts": now, "team": True, "told": False}]
+            await store.update_pair(token, guests=guests)
+            pair = {**pair, "guests": guests}
         return pair, "teammate"
     if getattr(principal, "kind", None) != "user":
         raise HTTPException(403, {"code": "account_required",
@@ -124,11 +242,11 @@ async def _let_in(token: str, request: Request, store: StoreDep,
     who = _who(principal)
     guests = pair["guests"]
     if not any(g.get("who") == who for g in guests):
-        if len(guests) >= OUTSIDE_CAP:
+        if sum(1 for g in guests if not g.get("team")) >= OUTSIDE_CAP:
             raise HTTPException(403, {"code": "pair_full",
                                       "detail": f"this pair session already has "
                                                 f"{OUTSIDE_CAP} guests from outside the team"})
-        guests = [*guests, {"who": who, "org": _org_of(principal), "ts": now}]
+        guests = [*guests, {"who": who, "org": _org_of(principal), "ts": now, "told": False}]
         await store.update_pair(token, guests=guests)
         pair = {**pair, "guests": guests}
     set_current_org(pair["org_id"])
@@ -175,7 +293,13 @@ async def pair_feed(token: str, request: Request, store: StoreDep, principal: Pr
                  "title": profile.get("title", ""),
                  "created_by": pair["created_by"], "created_ts": pair["created_ts"],
                  "expires_ts": pair["expires_ts"], "outside": pair["outside"],
-                 "guests": [g["who"] for g in pair["guests"]], "you": you,
+                 "guests": [g["who"] for g in pair["guests"] if not g.get("team")],
+                 "joined": [g["who"] for g in pair["guests"] if g.get("team")],
+                 "invited": pair["invited"], "you": you,
+                 # the developer holds their own agent; whoever they let in
+                 # watches and writes notes
+                 "yours": _person(principal) is False or str(pair["created_by"]).lower()
+                 == _who(principal).lower(),
                  "paused": paused, "stopped": bool(desired and desired[1].get("stopped")),
                  "desired_version": desired[0] if desired else 0, "level": posture},
         "steps": steps,
@@ -210,7 +334,15 @@ def _speaks_for(principal: Any, node_id: str) -> None:  # noqa: ANN401
 async def notes_for_agent(node_id: str, store: StoreDep, principal: PrincipalDep) -> dict:
     _speaks_for(principal, node_id)
     since = (_now() - NOTE_KEEP).isoformat()
-    return {"notes": await store.pending_notes(node_id, since)}
+    # said to the developer in their own agent, once each: who joined a pair
+    # on this session, and who asks to
+    news = [f"{who} joined a pair session on this session — they see your agent's "
+            f"steps live and can send it notes. End it on the Control Plane, Pair sessions."
+            for who in await store.untold_joins(node_id)]
+    news += [f"{r['by']} asks to pair on this session (watch it live, send your agent "
+             f"notes). Let them in or not on the Control Plane, Pair sessions."
+             for r in await store.untold_pair_requests(node_id)]
+    return {"notes": await store.pending_notes(node_id, since), "news": news}
 
 
 @router.post("/v1/coding/notes/{node_id}/delivered")

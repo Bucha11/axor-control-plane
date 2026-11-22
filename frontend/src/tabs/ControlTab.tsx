@@ -1,7 +1,7 @@
 // Control: a tree that is quiet when healthy (main-tabs mockup, ControlTab).
 // Wired to /v1/plane/nodes; divergence between desired and reported is rendered, not hidden.
 import { refusalWords } from "../refusal";
-import { useHasTeam } from "../team";
+import { useCanAdmin, useHasTeam, useMine } from "../team";
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Circle, Gauge, GitBranch, Lock, Pause, Play, Square, Syringe } from "lucide-react";
@@ -342,6 +342,8 @@ export default function ControlTab({ focusNode }: { focusNode?: string }) {
 
 function ControlBody({ focusNode, testBench }: { focusNode?: string; testBench: boolean }) {
   const hasTeam = useHasTeam();
+  const mine = useMine();
+  const canAdmin = useCanAdmin();
   const qc = useQueryClient();
   const nodes = useQuery({
     queryKey: ["nodes"],
@@ -809,7 +811,7 @@ function ControlBody({ focusNode, testBench }: { focusNode?: string; testBench: 
               && i.status === "new" && i.kind !== "refused")} />
 
           <RunsPanel nodeId={node.node_id} paused={paused} stopped={stopped}
-            disabled={command.isPending} send={send} />
+            disabled={command.isPending || !(!isCodingNode(node) || mine(node.profile?.developer) || canAdmin)} send={send} />
 
           <details className="mb-3" style={{ fontFamily: MONO, fontSize: 11, color: C.mut, lineHeight: 1.7 }}>
             <summary style={{ cursor: "pointer", color: C.dim }}>
@@ -829,6 +831,9 @@ function ControlBody({ focusNode, testBench }: { focusNode?: string; testBench: 
             </span>
           </details>
 
+          {isCodingNode(node) && !mine(node.profile?.developer) && !canAdmin ? (
+            <NotYours developer={node.profile?.developer ?? ""} nodeId={node.node_id} hasTeam={hasTeam} />
+          ) : <>
           {/* Budget cap — a first-class control (spec §15). Decrease-only over
               the plane: the adapter refuses any widening, so this can set an
               initial cap or tighten it, never raise it past the current one. */}
@@ -960,6 +965,8 @@ function ControlBody({ focusNode, testBench }: { focusNode?: string; testBench: 
             </div>
           )}
 
+          </>}
+
           {/* What is actually holding this node down, and what vouching for it
               would discharge. `covers` names fact ids (the kernel's contract),
               so attesting is a choice of which fact — not a gesture. */}
@@ -967,9 +974,9 @@ function ControlBody({ focusNode, testBench }: { focusNode?: string; testBench: 
 
           {isCodingNode(node) ? (
             <div className="mt-4" style={{ fontFamily: MONO, fontSize: 11, color: C.mut, lineHeight: 1.7 }}>
-              {hasTeam && <>
+              {hasTeam && mine(node.profile?.developer) && <>
                 <button onClick={() => navigate("pair", { node: node.node_id })} data-testid="agent-pair-link" style={panelLink}>
-                  pair on this session — watch it live, send the agent a note →
+                  invite a teammate to pair on this session →
                 </button>
                 <br />
               </>}
@@ -1047,6 +1054,40 @@ function NeedsALook({ nodeId, items }: { nodeId: string; items: IncidentItem[] }
 
 type PendingExperiment = { id: string; faults: { tool: string; mode: string }[] };
 
+
+/** Someone else's coding session: theirs to pause and stop (or an owner's or
+ *  admin's) — a teammate asks to pair, and is let in or not. */
+function NotYours({ developer, nodeId, hasTeam }: { developer: string; nodeId: string; hasTeam: boolean }) {
+  const qc = useQueryClient();
+  const requests = useQuery({ queryKey: ["pair-requests"], queryFn: api.pairRequests, retry: false,
+                              refetchInterval: 10000 });
+  const mineReq = (requests.data?.mine ?? []).find((r) => r.node_id === nodeId);
+  const ask = useMutation({
+    mutationFn: () => api.askToPair(nodeId),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ["pair-requests"] }),
+  });
+  return (
+    <div data-testid="not-your-session" className="mb-3" style={{ fontFamily: MONO, fontSize: 11.5, color: C.mut, lineHeight: 1.7 }}>
+      {developer}'s session — they, or an owner or admin, pause and stop it.
+      {hasTeam && (
+        <div className="mt-2">
+          {mineReq?.status === "accepted" && mineReq.token ? (
+            <button onClick={() => navigate(`pair/${mineReq.token}`)} style={btn({ color: C.green, borderColor: C.green, fontSize: 11, padding: "4px 12px" })}>
+              you're let in — watch it →
+            </button>
+          ) : mineReq?.status === "pending" ? (
+            <span data-testid="asked-to-pair" style={{ color: C.dim }}>asked to pair — {developer} is told in their agent</span>
+          ) : (
+            <button onClick={() => ask.mutate()} disabled={ask.isPending} data-testid="ask-to-pair"
+              style={btn({ fontSize: 11, padding: "4px 12px" })}>
+              {mineReq?.status === "declined" ? "ask to pair again" : "ask to pair — watch it live"}
+            </button>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
 
 function RunsPanel({ nodeId, paused, stopped, disabled, send }: {
   nodeId: string; paused: boolean; stopped: boolean; disabled: boolean;

@@ -13,6 +13,8 @@ import { api, PairFeed, PairNote, PairStep } from "../api";
 import { navigate } from "../router";
 import { C, MONO, btn } from "../theme";
 import { HowItWorks } from "../components/MachineCommand";
+import { useApp } from "../store";
+import { useMine } from "../team";
 
 const label: React.CSSProperties = {
   fontFamily: MONO, fontSize: 10.5, color: C.dim, letterSpacing: "0.1em", marginBottom: 8,
@@ -67,99 +69,226 @@ export default function Pair({ token, withToken, node }: { token?: string; withT
 
 function PairHome({ node }: { node?: string }) {
   const qc = useQueryClient();
+  const mine = useMine();
+  const email = useApp((s) => s.identityEmail);
   const nodes = useQuery({ queryKey: ["nodes"], queryFn: api.nodes });
+  const fleet = useQuery({ queryKey: ["fleet"], queryFn: api.fleet, refetchInterval: 10000 });
   const pairs = useQuery({ queryKey: ["pairs"], queryFn: api.pairs, refetchInterval: 10000 });
+  const requests = useQuery({ queryKey: ["pair-requests"], queryFn: api.pairRequests, refetchInterval: 10000,
+                              retry: false });
+  const me = useQuery({ queryKey: ["identity-me"], queryFn: api.identityMe, enabled: !!email, retry: false });
+  const org = me.data?.active_org ?? "";
+  const members = useQuery({ queryKey: ["org-members", org], queryFn: () => api.orgMembers(org),
+                             enabled: !!org, retry: false, staleTime: 60_000 });
+  const teammates = (members.data?.members ?? []).map((m) => m.email)
+    .filter((e) => e.toLowerCase() !== (email || "").toLowerCase());
   const [outside, setOutside] = useState(false);
+  const [invite, setInvite] = useState<Set<string>>(new Set());
   const [paste, setPaste] = useState("");
   const open = useMutation({
-    mutationFn: (nodeId: string) => api.openPair(nodeId, outside),
+    mutationFn: (nodeId: string) => api.openPair(nodeId, outside, [...invite]),
     onSuccess: (r) => { void qc.invalidateQueries({ queryKey: ["pairs"] }); navigate(`pair/${r.token}`); },
+  });
+  const decide = useMutation({
+    mutationFn: ({ id, accept }: { id: number; accept: boolean }) => api.decidePairRequest(id, accept),
+    onSuccess: (r) => {
+      void qc.invalidateQueries({ queryKey: ["pair-requests"] });
+      void qc.invalidateQueries({ queryKey: ["pairs"] });
+      if (r.token) navigate(`pair/${r.token}`);
+    },
+  });
+  const ask = useMutation({
+    mutationFn: (nodeId: string) => api.askToPair(nodeId),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ["pair-requests"] }),
   });
   const example = useMutation({
     mutationFn: api.seedPair,
     onSuccess: (r) => { void qc.invalidateQueries({ queryKey: ["pairs"] }); navigate(`pair/${r.token}`); },
   });
-  const sessions = (nodes.data ?? []).filter((n) => n.profile?.kind === "coding");
-  const err = open.error ? problem(open.error) : null;
+  // a pair is on a session that is running: a note to one that ended never lands
+  const rows = new Map((fleet.data?.nodes ?? []).map((r) => [r.node_id, r] as const));
+  const running = (nodes.data ?? []).filter((n) => n.profile?.kind === "coding"
+    && (n.example || rows.get(n.node_id)?.active_run) && n.desired?.state.stopped !== true)
+    .sort((a, b) => String(rows.get(b.node_id)?.last_ts ?? "").localeCompare(String(rows.get(a.node_id)?.last_ts ?? "")));
+  const yours = running.filter((n) => mine(n.profile?.developer));
+  const theirs = running.filter((n) => !mine(n.profile?.developer));
+  const anySessions = (nodes.data ?? []).some((n) => n.profile?.kind === "coding");
+  const asked = new Map((requests.data?.mine ?? []).map((r) => [r.node_id, r]));
+  const toMe = requests.data?.to_me ?? [];
+  const openMine = (pairs.data?.pairs ?? []).filter((p) => p.yours);
+  const invitedTo = (pairs.data?.pairs ?? []).filter((p) => !p.yours);
+  const titleOf = (id: string) => (nodes.data ?? []).find((n) => n.node_id === id)?.profile?.title || short(id);
+  const err = (open.error ?? ask.error ?? decide.error) ? problem(open.error ?? ask.error ?? decide.error) : null;
   const join = () => {
     const m = paste.trim().match(/pair\/([A-Za-z0-9_-]+)/) ?? paste.trim().match(/^([A-Za-z0-9_-]{16,})$/);
     if (m) navigate(`pair/${m[1]}`);
   };
+  const row = (i: number): React.CSSProperties => ({ borderTop: i ? `1px solid ${C.line}` : "none" });
   return (
     <div data-testid="pair-home" style={{ maxWidth: 860, margin: "0 auto" }}>
       <h1 style={{ fontSize: 22, fontWeight: 650, margin: "0 0 6px" }}>Pair sessions</h1>
       <div style={{ fontSize: 14, color: C.mut, lineHeight: 1.5, marginBottom: 22 }}>
-        Send a link — they watch your agent live and can leave it a note.
+        Invite someone to watch your agent live and leave it a note. Only by invitation: a teammate
+        asks, you let them in.
         <HowItWorks>
           <li>Every step as it happens: what it ran, what failed, what it said.</li>
-          <li>A note reaches the agent at its next step.</li>
-          <li>Two sessions side by side, if you both drive one.</li>
+          <li>A note reaches the agent at its next step — and you see it in your agent too.</li>
+          <li>You're told in your agent when someone joins or asks to.</li>
+          <li>Only you hold your agent; whoever you let in watches and writes notes.</li>
         </HowItWorks>
       </div>
 
-      <section className="mb-8">
-        <div style={label}>PAIR ON A SESSION</div>
-        <label className="flex items-start gap-2 mb-3" style={{ fontSize: 13, color: C.mut, lineHeight: 1.5, cursor: "pointer" }}>
-          <input type="checkbox" checked={outside} onChange={(e) => setOutside(e.target.checked)}
-            data-testid="pair-outside" style={{ marginTop: 3 }} />
-          <span>
-            people from outside the team can join too — anyone with an account, a free one too; at most
-            three. <span style={{ color: C.dim }}>Paid plan. Teammates can always join.</span>
-          </span>
-        </label>
-        {err && (
-          <div data-testid="pair-error" className="mb-3" style={{ fontFamily: MONO, fontSize: 11.5, color: err.status === 402 ? C.amber : C.red, lineHeight: 1.6 }}>
-            {err.words}
-            {err.status === 402 && <> · <button onClick={() => navigate("pricing")} style={link}>see plans →</button></>}
-          </div>
-        )}
-        {sessions.length === 0 ? (
-          <div style={{ ...panel, padding: 16, fontSize: 13, color: C.mut }}>
-            No coding sessions on this plane yet — they appear here once an agent with the axor hooks runs.{" "}
-            <button onClick={() => example.mutate()} data-testid="pair-example" style={{ ...link, fontSize: 13 }}>
-              {example.isPending ? "loading…" : "see an example pair →"}
-            </button>
-          </div>
-        ) : (
+      {err && (
+        <div data-testid="pair-error" className="mb-3" style={{ fontFamily: MONO, fontSize: 11.5, color: err.status === 402 ? C.amber : C.red, lineHeight: 1.6 }}>
+          {err.words}
+          {err.status === 402 && <> · <button onClick={() => navigate("pricing")} style={link}>see plans →</button></>}
+        </div>
+      )}
+
+      {toMe.length > 0 && (
+        <section className="mb-8" data-testid="pair-requests">
+          <div style={label}>ASKING TO PAIR WITH YOU</div>
           <div style={panel}>
-            {sessions.map((n, i) => (
-              <div key={n.node_id} data-testid={`pair-session-${n.node_id}`} className="flex items-center gap-3 px-4 py-2 flex-wrap"
-                style={{ borderTop: i ? `1px solid ${C.line}` : "none",
-                         background: node === n.node_id ? "rgba(127,168,204,0.08)" : "none" }}>
-                <span style={{ fontSize: 13, color: C.text, flex: 1, minWidth: 200 }}>
-                  {n.profile?.title || short(n.node_id)}
-                  {n.profile?.title && <span style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim }}> · {short(n.node_id)}</span>}
+            {toMe.map((r, i) => (
+              <div key={r.id} data-testid={`pair-request-${r.id}`} className="flex items-center gap-3 px-4 py-2 flex-wrap" style={row(i)}>
+                <span style={{ fontSize: 13, color: C.text, flex: 1, minWidth: 220 }}>
+                  {r.by} <span style={{ color: C.mut }}>asks to watch “{titleOf(r.node_id)}”</span>
                 </span>
-                <span style={{ fontFamily: MONO, fontSize: 11, color: C.dim }}>{n.profile?.agent}</span>
-                <button onClick={() => open.mutate(n.node_id)} disabled={open.isPending}
-                  data-testid={`pair-start-${n.node_id}`} style={btn({ color: C.text, fontSize: 11, padding: "4px 12px" })}>
-                  start pairing
+                <button onClick={() => decide.mutate({ id: r.id, accept: true })} disabled={decide.isPending}
+                  data-testid={`pair-let-in-${r.id}`} style={btn({ color: C.green, borderColor: C.green, fontSize: 11, padding: "4px 12px" })}>
+                  let them in
                 </button>
+                <button onClick={() => decide.mutate({ id: r.id, accept: false })} disabled={decide.isPending}
+                  style={{ ...link, color: C.mut }}>not now</button>
               </div>
             ))}
           </div>
+        </section>
+      )}
+
+      <section className="mb-8">
+        <div style={label}>PAIR ON YOUR SESSION</div>
+        {yours.length === 0 ? (
+          <div style={{ ...panel, padding: 16, fontSize: 13, color: C.mut }}>
+            None of your sessions is running now — start your agent, and it appears here.
+            {!anySessions && <>{" "}
+              <button onClick={() => example.mutate()} data-testid="pair-example" style={{ ...link, fontSize: 13 }}>
+                {example.isPending ? "loading…" : "see an example pair →"}
+              </button></>}
+          </div>
+        ) : (
+          <>
+            {teammates.length > 0 && (
+              <div className="flex items-center gap-2 mb-3 flex-wrap" data-testid="pair-invite" style={{ fontSize: 13, color: C.mut }}>
+                <span>invite</span>
+                {teammates.map((t) => {
+                  const on = invite.has(t);
+                  return (
+                    <button key={t} onClick={() => setInvite((cur) => { const n = new Set(cur); if (on) n.delete(t); else n.add(t); return n; })}
+                      aria-pressed={on} style={{ ...btn({ fontSize: 11, padding: "3px 10px" }),
+                        color: on ? C.steel : C.mut, borderColor: on ? C.steel : C.line }}>{t}</button>
+                  );
+                })}
+                <span style={{ color: C.dim, fontSize: 12 }}>— or just send the link</span>
+              </div>
+            )}
+            <label className="flex items-start gap-2 mb-3" style={{ fontSize: 13, color: C.mut, lineHeight: 1.5, cursor: "pointer" }}>
+              <input type="checkbox" checked={outside} onChange={(e) => setOutside(e.target.checked)}
+                data-testid="pair-outside" style={{ marginTop: 3 }} />
+              <span>
+                people from outside the team can join with the link too — their own account, a free one
+                too; at most three. <span style={{ color: C.dim }}>Paid plan.</span>
+              </span>
+            </label>
+            <div style={panel}>
+              {yours.map((n, i) => (
+                <div key={n.node_id} data-testid={`pair-session-${n.node_id}`} className="flex items-center gap-3 px-4 py-2 flex-wrap"
+                  style={{ ...row(i), background: node === n.node_id ? "rgba(127,168,204,0.08)" : "none" }}>
+                  <span style={{ width: 7, height: 7, borderRadius: 4, background: C.green }} />
+                  <span style={{ fontSize: 13, color: C.text, flex: 1, minWidth: 200 }}>
+                    {n.profile?.title || short(n.node_id)}
+                    {n.profile?.title && <span style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim }}> · {short(n.node_id)}</span>}
+                  </span>
+                  <span style={{ fontFamily: MONO, fontSize: 11, color: C.dim }}>{n.profile?.agent}</span>
+                  <button onClick={() => open.mutate(n.node_id)} disabled={open.isPending}
+                    data-testid={`pair-start-${n.node_id}`} style={btn({ color: C.text, fontSize: 11, padding: "4px 12px" })}>
+                    {invite.size ? `start pairing · invite ${invite.size}` : "start pairing"}
+                  </button>
+                </div>
+              ))}
+            </div>
+          </>
         )}
       </section>
 
-      {(pairs.data?.pairs.length ?? 0) > 0 && (
+      {openMine.length > 0 && (
         <section className="mb-8" data-testid="pair-open">
-          <div style={label}>OPEN NOW</div>
+          <div style={label}>YOUR OPEN PAIRS</div>
           <div style={panel}>
-            {pairs.data!.pairs.map((p, i) => (
+            {openMine.map((p, i) => (
               <div key={p.token} className="flex items-center gap-3 px-4 py-2 flex-wrap"
-                style={{ borderTop: i ? `1px solid ${C.line}` : "none", fontFamily: MONO, fontSize: 11.5 }}>
+                style={{ ...row(i), fontFamily: MONO, fontSize: 11.5 }}>
                 <button onClick={() => navigate(`pair/${p.token}`)} style={{ ...link, fontSize: 12, color: C.text }}>
-                  {short(p.node_id)}
+                  {p.title || short(p.node_id)}
                 </button>
                 <span style={{ color: C.dim, flex: 1 }}>
-                  {p.created_by ? `by ${p.created_by} · ` : ""}until {clock(p.expires_ts)}
-                  {p.outside ? ` · open to outside the team${p.guests.length ? ` (${p.guests.length} joined)` : ""}` : " · team only"}
+                  until {clock(p.expires_ts)}
+                  {p.invited.length ? ` · invited ${p.invited.join(", ")}` : ""}
+                  {p.guests.length ? ` · joined ${p.guests.map((g) => g.who).join(", ")}` : ""}
+                  {p.outside ? " · open to outside the team" : ""}
                 </span>
                 <CopyLink token={p.token} />
                 <button onClick={() => void api.closePair(p.token).then(() => qc.invalidateQueries({ queryKey: ["pairs"] }))}
                   style={{ ...link, color: C.mut }}>end</button>
               </div>
             ))}
+          </div>
+        </section>
+      )}
+
+      {invitedTo.length > 0 && (
+        <section className="mb-8" data-testid="pair-invited">
+          <div style={label}>YOU'RE INVITED</div>
+          <div style={panel}>
+            {invitedTo.map((p, i) => (
+              <div key={p.token} className="flex items-center gap-3 px-4 py-2 flex-wrap" style={row(i)}>
+                <span style={{ fontSize: 13, color: C.text, flex: 1, minWidth: 220 }}>
+                  {p.title || short(p.node_id)} <span style={{ color: C.mut }}>· {p.created_by}'s session</span>
+                </span>
+                <button onClick={() => navigate(`pair/${p.token}`)} data-testid={`pair-join-${p.node_id}`}
+                  style={btn({ color: C.text, fontSize: 11, padding: "4px 12px" })}>join</button>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
+
+      {theirs.length > 0 && (
+        <section className="mb-8" data-testid="pair-teammates">
+          <div style={label}>TEAMMATES' SESSIONS RUNNING NOW</div>
+          <div style={panel}>
+            {theirs.map((n, i) => {
+              const r = asked.get(n.node_id);
+              return (
+                <div key={n.node_id} className="flex items-center gap-3 px-4 py-2 flex-wrap" style={row(i)}>
+                  <span style={{ fontSize: 13, color: C.text, flex: 1, minWidth: 220 }}>
+                    {n.profile?.title || short(n.node_id)} <span style={{ color: C.mut }}>· {n.profile?.developer}</span>
+                  </span>
+                  {r?.status === "accepted" && r.token ? (
+                    <button onClick={() => navigate(`pair/${r.token}`)} style={btn({ color: C.green, borderColor: C.green, fontSize: 11, padding: "4px 12px" })}>
+                      let in — join
+                    </button>
+                  ) : r?.status === "pending" ? (
+                    <span data-testid={`pair-asked-${n.node_id}`} style={{ fontFamily: MONO, fontSize: 11, color: C.dim }}>asked — {n.profile?.developer} is told in their agent</span>
+                  ) : (
+                    <button onClick={() => ask.mutate(n.node_id)} disabled={ask.isPending}
+                      data-testid={`pair-ask-${n.node_id}`} style={btn({ fontSize: 11, padding: "4px 12px" })}>
+                      {r?.status === "declined" ? "ask again" : "ask to pair"}
+                    </button>
+                  )}
+                </div>
+              );
+            })}
           </div>
         </section>
       )}
@@ -194,7 +323,8 @@ function PairPage({ token, withToken }: { token: string; withToken?: string }) {
   const [picking, setPicking] = useState(false);
   const pairs = useQuery({ queryKey: ["pairs"], queryFn: api.pairs, retry: false, enabled: picking });
   const others = [
-    ...(pairs.data?.pairs ?? []).map((p) => ({ token: p.token, label: short(p.node_id) })),
+    ...(pairs.data?.pairs ?? []).map((p) => ({ token: p.token,
+      label: p.title ? `${p.title} · ${short(p.node_id)}` : short(p.node_id) })),
     ...remembered(),
   ].filter((o, i, all) => o.token !== token && all.findIndex((x) => x.token === o.token) === i);
   return (
@@ -325,16 +455,18 @@ function PairPane({ token }: { token: string }) {
           <span style={{ fontFamily: MONO, fontSize: 11, color: C.dim }}>{short(f.pair.node_id)}</span>
           <span style={{ flex: 1 }} />
           {f.pair.paused && <span style={{ fontFamily: MONO, fontSize: 11, color: C.amber }}>held</span>}
-          {teammate && !f.pair.stopped && (
+          {teammate && f.pair.yours !== false && !f.pair.stopped && (
             <button onClick={() => command.mutate(f)} disabled={command.isPending} data-testid="pair-hold"
               style={btn({ fontSize: 10.5, padding: "3px 9px" })}>{f.pair.paused ? "let it continue" : "hold the agent"}</button>
           )}
-          {teammate && <CopyLink token={token} />}
-          {teammate && <button onClick={() => end.mutate()} style={{ ...link, color: C.mut }}>end pairing</button>}
+          {teammate && f.pair.yours !== false && <CopyLink token={token} />}
+          {teammate && f.pair.yours !== false && <button onClick={() => end.mutate()} style={{ ...link, color: C.mut }}>end pairing</button>}
         </div>
         <div data-testid="pair-who" style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim, marginTop: 4, lineHeight: 1.6 }}>
-          {f.pair.created_by ? `started by ${f.pair.created_by} · ` : ""}
-          {teammate ? "you're here as a teammate" : "you're here as a guest from outside the team"}
+          {f.pair.yours === false
+            ? `${f.pair.created_by}'s session · you're here at their invitation`
+            : <>{f.pair.created_by ? `your session · ` : ""}{teammate ? "only you hold the agent" : "you're here as a guest from outside the team"}</>}
+          {f.pair.joined?.length ? ` · watching: ${f.pair.joined.join(", ")}` : ""}
           {f.pair.guests.length ? ` · from outside: ${f.pair.guests.join(", ")}` : f.pair.outside ? " · open to outside the team" : " · team only"}
           {` · until ${clock(f.pair.expires_ts)}`}
         </div>
