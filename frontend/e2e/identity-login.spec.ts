@@ -236,6 +236,29 @@ test.describe("identity login (Settings)", () => {
     expect(changed).toBe(false);
   });
 
+  test("alone in a workspace, pairing is not offered; with a teammate it is", async ({ page }) => {
+    let members = [{ user_id: "usr_1", email: "ada@acme.io", role: "owner", since: "2026-01-01" }];
+    await page.route("**/identity/v1/login", jsonRoute(200, SESSION));
+    await page.route("**/identity/v1/me", jsonRoute(200, {
+      user: SESSION.user, active_org: "org_1", role: "owner",
+      memberships: [{ org_id: "org_1", role: "owner", name: "Acme", tier: "community" }],
+    }));
+    await page.route("**/identity/v1/orgs/org_1/members", async (route) => {
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ members }) });
+    });
+    await setConnection(page, { mode: "adapter" });
+    await goHash(page, "settings");
+    await page.getByLabel("email", { exact: true }).fill("ada@acme.io");
+    await page.getByLabel("password").fill("correct horse");
+    await page.getByRole("button", { name: "log in", exact: true }).click();
+    await goHash(page, "govern");
+    await expect(page.getByTestId("side-trees")).toBeVisible();
+    await expect(page.getByTestId("side-pair")).toHaveCount(0);
+    members = [...members, { user_id: "usr_2", email: "max@acme.io", role: "member", since: "2026-01-02" }];
+    await page.reload();
+    await expect(page.getByTestId("side-pair")).toBeVisible();
+  });
+
   test("a used or withdrawn invitation says so", async ({ page }) => {
     await page.route("**/identity/v1/invites/tok-old", jsonRoute(404, {
       detail: "this invitation has expired, was used, or was withdrawn" }));

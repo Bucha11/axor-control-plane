@@ -405,6 +405,9 @@ node_profiles = Table(
     # remote) and the label the screens show — the team's memory is per repo
     Column("repo", String(64), nullable=False, server_default="", index=True),
     Column("repo_label", String(100), nullable=False, server_default=""),
+    # a coding session's title: the developer's first request in it (axor-wrap
+    # sidecar), so a list of sessions reads as a list of tasks
+    Column("title", String(120), nullable=False, server_default=""),
 )
 
 # Agent tree runs (axor-wrap `tree run`): the latest snapshot of each run —
@@ -991,8 +994,11 @@ class Store:
 
     async def memory_sessions_given(self, repo: str) -> int:
         async with self.engine.connect() as conn:
+            # given something: a session that started before anything was on,
+            # and got an empty memory, was not given it
             rows = (await conn.execute(select(memory_given.c.node_id).where(
                 memory_given.c.org_id == current_org_id(), memory_given.c.repo == repo,
+                memory_given.c.ids != "[]",
             ).distinct())).all()
         return len(rows)
 
@@ -1956,8 +1962,17 @@ class Store:
             rows = (await conn.execute(select(node_profiles).where(
                 node_profiles.c.org_id == current_org_id()))).all()
         return {r.node_id: {"kind": r.kind, "agent": r.agent, "developer": r.developer,
-                            "repo": r.repo, "repo_label": r.repo_label}
+                            "repo": r.repo, "repo_label": r.repo_label, "title": r.title}
                 for r in rows}
+
+    async def set_node_title(self, node_id: str, title: str) -> bool:
+        """Name a session once: the first request said in it. False when the
+        node has no profile yet, or already has a title."""
+        async with self.engine.begin() as conn:
+            done = await conn.execute(update(node_profiles).where(
+                node_profiles.c.org_id == current_org_id(), node_profiles.c.node_id == node_id,
+                node_profiles.c.title == "").values(title=title[:120]))
+        return bool(done.rowcount)
 
     async def coding_profiles(self) -> list[dict[str, str]]:
         """Every coding session this workspace has seen, first to report first

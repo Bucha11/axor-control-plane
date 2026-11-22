@@ -172,6 +172,7 @@ async def pair_feed(token: str, request: Request, store: StoreDep, principal: Pr
     paused = bool(desired and desired[1].get("paused"))
     return {
         "pair": {"node_id": pair["node_id"], "agent": profile.get("agent", ""),
+                 "title": profile.get("title", ""),
                  "created_by": pair["created_by"], "created_ts": pair["created_ts"],
                  "expires_ts": pair["expires_ts"], "outside": pair["outside"],
                  "guests": [g["who"] for g in pair["guests"]], "you": you,

@@ -182,7 +182,7 @@ function RepoMemory({ repo, freshDays }: { repo: MemoryRepo; freshDays: number }
       <section className="mb-4" data-testid="memory-note">
         <div style={label}>ADD A NOTE</div>
         <div style={{ fontSize: 12.5, color: C.mut, lineHeight: 1.6, marginBottom: 8 }}>
-          Something every agent should know in {repo.label}. It reaches every agent of the team here, as your words — keep it to a line.
+          Something every agent should know in {repo.label}. It reaches every agent here at its next session, as your words — keep it to a line.
         </div>
         <div className="flex gap-2 items-center flex-wrap">
           <input value={note} onChange={(e) => setNote(e.target.value)} maxLength={400}
@@ -191,7 +191,7 @@ function RepoMemory({ repo, freshDays }: { repo: MemoryRepo; freshDays: number }
             style={{ flex: 1, minWidth: 260, background: C.bg, border: `1px solid ${C.line}`, borderRadius: 4,
                      color: C.text, fontSize: 13, padding: "7px 10px", outline: "none" }} />
           <button onClick={() => add.mutate()} disabled={!note.trim() || add.isPending}
-            style={btn({ color: note.trim() ? C.text : C.dim, fontSize: 11 })}>add for the team</button>
+            style={btn({ color: note.trim() ? C.text : C.dim, fontSize: 11 })}>add the note</button>
         </div>
         {add.error && <div style={{ fontFamily: MONO, fontSize: 11, color: C.red, marginTop: 6 }}>{(add.error as Error).message}</div>}
       </section>
@@ -305,7 +305,7 @@ function Changes({ changes }: { changes: MemoryChange[] }) {
             <div key={ch.id} className="px-4 py-2" style={{ borderTop: n ? `1px solid ${C.line}` : "none", fontSize: 12.5 }}>
               <div className="flex gap-3 flex-wrap" style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim }}>
                 <span>{day(ch.ts)}</span>
-                <span>v {ch.version || "empty"}</span>
+                {!ch.version && <span>nothing given</span>}
                 {v && <span style={{ color: v[1] }}>{v[0]}
                   {ch.compare && ch.compare.verdict !== "too_few"
                     ? ` · went wrong ${ch.compare.before.bad}/${ch.compare.before.sessions} → ${ch.compare.after.bad}/${ch.compare.after.sessions}`

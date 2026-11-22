@@ -13,6 +13,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ChevronDown, ChevronRight, Circle, Loader2, Play, Upload } from "lucide-react";
 import { api, KernelEvent, SkillReport } from "../api";
 import { navigate } from "../router";
+import { refusalWords } from "../refusal";
 import { C, MONO, btn } from "../theme";
 import { SkillsOffPanel } from "../components/SkillsOff";
 import { HowItWorks, MachineCommand } from "../components/MachineCommand";
@@ -380,7 +381,7 @@ function DryRun({ nodeId }: { nodeId: string }) {
                 textDecoration: denied ? "line-through" : "none" }}>{said(e)}</span>
               {denied && (
                 <div style={{ color: C.green, fontSize: 10.5, marginLeft: 12 }}>
-                  ↳ refused — {reason || e.gate}
+                  ↳ refused — {reason ? refusalWords(reason, e.gate ?? "") : e.gate}
                 </div>
               )}
               {w && !denied && (

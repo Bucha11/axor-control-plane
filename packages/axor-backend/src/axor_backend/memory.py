@@ -245,7 +245,7 @@ def for_agent(items: list[dict], label: str) -> tuple[str, list[int]]:
     notes = [i for i in on if i["kind"] == "note"]
     learned = sorted((i for i in on if i["kind"] != "note"),
                      key=lambda i: (order[i["kind"]], -_stamp(i)))
-    head = (f"What your team's coding agents verifiably learned in {label or 'this repository'} "
+    head = (f"What coding agents verifiably learned in {label or 'this repository'} "
             "(each from commands that passed in their sessions — Axor Control Plane):")
     out, ids = [head], []
     size = len(head)

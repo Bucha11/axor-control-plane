@@ -126,8 +126,11 @@ function PairHome({ node }: { node?: string }) {
               <div key={n.node_id} data-testid={`pair-session-${n.node_id}`} className="flex items-center gap-3 px-4 py-2 flex-wrap"
                 style={{ borderTop: i ? `1px solid ${C.line}` : "none",
                          background: node === n.node_id ? "rgba(127,168,204,0.08)" : "none" }}>
-                <span style={{ fontFamily: MONO, fontSize: 12, color: C.text }}>{short(n.node_id)}</span>
-                <span style={{ fontFamily: MONO, fontSize: 11, color: C.dim, flex: 1 }}>{n.profile?.agent}</span>
+                <span style={{ fontSize: 13, color: C.text, flex: 1, minWidth: 200 }}>
+                  {n.profile?.title || short(n.node_id)}
+                  {n.profile?.title && <span style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim }}> · {short(n.node_id)}</span>}
+                </span>
+                <span style={{ fontFamily: MONO, fontSize: 11, color: C.dim }}>{n.profile?.agent}</span>
                 <button onClick={() => open.mutate(n.node_id)} disabled={open.isPending}
                   data-testid={`pair-start-${n.node_id}`} style={btn({ color: C.text, fontSize: 11, padding: "4px 12px" })}>
                   start pairing
@@ -286,7 +289,7 @@ function PairPane({ token }: { token: string }) {
     if (box.current) box.current.scrollTop = box.current.scrollHeight;
   }, [items.length]);
   useEffect(() => {
-    if (feed.data) remember(token, `${short(feed.data.pair.node_id)} · ${feed.data.pair.agent}`);
+    if (feed.data) remember(token, feed.data.pair.title || `${short(feed.data.pair.node_id)} · ${feed.data.pair.agent}`);
   }, [feed.data, token]);
 
   if (feed.error) {
@@ -318,6 +321,7 @@ function PairPane({ token }: { token: string }) {
         <div className="flex items-center gap-2 flex-wrap">
           <span style={{ width: 7, height: 7, borderRadius: 4, background: f.pair.stopped ? C.red : f.pair.paused ? C.amber : C.green }} />
           <span style={{ fontFamily: MONO, fontSize: 12.5, color: C.text }}>{f.pair.agent || "agent"}</span>
+          {f.pair.title && <span data-testid="pair-title" style={{ fontSize: 13, color: C.text }}>“{f.pair.title}”</span>}
           <span style={{ fontFamily: MONO, fontSize: 11, color: C.dim }}>{short(f.pair.node_id)}</span>
           <span style={{ flex: 1 }} />
           {f.pair.paused && <span style={{ fontFamily: MONO, fontSize: 11, color: C.amber }}>held</span>}

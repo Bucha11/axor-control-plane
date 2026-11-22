@@ -1,6 +1,7 @@
 // Control: a tree that is quiet when healthy (main-tabs mockup, ControlTab).
 // Wired to /v1/plane/nodes; divergence between desired and reported is rendered, not hidden.
 import { refusalWords } from "../refusal";
+import { useHasTeam } from "../team";
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Circle, Gauge, GitBranch, Lock, Pause, Play, Square, Syringe } from "lucide-react";
@@ -332,6 +333,7 @@ export default function ControlTab({ focusNode }: { focusNode?: string }) {
 }
 
 function ControlBody({ focusNode, testBench }: { focusNode?: string; testBench: boolean }) {
+  const hasTeam = useHasTeam();
   const qc = useQueryClient();
   const nodes = useQuery({
     queryKey: ["nodes"],
@@ -765,7 +767,10 @@ function ControlBody({ focusNode, testBench }: { focusNode?: string; testBench: 
           ) : (<>
         <div className="p-4" style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 8 }}>
           <div className="flex items-center justify-between">
-            <span style={{ fontFamily: MONO, fontSize: 13, color: C.text }}>{node.node_id}</span>
+            <span style={{ fontFamily: MONO, fontSize: 13, color: C.text }}>
+              {node.profile?.title && <span style={{ fontFamily: "inherit", display: "block", fontSize: 13.5 }}>“{node.profile.title}”</span>}
+              <span style={{ color: node.profile?.title ? C.dim : C.text, fontSize: node.profile?.title ? 11 : 13 }}>{node.node_id}</span>
+            </span>
             {applying ? (
               <span style={{ fontFamily: MONO, fontSize: 11, color: C.amber }}>
                 applying {Object.keys(desired?.state ?? {}).join(", ")}…
@@ -951,10 +956,12 @@ function ControlBody({ focusNode, testBench }: { focusNode?: string; testBench: 
 
           {isCodingNode(node) ? (
             <div className="mt-4" style={{ fontFamily: MONO, fontSize: 11, color: C.mut, lineHeight: 1.7 }}>
-              <button onClick={() => navigate("pair", { node: node.node_id })} data-testid="agent-pair-link" style={panelLink}>
-                pair on this session — watch it live, send the agent a note →
-              </button>
-              <br />
+              {hasTeam && <>
+                <button onClick={() => navigate("pair", { node: node.node_id })} data-testid="agent-pair-link" style={panelLink}>
+                  pair on this session — watch it live, send the agent a note →
+                </button>
+                <br />
+              </>}
               <button onClick={() => navigate("skills")} style={panelLink}>skills for the team — try one, turn one off →</button>
             </div>
           ) : (
@@ -1523,7 +1530,14 @@ function FleetRowView({ n, row, st, first, selected, onPick, locked, look }: {
                background: selected ? "rgba(127,168,204,0.05)" : "transparent" }}>
       <div className="flex items-center gap-2.5 flex-wrap">
         <Circle size={8} fill={color} color={color} />
-        <span style={{ fontFamily: MONO, fontSize: 13, color: locked ? C.mut : C.text, flex: 1, minWidth: 120 }}>{n.node_id}</span>
+        {n.profile?.title ? (
+          <span style={{ fontSize: 13.5, color: locked ? C.mut : C.text, flex: 1, minWidth: 120 }}>
+            {n.profile.title}
+            <span style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim }}> · {n.node_id}</span>
+          </span>
+        ) : (
+          <span style={{ fontFamily: MONO, fontSize: 13, color: locked ? C.mut : C.text, flex: 1, minWidth: 120 }}>{n.node_id}</span>
+        )}
         {locked && <LockChip reasons={locked} />}
         {!locked && attention(n).map((a) => (
           <button key={a.label}
@@ -1639,6 +1653,9 @@ function ActivityFeed({ only }: { only?: Set<string> }) {
   const feed = useQuery({ queryKey: ["activity"], queryFn: api.activity, refetchInterval: 2000 });
   const nodesQ = useQuery({ queryKey: ["nodes"], queryFn: api.nodes });
   const examples = new Set((nodesQ.data ?? []).filter((n) => n.example_hidden).map((n) => n.node_id));
+  // a coding session reads as its task: the developer's first request in it
+  const titleOf = new Map((nodesQ.data ?? []).filter((n) => n.profile?.title)
+    .map((n) => [n.node_id, n.profile!.title!]));
   // a session past the free plan is not shown, here either
   const ent = useQuery({ queryKey: ["entitlements"], queryFn: api.entitlements, retry: false });
   const [find, setFind] = useState("");
@@ -1649,7 +1666,7 @@ function ActivityFeed({ only }: { only?: Set<string> }) {
     if (examples.has(e.node_id)) return false;
     if (only && !only.has(e.node_id)) return false;
     if (!find) return true;
-    const t = `${e.node_id} ${feedLine(e).text}`.toLowerCase();
+    const t = `${e.node_id} ${titleOf.get(e.node_id) ?? ""} ${feedLine(e).text}`.toLowerCase();
     return t.includes(find.toLowerCase());
   });
   const work = new Set(["tool_call", "tool_result", "claim", "fault_injected", "denial"]);
@@ -1680,7 +1697,7 @@ function ActivityFeed({ only }: { only?: Set<string> }) {
               <div className="flex gap-2">
                 <span style={{ color: C.dim, whiteSpace: "nowrap" }}>{e.ts ? stamp(e.ts) : ""}</span>
                 <span style={{ color: C.steel, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis",
-                               whiteSpace: "nowrap" }}>{e.node_id}</span>
+                               whiteSpace: "nowrap" }} title={e.node_id}>{titleOf.get(e.node_id) ?? e.node_id}</span>
               </div>
               <div style={{ color, overflowWrap: "anywhere" }}>{text}</div>
             </div>

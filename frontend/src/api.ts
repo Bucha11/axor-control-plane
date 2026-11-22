@@ -264,7 +264,7 @@ export interface NodeInfo {
   probe?: { verdict: string; created_ts: string; escape_count: number } | null;
   /** what the node said it is when it first reported; null = never said
    * (a governed production agent, or one from before profiles) */
-  profile?: { kind: "coding" | "agent" | "tree"; agent: string; developer: string } | null;
+  profile?: { kind: "coding" | "agent" | "tree"; agent: string; developer: string; title?: string } | null;
 }
 
 // Behavioral health check (axor-probe, ui-spec 8.2). A family's state is
@@ -609,7 +609,7 @@ export interface PairNote {
   delivered_ts: string | null; delivered_at: string | null;
 }
 export interface PairFeed {
-  pair: { node_id: string; agent: string; created_by: string; created_ts: string; expires_ts: string;
+  pair: { node_id: string; agent: string; title?: string; created_by: string; created_ts: string; expires_ts: string;
           outside: boolean; guests: string[]; you: "teammate" | "guest"; paused: boolean;
           stopped: boolean; desired_version: number; level: string };
   steps: PairStep[]; cursor: number; notes: PairNote[];

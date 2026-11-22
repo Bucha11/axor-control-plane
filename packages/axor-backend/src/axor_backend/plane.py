@@ -1180,6 +1180,20 @@ async def post_profile(node_id: str, body: dict, request: Request) -> dict:
     return {"locked": []}
 
 
+@router.post("/{node_id}/title")
+async def post_title(node_id: str, body: dict, request: Request) -> dict:
+    """A coding session's title — the developer's first request in it, said by
+    the sidecar once. The screens name the session by it; the first one stands."""
+    principal = getattr(request.state, "principal", None)
+    if principal is not None and not principal.may_speak_for(node_id):
+        raise HTTPException(403, "this key is bound to another node")
+    raw = " ".join(str(body.get("title") or "").split())
+    title = "".join(c for c in raw if c.isprintable())[:120]
+    if not title:
+        raise HTTPException(400, "title is the session's first request, in words")
+    return {"titled": await _ctx(request).store.set_node_title(node_id, title)}
+
+
 @router.post("/{node_id}/reputation", status_code=201)
 async def post_reputation(node_id: str, body: dict, request: Request) -> dict:
     """Ingest one ReputationSnapshot from a node's axor-sentinel.

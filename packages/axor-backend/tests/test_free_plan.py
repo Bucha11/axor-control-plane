@@ -124,3 +124,15 @@ async def test_the_profile_answer_tells_a_locked_session_why(app_client) -> None
     assert (await _session(c, "claude-code-a1", "claude-code", "dev-ada")) == {"locked": []}
     second = await _session(c, "claude-code-b1", "claude-code", "dev-bob")
     assert second["locked"] == ["developer"] and "second developer" in second["detail"]
+
+
+async def test_a_session_is_named_by_its_first_request(app_client) -> None:  # noqa: ANN001
+    _, c = app_client
+    await _session(c, "claude-code-a1", "claude-code", "dev-ada")
+    r = await c.post("/v1/plane/claude-code-a1/title",
+                     json={"title": "add a 10% discount\nfor orders over $100"})
+    assert r.json() == {"titled": True}
+    # the first one stands
+    await c.post("/v1/plane/claude-code-a1/title", json={"title": "and the tests"})
+    nodes = {n["node_id"]: n for n in (await c.get("/v1/plane/nodes")).json()}
+    assert nodes["claude-code-a1"]["profile"]["title"] == "add a 10% discount for orders over $100"

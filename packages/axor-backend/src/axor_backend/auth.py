@@ -149,6 +149,8 @@ _ROUTE_POLICY: tuple[tuple[str, str, str], ...] = (
     # A node saying what it is (production agent / coding session / tree run):
     # out-dial, about itself, on its own credential — like telemetry.
     ("/v1/plane/", "/profile", "ingest"),
+    # ...and, a coding session, what it was asked first: its title
+    ("/v1/plane/", "/title", "ingest"),
     # Influence ranking is subgraph ablation: replay with one value excised.
     # Its siblings /v1/replay and /v1/regression are `read` for exactly that
     # reason; this one inherited `ingest` from the /v1/runs/ prefix, so a
@@ -308,7 +310,7 @@ def accepts_query_token(method: str, path: str) -> bool:
 # `/command` and `/cascade-stop` are excluded deliberately — they are operator
 # actions aimed AT a node, not the node speaking, and they carry their own
 # ed25519 signature check.
-_SPEAKS_AS_NODE_SUFFIXES = ("/telemetry", "/facts", "/consumed", "/probe-report")
+_SPEAKS_AS_NODE_SUFFIXES = ("/telemetry", "/facts", "/consumed", "/probe-report", "/title")
 _PLANE_PREFIX = "/v1/plane/"
 
 

@@ -22,3 +22,15 @@ test("two sessions of one developer are one row, unfolded on a click", async ({ 
   await row.getByText("▸ show sessions").click();
   for (const n of nodes) await expect(page.getByTestId(`agent-row-${n}`)).toBeVisible();
 });
+
+test("a session reads as what it was asked first", async ({ page, request }) => {
+  const node = `claude-code-title-${Date.now().toString(36).slice(-6)}`;
+  await seedNode(request, node);
+  await request.post(`${BACKEND}/v1/plane/${node}/profile`, {
+    data: { kind: "coding", agent: "claude-code", developer: `dev-title-${node}` } });
+  const r = await request.post(`${BACKEND}/v1/plane/${node}/title`, { data: { title: "add a 10% discount over $100" } });
+  expect(r.ok()).toBeTruthy();
+  await setConnection(page, { mode: "adapter" });
+  await goHash(page, "govern");
+  await expect(page.getByTestId(`agent-row-${node}`)).toContainText("add a 10% discount over $100");
+});

@@ -119,6 +119,13 @@ function EvalList() {
   );
 }
 
+/** An arm, as a person says it: none → without the skill, all → with it. */
+function armWords(arm: string): string {
+  if (arm === "none") return "without skills";
+  if (arm === "all") return "with the skills";
+  return arm.startsWith("only:") ? `only ${arm.slice(5)}` : arm;
+}
+
 function short(v: string): string {
   return v.split(" — ")[0];
 }
@@ -199,6 +206,20 @@ function EvalView({ evalId }: { evalId: string }) {
         {e.per_skill.map((s) => <SkillCard key={s.skill} s={s} single={e.skills.length === 1} />)}
       </div>
 
+      {/* nothing solved, with the skill or without: the "done when" command is
+          the question, not the skill */}
+      {e.overall.arms.length > 0 && e.overall.arms.every((a) => a.solved === 0) && (
+        <div data-testid="eval-nothing-solved" className="mb-6 p-3" style={{ border: `1px solid ${C.amber}`, borderRadius: 8,
+          fontFamily: MONO, fontSize: 11.5, color: C.amber, lineHeight: 1.6 }}>
+          Nothing was solved, with the skill or without: the “done when” command never passed — this says
+          nothing about the skill yet. Run that command in the repository to see why.
+          {(() => {
+            const out = String((e.trials ?? []).map((t) => (t as { check_output?: string }).check_output ?? "")
+              .find((x) => x) ?? "");
+            return out ? <pre style={{ color: C.mut, marginTop: 6, whiteSpace: "pre-wrap", fontSize: 10.5 }}>{out.slice(-400)}</pre> : null;
+          })()}
+        </div>
+      )}
       <Headline task={e.overall} />
 
       <div style={label}>WITH THE SKILL AND WITHOUT IT — ALL TASKS</div>
@@ -256,7 +277,7 @@ function Headline({ task }: { task: SkillEvalTask }) {
   const none = task.arms.find((a) => a.arm === "none");
   return (
     <div data-testid="skill-eval-headline" style={{ fontSize: 15, lineHeight: 1.6, marginBottom: 18 }}>
-      Fewest tokens per solved task: <span style={{ fontFamily: MONO, color: C.green }}>{best.arm}</span> —{" "}
+      Fewest tokens per solved task: <span style={{ fontFamily: MONO, color: C.green }}>{armWords(best.arm)}</span> —{" "}
       {n(best.tokens_per_solved)} tokens, {best.solved}/{best.trials} solved
       {none && (
         <span style={{ color: C.mut }}>
@@ -287,7 +308,7 @@ function ArmTable({ t }: { t: SkillEvalTask }) {
             const c = vs[a.arm];
             return (
               <tr key={a.arm}>
-                <td style={{ ...td, color: C.text }}>{a.arm}</td>
+                <td style={{ ...td, color: C.text }}>{armWords(a.arm)}</td>
                 <td style={{ ...td, color: a.solved === a.trials ? C.green : a.solved === 0 ? C.red : C.text }}>{a.solved}/{a.trials}</td>
                 <td style={td}>{c ? solvedText(c).replace(" solved", "") : "—"}</td>
                 <td style={td}>{n(a.mean_tokens)}</td>

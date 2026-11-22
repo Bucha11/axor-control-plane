@@ -21,6 +21,7 @@ import { navigate, useRoute } from "./router";
 import { MODE_LABEL, isConnected, isGuestToken, useApp } from "./store";
 import GuestSession, { guestTimeLeft } from "./components/GuestSession";
 import { track } from "./funnel";
+import { useHasTeam } from "./team";
 import Tooltip from "./components/Tooltip";
 import { codingExampleOnly, fleetExampleOnly } from "./components/CodingOnboarding";
 import Tour from "./components/Tour";
@@ -136,6 +137,7 @@ function routeKey(segments: string[]): string {
 
 export default function App() {
   const menu = useMenu();
+  const hasTeam = useHasTeam();
   const route = useRoute();
   const { mode } = useApp((s) => s.connection);
   const key = routeKey(route.segments);
@@ -213,8 +215,8 @@ export default function App() {
       {key === "prevent" && <Regression rules={route.query.rules} />}
       {key === "govern" && (
         <>
-          {!sidebar && <SubNav active={governView} items={GOVERN_VIEWS.filter(([r]) => menu.all
-            || menu.journey !== "coding" || ["govern", "trees", "health", "pair", "memory"].includes(r))} />}
+          {!sidebar && <SubNav active={governView} items={GOVERN_VIEWS.filter(([r]) => (r !== "pair" || hasTeam) && (menu.all
+            || menu.journey !== "coding" || ["govern", "trees", "health", "pair", "memory"].includes(r)))} />}
           {head === "health" ? <ContextHealth journey={menu.journey} /> : head === "sentinel" ? <Sentinel />
             : head === "trees" ? <Trees treeRun={runIdParam} />
             : head === "memory" ? <TeamMemory />
@@ -382,6 +384,7 @@ function useWide(): boolean {
 /** The navigation as a sidebar: sections, Agents' views under it, and the
  * session's controls at the bottom. */
 function Sidebar({ active, view }: { active: string; view: string }) {
+  const hasTeam = useHasTeam();
   const menu = useMenu();
   const incidentCount = useIncidentCount();
   const item = (on: boolean, indent: boolean): React.CSSProperties => ({
@@ -418,8 +421,8 @@ function Sidebar({ active, view }: { active: string; view: string }) {
             </button>
             {l.key === "govern" && (
               <div className="flex flex-col" style={{ gap: 1, margin: "2px 0 6px" }}>
-                {GOVERN_VIEWS.slice(1).filter(([route]) => menu.all || menu.journey !== "coding"
-                  || ["trees", "health", "pair", "memory"].includes(route)).map(([route, label]) => (
+                {GOVERN_VIEWS.slice(1).filter(([route]) => (route !== "pair" || hasTeam) && (menu.all
+                  || menu.journey !== "coding" || ["trees", "health", "pair", "memory"].includes(route))).map(([route, label]) => (
                   <button key={route} onClick={() => navigate(route)}
                     aria-current={view === route ? "page" : undefined}
                     data-testid={`side-${route}`} style={item(view === route, true)}>

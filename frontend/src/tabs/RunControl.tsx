@@ -129,10 +129,13 @@ export default function RunControl({ runId }: { runId: string }) {
   const status = stopped ? "stopped" : live ? (paused ? "held" : "running") : "done";
   const statusColor = stopped ? C.red : live ? (paused ? C.amber : C.green) : C.dim;
 
+  // a coding session's first request: what this was about, in the developer's words
+  const title = (nodes.data ?? []).find((n) => n.node_id === nodeId)?.profile?.title;
   return (
     <Shell>
       <ExampleStory runId={runId} />
       {/* header: what this run is, and the controls that act on it */}
+      {title && <div data-testid="run-title" style={{ fontSize: 15, color: C.text, marginBottom: 2 }}>“{title}”</div>}
       <div style={{ fontFamily: MONO, fontSize: 11, color: C.mut, marginBottom: 6 }}>
         <span style={{ color: C.steel, cursor: "pointer" }}
           onClick={() => navigate(`control/${encodeURIComponent(nodeId)}`)}>{nodeId}</span>

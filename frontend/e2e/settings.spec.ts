@@ -12,7 +12,7 @@ test.describe("settings", () => {
   test("subscribes a webhook to a trigger", async ({ page }) => {
     await goHash(page, "settings?tab=alerts");
     await expect(page.getByRole("heading", { name: "Settings" })).toBeVisible();
-    await page.getByPlaceholder("https://hooks.example/… (JSON POST)").fill("https://sink.e2e/hook");
+    await page.getByPlaceholder(/https:\/\/hooks.example\/…/).fill("https://sink.e2e/hook");
     await page.getByRole("checkbox").first().check();
     await page.getByRole("button", { name: /Subscribe/ }).click();
     await expect(page.getByRole("button", { name: "subscribed" })).toBeVisible();
@@ -24,7 +24,7 @@ test.describe("settings", () => {
     // permalink.
     await goHash(page, "settings?tab=alerts");
     const url = `https://sink.e2e/drop-${Date.now()}`;
-    await page.getByPlaceholder("https://hooks.example/… (JSON POST)").fill(url);
+    await page.getByPlaceholder(/https:\/\/hooks.example\/…/).fill(url);
     await page.getByRole("checkbox").first().check();
     await page.getByRole("button", { name: /Subscribe/ }).click();
     await expect(page.getByText(url)).toBeVisible();
@@ -69,10 +69,10 @@ test.describe("settings", () => {
       /stopped reporting/,
       /a policy change breaks a case you kept/,
     ]) {
-      await expect(page.getByText(label)).toBeVisible();
+      await expect(page.getByLabel(label)).toBeVisible();
     }
     // a license that expires is a licensed workspace's news: this one has none
-    await expect(page.getByText(/the license is about to expire/)).toHaveCount(0);
+    await expect(page.getByLabel(/the license is about to expire/)).toHaveCount(0);
   });
 
   test("the meter and the statement drawn from it are visible", async ({ page }) => {
@@ -123,8 +123,8 @@ test.describe("settings", () => {
     await expect(page.getByTestId("if-paid-security")).toHaveCount(0);
     await tabs.getByRole("tab", { name: "alerts" }).click();
     await expect(page).toHaveURL(/tab=alerts/);
-    await expect(page.getByText(/its own run contradicts/)).toBeVisible();
-    await expect(page.getByText(/restricted further/)).toHaveCount(0);
+    await expect(page.getByLabel(/its own run contradicts/)).toBeVisible();
+    await expect(page.getByLabel(/restricted further/)).toHaveCount(0);
     await tabs.getByRole("tab", { name: "connect agents" }).click();
     await expect(page.getByTestId("keys-open")).toContainText("axor-wrap connect http");
   });

@@ -32,8 +32,14 @@ const verdictOf = (s: ScrubberStep) => s.reevaluated_verdict ?? s.recorded_verdi
 const isRefused = (s: ScrubberStep) => s.kind === "tool_call" && verdictOf(s) === "deny";
 const toolOf = (s: ScrubberStep) => (typeof s.payload.tool === "string" ? s.payload.tool : "");
 
+// a check the agent ran that failed (tests, a lint, a build): not a governance
+// verdict, but what an agent saying "the tests pass" is measured against
+const checkFailed = (s: ScrubberStep) => s.kind === "tool_result"
+  && (s.payload.check as { passed?: boolean } | undefined)?.passed === false;
+
 function stepColor(s: ScrubberStep): string {
   if (isTainted(s)) return C.amber;
+  if (checkFailed(s)) return C.red;
   return sevColor(verdictOf(s), s.kind);
 }
 
@@ -184,6 +190,14 @@ export default function ReplayTab({ runId: runIdProp, cursor: cursorProp, seq: s
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [runId]);
 
+  const [settled, setSettled] = useState<string | null>(null);
+  const settle = useMutation({
+    mutationFn: (status: "looked_at" | "not_a_problem") => api.setIncidentStatus(`ev:${runId}:0`, status),
+    onSuccess: (_r, status) => {
+      setSettled(status === "looked_at" ? "looked at" : "not a problem");
+      void qc.invalidateQueries({ queryKey: ["incidents"] });
+    },
+  });
   const counterfactual = useMutation({
     mutationFn: (config: Record<string, unknown>) => api.counterfactual(runId!, config),
   });
@@ -273,6 +287,7 @@ export default function ReplayTab({ runId: runIdProp, cursor: cursorProp, seq: s
   const outsideAt = baseSteps.findIndex(isTainted);
   const refusedAt = baseSteps.findIndex(isRefused);
   const claimAt = steps.map((x) => x.kind).lastIndexOf("claim");
+  const failedAt = steps.map(checkFailed).lastIndexOf(true);
   // other rules decide calls: a run that made none of them (no refusal, no
   // outside text) has nothing for them to change — an agent saying the tests
   // passed is not a rule's question
@@ -388,7 +403,7 @@ export default function ReplayTab({ runId: runIdProp, cursor: cursorProp, seq: s
           <div className="flex gap-3 mb-2" style={{ fontFamily: MONO, fontSize: 10, color: C.dim, marginTop: 8 }}>
             <span><span style={{ color: C.green }}>━</span> let through</span>
             <span><span style={{ color: C.amber }}>━</span> text from outside</span>
-            <span><span style={{ color: C.red }}>━</span> refused</span>
+            <span><span style={{ color: C.red }}>━</span> refused{steps.some(checkFailed) ? " · a check failed" : ""}</span>
           </div>
           <input type="range" min={0} max={steps.length - 1} value={Math.min(cursor, steps.length - 1)}
             onChange={(e) => setCursor(+e.target.value)} aria-label="step" className="w-full" style={{ accentColor: C.steel }} />
@@ -402,6 +417,20 @@ export default function ReplayTab({ runId: runIdProp, cursor: cursorProp, seq: s
               <div style={{ fontSize: 14.5, color: isRefused(cur) ? C.red : C.text, lineHeight: 1.5 }}>
                 {sentence(steps, cur)}
               </div>
+              {checkFailed(cur) && (
+                <div style={{ fontFamily: MONO, fontSize: 11.5, color: C.red, marginTop: 6 }}>
+                  the check failed{(cur.payload.check as { summary?: string }).summary ? ` — ${(cur.payload.check as { summary?: string }).summary}` : ""}
+                </div>
+              )}
+              {/* the claim, beside what contradicts it */}
+              {cur.kind === "claim" && incident && failedAt >= 0 && (
+                <div data-testid="replay-contradiction" className="mt-2 p-2"
+                  style={{ fontFamily: MONO, fontSize: 11.5, color: C.red, border: `1px solid ${C.red}`, borderRadius: 6 }}>
+                  but at step {failedAt + 1} {String((steps[failedAt].payload.check as { command?: string }).command ?? toolOf(steps[failedAt]))} failed
+                  {(steps[failedAt].payload.check as { summary?: string }).summary ? `: ${(steps[failedAt].payload.check as { summary?: string }).summary}` : ""}{" "}
+                  <button onClick={() => setCursor(failedAt)} style={{ ...link, fontSize: 11.5 }}>see it →</button>
+                </div>
+              )}
               {typeof cur.payload.preview === "string" && cur.payload.preview && (
                 <div style={{ fontFamily: MONO, fontSize: 11, color: C.text, marginTop: 8, background: C.panel2,
                               borderRadius: 4, padding: "6px 8px", whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>
@@ -440,6 +469,24 @@ export default function ReplayTab({ runId: runIdProp, cursor: cursorProp, seq: s
                 </div>
                 {curRef && <TaintGraph key={`${runId}:${curRef}`} runId={runId} focus={curRef} />}
               </Fold>
+            </div>
+          )}
+
+          {/* an incident's run ends somewhere: settle it, or go back to the list */}
+          {incident && (
+            <div data-testid="replay-settle" className="mt-3 flex items-center gap-3 flex-wrap"
+              style={{ fontFamily: MONO, fontSize: 11.5, color: C.mut }}>
+              {settled ? <span style={{ color: C.green }}>✓ marked {settled}</span> : (
+                <>
+                  <button onClick={() => settle.mutate("looked_at")} disabled={settle.isPending}
+                    style={btn({ color: C.text, fontSize: 11, padding: "4px 10px" })}>looked at — done</button>
+                  <button onClick={() => settle.mutate("not_a_problem")} disabled={settle.isPending}
+                    style={btn({ color: C.mut, fontSize: 11, padding: "4px 10px" })}>not a problem</button>
+                </>
+              )}
+              <button onClick={() => navigate("evidence", run?.node_id ? { agent: run.node_id } : {})} style={link}>
+                ← back to incidents
+              </button>
             </div>
           )}
 

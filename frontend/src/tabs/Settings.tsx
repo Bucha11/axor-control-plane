@@ -479,9 +479,15 @@ export default function Settings({ tab = "workspace" }: { tab?: string } = {}) {
   const meQ = useQuery({ queryKey: ["identity-me"], queryFn: api.identityMe, enabled: !!identityEmail, retry: false });
   const verified = meQ.data?.user.email_verified !== false;
 
+  const journey = useApp((s) => s.journey);
+  const menuAll = useApp((s) => s.menuAll);
+  const shownTriggers = TRIGGERS.filter((t) => (!journey || menuAll || t.for.includes(journey))
+    // a license that expires is a licensed workspace's news
+    && (t.id !== "license_expiring" || eeActive));
   const subscribe = useMutation({
     mutationFn: () =>
-      api.subscribeNotifications(url, selected, 0, {
+      // only what the list shows: a default this journey hides is not asked for
+      api.subscribeNotifications(url, selected.filter((id) => shownTriggers.some((t) => t.id === id)), 0, {
         label: chanLabel || undefined,
         nodePattern: nodePattern || undefined,
       }),
@@ -512,8 +518,6 @@ export default function Settings({ tab = "workspace" }: { tab?: string } = {}) {
   const resetCoach = useApp((s) => s.resetCoach);
   const startTour = useStartTour();
 
-  const journey = useApp((s) => s.journey);
-  const menuAll = useApp((s) => s.menuAll);
   const funnel = useQuery({ queryKey: ["funnel", 30], queryFn: () => api.funnelReport(30), retry: false });
   const prod = !journey || menuAll || journey !== "coding";
   const coding = !journey || menuAll || journey !== "production";
@@ -741,14 +745,13 @@ export default function Settings({ tab = "workspace" }: { tab?: string } = {}) {
         <input
           value={url}
           onChange={(e) => { setUrl(e.target.value); subscribe.reset(); }}
-          placeholder="https://hooks.example/… (JSON POST) or mailto:you@…"
+          placeholder={canMail ? "https://hooks.example/… (JSON POST) or mailto:you@…"
+            : "https://hooks.example/… — a webhook (JSON POST): Slack, Discord, PagerDuty"}
           className="w-full mb-3"
           style={{ background: C.bg, border: `1px solid ${C.line}`, borderRadius: 5, color: C.text, fontFamily: MONO, fontSize: 12, padding: "7px 9px", outline: "none" }}
         />
         <div className="flex flex-col gap-2 mb-3">
-          {TRIGGERS.filter((t) => (!journey || menuAll || t.for.includes(journey))
-            // a license that expires is a licensed workspace's news
-            && (t.id !== "license_expiring" || eeActive)).map((t) => (
+          {shownTriggers.map((t) => (
             <label key={t.id} className="flex items-center gap-2" style={{ fontFamily: MONO, fontSize: 11.5, color: C.mut, cursor: "pointer" }}>
               <input type="checkbox" checked={selected.includes(t.id)} onChange={() => toggle(t.id)} />
               {t.label}
@@ -800,7 +803,8 @@ export default function Settings({ tab = "workspace" }: { tab?: string } = {}) {
             {(subscriptions.data ?? []).map((s, i) => (
               <div key={i} className="flex items-center gap-2" style={{ fontFamily: MONO, fontSize: 11, color: C.mut, marginTop: 4 }}>
                 <span>
-                  {s.label ? `[${s.label}] ` : ""}{s.url} · {s.triggers.join(", ")}
+                  {s.label ? `[${s.label}] ` : ""}{s.url} · {s.triggers
+                    .map((id) => TRIGGERS.find((t) => t.id === id)?.label.split(" — ")[0] ?? id).join("; ")}
                   {s.node_pattern !== "*" ? ` · nodes: ${s.node_pattern}` : ""}
                 </span>
                 <button

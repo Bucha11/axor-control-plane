@@ -223,7 +223,10 @@ function StatusPick({ item }: { item: IncidentItem }) {
       onChange={(e) => set.mutate(e.target.value as IncidentStatus)}
       style={{ background: C.panel2, border: `1px solid ${item.status === "new" ? C.steel : C.line}`, borderRadius: 5,
                color: item.status === "new" ? C.steel : C.mut, fontFamily: MONO, fontSize: 11, padding: "3px 6px" }}>
-      {(Object.keys(STATUS_WORDS) as IncidentStatus[]).map((st) => <option key={st} value={st}>{STATUS_WORDS[st]}</option>)}
+      {(Object.keys(STATUS_WORDS) as IncidentStatus[])
+        // a refusal already is a rule at work: keeping it or making one is not its question
+        .filter((st) => item.kind !== "refused" || st === item.status || !["kept_as_test", "rule_made"].includes(st))
+        .map((st) => <option key={st} value={st}>{STATUS_WORDS[st]}</option>)}
     </select>
   );
 }

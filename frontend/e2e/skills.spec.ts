@@ -322,7 +322,7 @@ test.describe("coding agents: their menu, and trying a skill", () => {
     expect(given.text).not.toContain("make test-all-integration");
     // a note from a person
     await view.getByLabel("note for every agent").fill("The payments module is frozen until the audit — don't touch it.");
-    await view.getByRole("button", { name: "add for the team" }).click();
+    await view.getByRole("button", { name: "add the note" }).click();
     await expect(view.getByTestId("memory-preview")).toContainText("payments module is frozen");
     // back to where it passed
     await view.getByTestId("memory-on").getByRole("button", { name: "see where it passed →" }).first().click();
