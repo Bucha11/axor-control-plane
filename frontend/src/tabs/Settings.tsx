@@ -95,7 +95,9 @@ function OrgMembers() {
   return (
     <div className="mb-3" style={{ fontFamily: MONO, fontSize: 11, color: C.mut, display: "flex", flexDirection: "column", gap: 6 }}>
       <div>
-        workspace <span style={{ color: C.text }}>{active?.name ?? d.active_org}</span> · you are{" "}
+        workspace <span style={{ color: C.text }}>{active?.name ?? d.active_org}</span>{" "}
+        <span data-testid="workspace-id" title="a license is issued to this id: give it when you buy one"
+          style={{ color: C.dim }}>({d.active_org})</span> · you are{" "}
         <span style={{ color: C.text }}>{d.role}</span>
         {d.memberships.length > 1 && (
           <span style={{ color: C.dim }}>
@@ -567,8 +569,10 @@ export default function Settings({ tab = "workspace" }: { tab?: string } = {}) {
               <TokenFold />
             )}
           </Section>
-          {/* a hosted plane (it offers guests) has no license to paste */}
-          {(!authStatus.data?.guest_sessions || licenseStatus.data?.active) && <Section title="LICENSE · a plane you run yourself">
+          {/* a guest has no license to paste; a signed-in workspace does — the
+              file the vendor sent after an upgrade is applied here */}
+          {(!authStatus.data?.guest || licenseStatus.data?.active) && authStatus.data?.authenticated !== false
+            && <Section title="LICENSE · the file you were sent">
             <details data-testid="license-fold" open={!!licenseStatus.data?.active || !!licenseStatus.data?.expired || undefined}>
               <summary style={{ cursor: "pointer", fontFamily: MONO, fontSize: 11.5, color: C.mut }}>
                 {licenseStatus.data?.active
@@ -577,7 +581,8 @@ export default function Settings({ tab = "workspace" }: { tab?: string } = {}) {
               </summary>
               <div className="mt-3">
         <div style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim, marginBottom: 10 }}>
-          For a plane you run yourself: paste the license file you were sent. It is checked
+          Paste the license file you were sent after an upgrade (it is issued to your workspace id, shown
+          above). It is checked
           here, offline — nothing calls us. When it expires the paid features turn read-only;
           what gets blocked never depends on a license.
         </div>
@@ -682,6 +687,15 @@ export default function Settings({ tab = "workspace" }: { tab?: string } = {}) {
       {active === "billing" && (
         <>
           <Billing coding={coding} prod={prod} />
+          {!licenseStatus.data?.active && !authStatus.data?.guest && (
+            <div data-testid="billing-license-hint" className="mb-4" style={{ fontFamily: MONO, fontSize: 11, color: C.mut }}>
+              bought a plan? the license file you were sent goes under{" "}
+              <button onClick={() => navigate("settings", { tab: "workspace" })}
+                style={{ background: "none", border: "none", padding: 0, cursor: "pointer", color: C.steel, fontFamily: MONO, fontSize: 11 }}>
+                workspace → license
+              </button>
+            </div>
+          )}
           {coding && (
             <Section title="DEVELOPERS PER MONTH · coding agents">
               <DeveloperUsage />

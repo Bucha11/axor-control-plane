@@ -33,16 +33,17 @@ const REPORT = {
 };
 
 test.describe("coding agents: their menu, and trying a skill", () => {
-  test("the coding menu: agents, replay, try a skill — everything else one click away", async ({ page }) => {
+  test("the coding menu: agents, replay, skills, its own policy — everything else one click away", async ({ page }) => {
     await setConnection(page, { mode: "demo" });
     await journey(page, "coding");
     await goHash(page, "govern");
     const side = page.getByTestId("sidebar");
-    await expect(side.getByRole("button", { name: "Try a skill", exact: true })).toBeVisible();
+    await expect(side.getByRole("button", { name: "Skills", exact: true })).toBeVisible();
+    await expect(side.getByRole("button", { name: "Policy", exact: true })).toBeVisible();
     await expect(side.getByRole("button", { name: "Replay", exact: true })).toBeVisible();
     await expect(side.getByRole("button", { name: "Skill evals", exact: true })).toBeVisible();
     await expect(side.getByRole("button", { name: "Incidents", exact: true })).toBeVisible();
-    for (const hidden of ["Policy", "Safe to ship?"]) {
+    for (const hidden of ["Chaos tests", "Safe to ship?"]) {
       await expect(side.getByRole("button", { name: hidden, exact: true })).toHaveCount(0);
     }
     await page.getByTestId("menu-scope").getByRole("button", { name: "show everything" }).click();
@@ -55,7 +56,7 @@ test.describe("coding agents: their menu, and trying a skill", () => {
     await goHash(page, "govern");
     const side = page.getByTestId("sidebar");
     await expect(side.getByRole("button", { name: "Safe to ship?", exact: true })).toBeVisible();
-    await expect(side.getByRole("button", { name: "Try a skill", exact: true })).toHaveCount(0);
+    await expect(side.getByRole("button", { name: "Skills", exact: true })).toHaveCount(0);
   });
 
   test("checking a skill says what it asks, and what Axor does about it", async ({ page }) => {
@@ -198,7 +199,8 @@ test.describe("coding agents: their menu, and trying a skill", () => {
   test("a skill that helps, turned on for the team: the policy names it, the sidecars fetch it", async ({ page, request }) => {
     await setConnection(page, { mode: "demo" });
     await request.post("http://127.0.0.1:8400/v1/demo/seed-skill-eval");
-    await goHash(page, "skill-evals");
+    // the team's skills are on Skills, with the rest of what is done about skills
+    await goHash(page, "skills");
     const panel = page.getByTestId("team-skills");
     await expect(panel.getByTestId("team-share-cmd")).toHaveText("axor-wrap skill share ./.claude/skills/my-skill");
     // no environment variables on the page: the machine's connection is set once
@@ -417,5 +419,25 @@ test.describe("coding agents: their menu, and trying a skill", () => {
     await expect(view.getByTestId("memory-plan")).toHaveCount(0);
     await expect(view.getByTestId("memory-preview")).toContainText("WHAT YOUR AGENTS GET");
     await expect(view.getByTestId("memory-preview")).toContainText("pnpm test");
+  });
+});
+
+
+test.describe("the team's policy for coding agents", () => {
+  test("an admin allows a rule, chooses to observe, and every sidecar fetches it", async ({ page, request }) => {
+    await setConnection(page, { mode: "adapter" });
+    await journey(page, "coding");
+    await goHash(page, "policy");
+    const view = page.getByTestId("coding-policy");
+    await expect(view.getByTestId("rule-secrets")).toContainText("reads secrets");
+    await view.getByTestId("rule-destructive-allowed").click();
+    await view.getByTestId("policy-mode-observe").check();
+    await view.getByTestId("policy-save").click();
+    await expect(view).toContainText("saved — every sidecar picks it up");
+    const policy = await (await request.get("http://127.0.0.1:8400/v1/coding/policy")).json();
+    expect(policy.rules.allow).toContain("destructive");
+    expect(policy.rules.mode).toBe("observe");
+    // put back: other specs share this plane
+    await request.put("http://127.0.0.1:8400/v1/coding/rules", { data: { allow: [], mode: "enforce" } });
   });
 });

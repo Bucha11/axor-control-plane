@@ -10,6 +10,8 @@ context (the agent loads them at start) until the folder is removed; the
 screen says so.
 
 - ``GET  /v1/coding/policy``       what the sidecars fetch (an ingest key reads it)
+- ``GET  /v1/coding/rules``        the team's rules for the screen, with the catalog
+- ``PUT  /v1/coding/rules``        ``{"allow": [...], "mode": "enforce"|"observe"}`` — admin
 - ``GET  /v1/coding/skills``       the list for the screen, with recent refusals
 - ``PUT  /v1/coding/skills/{name}`` ``{"off": true|false}`` or
   ``{"team": true|false}`` — operate
@@ -50,10 +52,86 @@ async def _off(request: Request) -> dict[str, dict]:
 
 @router.get("/policy")
 async def policy(request: Request, store: StoreDep) -> dict:
-    """For the sidecars: the names (and the team's versions), nothing else."""
+    """For the sidecars: the skills off and on, and — once an admin saved one —
+    the team's rules: which the hooks refuse, which they allow, and whether
+    they refuse at all (``enforce``) or only record what they would have."""
     team = [{"name": t["name"], "version": t["live"]["version"]}
             for t in await store.team_skills() if t["live"]]
-    return {"skills_off": sorted(await _off(request)), "skills_team": team}
+    rules = await _rules(store)
+    return {"skills_off": sorted(await _off(request)), "skills_team": team,
+            **({"rules": {"allow": rules["allow"], "mode": rules["mode"]}} if rules["set"] else {})}
+
+
+# ── the team's rules for coding agents ───────────────────────────────────────
+# What the hooks refuse whoever asked (axor_wrap.agents.rules): the same list
+# for every developer, decided once here. A repository's .axor/rules.json may
+# refuse more ("refuse": [...]); it may not allow what the team refuses.
+
+RULES = "coding_rules"
+MODES = ("enforce", "observe")
+# the catalog, when the backend's axor-wrap cannot say it (an older one)
+_CATALOG = [
+    ("download_and_run", "downloads code and runs it",
+     "what it downloads is never seen before it runs"),
+    ("secrets", "reads secrets",
+     "keys and tokens in the agent's context can be sent anywhere it can reach"),
+    ("sends_out", "sends a file or data out of this machine",
+     "uploads and raw network pipes are how data leaves"),
+    ("persistence", "changes what runs later",
+     "shell profiles, git hooks, cron and services outlive the session"),
+    ("writes_outside", "writes outside the repository",
+     "a coding task changes this repository, not the rest of the machine"),
+    ("destructive", "deletes or rewrites what cannot be undone",
+     "a recursive delete outside the repository, a force push, a disk write"),
+    ("privilege", "asks for root",
+     "a coding task does not need to become root"),
+    ("skill_scripts", "runs a skill's script that does something dangerous",
+     "a script is one call to Axor — what it does inside is not seen line by line"),
+]
+# the agent's own guard is never the team's to switch off
+_FIXED = {"agent_config"}
+
+
+def _catalog() -> list[dict]:
+    try:
+        from axor_wrap.agents.rules import RULES as WRAP_RULES
+
+        rows = [(r.id, r.what, r.why) for r in WRAP_RULES.values()]
+    except Exception:  # noqa: BLE001 - an older axor-wrap: the list above
+        rows = list(_CATALOG)
+    return [{"id": i, "what": w, "why": y, "fixed": i in _FIXED} for i, w, y in rows]
+
+
+async def _rules(store: object) -> dict:
+    value = await store.get_setting(RULES)  # type: ignore[attr-defined]
+    if not isinstance(value, dict):
+        return {"set": False, "allow": [], "mode": "enforce", "by": "", "ts": ""}
+    return {"set": True, "allow": sorted(value.get("allow") or []),
+            "mode": value.get("mode") if value.get("mode") in MODES else "enforce",
+            "by": value.get("by", ""), "ts": value.get("ts", "")}
+
+
+@router.get("/rules")
+async def rules_for_screen(store: StoreDep) -> dict:
+    return {**await _rules(store), "catalog": _catalog()}
+
+
+@router.put("/rules")
+async def set_rules(body: dict, store: StoreDep, principal: PrincipalDep) -> dict:
+    """The team's rules: ``{"allow": [rule ids], "mode": "enforce"|"observe"}``.
+    Admin: it decides what every developer's agent may do."""
+    known = {r["id"] for r in _catalog()}
+    allow = body.get("allow")
+    if not isinstance(allow, list) or not all(isinstance(x, str) and x in known for x in allow):
+        raise HTTPException(400, f"allow is a list of rule ids, from {sorted(known)}")
+    if any(x in _FIXED for x in allow):
+        raise HTTPException(400, "the agent's own guard (agent_config) cannot be allowed")
+    mode = body.get("mode", "enforce")
+    if mode not in MODES:
+        raise HTTPException(400, f"mode is one of {list(MODES)}")
+    await store.set_setting(RULES, {"allow": sorted(set(allow)), "mode": mode,
+                                    "by": _by(principal), "ts": datetime.now(UTC).isoformat()})
+    return await _rules(store)
 
 
 @router.get("/skills")

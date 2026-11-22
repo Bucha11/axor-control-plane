@@ -15,7 +15,7 @@ import { api, KernelEvent, SkillReport } from "../api";
 import { navigate } from "../router";
 import { refusalWords } from "../refusal";
 import { C, MONO, btn } from "../theme";
-import { SkillsOffPanel } from "../components/SkillsOff";
+import { SkillsOffPanel, TeamSkillsPanel } from "../components/SkillsOff";
 import { HowItWorks, MachineCommand } from "../components/MachineCommand";
 const TRY_PREFIX = "skill-try.";
 
@@ -82,19 +82,25 @@ const link: React.CSSProperties = {
 export default function Skills() {
   return (
     <div style={{ maxWidth: 680, margin: "0 auto" }}>
-      <h1 style={{ fontSize: 22, fontWeight: 650, margin: "0 0 6px" }}>Try a skill</h1>
+      <h1 style={{ fontSize: 22, fontWeight: 650, margin: "0 0 6px" }}>Skills</h1>
       <div style={{ fontSize: 14, color: C.mut, lineHeight: 1.5, marginBottom: 24 }}>
-        Look before you install: what a skill asks, then what an agent does with it.
+        The team's skills in one place: the ones shared for the team, the ones turned off — and,
+        before you install one, what it asks and what an agent does with it.
         <HowItWorks>
           <li>Your agent follows a skill as its own instructions.</li>
           <li>Axor refuses the dangerous part anyway: running a download, reading secrets, sending files out, force-pushing.</li>
           <li>The rest is up to you — and what a script inside it does isn't visible.</li>
         </HowItWorks>
       </div>
+      {/* what waits for a decision comes first: a teammate's shared skill */}
+      <TeamSkillsPanel />
+      <div style={{ marginBottom: 36 }}><SkillsOffPanel /></div>
+      <div style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim, letterSpacing: "0.1em", marginBottom: 12 }}>
+        BEFORE YOU INSTALL ONE
+      </div>
       <CheckSkill />
       <RunSkill />
       <DryRuns />
-      <div style={{ marginTop: 36 }}><SkillsOffPanel /></div>
       <div data-testid="skills-to-evals" className="mt-8" style={{ fontFamily: MONO, fontSize: 11.5, color: C.mut }}>
         does it actually help?{" "}
         <button onClick={() => navigate("skill-evals")} style={link}>Skill evals →</button>

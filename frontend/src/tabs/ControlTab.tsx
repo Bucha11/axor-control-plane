@@ -288,6 +288,14 @@ export default function ControlTab({ focusNode }: { focusNode?: string }) {
   // nothing behind it; now the page is open, says so up front, and has an
   // example fleet to operate.
   const hasAgents = (fleet.data ?? []).length > 0;
+  // a coding team's agents come through their hooks: wrapping code or a proxy
+  // is not their question, and an admin with no machine of their own is not
+  // "unconnected"
+  const journey = useApp((s) => s.journey);
+  const ownNodes = (fleet.data ?? []).filter((n) => !n.example);
+  const codingTeam = journey === "coding" || (ownNodes.length > 0 && ownNodes.every((n) =>
+    isCodingSession(n.node_id) || n.profile?.kind === "coding" || n.profile?.kind === "tree"
+    || n.node_id.startsWith("skill-try.")));
   const [examples, setExamples] = useState(false);
   const note = (
     <>
@@ -300,7 +308,7 @@ export default function ControlTab({ focusNode }: { focusNode?: string }) {
     <>
       {/* decided once the list is in: a note that unfolds and then folds
           itself takes the button out from under the pointer */}
-      {!isAdapter(mode) && fleet.isSuccess
+      {!isAdapter(mode) && fleet.isSuccess && !codingTeam
         && !codingExampleOnly((fleet.data ?? []).map((n) => n.node_id))
         && !fleetExampleOnly((fleet.data ?? []).map((n) => n.node_id)) && (hasAgents ? (
         // agents are already on screen: one line, the example tools folded away

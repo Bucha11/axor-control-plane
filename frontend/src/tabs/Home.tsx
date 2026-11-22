@@ -177,7 +177,7 @@ function FirstVisit() {
 /** For someone who wants to see the product before connecting anything: the
  * sections, one click each — the menu itself is kept off a first visit. */
 const SECTIONS: Record<Side, [string, string][]> = {
-  coding: [["govern", "Agents"], ["explain", "Replay"], ["skills", "Try a skill"]],
+  coding: [["govern", "Agents"], ["explain", "Replay"], ["skills", "Skills"]],
   production: [["govern", "Agents"], ["policy", "Policy"], ["evidence", "Incidents"],
                ["explain", "Replay"], ["prevent", "Safe to ship?"]],
 };

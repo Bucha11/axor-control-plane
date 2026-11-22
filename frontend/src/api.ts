@@ -244,6 +244,11 @@ export interface NodeRun {
   intervened: boolean;
 }
 
+export interface CodingRules {
+  set: boolean; allow: string[]; mode: "enforce" | "observe"; by: string; ts: string;
+  catalog?: { id: string; what: string; why: string; fixed: boolean }[];
+}
+
 export interface NodeInfo {
   node_id: string;
   // the product's own example (a demo seed), not this workspace's work
@@ -1426,6 +1431,13 @@ export const api = {
     }).then((r) => j<{ name: string; team: boolean; version: string | null }>(r)),
   seedTeamSkill: () =>
     af("/v1/demo/seed-team-skill", { method: "POST" }).then((r) => j<{ name: string }>(r)),
+  // the team's rules for coding agents (an admin's decision)
+  codingRules: () => af("/v1/coding/rules").then((r) => j<CodingRules>(r)),
+  setCodingRules: (allow: string[], mode: "enforce" | "observe") =>
+    af("/v1/coding/rules", {
+      method: "PUT", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ allow, mode }),
+    }).then((r) => j<CodingRules>(r)),
   setSkillOff: (name: string, off: boolean) =>
     af(`/v1/coding/skills/${encodeURIComponent(name)}`, {
       method: "PUT",

@@ -185,6 +185,8 @@ _WRITE_POLICY: tuple[tuple[str, str], ...] = (
     # pairing on a session and writing a note: any signed-in member, and a
     # guest from outside the team where the pair lets them (routers/pair_api)
     ("/v1/pair", "read"),
+    # what every developer's agent may do is the admin's decision
+    ("/v1/coding/rules", "admin"),
     # turning a skill off — or on — for every developer is an operator's decision
     ("/v1/coding/", "operate"),
     ("/v1/plane/", "operate"),        # command / facts / cascade-stop

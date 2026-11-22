@@ -25,6 +25,7 @@ import { useHasTeam } from "./team";
 import Tooltip from "./components/Tooltip";
 import { codingExampleOnly, fleetExampleOnly } from "./components/CodingOnboarding";
 import Tour from "./components/Tour";
+import { usePendingSkills } from "./components/SkillsOff";
 import Home from "./tabs/Home";
 import Evidence, { useIncidentCount } from "./tabs/Evidence";
 import Experiment from "./tabs/Experiment";
@@ -43,6 +44,7 @@ import Settings, { IdentityLogin } from "./tabs/Settings";
 import AuthReturn from "./components/AuthReturn";
 import Tabs from "./components/Tabs";
 import Pricing from "./tabs/Pricing";
+import CodingPolicy from "./tabs/CodingPolicy";
 import Skills from "./tabs/Skills";
 import SkillEvals from "./tabs/SkillEvals";
 import SetupHealth from "./tabs/SetupHealth";
@@ -59,12 +61,12 @@ type Journey = "coding" | "production" | "both";
 // a coding team's question before trusting a skill is coding's.
 const LOOP: { key: string; label: string; hint: string; for: Journey[] }[] = [
   { key: "govern", label: "Agents", hint: "Every agent and session, live: what each did, what was refused — pause, stop or cap one.", for: ["coding", "production", "both"] },
-  { key: "policy", label: "Policy", hint: "What each agent may read, send and run — the rules enforced at the tool boundary.", for: ["production", "both"] },
+  { key: "policy", label: "Policy", hint: "What each agent may read, send and run — the rules enforced at the tool boundary.", for: ["coding", "production", "both"] },
   { key: "chaos", label: "Chaos tests", hint: "Break a tool on purpose and see what your agent says — on the example, through the proxy, on live agents' next run, or on a schedule.", for: ["production", "both"] },
   { key: "evidence", label: "Incidents", hint: "When an agent said a tool worked and it didn't, said the tests passed when they failed, or tried to send out what came from outside — caught in test runs and in your agents' work.", for: ["coding", "production", "both"] },
   { key: "explain", label: "Replay", hint: "Find the step — by when, which agent, what it did — and see where it came from.", for: ["coding", "production", "both"] },
   { key: "prevent", label: "Safe to ship?", hint: "Check a policy change against every case you've caught, before it ships.", for: ["production", "both"] },
-  { key: "skills", label: "Try a skill", hint: "Before installing a skill for Claude Code or Codex: what it asks the agent to do, and what an agent actually does with it.", for: ["coding", "both"] },
+  { key: "skills", label: "Skills", hint: "The team's skills: shared ones waiting to be turned on, the ones turned off — and, before installing one, what it asks and what an agent does with it.", for: ["coding", "both"] },
   { key: "skill-evals", label: "Skill evals", hint: "Which of your skills help, and what they cost — and the ones that do, shared with the whole team in one click.", for: ["coding", "both"] },
 ];
 
@@ -226,7 +228,9 @@ export default function App() {
               : <ControlTab focusNode={runIdParam} />}
         </>
       )}
-      {key === "policy" && <ConfigBuilder />}
+      {key === "policy" && (menu.journey === "coding" ? <CodingPolicy />
+        : menu.journey === "both" ? <><CodingPolicy /><div style={{ height: 40 }} /><ConfigBuilder /></>
+          : <ConfigBuilder />)}
       {key === "skills" && <Skills />}
       {key === "skill-evals" && <SkillEvals evalId={runIdParam ? decodeURIComponent(runIdParam) : undefined} />}
       {key === "connect" && <Onboarding />}
@@ -384,6 +388,7 @@ function useWide(): boolean {
 /** The navigation as a sidebar: sections, Agents' views under it, and the
  * session's controls at the bottom. */
 function Sidebar({ active, view }: { active: string; view: string }) {
+  const pendingSkills = usePendingSkills();
   const hasTeam = useHasTeam();
   const menu = useMenu();
   const incidentCount = useIncidentCount();
@@ -414,6 +419,10 @@ function Sidebar({ active, view }: { active: string; view: string }) {
               aria-current={active === l.key ? "page" : undefined}
               style={item(active === l.key && (l.key !== "govern" || view === "govern"), false)}>
               {l.label}
+              {l.key === "skills" && pendingSkills > 0 && (
+                <span data-testid="skills-pending" aria-hidden="true" title="shared, waiting to be turned on" style={{ marginLeft: 8, fontSize: 10.5, color: C.bg, background: C.steel,
+                  borderRadius: 9, padding: "0 6px", fontWeight: 700 }}>{pendingSkills}</span>
+              )}
               {l.key === "evidence" && incidentCount > 0 && (
                 <span data-testid="incidents-count" aria-hidden="true" title="new, needing a look" style={{ marginLeft: 8, fontSize: 10.5, color: C.bg, background: C.amber,
                   borderRadius: 9, padding: "0 6px", fontWeight: 700 }}>{incidentCount}</span>

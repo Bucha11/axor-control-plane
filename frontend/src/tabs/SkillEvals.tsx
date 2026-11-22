@@ -11,7 +11,7 @@ import { ChevronDown, ChevronRight, Loader2 } from "lucide-react";
 import { api, SkillEval, SkillEvalArm, SkillEvalCompare, SkillEvalSkill, SkillEvalTask } from "../api";
 import { navigate } from "../router";
 import { C, MONO, btn } from "../theme";
-import { SkillSwitch, TeamSkillsPanel, TeamSwitch } from "../components/SkillsOff";
+import { SkillSwitch, TeamSwitch } from "../components/SkillsOff";
 import { HowItWorks, MachineCommand } from "../components/MachineCommand";
 
 const label: React.CSSProperties = {
@@ -114,7 +114,11 @@ function EvalList() {
           </button>
         </div>
       )}
-      <div style={{ marginTop: 36 }}><TeamSkillsPanel /></div>
+      <div data-testid="evals-to-skills" style={{ marginTop: 28, fontFamily: MONO, fontSize: 11.5, color: C.mut }}>
+        shared with the team, turned off, checked before installing:{" "}
+        <button onClick={() => navigate("skills")} style={{ background: "none", border: "none", padding: 0,
+          cursor: "pointer", fontFamily: MONO, fontSize: 11.5, color: C.steel }}>Skills →</button>
+      </div>
     </>
   );
 }

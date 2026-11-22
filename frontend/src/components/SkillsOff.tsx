@@ -27,6 +27,15 @@ export function useSkillsOff() {
 
 const day = (ts: string) => ts.slice(0, 16).replace("T", " ");
 
+/** Shared skills waiting for someone's decision: never turned on, or a newer
+ * upload than the version on — the menu says how many. */
+export function usePendingSkills(): number {
+  const q = useQuery({ queryKey: ["coding-skills"], queryFn: api.codingSkills, refetchInterval: 30000, retry: false });
+  const off = new Set((q.data?.off ?? []).map((o) => o.skill));
+  return (q.data?.team ?? []).filter((t) => !off.has(t.name)
+    && (!t.live || t.live.version !== t.latest.version)).length;
+}
+
 /** On a skill a team member shared: on for the team, or a newer upload. */
 export function TeamSwitch({ name }: { name: string }) {
   const { shared, team, off } = useSkillsOff();
