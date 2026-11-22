@@ -80,3 +80,61 @@ async def test_the_operators_word_sticks_and_filters(client: httpx.AsyncClient) 
     block = next(i for i in (await _feed(client, kind="made_up"))["items"]
                  if i["run_id"] == "ex_block")
     assert block["status"] == "kept_as_test"
+
+
+async def test_a_safe_force_push_is_not_a_wipe_and_a_wipe_can_be_muted(
+        client: httpx.AsyncClient) -> None:
+    node = "coder-2"
+    await client.post(f"/v1/plane/{node}/telemetry", json={"run_id": f"{node}-t1", "events": [
+        _line(node, 0, "tool_call", tool="Bash",
+              args={"command": "git push --force-with-lease origin feature/auth"}),
+        _line(node, 1, "tool_call", tool="Bash", args={"command": "rm -rf build/"}),
+        _line(node, 2, "tool_call", tool="Bash", args={"command": "rm -rf dist/"}),
+        _line(node, 3, "tool_call", tool="Bash", args={"command": "git push --force origin main"}),
+    ]})
+    details = {i["detail"] for i in (await _feed(client, kind="dangerous"))["items"]}
+    assert details == {"rm -rf build/", "rm -rf dist/", "git push --force origin main"}
+    r = await client.put("/v1/incidents/mute", json={
+        "kind": "dangerous", "what": "deleted or wiped something", "detail": "rm -rf *"})
+    assert r.status_code == 200, r.text
+    details = {i["detail"] for i in (await _feed(client, kind="dangerous"))["items"]}
+    assert details == {"git push --force origin main"}
+    wipe = {"kind": "dangerous", "what": "deleted or wiped something"}
+    assert (await client.put("/v1/incidents/mute",
+                             json={**wipe, "detail": "*"})).status_code == 400
+    await client.put("/v1/incidents/mute", json={**wipe, "detail": "rm -rf *", "on": False})
+    assert len((await _feed(client, kind="dangerous"))["items"]) == 3
+
+
+async def test_a_refusal_says_its_cause_its_origin_and_what_to_except(
+        client: httpx.AsyncClient) -> None:
+    node = "coder-3"
+    team = "Your team's policy refuses it (rule 'secrets'); an admin can allow it"
+    await client.post(f"/v1/plane/{node}/telemetry", json={"run_id": f"{node}-t1", "events": [
+        _line(node, 0, "tool_call", "deny", tool="Read",
+              args={"file_path": "tests/fixtures/credentials.json"},
+              reason=f"axor: reads a secret file — {team}"),
+        _line(node, 1, "tool_call", "deny", tool="Bash", args={"command": "pip  install pyjwt"},
+              reason="axor: this call follows an instruction that came from a web page this "
+                     "session read — Axor does not run what outside text tells the agent to do."),
+        _line(node, 2, "tool_call", tool="Read", args={"file_path": "tests/fixtures/k.pem"},
+              allowed_by={"exception": {"rule": "secrets", "path": "tests/fixtures/*"}}),
+    ]})
+    items = {i["what"]: i for i in (await _feed(client, kind="refused"))["items"]
+             if i["node_id"] == node}
+    read, run = items["Read"], items["Bash"]
+    assert (read["cause"], read["origin"]) == ("secrets", "agent")
+    assert read["target"] == {"path": "tests/fixtures/credentials.json"}
+    assert (run["cause"], run["origin"]) == ("outside_text", "web_page")
+    assert run["target"] == {"command": "pip install pyjwt"}
+
+
+@pytest.mark.parametrize(("command", "wipes"), [
+    ("git push --force origin main", True), ("git push -f origin main", True),
+    ("git push origin +main", True), ("git push --force-with-lease origin feature/auth", False),
+    ("git push origin feature/a-f", False), ("git push origin main", False),
+])
+def test_what_a_force_push_deletes(command: str, wipes: bool) -> None:
+    from axor_backend.step_search import what_it_did
+
+    assert ("deletes" in what_it_did("Bash", {"command": command})) is wipes

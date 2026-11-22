@@ -37,7 +37,10 @@ _SENDS_OUT_NAME = re.compile(r"post|send|email|mail|slack|webhook|upload|publish
 _SENDS_OUT_CMD = re.compile(r"\b(curl|wget|scp|rsync|nc|ssh|sftp)\b|git\s+push", re.I)
 _DELETES = re.compile(
     r"\brm\s+-\w*[rf]|\bdrop\s+(table|database|schema|index|collection)\b|\btruncate\b"
-    r"|\bdelete\s+from\b|kubectl\s+delete|terraform\s+destroy|git\s+push\s+.*(--force|-f\b)"
+    r"|\bdelete\s+from\b|kubectl\s+delete|terraform\s+destroy"
+    # a plain force push overwrites; --force-with-lease refuses to (it is the
+    # safe way to push a rebased branch), so it deletes nothing
+    r"|git\s+push\b.*\s(--force(?![-\w])|-f\b|\+[\w/.-]+)"
     r"|git\s+reset\s+--hard|docker\s+(rm|system\s+prune)|\bmkfs\b|\bdd\s+if=|deleteobject"
     r"|flushall|dropdatabase", re.I)
 _DELETES_NAME = re.compile(r"delete|drop|destroy|remove|purge|wipe", re.I)
@@ -77,6 +80,16 @@ def _summary(args: dict[str, Any]) -> str:
         if isinstance(v, str) and v:
             return v[:200]
     return json.dumps(args, ensure_ascii=False)[:200] if args else ""
+
+
+def _target(args: dict[str, Any]) -> dict[str, str]:
+    command = args.get("command") or args.get("cmd")
+    if isinstance(command, str) and command.strip():
+        return {"command": " ".join(command.split())[:300]}
+    for key in ("file_path", "path", "notebook_path"):
+        if isinstance(args.get(key), str) and args[key].strip():
+            return {"path": args[key].strip()[:300]}
+    return {}
 
 
 def search(
@@ -142,6 +155,9 @@ def search(
             "ts": line.get("ts"), "kind": kind, "tool": name, "outcome": label,
             "does": did, "from_outside": from_outside,
             "what": _summary(args) if kind == "tool_call" else preview[:200],
+            # what a team's exception would name: the path or the command
+            "target": _target(args) if kind == "tool_call" else {},
+            "allowed_by": p.get("allowed_by") if isinstance(p.get("allowed_by"), dict) else None,
             # whole enough to keep the "how to allow it" a refusal ends with
             "reason": str(reason)[:600],
         })

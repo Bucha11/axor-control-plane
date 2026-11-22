@@ -59,7 +59,8 @@ async def policy(request: Request, store: StoreDep) -> dict:
             for t in await store.team_skills() if t["live"]]
     rules = await _rules(store)
     return {"skills_off": sorted(await _off(request)), "skills_team": team,
-            **({"rules": {"allow": rules["allow"], "mode": rules["mode"]}} if rules["set"] else {})}
+            **({"rules": {k: rules[k] for k in ("allow", "mode", "exceptions", "trusted_sources")}}
+               if rules["set"] else {})}
 
 
 # ── the team's rules for coding agents ───────────────────────────────────────
@@ -105,10 +106,50 @@ def _catalog() -> list[dict]:
 async def _rules(store: object) -> dict:
     value = await store.get_setting(RULES)  # type: ignore[attr-defined]
     if not isinstance(value, dict):
-        return {"set": False, "allow": [], "mode": "enforce", "by": "", "ts": ""}
+        return {"set": False, "allow": [], "mode": "enforce", "exceptions": [],
+                "trusted_sources": [], "by": "", "ts": ""}
     return {"set": True, "allow": sorted(value.get("allow") or []),
             "mode": value.get("mode") if value.get("mode") in MODES else "enforce",
+            "exceptions": list(value.get("exceptions") or []),
+            "trusted_sources": list(value.get("trusted_sources") or []),
             "by": value.get("by", ""), "ts": value.get("ts", "")}
+
+
+MAX_EXCEPTIONS, MAX_SOURCES = 100, 30
+_HOST = re.compile(r"^(?:\*\.)?(?:[a-z0-9-]+\.)+[a-z]{2,}$")
+
+
+def _exceptions(raw: object, known: set[str]) -> list[dict]:
+    """An exception lets ONE thing a rule refuses through, for the team: a path
+    (``tests/fixtures/*``) or a command (``env | grep JWT``), * as a wildcard.
+    Never a whole rule (that is ``allow``), never the agent's own guard."""
+    if not isinstance(raw, list) or len(raw) > MAX_EXCEPTIONS:
+        raise HTTPException(400, f"exceptions is a list of at most {MAX_EXCEPTIONS}")
+    out = []
+    for e in raw:
+        if not isinstance(e, dict) or e.get("rule") not in known or e.get("rule") in _FIXED:
+            raise HTTPException(
+                400, "an exception names a rule from the catalog (not agent_config)")
+        kind = "path" if e.get("path") else "command" if e.get("command") else None
+        value = str(e.get(kind) or "").strip() if kind else ""
+        if not kind or not value or len(value) > 300 or value.strip("*/ ") == "":
+            raise HTTPException(400, "an exception is a path or a command — not everything (*)")
+        out.append({"rule": e["rule"], kind: value, "note": str(e.get("note") or "")[:200],
+                    "by": str(e.get("by") or ""), "ts": str(e.get("ts") or "")})
+    return out
+
+
+def _sources(raw: object) -> list[str]:
+    """Hosts whose text is not "from outside": a page there is read like the
+    developer's own words, so a command it shows may be run. Exact hosts, or
+    *.example.com for its subdomains — never a bare TLD or everything."""
+    if not isinstance(raw, list) or len(raw) > MAX_SOURCES:
+        raise HTTPException(400, f"trusted_sources is a list of at most {MAX_SOURCES} hosts")
+    hosts = sorted({str(h).strip().lower() for h in raw if str(h).strip()})
+    bad = [h for h in hosts if not _HOST.match(h)]
+    if bad:
+        raise HTTPException(400, f"not a host: {', '.join(bad)} (e.g. pypi.org, *.readthedocs.io)")
+    return hosts
 
 
 @router.get("/rules")
@@ -129,8 +170,19 @@ async def set_rules(body: dict, store: StoreDep, principal: PrincipalDep) -> dic
     mode = body.get("mode", "enforce")
     if mode not in MODES:
         raise HTTPException(400, f"mode is one of {list(MODES)}")
+    held = await _rules(store)
+    now_ts = datetime.now(UTC).isoformat()
+    # left out of the body: kept as they were (the screen saves rules and mode)
+    exceptions = (_exceptions(body["exceptions"], known) if "exceptions" in body
+                  else held["exceptions"])
+    for e in exceptions:
+        e["by"] = e["by"] or _by(principal)
+        e["ts"] = e["ts"] or now_ts
+    sources = (_sources(body["trusted_sources"]) if "trusted_sources" in body
+               else held["trusted_sources"])
     await store.set_setting(RULES, {"allow": sorted(set(allow)), "mode": mode,
-                                    "by": _by(principal), "ts": datetime.now(UTC).isoformat()})
+                                    "exceptions": exceptions, "trusted_sources": sources,
+                                    "by": _by(principal), "ts": now_ts})
     return await _rules(store)
 
 

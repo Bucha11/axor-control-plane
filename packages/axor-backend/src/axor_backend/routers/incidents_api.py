@@ -53,3 +53,34 @@ async def set_status(body: dict, store: StoreDep) -> dict:
         raise HTTPException(400, f"status is one of {', '.join(incidents.STATUSES)}")
     await store.set_incident_status(item, status, now())
     return {"id": item, "status": status}
+
+
+MAX_MUTES = 200
+
+
+@router.get("/mute")
+async def list_mutes(store: StoreDep) -> dict:
+    value = await store.get_setting(incidents.MUTED)
+    return {"muted": value if isinstance(value, list) else []}
+
+
+@router.put("/mute")
+async def set_mute(body: dict, store: StoreDep) -> dict:
+    """"Not a problem — don't flag this again": a let-through call of this kind,
+    what and detail (``*`` as a wildcard in the detail) stops being an item.
+    ``{"on": false}`` lifts it."""
+    kind, what = body.get("kind"), body.get("what")
+    detail = " ".join(str(body.get("detail") or "").split())
+    if kind not in ("dangerous", "would_refuse") or not isinstance(what, str) or not what:
+        raise HTTPException(400, "only a dangerous or would-refuse item is muted, by kind and what")
+    if not detail or detail.strip("* ") == "" or len(detail) > 300:
+        raise HTTPException(400, "detail names the call — not everything (*)")
+    held = await store.get_setting(incidents.MUTED)
+    mutes = [m for m in (held if isinstance(held, list) else [])
+             if (m.get("kind"), m.get("what"), m.get("detail")) != (kind, what, detail)]
+    if body.get("on", True):
+        if len(mutes) >= MAX_MUTES:
+            raise HTTPException(400, f"at most {MAX_MUTES} muted calls")
+        mutes.append({"kind": kind, "what": what, "detail": detail, "ts": now()})
+    await store.set_setting(incidents.MUTED, mutes)
+    return {"muted": mutes}

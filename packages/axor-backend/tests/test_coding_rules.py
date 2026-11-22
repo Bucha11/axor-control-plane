@@ -25,7 +25,8 @@ async def test_the_admin_decides_and_every_sidecar_fetches_it(
                          json={"allow": ["destructive"], "mode": "observe"})
     assert r.status_code == 200 and r.json()["by"]
     policy = (await client.get("/v1/coding/policy", headers=member)).json()
-    assert policy["rules"] == {"allow": ["destructive"], "mode": "observe"}
+    assert policy["rules"]["allow"] == ["destructive"]
+    assert policy["rules"]["mode"] == "observe"
 
 
 async def test_nonsense_and_the_agents_own_guard_are_refused(
@@ -35,3 +36,35 @@ async def test_nonsense_and_the_agents_own_guard_are_refused(
                              json={"allow": ["teleport"]})).status_code == 400
     assert (await client.put("/v1/coding/rules", headers=owner,
                              json={"allow": [], "mode": "loose"})).status_code == 400
+
+
+async def test_exceptions_and_trusted_sources_are_the_teams_and_kept(
+        client: httpx.AsyncClient, priv) -> None:  # noqa: ANN001, F811
+    owner = _bearer(_mint(priv, role="owner"))
+    member = _bearer(_mint(priv, role="member", sub="usr_dev2", eml="dev2@acme.io"))
+    r = await client.put("/v1/coding/rules", headers=owner, json={
+        "allow": [], "mode": "enforce",
+        "exceptions": [{"rule": "secrets", "path": "tests/fixtures/*", "note": "fake credentials"},
+                       {"rule": "secrets", "command": "env | grep JWT"}],
+        "trusted_sources": ["pypi.org", "*.readthedocs.io"]})
+    assert r.status_code == 200, r.text
+    assert r.json()["exceptions"][0]["by"]
+    # saving the rules alone keeps them
+    await client.put("/v1/coding/rules", headers=owner, json={"allow": [], "mode": "observe"})
+    rules = (await client.get("/v1/coding/policy", headers=member)).json()["rules"]
+    assert [e.get("path") or e.get("command") for e in rules["exceptions"]] == \
+        ["tests/fixtures/*", "env | grep JWT"]
+    assert rules["trusted_sources"] == ["*.readthedocs.io", "pypi.org"]
+
+
+async def test_an_exception_is_one_thing_never_everything(
+        client: httpx.AsyncClient, priv) -> None:  # noqa: ANN001, F811
+    owner = _bearer(_mint(priv, role="owner"))
+    for bad in ({"rule": "secrets", "path": "*"}, {"rule": "agent_config", "path": ".claude/x"},
+                {"rule": "secrets"}):
+        r = await client.put("/v1/coding/rules", headers=owner,
+                             json={"allow": [], "exceptions": [bad]})
+        assert r.status_code == 400, bad
+    r = await client.put("/v1/coding/rules", headers=owner,
+                         json={"allow": [], "trusted_sources": ["com"]})
+    assert r.status_code == 400

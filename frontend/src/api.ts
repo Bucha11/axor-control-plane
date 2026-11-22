@@ -30,10 +30,15 @@ export interface RunSummary {
 // The Incidents feed (GET /v1/incidents): what needs a look, and the operator's word on it
 export type IncidentKind = "made_up" | "dangerous" | "would_refuse" | "refused" | "memory_worse";
 export type IncidentStatus = "new" | "looked_at" | "kept_as_test" | "rule_made" | "not_a_problem";
+export type IncidentOrigin = "web_page" | "outside" | "skill" | "agent";
 export interface IncidentItem {
   id: string; kind: IncidentKind; ts: string | null; node_id: string; run_id: string;
   seq: number | null; anchor_node?: string | null; what: string; detail: string; count: number;
   status: IncidentStatus; reason?: string; tool?: string; scenario?: string; label?: string;
+  // a refusal: its cause (a rule's id, outside_text, skill_scripts…), who asked
+  // for the call, and what a team exception would name
+  cause?: string; cause_words?: string; origin?: IncidentOrigin;
+  target?: { path?: string; command?: string };
   compare?: { before: { sessions: number; bad: number }; after: { sessions: number; bad: number }; p: number | null };
   case?: { observed_reality: unknown; agent_claim: unknown; index: number;
            fault_attribution: { fault_mode: string; tool_name: string; influence: string }[] };
@@ -244,8 +249,13 @@ export interface NodeRun {
   intervened: boolean;
 }
 
+// one thing an admin let through a rule, for the team: a path or a command glob
+export interface CodingException {
+  rule: string; path?: string; command?: string; note?: string; by?: string; ts?: string;
+}
 export interface CodingRules {
   set: boolean; allow: string[]; mode: "enforce" | "observe"; by: string; ts: string;
+  exceptions: CodingException[]; trusted_sources: string[];
   catalog?: { id: string; what: string; why: string; fixed: boolean }[];
 }
 
@@ -1433,11 +1443,17 @@ export const api = {
     af("/v1/demo/seed-team-skill", { method: "POST" }).then((r) => j<{ name: string }>(r)),
   // the team's rules for coding agents (an admin's decision)
   codingRules: () => af("/v1/coding/rules").then((r) => j<CodingRules>(r)),
-  setCodingRules: (allow: string[], mode: "enforce" | "observe") =>
+  setCodingRules: (allow: string[], mode: "enforce" | "observe",
+                   more: { exceptions?: CodingException[]; trusted_sources?: string[] } = {}) =>
     af("/v1/coding/rules", {
       method: "PUT", headers: { "content-type": "application/json" },
-      body: JSON.stringify({ allow, mode }),
+      body: JSON.stringify({ allow, mode, ...more }),
     }).then((r) => j<CodingRules>(r)),
+  // one more exception, on top of the team's policy as it is now
+  addCodingException: async (e: CodingException): Promise<CodingRules> => {
+    const now: CodingRules = await api.codingRules();
+    return api.setCodingRules(now.allow, now.mode, { exceptions: [...now.exceptions, e] });
+  },
   setSkillOff: (name: string, off: boolean) =>
     af(`/v1/coding/skills/${encodeURIComponent(name)}`, {
       method: "PUT",
@@ -1780,6 +1796,13 @@ export const api = {
     return af(`/v1/incidents?${qs}`).then((r) => j<{
       items: IncidentItem[]; new: Record<IncidentKind, number>; needs_a_look: number }>(r));
   },
+  // "not a problem — don't flag this again" (detail may hold * as a wildcard)
+  muteIncident: (m: { kind: IncidentKind; what: string; detail: string; on?: boolean }) =>
+    af("/v1/incidents/mute", {
+      method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(m),
+    }).then((r) => j<{ muted: { kind: string; what: string; detail: string; ts: string }[] }>(r)),
+  incidentMutes: () => af("/v1/incidents/mute").then((r) =>
+    j<{ muted: { kind: IncidentKind; what: string; detail: string; ts: string }[] }>(r)),
   setIncidentStatus: (id: string, status: IncidentStatus) =>
     af("/v1/incidents/status", {
       method: "PUT", headers: { "content-type": "application/json" },

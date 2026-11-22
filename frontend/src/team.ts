@@ -15,3 +15,12 @@ export function useHasTeam(): boolean {
   if (!email || !members.data) return true;
   return members.data.members.length > 1;
 }
+
+/** Whether the person here decides the team's policy: an owner or admin — or
+ *  anyone on an open plane, which has no roles (whoever runs it decides). */
+export function useCanAdmin(): boolean {
+  const email = useApp((s) => s.identityEmail);
+  const me = useQuery({ queryKey: ["identity-me"], queryFn: api.identityMe, enabled: !!email, retry: false });
+  const role = me.data?.memberships.find((m) => m.org_id === me.data?.active_org)?.role ?? me.data?.role;
+  return !email || role === "owner" || role === "admin";
+}

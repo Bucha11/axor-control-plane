@@ -22,6 +22,8 @@ test" until someone says otherwise.
 """
 from __future__ import annotations
 
+import re
+from fnmatch import fnmatchcase
 from typing import Any
 
 from axor_backend import step_search
@@ -43,6 +45,54 @@ def dangerous(step: dict[str, Any]) -> str | None:
     if outside and "changes_files" in does:
         return "changed files as outside text said"
     return None
+
+
+MUTED = "muted_incidents"
+_RULE = re.compile(r"rule '?([a-z_]+)'?")
+
+
+def cause_of(reason: str) -> tuple[str, str]:
+    """Why a call was refused, as one of a few causes: (key, words). The rule's
+    id for a rule; else what the kernel or the plane refused it for."""
+    text = str(reason or "")
+    low = text.lower()
+    if "skill_scripts" in low or "inside a script" in low:
+        return "skill_scripts", "a skill's script"
+    if (m := _RULE.search(text)) and "skill" not in m.group(1):
+        return m.group(1), f"rule {m.group(1)}"
+    if "skill" in low and "turned off" in low:
+        return "skill_off", "a skill turned off"
+    if "secret this session read" in low or "confidentiality" in low:
+        return "secret_out", "a read secret leaving"
+    if "came from" in low or "carrier" in low or "taint" in low or "outside text" in low:
+        return "outside_text", "outside text driving it"
+    if "stopped from" in low or "paused from" in low:
+        return "stopped", "stopped from the Control Plane"
+    if "budget" in low:
+        return "budget", "the call budget"
+    return "other", "other"
+
+
+def origin_of(reason: str, from_outside: bool) -> str:
+    """Who asked for the refused call: a web page, other outside text, a
+    skill, or the agent itself (its task, its repository's instructions)."""
+    low = str(reason or "").lower()
+    if "web page" in low:
+        return "web_page"
+    if from_outside or "from outside" in low or "outside text" in low:
+        return "outside"
+    if "skill" in low:
+        return "skill"
+    return "agent"
+
+
+def muted(item: dict[str, Any], mutes: list[dict[str, Any]]) -> bool:
+    for m in mutes:
+        if m.get("kind") == item["kind"] and m.get("what") == item["what"] and fnmatchcase(
+                " ".join(str(item.get("detail") or "").split()),
+                " ".join(str(m.get("detail") or "").split())):
+            return True
+    return False
 
 
 async def incidents(store: Any, scan: int) -> list[dict[str, Any]]:  # noqa: ANN401
@@ -76,7 +126,7 @@ async def incidents(store: Any, scan: int) -> list[dict[str, Any]]:  # noqa: ANN
         if s["outcome"] == "would_refuse":
             items.append({**base, "id": sid, "kind": "would_refuse", "what": s["tool"],
                           "reason": s["reason"]})
-        elif s["outcome"] == "let_through" and (why := dangerous(s)):
+        elif s["outcome"] == "let_through" and not s.get("allowed_by") and (why := dangerous(s)):
             items.append({**base, "id": sid, "kind": "dangerous", "what": why,
                           "tool": s["tool"]})
         elif s["outcome"] == "refused":
@@ -87,12 +137,18 @@ async def incidents(store: Any, scan: int) -> list[dict[str, Any]]:  # noqa: ANN
             key = f"refused:{s['node_id']}:{s['tool']}:{day}:{cause}"
             group = refused.get(key)
             if group is None:   # newest first: the first seen is the latest
+                cause_key, cause_words = cause_of(s["reason"])
                 refused[key] = {**base, "id": key, "kind": "refused", "what": s["tool"],
-                                "reason": s["reason"]}
+                                "reason": s["reason"], "cause": cause_key,
+                                "cause_words": cause_words, "target": s.get("target") or {},
+                                "origin": origin_of(s["reason"], s["from_outside"])}
             else:
                 group["count"] += 1
     items += refused.values()
     items += await _memory_worse(store)
+    mutes = await store.get_setting(MUTED) if hasattr(store, "get_setting") else None
+    if isinstance(mutes, list) and mutes:
+        items = [i for i in items if not muted(i, mutes)]
     for item in items:
         item.setdefault("scenario", scenario.get(item["run_id"], ""))
     kept = {p["run_id"] for p in await store.pinned()}

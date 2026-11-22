@@ -19,6 +19,8 @@ import { api, EvidenceCaseDto, IncidentItem, IncidentKind, IncidentStatus } from
 import { navigate } from "../router";
 import { isConnected, useApp } from "../store";
 import { C, MONO } from "../theme";
+import { useCanAdmin } from "../team";
+import { errorWords } from "../refusal";
 
 
 /** One line of whatever the agent claimed or the tool returned. */
@@ -97,6 +99,11 @@ const STATUS_WORDS: Record<IncidentStatus, string> = {
   new: "new", looked_at: "looked at", kept_as_test: "kept as a test",
   rule_made: "made a rule", not_a_problem: "not a problem",
 };
+// who asked for a refused call
+const ORIGIN_WORDS: Record<string, string> = {
+  web_page: "a web page asked for it", outside: "outside text asked for it",
+  skill: "a skill asked for it", agent: "the agent's own call",
+};
 const KIND_COLOR: Record<IncidentKind, string> = {
   made_up: C.red, dangerous: C.red, would_refuse: C.amber, refused: C.dim, memory_worse: C.amber,
 };
@@ -139,7 +146,10 @@ export default function Evidence({ agent: agentParam }: { agent?: string } = {})
     if (!pr?.title && !pr?.developer) return id;
     return [pr.developer, pr.title ? `“${pr.title}”` : ""].filter(Boolean).join(" · ");
   };
-  const items = feed.data?.items ?? [];
+  const [cause, setCause] = useState("");
+  const listed = feed.data?.items ?? [];
+  const items = cause ? listed.filter((i) => i.kind !== "refused" || i.cause === cause) : listed;
+  const developerOf = (id: string) => (nodesQ.data ?? []).find((n) => n.node_id === id)?.profile?.developer || id;
   const nothingAtAll = all.isSuccess && all.data.items.length === 0;
 
   return (
@@ -210,6 +220,7 @@ export default function Evidence({ agent: agentParam }: { agent?: string } = {})
             </div>
           ) : (
             <div className="flex flex-col gap-2" data-testid="evidence-list">
+              <RefusalSummary items={listed} developerOf={developerOf} cause={cause} setCause={setCause} />
               {items.map((i) => <Item key={i.id} item={i} who={labelOf(i.node_id)} />)}
             </div>
           )}
@@ -251,7 +262,7 @@ function Item({ item, who }: { item: IncidentItem; who?: string }) {
   const fault = c?.fault_attribution?.[0];
   const check = c ? checkOf(c) : null;
   return (
-    <div data-testid={item.kind === "made_up" ? "evidence-row" : "incident-row"} data-kind={item.kind}
+    <div data-testid={item.kind === "made_up" ? "evidence-row" : "incident-row"} data-kind={item.kind} data-cause={item.cause}
       style={{ background: C.panel, border: `1px solid ${C.line}`, borderLeft: `3px solid ${color}`, borderRadius: 10, padding: 14 }}>
       <div className="flex items-center justify-between flex-wrap" style={{ gap: 8, marginBottom: 8 }}>
         <span className="flex items-center gap-2" style={{ fontFamily: MONO, fontSize: 11.5, fontWeight: 700, color }}>
@@ -305,6 +316,7 @@ function Item({ item, who }: { item: IncidentItem; who?: string }) {
       <div className="flex items-center justify-between flex-wrap" style={{ gap: 8 }}>
         <span style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim }}>
           {who && who !== item.node_id ? who : <>agent {item.node_id}</>} · {source(item.scenario)}
+          {item.origin && <span data-testid="incident-origin"> · {ORIGIN_WORDS[item.origin] ?? item.origin}</span>}
         </span>
         <span className="flex gap-2 items-center">
           <StatusPick item={item} />
@@ -317,6 +329,138 @@ function Item({ item, who }: { item: IncidentItem; who?: string }) {
           </button>
         </span>
       </div>
+      {item.kind === "refused" && <AllowExactly item={item} />}
+      {(item.kind === "dangerous" || item.kind === "would_refuse") && <Mute item={item} />}
+    </div>
+  );
+}
+
+/** The refusals, counted by cause: how many, and how many developers hit it —
+ *  a rule too strict shows as many refusals across the team. */
+function RefusalSummary({ items, developerOf, cause, setCause }: {
+  items: IncidentItem[]; developerOf: (id: string) => string; cause: string; setCause: (c: string) => void;
+}) {
+  const refused = items.filter((i) => i.kind === "refused" && i.cause);
+  if (refused.length < 2) return null;
+  const by = new Map<string, { words: string; n: number; devs: Set<string> }>();
+  for (const i of refused) {
+    const g = by.get(i.cause!) ?? { words: i.cause_words || i.cause!, n: 0, devs: new Set<string>() };
+    g.n += i.count;
+    g.devs.add(developerOf(i.node_id));
+    by.set(i.cause!, g);
+  }
+  const rows = [...by.entries()].sort((a, b) => b[1].n - a[1].n);
+  return (
+    <div data-testid="refusal-summary" className="flex gap-1.5 flex-wrap items-center mb-1"
+      style={{ fontFamily: MONO, fontSize: 11, color: C.dim }}>
+      <span>refused, by cause:</span>
+      {rows.map(([k, g]) => (
+        <button key={k} data-testid={`refusal-cause-${k}`} onClick={() => setCause(cause === k ? "" : k)} style={chip(cause === k)}>
+          {g.words} · {g.n} · {g.devs.size} {g.devs.size === 1 ? "developer" : "developers"}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+const fieldSmall: React.CSSProperties = {
+  background: C.panel2, border: `1px solid ${C.line}`, borderRadius: 5, color: C.text,
+  fontFamily: MONO, fontSize: 11, padding: "3px 6px",
+};
+
+/** A refusal by one of the team's rules: let exactly this through, for the
+ *  team (a path or a command — edit it to a glob), on the Policy. */
+function AllowExactly({ item }: { item: IncidentItem }) {
+  const canAdmin = useCanAdmin();
+  const qc = useQueryClient();
+  const rules = useQuery({ queryKey: ["coding-rules"], queryFn: api.codingRules, enabled: canAdmin, retry: false });
+  const kind: "path" | "command" | null = item.target?.path ? "path" : item.target?.command ? "command" : null;
+  const [open, setOpen] = useState(false);
+  const [value, setValue] = useState(kind ? item.target![kind]! : "");
+  const [note, setNote] = useState("");
+  const add = useMutation({
+    mutationFn: () => api.addCodingException({ rule: item.cause!, [kind!]: value.trim(), note }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ["coding-rules"] });
+      void api.setIncidentStatus(item.id, "not_a_problem").then(() => qc.invalidateQueries({ queryKey: ["incidents"] }));
+    },
+  });
+  const rule = rules.data?.catalog?.find((r) => r.id === item.cause && !r.fixed);
+  if (!canAdmin) return null;
+  if (item.origin === "web_page" && item.cause === "outside_text") {
+    return (
+      <div style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim, marginTop: 8 }}>
+        if that page was documentation you trust, add its host to{" "}
+        <button onClick={() => navigate("policy")} style={inlineLink}>trusted sources on Policy →</button>
+      </div>
+    );
+  }
+  if (!rule || !kind) return null;
+  if (add.isSuccess) {
+    return <div data-testid="allow-exactly-done" style={{ fontFamily: MONO, fontSize: 11, color: C.green, marginTop: 8 }}>
+      allowed for the team — every sidecar picks it up within a minute</div>;
+  }
+  return (
+    <div style={{ marginTop: 8 }}>
+      {!open ? (
+        <button data-testid="allow-exactly" onClick={() => setOpen(true)} style={small}>
+          allow exactly this for the team…
+        </button>
+      ) : (
+        <div className="flex items-center gap-2 flex-wrap" style={{ fontFamily: MONO, fontSize: 11 }}>
+          <span style={{ color: C.dim }}>{rule.what}, except {kind}</span>
+          <input data-testid="allow-exactly-value" value={value} onChange={(e) => setValue(e.target.value)}
+            style={{ ...fieldSmall, flex: 1, minWidth: 200 }} />
+          <input aria-label="why" value={note} onChange={(e) => setNote(e.target.value)} placeholder="why (optional)"
+            style={{ ...fieldSmall, width: 140 }} />
+          <button data-testid="allow-exactly-save" disabled={!value.trim() || add.isPending} onClick={() => add.mutate()}
+            style={{ ...small, border: `1px solid ${C.amber}`, color: C.amber }}>allow for the team</button>
+          <button onClick={() => setOpen(false)} style={small}>cancel</button>
+          <div style={{ width: "100%", color: C.dim, fontSize: 10.5 }}>
+            * matches anything ({kind === "path" ? "tests/fixtures/*" : "pytest *"}); the rule keeps refusing everything else
+            {rules.data && !rules.data.set ? " · this saves the team's policy" : ""}
+          </div>
+          {add.isError && <div style={{ width: "100%", color: C.red }}>{errorWords((add.error as Error).message)}</div>}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** "Not a problem — don't flag this again": this call (edit it to a glob)
+ *  stops being an incident. */
+function Mute({ item }: { item: IncidentItem }) {
+  const qc = useQueryClient();
+  const [open, setOpen] = useState(false);
+  const [detail, setDetail] = useState(item.detail);
+  const mute = useMutation({
+    mutationFn: async () => {
+      await api.muteIncident({ kind: item.kind, what: item.what, detail });
+      await api.setIncidentStatus(item.id, "not_a_problem");
+    },
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ["incidents"] }),
+  });
+  if (!item.detail) return null;
+  return (
+    <div style={{ marginTop: 8 }}>
+      {!open ? (
+        <button data-testid="incident-mute" onClick={() => setOpen(true)} style={small}>
+          not a problem — don't flag this again…
+        </button>
+      ) : (
+        <div className="flex items-center gap-2 flex-wrap" style={{ fontFamily: MONO, fontSize: 11 }}>
+          <span style={{ color: C.dim }}>stop flagging</span>
+          <input data-testid="incident-mute-detail" value={detail} onChange={(e) => setDetail(e.target.value)}
+            style={{ ...fieldSmall, flex: 1, minWidth: 200 }} />
+          <button data-testid="incident-mute-save" disabled={!detail.replace(/[*\s]/g, "") || mute.isPending}
+            onClick={() => mute.mutate()} style={small}>don't flag it again</button>
+          <button onClick={() => setOpen(false)} style={small}>cancel</button>
+          <div style={{ width: "100%", color: C.dim, fontSize: 10.5 }}>
+            * matches anything (rm -rf build/*); it still runs and is still recorded — it just stops being an incident
+          </div>
+          {mute.isError && <div style={{ width: "100%", color: C.red }}>{errorWords((mute.error as Error).message)}</div>}
+        </div>
+      )}
     </div>
   );
 }

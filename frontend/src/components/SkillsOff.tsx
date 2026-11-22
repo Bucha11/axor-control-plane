@@ -38,9 +38,11 @@ export function usePendingSkills(): number {
 
 /** On a skill a team member shared: on for the team, or a newer upload. */
 export function TeamSwitch({ name }: { name: string }) {
-  const { shared, team, off } = useSkillsOff();
+  const { shared, team, off, set } = useSkillsOff();
+  const [sure, setSure] = useState(false);
   const s = shared.find((t) => t.name === name);
   if (!s || off.has(name)) return null;
+  const danger = s.latest.check?.summary.danger ?? 0;
   const newer = s.live && s.live.version !== s.latest.version;
   if (s.live && !newer) {
     return (
@@ -50,11 +52,41 @@ export function TeamSwitch({ name }: { name: string }) {
       </span>
     );
   }
-  return (
-    <button data-testid={`team-on-${name}`} onClick={() => team.mutate({ name, on: true })}
-      disabled={team.isPending} style={btn({ color: C.green, borderColor: C.green, fontSize: 10.5, padding: "3px 10px" })}>
-      {newer ? "turn the new version on for the team" : "turn on for the team"}
+  // rejecting it turns it off for the team: no agent may use it, and it no
+  // longer waits for a decision
+  const reject = (
+    <button data-testid={`team-reject-${name}`} onClick={() => set.mutate({ name, off: true })}
+      disabled={set.isPending} style={btn({ color: danger ? C.red : C.mut, borderColor: danger ? C.red : C.line,
+                                            fontSize: 10.5, padding: "3px 10px" })}>
+      reject
     </button>
+  );
+  if (danger && !sure) {
+    // a skill the check found dangerous is not one click from every machine
+    return (
+      <span className="flex items-center gap-2">
+        {reject}
+        <button data-testid={`team-on-${name}`} onClick={() => setSure(true)}
+          style={btn({ color: C.mut, fontSize: 10.5, padding: "3px 10px" })}>turn on anyway…</button>
+      </span>
+    );
+  }
+  return (
+    <span className="flex items-center gap-2 flex-wrap">
+      {danger > 0 && (
+        <span data-testid={`team-confirm-${name}`} style={{ fontFamily: MONO, fontSize: 10.5, color: C.red }}>
+          {danger} dangerous in its files — every developer's agent gets them
+        </span>
+      )}
+      {!danger && !s.live && reject}
+      <button data-testid={danger ? `team-on-confirm-${name}` : `team-on-${name}`}
+        onClick={() => team.mutate({ name, on: true }, { onSuccess: () => setSure(false) })}
+        disabled={team.isPending} style={btn({ color: danger ? C.red : C.green, borderColor: danger ? C.red : C.green,
+                                                fontSize: 10.5, padding: "3px 10px" })}>
+        {danger ? "turn it on for the team" : newer ? "turn the new version on for the team" : "turn on for the team"}
+      </button>
+      {danger > 0 && <button onClick={() => setSure(false)} style={link}>cancel</button>}
+    </span>
   );
 }
 
