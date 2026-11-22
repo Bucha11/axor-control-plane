@@ -264,3 +264,19 @@ async def test_a_teammate_does_not_pause_someone_elses_session(
         r = await client.post(f"/v1/plane/{node}/command", headers=who,
                               json={"version": v, "state": {"paused": v == 1}})
         assert r.status_code == 202, r.text
+
+
+async def test_a_pair_someone_else_opened_on_your_session_is_void(
+        app, client: httpx.AsyncClient, priv: Ed25519PrivateKey) -> None:  # noqa: ANN001
+    from axor_backend.tenancy import set_current_org
+
+    ada = _user(priv, "org_acme", "ada@acme.io", role="member")
+    sam = _user(priv, "org_acme", "sam@acme.io", role="member")
+    await _session(client, ada)
+    # opened by a teammate before pairs were by invitation
+    set_current_org("org_acme")
+    await app.state.store.create_pair("legacy-token-0000000", "claude-code-ada-1", "sam@acme.io",
+                                      "2026-11-20T10:00:00+00:00", "2099-01-01T00:00:00+00:00",
+                                      False)
+    assert (await client.get("/v1/pair", headers=sam)).json()["pairs"] == []
+    assert (await client.get("/v1/pair/legacy-token-0000000/feed", headers=sam)).status_code == 404

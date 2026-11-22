@@ -121,6 +121,13 @@ async def open_pair(body: dict, request: Request, store: StoreDep,
     return await _open(store, node_id, _who(principal), outside, invited)
 
 
+def _opened_by_developer(pair: dict, profile: dict) -> bool:
+    """A pair opened by someone other than the session's developer (before
+    pairs were by invitation) is void: it lets nobody in."""
+    by, dev = str(pair["created_by"]).lower(), str(profile.get("developer") or "").lower()
+    return not by or "@" not in by or not dev or by == dev
+
+
 def _visible(pair: dict, principal: Any) -> bool:  # noqa: ANN401
     """Whose pair this is to see in a list: the one who opened it, a teammate
     invited by name, or one already let in by its link."""
@@ -133,8 +140,9 @@ def _visible(pair: dict, principal: Any) -> bool:  # noqa: ANN401
 
 @router.get("/v1/pair")
 async def list_pairs(store: StoreDep, principal: PrincipalDep) -> dict:
-    pairs = [p for p in await store.list_pairs(_now().isoformat()) if _visible(p, principal)]
     kinds = await store.node_kinds()
+    pairs = [p for p in await store.list_pairs(_now().isoformat())
+             if _visible(p, principal) and _opened_by_developer(p, kinds.get(p["node_id"], {}))]
     for p in pairs:
         prof = kinds.get(p["node_id"], {})
         p["title"], p["agent"] = prof.get("title", ""), prof.get("agent", "")
@@ -217,6 +225,9 @@ async def _let_in(token: str, request: Request, store: StoreDep,
     pair = await store.pair_by_token(token)
     now = _now().isoformat()
     if pair is None or pair["closed_ts"] or pair["expires_ts"] <= now:
+        raise HTTPException(404, "this pair session has ended, or the link is wrong")
+    set_current_org(pair["org_id"])
+    if not _opened_by_developer(pair, (await store.node_kinds()).get(pair["node_id"], {})):
         raise HTTPException(404, "this pair session has ended, or the link is wrong")
     if _org_of(principal) == pair["org_id"]:
         set_current_org(pair["org_id"])
