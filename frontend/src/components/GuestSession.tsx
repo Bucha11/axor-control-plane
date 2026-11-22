@@ -24,7 +24,9 @@ function describeMoved(moved: Record<string, number>): string {
   const parts = LABELS
     .filter(([table]) => moved[table])
     .map(([table, word]) => `${moved[table]} ${word}${moved[table] === 1 ? "" : "s"}`);
-  return parts.length ? parts.join(", ") : "your guest work";
+  // only what can be named: rows behind the examples a guest looked at (their
+  // events, their evidence) are not work the guest did
+  return parts.length ? parts.join(", ") : "";
 }
 
 export default function GuestSession() {
@@ -65,8 +67,9 @@ export default function GuestSession() {
       for (const r of results) {
         for (const [k, v] of Object.entries(r?.moved ?? {})) total[k] = (total[k] ?? 0) + v;
       }
-      if (Object.keys(total).length) {
-        setMoved(describeMoved(total));
+      const said = describeMoved(total);
+      if (said) {
+        setMoved(said);
         track("guest_claimed");
       }
       void qc.invalidateQueries();
