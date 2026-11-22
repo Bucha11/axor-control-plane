@@ -191,23 +191,20 @@ async def test_example_memory(client: httpx.AsyncClient) -> None:
     assert "Run migrations with --dry-run first" in repo["preview"]
 
 
-async def test_on_the_free_plan_agents_get_nothing_and_learning_goes_on(
+async def test_on_the_free_plan_the_one_developer_gets_their_memory(
         client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Free is one developer: their agents get what their sessions verified.
+    A second developer's session is locked by the plan and gets nothing —
+    sharing memory across a team is the Coding plan."""
     monkeypatch.undo()          # the real plan check: this workspace has no license
-    await _session(client, "ada-1", "dev-ada")
-    await _session(client, "bob-1", "dev-bob")
-    await _check(client, "ada-1", "a1", "uv run pytest -q", True)
-    await _check(client, "bob-1", "b1", "uv run pytest -q", True)
-    given = (await client.get("/v1/coding/memory", params={"repo": REPO})).json()
-    assert given["text"] == "" and given["ids"] == [] and given["items"] == []
-    assert given["plan_required"] == "coding"
+    for n in (1, 2, 3):          # three of her sessions: confirmed by her own agents
+        await _session(client, f"ada-{n}", "dev-ada")
+        await _check(client, f"ada-{n}", f"a{n}", "uv run pytest -q", True)
+    mine = (await client.get("/v1/coding/memory", params={"repo": REPO, "node": "ada-1"})).json()
+    assert "uv run pytest -q" in mine["text"] and "plan_required" not in mine
+    await _session(client, "bob-1", "dev-bob")            # a second developer: locked
+    theirs = (await client.get("/v1/coding/memory", params={"repo": REPO, "node": "bob-1"})).json()
+    assert theirs["text"] == "" and theirs["plan_required"] == "coding"
     body = (await client.get("/v1/memory")).json()
     repo = next(r for r in body["repos"] if r["repo"] == REPO)
-    # what it learned is kept, and shown as what agents would get
-    assert repo["given"] is False and "uv run pytest -q" in repo["preview"]
-    assert repo["changes"] == [] and body["plan_tier"] == "coding"
-    # the example repository is always given — it shows the product
-    await client.post("/v1/demo/seed-memory")
-    example = (await client.get("/v1/coding/memory",
-                                params={"repo": "r-example-acme-api"})).json()
-    assert "uv run pytest -q" in example["text"]
+    assert repo["given"] is True and "uv run pytest -q" in repo["preview"]

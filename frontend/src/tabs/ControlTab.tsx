@@ -618,8 +618,8 @@ function ControlBody({ focusNode, testBench }: { focusNode?: string; testBench: 
         active: Math.max(fleetQ.data.totals.active, units.filter((st) => st.includes("running")).length) }} />}
       <div className="flex items-center gap-4" style={{ fontFamily: MONO, fontSize: 11, color: C.mut, marginBottom: 20 }}>
         <span data-testid="fleet-count">
-          {devCount > 0 && <>{devCount} developer{devCount === 1 ? "" : "s"} · </>}
-          {looseCount} agent{looseCount === 1 ? "" : "s"}
+          {devCount > 0 && <>{devCount} developer{devCount === 1 ? "" : "s"}{looseCount > 0 ? " · " : ""}</>}
+          {(looseCount > 0 || devCount === 0) && <>{looseCount} agent{looseCount === 1 ? "" : "s"}</>}
           {treeCount > 0 && <> · {treeCount} tree{treeCount === 1 ? "" : "s"}</>} · live
           {otherSide > 0 && (
             <> · <button data-testid="agents-show-other" onClick={() => setMenuAll(true)}
@@ -690,6 +690,10 @@ function ControlBody({ focusNode, testBench }: { focusNode?: string; testBench: 
               const open = openDevs.has(dev) || sessions.some((m) => m.node_id === sel);
               out.push(
                 <DeveloperRow key={`dev:${dev}`} developer={dev} first={out.length === 0} open={open}
+                  looks={sessions.flatMap((m) => {
+                    const l = lookOf.get(m.node_id);
+                    return l ? [{ ...l, node: m.node_id }] : [];
+                  })}
                   sessions={sessions} rows={sessions.map((m) => fleetRows.get(m.node_id))}
                   st={sessions.flatMap((m) => statuses.get(m.node_id)!)}
                   onToggle={() => setOpenDevs((cur) => {
@@ -1308,7 +1312,7 @@ function FleetTotals({ totals }: { totals: { runs: number; calls: number; tainte
       {part(totals.active, "running now", C.green)}
       {part(totals.runs, "runs")}
       {part(totals.calls, "tool calls")}
-      {part(totals.tainted, "answers from outside text", C.amber)}
+      {part(totals.tainted, totals.tainted === 1 ? "answer from outside text" : "answers from outside text", C.amber)}
       {part(totals.denied, "refused", C.red)}
       {totals.lies > 0 ? (
         <button onClick={() => navigate("evidence")} style={{ background: "none", border: "none", padding: 0, cursor: "pointer",
@@ -1416,8 +1420,9 @@ function PlanLock({ nodeId, reasons }: { nodeId: string; reasons: LockReason[] }
 
 /** One developer's coding sessions, folded: who, which agents, how many
  * sessions, what needs a look — unfold to open one. */
-function DeveloperRow({ developer, sessions, rows, st, first, open, onToggle, children }: {
+function DeveloperRow({ developer, sessions, rows, st, first, open, onToggle, looks, children }: {
   developer: string; sessions: NodeInfo[]; rows: (FleetRow | undefined)[]; st: Status[];
+  looks: { label: string; more: number; node: string }[];
   first: boolean; open: boolean; onToggle: () => void; children: React.ReactNode;
 }) {
   const p = primary(st);
@@ -1435,6 +1440,25 @@ function DeveloperRow({ developer, sessions, rows, st, first, open, onToggle, ch
         <div className="flex items-center gap-2.5 flex-wrap">
           <Circle size={8} fill={color} color={color} />
           <span style={{ fontFamily: MONO, fontSize: 13, color: C.text, flex: 1, minWidth: 120 }}>{developer}</span>
+          {/* what needs a look, from any of the sessions — folded, it still says */}
+          {looks.length > 0 && (
+            <button data-testid={`developer-look-${developer}`}
+              onClick={(e) => { e.stopPropagation(); navigate("evidence", looks.length === 1 ? { agent: looks[0].node } : {}); }}
+              style={{ fontFamily: MONO, fontSize: 10, color: C.red, background: "none", border: `1px solid ${C.red}`,
+                       borderRadius: 20, padding: "1px 8px", cursor: "pointer" }}>
+              {looks[0].label}{looks.length + looks.reduce((a, l) => a + l.more, 0) > 1
+                ? ` · +${looks.length - 1 + looks.reduce((a, l) => a + l.more, 0)}` : ""} →
+            </button>
+          )}
+          {[...new Map(sessions.flatMap((n) => attention(n)).map((a) => [a.label, a])).values()].map((a) => (
+            <button key={a.label}
+              onClick={(e) => { if (a.route) { e.stopPropagation(); navigate(a.route); } }}
+              style={{ fontFamily: MONO, fontSize: 10, color: a.color, background: "none",
+                       border: `1px solid ${a.color}`, borderRadius: 20, padding: "1px 8px",
+                       cursor: a.route ? "pointer" : "default" }}>
+              {a.label}{a.route ? " →" : ""}
+            </button>
+          ))}
           <span style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim }}>{agents}</span>
         </div>
         <div className="flex gap-3 flex-wrap" style={{ fontFamily: MONO, fontSize: 10.5, color: C.mut, marginTop: 4, marginLeft: 18 }}>

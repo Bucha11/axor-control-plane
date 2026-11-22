@@ -360,3 +360,14 @@ test("not a guest: keeping a caught lie as a test just keeps it", async ({ page,
   expect(pinned).toMatchObject({ side: "must_block" });
   await page.unrouteAll({ behavior: "ignoreErrors" });
 });
+
+test("an incident's replay opens where the agent said it", async ({ page, request }) => {
+  await request.post(`${BACKEND}/v1/demo/seed-coding`);
+  await setConnection(page, { mode: "demo" });
+  await goHash(page, "explain/ex_coding_claude");
+  const step = page.getByTestId("replay-step");
+  await expect(step).toContainText("The agent said");
+  await expect(page.getByTestId("replay-to-incident")).toContainText(/it said so at step \d+/);
+  // this run read a web page: whether other rules change it is a fair question here
+  await expect(page.getByTestId("replay-whatif")).toBeVisible();
+});

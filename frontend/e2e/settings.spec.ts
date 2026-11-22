@@ -37,7 +37,7 @@ test.describe("settings", () => {
     await goHash(page, "settings?tab=alerts");
     // The failure-honesty log is always surfaced; its contents depend on prior
     // deliveries, so assert the section, not emptiness.
-    await expect(page.getByText("DEAD-LETTER LOG")).toBeVisible();
+    await expect(page.getByText("ALERTS THAT COULD NOT BE DELIVERED")).toBeVisible();
   });
 
   test("rejects an invalid EE license offline", async ({ page }) => {
@@ -68,10 +68,11 @@ test.describe("settings", () => {
       /suspicious across sessions/,
       /stopped reporting/,
       /a policy change breaks a case you kept/,
-      /the license is about to expire/,
     ]) {
       await expect(page.getByText(label)).toBeVisible();
     }
+    // a license that expires is a licensed workspace's news: this one has none
+    await expect(page.getByText(/the license is about to expire/)).toHaveCount(0);
   });
 
   test("the meter and the statement drawn from it are visible", async ({ page }) => {

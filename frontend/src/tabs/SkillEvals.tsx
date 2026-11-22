@@ -11,7 +11,7 @@ import { ChevronDown, ChevronRight, Loader2 } from "lucide-react";
 import { api, SkillEval, SkillEvalArm, SkillEvalCompare, SkillEvalSkill, SkillEvalTask } from "../api";
 import { navigate } from "../router";
 import { C, MONO, btn } from "../theme";
-import { SkillSwitch, SkillsOffPanel, TeamSkillsPanel, TeamSwitch } from "../components/SkillsOff";
+import { SkillSwitch, TeamSkillsPanel, TeamSwitch } from "../components/SkillsOff";
 import { HowItWorks, MachineCommand } from "../components/MachineCommand";
 
 const label: React.CSSProperties = {
@@ -101,8 +101,8 @@ function EvalList() {
         </div>
       )}
 
-      <TeamSkillsPanel />
-      <SkillsOffPanel />
+      {/* the page's question first: does a skill help? Sharing one comes after;
+          turning one off is on Try a skill */}
       <HowToRun />
       {!rows.some((r) => r.eval_id === "se-example") && (
         <div className="mt-4" style={{ fontFamily: MONO, fontSize: 12, color: C.mut }}>
@@ -114,6 +114,7 @@ function EvalList() {
           </button>
         </div>
       )}
+      <div style={{ marginTop: 36 }}><TeamSkillsPanel /></div>
     </>
   );
 }
@@ -123,26 +124,49 @@ function short(v: string): string {
 }
 
 function HowToRun() {
-  const cmd = "pip install --upgrade axor-eval\npython -m axor_eval.skills run skill-eval.json --plane";
-  const spec = `{
-  "skills": ["./skills/changelog-entries", "./skills/test-first"],
-  "repo": "./fixture-repo",
-  "agent": "claude-code",
-  "trials": 5,
-  "tasks": [{"name": "fix-and-record", "prompt": "…",
-             "check": "python -m pytest -q"}]
-}`;
+  // the file is written here, from four answers — not by hand from a sample
+  const [skill, setSkill] = useState("./.claude/skills/my-skill");
+  const [prompt, setPrompt] = useState("fix the failing test in tests/");
+  const [checkCmd, setCheckCmd] = useState("python -m pytest -q");
+  const [trials, setTrials] = useState(5);
+  const runs = trials * 2;
+  const spec = JSON.stringify({
+    skills: [skill], repo: ".", agent: "claude-code", trials,
+    tasks: [{ name: "task-1", prompt, check: checkCmd }],
+  }, null, 2);
+  const cmd = `pip install --upgrade axor-eval\ncat > skill-eval.json <<'EOF'\n${spec}\nEOF\npython -m axor_eval.skills run skill-eval.json --plane`;
+  const field = (labelText: string, value: string, set: (v: string) => void, testId: string) => (
+    <label className="flex items-center gap-2" style={{ fontFamily: MONO, fontSize: 11, color: C.mut }}>
+      <span style={{ width: 110 }}>{labelText}</span>
+      <input value={value} onChange={(ev) => set(ev.target.value)} data-testid={testId}
+        style={{ flex: 1, background: C.bg, border: `1px solid ${C.line}`, borderRadius: 5, color: C.text,
+                 fontFamily: MONO, fontSize: 11.5, padding: "5px 8px", outline: "none" }} />
+    </label>
+  );
   return (
     <section>
-      <div style={label}>RUN ONE</div>
+      <div style={label}>DOES A SKILL HELP?</div>
       <div style={{ fontSize: 13.5, color: C.mut, lineHeight: 1.5, marginBottom: 10 }}>
-        On your machine: the skills, a repository, and tasks with a check command.
+        Your agent does the same task with the skill and without it, a few times each; a command
+        says whether the task was done. You see which way solves it more often, and for fewer tokens.
       </div>
+      <div className="flex flex-col gap-2 mb-3">
+        {field("the skill", skill, setSkill, "eval-skill")}
+        {field("a task", prompt, setPrompt, "eval-prompt")}
+        {field("done when", checkCmd, setCheckCmd, "eval-check")}
+        <label className="flex items-center gap-2" style={{ fontFamily: MONO, fontSize: 11, color: C.mut }}>
+          <span style={{ width: 110 }}>times each</span>
+          <input type="number" min={1} max={50} value={trials} data-testid="eval-trials"
+            onChange={(ev) => setTrials(Math.max(1, Math.min(50, Number(ev.target.value) || 1)))}
+            style={{ width: 70, background: C.bg, border: `1px solid ${C.line}`, borderRadius: 5, color: C.text,
+                     fontFamily: MONO, fontSize: 11.5, padding: "5px 8px", outline: "none" }} />
+          <span style={{ color: C.dim }}>
+            {runs} agent runs on your tokens · 5 each tells a big difference, a small one needs 20+
+          </span>
+        </label>
+      </div>
+      <div style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim, marginBottom: 6 }}>in the repository, on a machine connected to this plane:</div>
       <MachineCommand testId="skill-eval-cmd" cmd={cmd} />
-      <pre style={{ background: C.panel2, border: `1px solid ${C.line}`, borderRadius: 6, marginTop: 10,
-        padding: "10px 12px", fontFamily: MONO, fontSize: 11, color: C.mut, whiteSpace: "pre-wrap" }}>
-        <span style={{ color: C.dim }}>skill-eval.json{"\n"}</span>{spec}
-      </pre>
     </section>
   );
 }
@@ -166,7 +190,7 @@ function EvalView({ evalId }: { evalId: string }) {
         {e.skills.length} skill{e.skills.length === 1 ? "" : "s"}, {e.per_task.length} task{e.per_task.length === 1 ? "" : "s"}
       </h1>
       <div style={{ fontFamily: MONO, fontSize: 11.5, color: C.dim, marginBottom: 18 }}>
-        {e.agent}{e.model ? ` · ${e.model}` : ""} · {e.arms.length} arms × {trials} trials · {e.created_ts.slice(0, 16).replace("T", " ")}
+        {e.agent}{e.model ? ` · ${e.model}` : ""} · {e.arms.length} ways × {trials} times each · {e.created_ts.slice(0, 16).replace("T", " ")}
         {e.example && <span style={{ color: C.amber }}> · example: a scripted agent, not a real run</span>}
       </div>
 
@@ -177,15 +201,16 @@ function EvalView({ evalId }: { evalId: string }) {
 
       <Headline task={e.overall} />
 
-      <div style={label}>EVERY ARM — ALL TASKS</div>
+      <div style={label}>WITH THE SKILL AND WITHOUT IT — ALL TASKS</div>
       <ArmTable t={e.overall} />
       {e.per_task.length > 1 && e.per_task.map((t) => <TaskFold key={t.task} t={t} />)}
 
       <div style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim, marginTop: 14, lineHeight: 1.7 }}>
-        solved = the task's check command exited 0 after the agent finished · tokens = fresh input + cache
-        reads + output, as the agent reported them · tokens / solved = an arm's tokens over its solved
-        runs, so a cheap arm that solves less is not called cheap · p = two-sided Fisher exact · [ ] =
-        95% bootstrap interval · opened = the agent called the skill or read a file under it
+        solved = the task's "done when" command passed after the agent finished · tokens = what the
+        agent reported using · tokens / solved = all of a way's tokens over the tasks it solved, so a
+        cheap way that solves less is not called cheap · p = how likely a difference this size is by
+        chance (under 0.05: probably real) · [ ] = the range the true difference likely falls in ·
+        opened = the agent called the skill or read a file under it
       </div>
     </div>
   );
@@ -252,7 +277,7 @@ function ArmTable({ t }: { t: SkillEvalTask }) {
       <table data-testid="skill-eval-arms" style={{ borderCollapse: "collapse", width: "100%" }}>
         <thead>
           <tr>
-            {["arm", "solved", "vs none", "tokens / run", "Δ tokens vs none [95%]", "$ / run", "tokens / solved", "turns"].map((h) => (
+            {["way", "solved", "vs no skill", "tokens / run", "Δ tokens vs none [95%]", "$ / run", "tokens / solved", "turns"].map((h) => (
               <th key={h} style={th}>{h}</th>
             ))}
           </tr>

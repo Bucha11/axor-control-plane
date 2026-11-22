@@ -237,6 +237,20 @@ export default function ReplayTab({ runId: runIdProp, cursor: cursorProp, seq: s
   // could ever differ — say so instead of a false "nothing would change".
   const hasRecordedVerdicts = (base?.steps ?? []).some((x) => x.recorded_verdict != null);
 
+  // An incident's run opens where it happened: the agent saying what its own
+  // run contradicts — not at step 1, nine steps before the point.
+  const autoOpened = useRef<string | null>(null);
+  useEffect(() => {
+    if (cursorProp || seqProp || !runId || autoOpened.current === runId || !steps.length) return;
+    const r = (runs.data ?? []).find((x) => x.run_id === runId);
+    if (!r?.evidence?.length) return;
+    const at = steps.map((x) => x.kind).lastIndexOf("claim");
+    if (at >= 0) {
+      setCursor(at);
+      autoOpened.current = runId;
+    }
+  }, [runId, runs.data, steps, cursorProp, seqProp]);
+
   const toolsSeen = useMemo(() => {
     const seen: string[] = [];
     for (const x of base?.steps ?? []) {
@@ -258,6 +272,11 @@ export default function ReplayTab({ runId: runIdProp, cursor: cursorProp, seq: s
   const baseSteps = base?.steps ?? [];
   const outsideAt = baseSteps.findIndex(isTainted);
   const refusedAt = baseSteps.findIndex(isRefused);
+  const claimAt = steps.map((x) => x.kind).lastIndexOf("claim");
+  // other rules decide calls: a run that made none of them (no refusal, no
+  // outside text) has nothing for them to change — an agent saying the tests
+  // passed is not a rule's question
+  const rulesQuestion = !incident || outsideAt >= 0 || refusedAt >= 0;
 
   // The call this run should not have made: one that was let through while
   // what it was given came from outside text — the selected one, or else the
@@ -327,7 +346,8 @@ export default function ReplayTab({ runId: runIdProp, cursor: cursorProp, seq: s
           {baseSteps.length} steps
           {outsideAt >= 0 && <> · <span style={{ color: C.amber }}>outside text at step {outsideAt + 1}</span></>}
           {refusedAt >= 0 && <> · <span style={{ color: C.red }}>refused at step {refusedAt + 1}</span></>}
-          {incident && <> · <button onClick={() => navigate("evidence")} style={{ ...link, fontSize: 11.5 }}>the incident →</button></>}
+          {incident && claimAt >= 0 && <> · <button data-testid="replay-to-incident" onClick={() => setCursor(claimAt)}
+            style={{ ...link, fontSize: 11.5, color: C.red }}>it said so at step {claimAt + 1}</button></>}
         </div>
       )}
       {run?.node_id && <SessionMemory nodeId={run.node_id} />}
@@ -423,7 +443,7 @@ export default function ReplayTab({ runId: runIdProp, cursor: cursorProp, seq: s
             </div>
           )}
 
-          <div data-testid="replay-whatif" className="mt-4 p-4" style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 8 }}>
+          {rulesQuestion && <div data-testid="replay-whatif" className="mt-4 p-4" style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 8 }}>
             <div style={{ fontSize: 15, fontWeight: 600, color: C.text, marginBottom: 2 }}>Would other rules have changed this run?</div>
             <div style={{ fontSize: 12.5, color: C.mut, marginBottom: 10 }}>
               Decide the same recorded steps again under other rules — no model is called, same answer every time.
@@ -480,9 +500,9 @@ export default function ReplayTab({ runId: runIdProp, cursor: cursorProp, seq: s
                 otherRuns={(runs.data ?? []).filter((r) => r.node_id === run.node_id && r.run_id !== runId
                   && (r.evidence ?? []).length === 0).map((r) => r.run_id)} />
             )}
-          </div>
+          </div>}
 
-          <div data-testid="replay-keep" className="mt-4 flex items-center gap-2 flex-wrap" style={{ fontFamily: MONO, fontSize: 11.5, color: C.mut }}>
+          {rulesQuestion && <div data-testid="replay-keep" className="mt-4 flex items-center gap-2 flex-wrap" style={{ fontFamily: MONO, fontSize: 11.5, color: C.mut }}>
             keep this run as a test:
             {(["must_block", "must_pass"] as const).map((side) => (
               <button key={side} onClick={() => pin.mutate(side)} disabled={pin.isPending}
@@ -492,7 +512,7 @@ export default function ReplayTab({ runId: runIdProp, cursor: cursorProp, seq: s
             ))}
             {pin.isError && <span style={{ color: C.red }}>{(pin.error as Error).message}</span>}
             {pinned && <button onClick={() => navigate("prevent")} style={link}>check it in Safe to ship? →</button>}
-          </div>
+          </div>}
         </>
       )}
     </div>

@@ -371,8 +371,33 @@ test.describe("e-mail: reset and verification links", () => {
   });
 });
 
+test("alert mail is offered only where it can arrive: mail on, address confirmed", async ({ page }) => {
+  await setConnection(page, { mode: "adapter" });
+  await page.route("**/identity/v1/email", jsonRoute(200, { available: true }));
+  await page.route("**/identity/v1/login", jsonRoute(200, SESSION));
+  await page.route("**/identity/v1/me", jsonRoute(200, {
+    user: { user_id: "usr_1", email: "ada@acme.io", email_verified: false },
+    active_org: "org_1", role: "owner",
+    memberships: [{ org_id: "org_1", role: "owner", name: "Acme", tier: "community" }],
+  }));
+  await goHash(page, "settings");
+  await page.getByLabel("email").fill("ada@acme.io");
+  await page.getByLabel("password").fill("correct horse");
+  await page.getByRole("button", { name: "log in", exact: true }).click();
+  await page.getByTestId("settings-tab-alerts").click();
+  // unconfirmed: the way to confirm, not a button that fails
+  await expect(page.getByTestId("email-unverified")).toContainText("resend link");
+  await expect(page.getByTestId("mail-me")).toHaveCount(0);
+});
+
 test("signed in, one click fills in drift alerts to your own address", async ({ page }) => {
   await setConnection(page, { mode: "adapter" });
+  await page.route("**/identity/v1/email", jsonRoute(200, { available: true }));
+  await page.route("**/identity/v1/me", jsonRoute(200, {
+    user: { user_id: "usr_1", email: "ada@acme.io", email_verified: true },
+    active_org: "org_1", role: "owner",
+    memberships: [{ org_id: "org_1", role: "owner", name: "Acme", tier: "community" }],
+  }));
   await page.route("**/identity/v1/login", jsonRoute(200, SESSION));
   await goHash(page, "settings");
   await page.getByLabel("email").fill("ada@acme.io");

@@ -107,8 +107,10 @@ def _mail_allowed(request: Request, url: str) -> None:
         raise HTTPException(403, "alert mail can go only to your own address "
                                  f"({principal.email})")
     if not principal.email_verified:
-        raise HTTPException(403, "confirm your e-mail address first (Settings → "
-                                 "resend link), then sign in again")
+        # the console refreshes its session on this refusal and asks again:
+        # confirming the address is the only step
+        raise HTTPException(403, "confirm your e-mail address first — the link is in "
+                                 "Settings, under the alert settings")
 
 
 @router.post("/subscribe")

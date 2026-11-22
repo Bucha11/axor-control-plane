@@ -18,6 +18,7 @@ import Coach from "../components/Coach";
 import ToolCredentials from "../components/ToolCredentials";
 import UsageAndBilling from "../components/UsageAndBilling";
 import { useStartTour } from "../components/Tour";
+import { errorWords } from "../refusal";
 
 // Every trigger the backend emits, in words, and for whom. A trigger that fires
 // and cannot be subscribed to is a notification nobody receives — which is how
@@ -471,6 +472,12 @@ export default function Settings({ tab = "workspace" }: { tab?: string } = {}) {
   // rather than flashing enabled and then failing.
   const vendorKeyPinned = licenseStatus.data?.vendor_key_configured;
   const subscriptions = useQuery({ queryKey: ["subscriptions"], queryFn: api.listSubscriptions });
+  // alert mail goes only where the identity service sends mail, and only to a
+  // confirmed address: the button is offered when it can work
+  const [canMail, setCanMail] = useState(false);
+  useEffect(() => { void emailAvailable().then(setCanMail); }, []);
+  const meQ = useQuery({ queryKey: ["identity-me"], queryFn: api.identityMe, enabled: !!identityEmail, retry: false });
+  const verified = meQ.data?.user.email_verified !== false;
 
   const subscribe = useMutation({
     mutationFn: () =>
@@ -718,7 +725,8 @@ export default function Settings({ tab = "workspace" }: { tab?: string } = {}) {
           Discord or PagerDuty take one) or an e-mail address. The screens stay quiet; this is
           where it gets loud.
         </div>
-        {identityEmail && (
+        <EmailStatus />
+        {identityEmail && canMail && verified && (
           <button data-testid="mail-me"
             onClick={() => {
               setUrl(`mailto:${identityEmail}`);
@@ -727,7 +735,7 @@ export default function Settings({ tab = "workspace" }: { tab?: string } = {}) {
             }}
             className="mb-2"
             style={btn({ color: C.steel, borderColor: C.steel, fontSize: 10.5, padding: "3px 10px" })}>
-            e-mail me drift alerts ({identityEmail})
+            e-mail me alerts ({identityEmail})
           </button>
         )}
         <input
@@ -738,7 +746,9 @@ export default function Settings({ tab = "workspace" }: { tab?: string } = {}) {
           style={{ background: C.bg, border: `1px solid ${C.line}`, borderRadius: 5, color: C.text, fontFamily: MONO, fontSize: 12, padding: "7px 9px", outline: "none" }}
         />
         <div className="flex flex-col gap-2 mb-3">
-          {TRIGGERS.filter((t) => !journey || menuAll || t.for.includes(journey)).map((t) => (
+          {TRIGGERS.filter((t) => (!journey || menuAll || t.for.includes(journey))
+            // a license that expires is a licensed workspace's news
+            && (t.id !== "license_expiring" || eeActive)).map((t) => (
             <label key={t.id} className="flex items-center gap-2" style={{ fontFamily: MONO, fontSize: 11.5, color: C.mut, cursor: "pointer" }}>
               <input type="checkbox" checked={selected.includes(t.id)} onChange={() => toggle(t.id)} />
               {t.label}
@@ -778,7 +788,7 @@ export default function Settings({ tab = "workspace" }: { tab?: string } = {}) {
         </button>
         {subscribe.isError && (
           <div className="mt-2" style={{ fontFamily: MONO, fontSize: 11, color: C.red }}>
-            {(subscribe.error as Error).message}
+            {errorWords((subscribe.error as Error).message)}
           </div>
         )}
 
@@ -812,7 +822,7 @@ export default function Settings({ tab = "workspace" }: { tab?: string } = {}) {
         )}
 
         <div className="mt-4" style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim, letterSpacing: "0.08em" }}>
-          DEAD-LETTER LOG · alerts that could not be delivered
+          ALERTS THAT COULD NOT BE DELIVERED
         </div>
         {(deadLetters.data ?? []).length === 0 ? (
           <div style={{ fontFamily: MONO, fontSize: 11, color: C.dim, marginTop: 4 }}>

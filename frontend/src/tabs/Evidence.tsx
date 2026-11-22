@@ -14,6 +14,7 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AlertTriangle, ArrowRight, Play, Zap } from "lucide-react";
+import { refusalWords } from "../refusal";
 import { api, EvidenceCaseDto, IncidentItem, IncidentKind, IncidentStatus } from "../api";
 import { navigate } from "../router";
 import { isConnected, useApp } from "../store";
@@ -275,7 +276,15 @@ function Item({ item }: { item: IncidentItem }) {
                           padding: "5px 8px", overflowWrap: "anywhere" }}>{item.detail}</div>
           )}
           {item.reason && (
-            <div style={{ fontFamily: MONO, fontSize: 11, color: C.mut, marginTop: 5 }}>why: {brief(item.reason, 200)}</div>
+            <div style={{ fontFamily: MONO, fontSize: 11, color: C.mut, marginTop: 5 }}>why: {brief(refusalWords(item.reason), 200)}
+              {/if this repository needs it|run it yourself|allow skill scripts/.test(item.reason) && (
+                <div style={{ color: C.dim }}>
+                  {/run it yourself:/.test(item.reason)
+                    ? `if you meant it: ${item.reason.split(/If you want it,\s*/)[1] ?? ""}`
+                    : `to allow it here: ${item.reason.split(/if this repository needs it,?\s*|or allow skill scripts in this repository:\s*/)[1] ?? ""}`}
+                </div>
+              )}
+            </div>
           )}
         </div>
       )}

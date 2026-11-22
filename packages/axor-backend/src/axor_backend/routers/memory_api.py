@@ -38,8 +38,9 @@ def _who(principal: object) -> str:
 
 
 @router.get("/v1/coding/memory")
-async def memory_for_agent(repo: str, request: Request, store: StoreDep) -> dict:
-    given = memory.given_on_plan(request.app.state, repo)
+async def memory_for_agent(repo: str, request: Request, store: StoreDep, node: str = "") -> dict:
+    given = memory.given_on_plan(request.app.state, repo) \
+        and await memory.given_to_session(request.app.state, node)
     items, text, ids, version = await memory.refresh(store, repo, given=given)
     by_id = {i["id"]: i for i in items}
     # each fact on its own too: a setup health check takes them out one by one

@@ -93,7 +93,7 @@ export default function Skills() {
       <CheckSkill />
       <RunSkill />
       <DryRuns />
-      <div className="mt-8"><SkillsOffPanel /></div>
+      <div style={{ marginTop: 36 }}><SkillsOffPanel /></div>
       <div data-testid="skills-to-evals" className="mt-8" style={{ fontFamily: MONO, fontSize: 11.5, color: C.mut }}>
         does it actually help?{" "}
         <button onClick={() => navigate("skill-evals")} style={link}>Skill evals →</button>
@@ -148,14 +148,30 @@ function CheckSkill() {
   );
 }
 
+// refused: by a rule on the call, or — a script the skill ships — read before it runs
+const isRefused = (f: SkillReport["findings"][number]) =>
+  f.axor.startsWith("Axor refuses") || f.axor.includes("Axor refuses the agent's run");
+
 function CheckReport({ report }: { report: SkillReport }) {
+  const qc = useQueryClient();
   const [more, setMore] = useState(false);
   const name = report.name || "This skill";
   const danger = report.summary.danger;
-  const refused = report.findings.filter((f) => f.axor.startsWith("Axor refuses")).length;
-  // what nothing stops: not refused by a rule, not what a web page says
-  const yours = report.findings.filter((f) => f.severity !== "info" && f.kind !== "follows_web"
-    && !f.axor.startsWith("Axor refuses")).length;
+  // one line, one row: a line that reads a secret AND sends it out is one place to look
+  const rows = [...report.findings.reduce((m, f) => {
+    const had = m.get(f.where);
+    m.set(f.where, had ? { ...had, what: `${had.what} · ${f.what}`,
+      severity: had.severity === "danger" || f.severity === "danger" ? "danger" : had.severity } : f);
+    return m;
+  }, new Map<string, SkillReport["findings"][number]>()).values()];
+  const refused = rows.filter(isRefused).length;
+  // what nothing stops: not refused, not what a web page says
+  const yours = rows.filter((f) => f.severity !== "info" && f.kind !== "follows_web" && !isRefused(f)).length;
+  const dangerYours = rows.filter((f) => f.severity === "danger" && !isRefused(f)).length;
+  const off = useMutation({
+    mutationFn: () => api.setSkillOff(report.name, true),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ["coding-skills"] }),
+  });
   return (
     <div data-testid="skill-report" className="mt-4">
       <div style={{ fontSize: 18, fontWeight: 650, lineHeight: 1.35, marginBottom: 4 }}>
@@ -165,11 +181,30 @@ function CheckReport({ report }: { report: SkillReport }) {
               {yours > 0 && <>{yours} {yours === 1 ? "thing is" : "things are"} yours to judge before you install it.</>}</>
           : <><span style={{ color: C.green }}>{name}:</span> nothing here downloads and runs code, reads secrets or sends anything out</>}
       </div>
+      {/* the answer to "should I install it?", before the details */}
+      <div data-testid="skill-verdict" style={{ fontSize: 13.5, lineHeight: 1.6, marginBottom: 6,
+        color: dangerYours > 0 ? C.red : yours > 0 ? C.amber : C.green }}>
+        {dangerYours > 0
+          ? `Don't install it as it is: ${dangerYours} dangerous ${dangerYours === 1 ? "line runs" : "lines run"} if the agent follows it.`
+          : yours > 0
+            ? "Read the lines below before you install it — Axor lets them run."
+            : danger > 0
+              ? "Axor refuses everything dangerous it asks — the rest is ordinary work."
+              : "Nothing here asks for anything dangerous."}
+        {report.name && danger > 0 && (
+          off.isSuccess
+            ? <span style={{ fontFamily: MONO, fontSize: 11, color: C.green }}> · turned off — no agent here can use it</span>
+            : <> <button data-testid="skill-turn-off" onClick={() => off.mutate()} disabled={off.isPending}
+                style={btn({ color: C.text, borderColor: C.line, fontSize: 10.5, padding: "2px 10px", marginLeft: 6 })}>
+                {off.isPending ? "…" : `turn ${report.name} off`}
+              </button></>
+        )}
+      </div>
       <div style={{ fontFamily: MONO, fontSize: 11.5, color: C.dim, marginBottom: 12, lineHeight: 1.6 }}>
         <span style={{ color: C.green }}>refused</span> — Axor stops it every time · the rest runs if the agent follows the skill
       </div>
       <div style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 8 }}>
-        {report.findings.filter((f) => more || f.severity !== "info").map((f, i) => (
+        {rows.filter((f) => more || f.severity !== "info").map((f, i) => (
           <div key={`${f.kind}-${f.where}-${i}`} data-testid="skill-finding" className="px-4 py-3"
             style={{ borderTop: i ? `1px solid ${C.line}` : "none" }}>
             <div className="flex items-center gap-2 flex-wrap">
@@ -180,7 +215,7 @@ function CheckReport({ report }: { report: SkillReport }) {
             <div style={{ fontFamily: MONO, fontSize: 11.5, color: C.mut, margin: "4px 0 2px 16px",
               overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{f.snippet}</div>
             <div style={{ fontFamily: MONO, fontSize: 10.5,
-              color: f.axor.startsWith("Axor refuses") || f.kind === "follows_web" ? C.green
+              color: isRefused(f) || f.kind === "follows_web" ? C.green
                 : f.axor.startsWith("Inside a script") ? C.amber : C.dim,
               marginLeft: 16 }}>{f.axor}</div>
           </div>
@@ -210,7 +245,8 @@ function CheckReport({ report }: { report: SkillReport }) {
 
 function RunSkill() {
   const [agent, setAgent] = useState<"claude-code" | "codex">("claude-code");
-  const cmd = `pip install --upgrade axor-wrap\naxor-wrap skill try ./my-skill${agent === "codex" ? " --agent codex" : ""}`;
+  // the same install the Connect page gives: one tool, one way to get it
+  const cmd = `uv tool install 'axor-wrap[plane]'\naxor-wrap skill try ./my-skill${agent === "codex" ? " --agent codex" : ""}`;
   return (
     <section className="mb-8">
       <div style={label}>2 · WHAT AN AGENT ACTUALLY DOES WITH IT</div>
@@ -350,6 +386,11 @@ function DryRun({ nodeId }: { nodeId: string }) {
               {w && !denied && (
                 <div style={{ color: C.red, fontSize: 10.5, marginLeft: 12 }}>
                   ↳ ran — Axor would have refused it: {w.reason}
+                </div>
+              )}
+              {!denied && !w && /skills\/[^\s]*\/scripts?\//.test(said(e)) && (
+                <div style={{ color: C.amber, fontSize: 10.5, marginLeft: 12 }}>
+                  ↳ a script the skill ships — one call to Axor; check the skill folder above to read what it does inside
                 </div>
               )}
             </div>

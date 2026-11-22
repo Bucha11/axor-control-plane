@@ -8,6 +8,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, FoundStep, StepQuery } from "../api";
 import { navigate } from "../router";
+import { useApp } from "../store";
 import { C, MONO, btn } from "../theme";
 import Coach from "../components/Coach";
 
@@ -103,10 +104,6 @@ export default function ReplaySearch({ query }: { query: Record<string, string> 
   }), [when, query.from, query.to, query.agent, query.tool, query.text, query.does, query.outcome]);
   const found = useQuery({ queryKey: ["step-search", q], queryFn: () => api.searchSteps(q) });
 
-  const agents = useMemo(
-    () => [...new Set((runs.data ?? []).map((r) => r.node_id))].sort(),
-    [runs.data],
-  );
   const seed = useMutation({
     mutationFn: () => api.seedProdIncident(),
     onSuccess: async () => {
@@ -115,8 +112,30 @@ export default function ReplaySearch({ query }: { query: Record<string, string> 
       set({ when: "30d", does: "deletes", outcome: "", agent: "", text: "", tool: "" });
     },
   });
+  // a skill's dry run is a try, not the agents' work: it is searched only
+  // when it is picked by name
+  const isTry = (id: string) => id.startsWith("skill-try.");
+  const agents = useMemo(
+    () => [...new Set((runs.data ?? []).map((r) => r.node_id))]
+      .filter((a) => !isTry(a) || a === query.agent).sort(),
+    [runs.data, query.agent],
+  );
+  const journey = useApp((st) => st.journey);
+  const apiToken = useApp((st) => st.apiToken);
+  const ws = useQuery({ queryKey: ["workspace", apiToken], queryFn: api.workspace, staleTime: 60_000, retry: false });
+  const coding = journey === "coding";
+  // once the workspace's own agents report, an example would not show here
+  const offerExample = !ws.data?.work_started;
+  const codingExample = useMutation({
+    mutationFn: () => api.seedCoding(),
+    onSuccess: () => navigate("explain/ex_coding_claude"),
+  });
+  const exampleLabel = coding ? "an example: an agent said the tests passed when they failed"
+    : "an example: an agent dropped a production table";
+  const loadExample = () => (coding ? codingExample.mutate() : seed.mutate());
+  const loading = seed.isPending || codingExample.isPending;
   const nothingYet = runs.isSuccess && runs.data.length === 0;
-  const steps = found.data?.steps ?? [];
+  const steps = (found.data?.steps ?? []).filter((x) => !isTry(x.node_id) || query.agent === x.node_id);
   const open = (s: FoundStep) => {
     // what is typed counts even if the search had not caught up with it yet
     sessionStorage.setItem(LAST_SEARCH, JSON.stringify({ ...query, text, tool }));
@@ -191,10 +210,12 @@ export default function ReplaySearch({ query }: { query: Record<string, string> 
       {nothingYet ? (
         <div style={{ fontSize: 13.5, color: C.mut, lineHeight: 1.6 }}>
           Nothing has run yet — connect an agent and every call it makes is searchable here.{" "}
-          <button onClick={() => seed.mutate()} disabled={seed.isPending} data-testid="search-example"
-            style={btn({ color: C.steel, fontSize: 11.5, padding: "4px 10px", marginLeft: 6 })}>
-            {seed.isPending ? "loading…" : "load an example: an agent dropped a production table"}
-          </button>
+          {offerExample && (
+            <button onClick={loadExample} disabled={loading} data-testid="search-example"
+              style={btn({ color: C.steel, fontSize: 11.5, padding: "4px 10px", marginLeft: 6 })}>
+              {loading ? "loading…" : `load ${exampleLabel}`}
+            </button>
+          )}
         </div>
       ) : found.isError ? (
         <div style={{ color: C.red, fontSize: 13 }}>{(found.error as Error).message}</div>
@@ -206,10 +227,10 @@ export default function ReplaySearch({ query }: { query: Record<string, string> 
             </span>
             {found.data?.more && <span style={{ color: C.amber }}>only the newest {found.data.scanned.toLocaleString()} calls were searched — narrow the time</span>}
             <span style={{ flex: 1 }} />
-            {!runs.data?.some((r) => r.run_id === "ex_prod_drop") && (
-              <button onClick={() => seed.mutate()} disabled={seed.isPending} data-testid="search-example"
+            {offerExample && !runs.data?.some((r) => r.run_id === (coding ? "ex_coding_claude" : "ex_prod_drop")) && (
+              <button onClick={loadExample} disabled={loading} data-testid="search-example"
                 style={{ background: "none", border: "none", padding: 0, cursor: "pointer", fontFamily: MONO, fontSize: 11, color: C.steel }}>
-                {seed.isPending ? "loading…" : "an example: an agent dropped a production table"}
+                {loading ? "loading…" : exampleLabel}
               </button>
             )}
           </div>

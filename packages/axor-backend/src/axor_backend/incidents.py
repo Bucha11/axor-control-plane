@@ -79,7 +79,10 @@ async def incidents(store: Any, scan: int) -> list[dict[str, Any]]:  # noqa: ANN
                           "tool": s["tool"]})
         elif s["outcome"] == "refused":
             day = str(s["ts"] or "")[:10]
-            key = f"refused:{s['node_id']}:{s['tool']}:{day}"
+            # an agent retrying the same refused call is one item; a different
+            # reason (sending .env out vs a command from a web page) is another
+            cause = str(s["reason"] or "").removeprefix("axor: ").split(" — ")[0][:80]
+            key = f"refused:{s['node_id']}:{s['tool']}:{day}:{cause}"
             group = refused.get(key)
             if group is None:   # newest first: the first seen is the latest
                 refused[key] = {**base, "id": key, "kind": "refused", "what": s["tool"],

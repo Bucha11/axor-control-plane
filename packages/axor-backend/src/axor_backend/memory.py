@@ -22,7 +22,8 @@ green without fixing anything. A kept-out command is listed — "kept out: it ca
 web page" — and never given to an agent.
 
 An item found automatically is suggested; one click turns it on, and it turns
-on by itself once it passed for two different developers.
+on by itself once it passed for two different developers — or, for one
+developer, in three of their sessions.
 
 Rotation (``rotate``), so what agents get stays true:
 
@@ -56,6 +57,7 @@ KINDS = ("runs", "fix", "note")
 GIVEN = "on"
 STATUSES = ("suggested", "on", "off", "stale", "dormant", "replaced", "kept_out")
 AUTO_ON_DEVELOPERS = 2
+AUTO_ON_SESSIONS = 3          # one developer: passed in this many of their sessions
 STALE_DEVELOPERS = 2          # failed for this many developers since its last pass…
 STALE_ONE_DEVELOPER = 3       # …or this many times for one
 FRESH_DAYS = 30
@@ -63,11 +65,10 @@ FRESH_SETTING = "memory_fresh_days"
 SUGGESTED_DAYS = 14
 NOTE_ASK_DAYS = 90
 MIN_SESSIONS = 5              # per side, before a comparison says anything
-# agents are given the team's memory on this workspace tier and above — Coding,
-# the plan for a team of developers (Team and up include everything in it).
-# Below it — one developer, free — the plane keeps learning (an upgrade gives
-# agents what was learned) and gives nothing. The example repository is always
-# given: it shows the product.
+# The free plan is one developer: their agents are given what their own
+# sessions verified — their memory. Sharing it across a team of developers is
+# the Coding plan (Team and up include it): on the free plan a second
+# developer's sessions are locked (ee.entitlements) and are given nothing.
 PLAN_TIER = "coding"
 WORSE_P = 0.05
 MAX_COMMAND = 200
@@ -144,6 +145,7 @@ async def _bump(store: Any, repo: str, key: str, kind: str, base: dict, *,  # no
         if not passed:
             return  # a failure alone teaches nothing to remember
         doc = {**base, "developers": [developer] if developer else [], "evidence": [evidence],
+               "sessions": [evidence.get("node_id")] if evidence.get("node_id") else [],
                "fails": 0, "fail_devs": {}, "first_ok_ts": ts, "last_ok_ts": ts, "given": 0,
                "auto": False, "reason": reason or ""}
         await store.add_memory_item(repo, key, kind, "kept_out" if reason else "suggested",
@@ -153,10 +155,18 @@ async def _bump(store: Any, repo: str, key: str, kind: str, base: dict, *,  # no
     if passed:
         if developer and developer not in doc["developers"]:
             doc["developers"].append(developer)
+        node = evidence.get("node_id")
+        sessions = doc.setdefault("sessions", [])
+        if node and node not in sessions:
+            sessions.append(node)
+            del sessions[:-20]
         doc["evidence"] = ([evidence] + doc["evidence"])[:EVIDENCE_KEEP]
         doc["fails"], doc["fail_devs"], doc["last_ok_ts"] = 0, {}, ts
         doc.setdefault("first_ok_ts", ts)
-        if status == "suggested" and len(doc["developers"]) >= AUTO_ON_DEVELOPERS:
+        # confirmed: two developers' agents, or — one developer, the free plan's
+        # whole team — passing in three of their sessions
+        if status == "suggested" and (len(doc["developers"]) >= AUTO_ON_DEVELOPERS
+                                      or len(doc["sessions"]) >= AUTO_ON_SESSIONS):
             status, doc["auto"] = "on", True
         elif status in ("stale", "dormant", "replaced"):
             status = "on"          # works again; rotate() decides what is given
@@ -361,15 +371,25 @@ async def rotate(store: Any, repo: str, now: datetime | None = None) -> list[dic
 # ── versions and drift ──────────────────────────────────────────────────────
 
 def given_on_plan(state: Any, repo: str) -> bool:  # noqa: ANN401 - app.state
-    """Whether this workspace's plan gives agents the team's memory."""
-    from axor_backend.demo import CODING_REPO
+    """Whether this workspace's plan gives agents the memory: every plan does —
+    the free one to its one developer (:func:`given_to_session` says who)."""
+    return True
+
+
+async def given_to_session(state: Any, node_id: str) -> bool:  # noqa: ANN401 - app.state
+    """Whether one session is given the memory: not when the free plan locks it
+    (a second developer, a second agent family) — the team's memory is the
+    Coding plan's."""
+    from axor_backend.ee.entitlements import coding_entitlements, workspace_tier
     from axor_backend.licensing import active_license
     from axor_backend.tenancy import current_org_id
 
-    if repo == CODING_REPO:
+    if not node_id:
         return True
-    lic = active_license(state, current_org_id())
-    return lic is not None and lic.tier_at_least(PLAN_TIER)
+    tier = workspace_tier(active_license(state, current_org_id()))
+    if tier != "community":
+        return True
+    return node_id not in (await coding_entitlements(state.store, tier))["locked"]
 
 
 def version_of(ids: list[int]) -> str:
@@ -419,7 +439,9 @@ def _why_on(item: dict) -> str:
     if d.get("decided_by"):
         return f"turned on by {d['decided_by']}"
     if d.get("auto"):
-        return "confirmed by two developers' agents"
+        if len(d.get("developers") or []) >= AUTO_ON_DEVELOPERS:
+            return "confirmed by two developers' agents"
+        return f"passed in {len(d.get('sessions') or [])} of your sessions"
     return "turned on"
 
 

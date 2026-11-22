@@ -24,9 +24,9 @@ const link: React.CSSProperties = {
 const day = (ts: string) => (ts ? ts.slice(0, 16).replace("T", " ") : "");
 
 const GROUPS: { status: MemoryItem["status"]; title: string; color: string; words: string }[] = [
-  { status: "on", title: "ON — EVERY AGENT GETS THESE", color: C.green, words: "" },
+  { status: "on", title: "ON — GIVEN TO AGENTS", color: C.green, words: "" },
   { status: "suggested", title: "SUGGESTED", color: C.amber,
-    words: "Found in one developer's sessions. Turns on by itself once a second developer's agent confirms it — or turn it on now." },
+    words: "Passed, not yet confirmed. Turns on by itself once a second developer's agent confirms it, or it passed in three of one developer's sessions — or turn it on now." },
   { status: "stale", title: "STOPPED WORKING", color: C.red,
     words: "Since it last passed it failed for two developers, or three times for one — no longer given. It comes back by itself if it passes again." },
   { status: "dormant", title: "NOT CONFIRMED LATELY", color: C.dim,
@@ -47,13 +47,21 @@ export default function TeamMemory() {
     onSuccess: (r) => { setPick(r.repo); void qc.invalidateQueries({ queryKey: ["memory"] }); },
   });
   const repos = q.data?.repos ?? [];
+  // the free plan is one developer: this is their memory; a team shares it on Coding
+  const ent = useQuery({ queryKey: ["entitlements"], queryFn: api.entitlements, retry: false });
+  const solo = ent.data?.free === true;
   const freshDays = q.data?.fresh_days ?? 30;
   const repo = repos.find((r) => r.repo === pick) ?? repos.find((r) => r.items.length) ?? repos[0];
   return (
     <div data-testid="team-memory" style={{ maxWidth: 860, margin: "0 auto" }}>
-      <h1 style={{ fontSize: 22, fontWeight: 650, margin: "0 0 6px" }}>Team memory</h1>
+      <h1 style={{ fontSize: 22, fontWeight: 650, margin: "0 0 6px" }}>{solo ? "Your memory" : "Team memory"}</h1>
       <div style={{ fontSize: 14, color: C.mut, lineHeight: 1.5, marginBottom: 22 }}>
-        What your agents learned in each repo, given to every agent next session.
+        {solo
+          ? <>What your agents learned in each repo, given to your agents at the start of their next session.
+              With a team on the Coding plan, every developer's agents share it.{" "}
+              <button onClick={() => navigate("pricing?for=coding")} style={{ background: "none", border: "none",
+                padding: 0, cursor: "pointer", color: C.steel, fontSize: 13 }}>plans →</button></>
+          : "What your agents learned in each repo, given to every agent next session."}
         <HowItWorks>
           <li>Only commands that actually passed — never what an agent claims it learned.</li>
           <li>Never handed on: commands from a web page, ones that send, delete or touch secrets, and ones that fake a green check (<code style={{ fontFamily: MONO, fontSize: 12 }}>jest -u</code>, <code style={{ fontFamily: MONO, fontSize: 12 }}>|| true</code>).</li>
@@ -126,12 +134,12 @@ function RepoMemory({ repo, freshDays }: { repo: MemoryRepo; freshDays: number }
       )}
       {repo.drift && <Drift change={repo.drift} onOff={(id) => set.mutate({ id, status: "off" })} />}
       <section className="mb-8" data-testid="memory-preview">
-        <div style={label}>{repo.given ? "WHAT EVERY AGENT GETS AT SESSION START" : "WHAT EVERY AGENT WOULD GET ON THE CODING PLAN"} · {repo.label}</div>
+        <div style={label}>{repo.given ? "WHAT YOUR AGENTS GET AT SESSION START" : "WHAT AGENTS WOULD GET ON THE CODING PLAN"} · {repo.label}</div>
         {repo.preview ? (
           <pre style={{ ...panel, padding: "12px 14px", margin: 0, fontFamily: MONO, fontSize: 11.5, color: C.text,
                         whiteSpace: "pre-wrap", lineHeight: 1.6 }}>{repo.preview}</pre>
         ) : (
-          <div style={{ ...panel, padding: 14, fontSize: 13, color: C.mut }}>Nothing on yet — agents get nothing from the team's memory here.</div>
+          <div style={{ ...panel, padding: 14, fontSize: 13, color: C.mut }}>Nothing on yet — agents get nothing from memory here.</div>
         )}
         {repo.given && (
           <div style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim, marginTop: 6 }}>
@@ -204,7 +212,9 @@ function Item({ item, first, onSet, busy, overLimit }: {
     ? `written by ${d.by || "someone on the team"}`
     : `passed in ${sessions} session${sessions === 1 ? "" : "s"} · ${d.developers.length} developer${d.developers.length === 1 ? "" : "s"} · last ${day(d.last_ok_ts)}`;
   const decided = item.status === "on"
-    ? (d.auto ? "on by itself — two developers' agents confirmed it" : d.decided_by ? `turned on by ${d.decided_by}` : "")
+    ? (d.auto ? (d.developers.length >= 2 ? "on by itself — two developers' agents confirmed it"
+                                          : "on by itself — it passed in three of your sessions")
+      : d.decided_by ? `turned on by ${d.decided_by}` : "")
     : item.status === "off" && d.decided_by ? `turned off by ${d.decided_by}` : "";
   return (
     <div data-testid={`memory-item-${item.id}`} className="px-4 py-3" style={{ borderTop: first ? "none" : `1px solid ${C.line}` }}>

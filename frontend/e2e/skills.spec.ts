@@ -138,7 +138,8 @@ test.describe("coding agents: their menu, and trying a skill", () => {
     const policy = await (await request.get("http://127.0.0.1:8400/v1/coding/policy")).json();
     expect(policy.skills_off).toContain("test-first");
     // the list says what it can and cannot do, and turns it back on
-    await page.getByRole("button", { name: /all skill evals/ }).click();
+    // turned-off skills are listed where skills are tried
+    await goHash(page, "skills");
     const panel = page.getByTestId("skills-off");
     await expect(panel).toContainText("No agent on the team can use it");
     // the detail is one click away, not a wall of text
@@ -388,7 +389,7 @@ test.describe("coding agents: their menu, and trying a skill", () => {
     }
   });
 
-  test("team memory on the free plan: learned and shown, given to no agent", async ({ page, request }) => {
+  test("memory on the free plan: the developer's own, given to their agents", async ({ page, request }) => {
     const B = "http://127.0.0.1:8400";
     const tag = Math.random().toString(36).slice(2, 8);
     const repo = `r-free-${tag}`;
@@ -404,17 +405,17 @@ test.describe("coding agents: their menu, and trying a skill", () => {
         line(1, "tool_result", { tool: "Bash", status: "ok", preview: "",
           check: { kind: "tests", passed: true, command: "pnpm test", summary: "ok" } })] } });
     }
+    // what it learned is given (no session named: the plan locks no one here)
     const given = await (await request.get(`${B}/v1/coding/memory?repo=${repo}`)).json();
-    expect(given.text).toBe("");
-    expect(given.plan_required).toBe("coding");
+    expect(given.text).toContain("pnpm test");
+    expect(given.plan_required).toBeUndefined();
     await setConnection(page, { mode: "demo" });
     await goHash(page, "memory");
     const view = page.getByTestId("team-memory");
+    await expect(view.getByRole("heading", { name: "Your memory" })).toBeVisible();
     await view.getByRole("tab", { name: `free/${tag}` }).click();
-    await expect(view.getByTestId("memory-plan")).toContainText("Team memory comes with the Coding plan");
-    await expect(view.getByTestId("memory-preview")).toContainText("WOULD GET ON THE CODING PLAN");
+    await expect(view.getByTestId("memory-plan")).toHaveCount(0);
+    await expect(view.getByTestId("memory-preview")).toContainText("WHAT YOUR AGENTS GET");
     await expect(view.getByTestId("memory-preview")).toContainText("pnpm test");
-    await view.getByTestId("memory-plan").getByRole("button", { name: "see plans →" }).click();
-    await expect(page).toHaveURL(/#\/pricing/);
   });
 });
