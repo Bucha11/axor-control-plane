@@ -41,6 +41,8 @@ test.describe("three ways in", () => {
   });
 
   test("on an open plane no key is asked for", async ({ page }) => {
+    // a fresh plane: no session has reported yet (other specs share this one)
+    await page.route("**/v1/plane/nodes", (route) => route.fulfill({ json: [] }));
     await setConnection(page, { mode: "none" });
     await goHash(page, "connect?for=coding");
     await expect(page.getByText(/this plane is open — no key needed/)).toBeVisible();
@@ -119,7 +121,7 @@ test.describe("three ways in", () => {
     const before = await (await request.get(`${BACKEND}/v1/license/usage?months=1`)).json();
     const r = await request.post(`${BACKEND}/v1/plane/${node}/profile`,
       { data: { kind: "coding", agent: "codex", developer: "dev-e2e-1" } });
-    expect(r.status()).toBe(204);
+    expect(r.status()).toBe(200);
     const after = await (await request.get(`${BACKEND}/v1/license/usage?months=1`)).json();
     expect(after.months[0].active_developers).toBeGreaterThanOrEqual(1);
     expect(after.months[0].peak_nodes).toBeLessThanOrEqual(before.months[0].peak_nodes);
@@ -136,11 +138,19 @@ test("on the connect page the header does not offer to connect, and a session co
   await expect(page.getByRole("button", { name: /connection:/ })).toBeVisible();
 });
 
-test("home: a coding tab and a production tab, and the coding example opens a tree", async ({ page }) => {
+test("home: the coding example is one session first, then the next agent, then a tree", async ({ page }) => {
   await setConnection(page, { mode: "none" });
   await goHash(page, "home");
   await expect(page.getByTestId("coding-stage")).toBeVisible();
   await page.getByTestId("home-example-coding").click();
+  await expect(page).toHaveURL(/#\/govern\/run\/ex_coding_claude$/);
+  const story = page.getByTestId("run-example-story");
+  await expect(story).toContainText("ONE CLAUDE CODE SESSION");
+  await expect(page.getByTestId("run-timeline")).toContainText("text from outside");
+  await story.getByTestId("run-example-govern").click();
+  await expect(page).toHaveURL(/#\/govern\/run\/ex_coding_codex$/);
+  await expect(page.getByTestId("refusal-reason")).toContainText("came from text from outside");
+  await page.getByTestId("run-example-trees").click();
   await expect(page).toHaveURL(/#\/trees\/tree-example-coding/);
   await expect(page.getByTestId("tree-node-read")).toContainText("codex/luna");
   await expect(page.getByTestId("tree-item-read#3/f0")).toContainText("withheld · untrusted");
@@ -169,7 +179,7 @@ test("a tree's agents fold into one row on Agents", async ({ page }) => {
   await setConnection(page, { mode: "none" });
   await goHash(page, "home");
   await page.getByTestId("home-example-coding").click();
-  await expect(page).toHaveURL(/#\/trees\/tree-example-coding/);
+  await expect(page).toHaveURL(/#\/govern\/run\/ex_coding_claude$/);
   await goHash(page, "govern");
   const row = page.getByTestId("tree-row-tree-example-coding");
   await expect(row).toContainText("Add rate limiting to the auth module");
@@ -180,7 +190,7 @@ test("a tree's agents fold into one row on Agents", async ({ page }) => {
   await expect(page.getByTestId("fleet-count")).toContainText(/\d+ trees? · live/);
   await expect.poll(async () => {
     const chip = await page.getByTestId("status-chips").getByRole("button", { name: /^all/ }).innerText();
-    const rows = await page.locator('[data-tour="spawn"] [data-testid^="agent-row-"], [data-tour="spawn"] [data-testid^="tree-row-"]').count();
+    const rows = await page.locator('[data-tour="spawn"] [data-testid^="agent-row-"], [data-tour="spawn"] [data-testid^="tree-row-"], [data-tour="spawn"] [data-testid^="developer-row-"]').count();
     return Number(chip.replace(/\D+/g, "")) - rows;
   }).toBe(0);
   await row.getByText("▸ show agents").click();
@@ -197,7 +207,7 @@ test("past the free plan a session is kept but locked, and says what unlocks it"
     await seedNode(request, node);
     const r = await request.post(`${BACKEND}/v1/plane/${node}/profile`,
       { data: { kind: "coding", agent: "claude-code", developer: dev } });
-    expect(r.status()).toBe(204);
+    expect(r.status()).toBe(200);
   }
   // whoever reported first in this workspace keeps the free seat: the second is locked
   const ent = await (await request.get(`${BACKEND}/v1/license/entitlements`)).json();
@@ -246,14 +256,14 @@ test("Agents with only the coding example tells its story, in coding words", asy
   await setConnection(page, { mode: "none" });
   await goHash(page, "home");
   await page.getByTestId("home-example-coding").click();
-  await expect(page).toHaveURL(/#\/trees\/tree-example-coding/);
+  await expect(page).toHaveURL(/#\/govern\/run\/ex_coding_claude$/);
   // other specs share this plane: show this page what a visitor's plane holds
   await page.route("**/v1/plane/nodes", async (route) => {
     const all = await (await request.get(`${BACKEND}/v1/plane/nodes`)).json() as { node_id: string }[];
     await route.fulfill({
       json: all.filter((n) => /^(claude-code|codex)-example-|^tree-example/.test(n.node_id)) });
   });
-  await page.getByTestId("example-agents").click();
+  await goHash(page, "govern");
   const story = page.getByTestId("coding-example-story");
   await expect(story).toContainText("denied at the shell");
   // no adapter talk for a coding visitor, and the badge says what this is

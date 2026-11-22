@@ -44,7 +44,7 @@ async def test_coding_sessions_are_developers_not_governed_nodes(client) -> None
         node = f"claude-code-host-{i}"
         await _report(client, node)
         assert await _profile(client, node, kind="coding", agent="claude-code",
-                              developer="dev-aaa") == 204
+                              developer="dev-aaa") == 200
     await _report(client, "codex-host-x")
     await _profile(client, "codex-host-x", kind="coding", agent="codex", developer="dev-bbb")
     await _report(client, "tree-1234")

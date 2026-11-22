@@ -1,5 +1,6 @@
 // Control: a tree that is quiet when healthy (main-tabs mockup, ControlTab).
 // Wired to /v1/plane/nodes; divergence between desired and reported is rendered, not hidden.
+import { refusalWords } from "../refusal";
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Circle, Gauge, GitBranch, Lock, Pause, Play, Square, Syringe } from "lucide-react";
@@ -13,7 +14,7 @@ import { C, MONO, btn } from "../theme";
 import Coach from "../components/Coach";
 import { incidentWhat } from "./Evidence";
 import Tooltip from "../components/Tooltip";
-import { codingExampleOnly, fleetExampleOnly } from "../components/CodingOnboarding";
+import { codingExampleOnly, fleetExampleOnly, isCodingSession } from "../components/CodingOnboarding";
 import { AlertMe, KeepAsTest, SignUpForYourAgent } from "../components/AccountAction";
 
 const REFETCH_MS = 5000;
@@ -401,6 +402,9 @@ function ControlBody({ focusNode, testBench }: { focusNode?: string; testBench: 
     for (const m of t.members ?? []) treeOf.set(m, t);
   }
   const [openTrees, setOpenTrees] = useState<Set<string>>(new Set());
+  // a developer's coding sessions fold into one row: a day of Claude Code is
+  // many sessions, and the list is about people's agents, not every session
+  const [openDevs, setOpenDevs] = useState<Set<string>>(new Set());
   const fleetRows = new Map((fleetQ.data?.nodes ?? []).map((r) => [r.node_id, r]));
   const [budgetInput, setBudgetInput] = useState("");
 
@@ -540,9 +544,21 @@ function ControlBody({ focusNode, testBench }: { focusNode?: string; testBench: 
   // Counters count what the list shows: a tree is one row, so it is one unit,
   // and its statuses are its agents' together (one agent needing you puts the
   // tree in "needs you"; one running makes it running, not idle).
+  // ...and a developer's folded sessions are one row too
+  const devOfNode = (n: NodeInfo) => (!treeOf.get(n.node_id) && isCodingSession(n.node_id)
+    && !n.example && n.profile?.developer) || null;
+  const devSessions = new Map<string, number>();
+  for (const n of list) {
+    const d = devOfNode(n);
+    if (d) devSessions.set(d, (devSessions.get(d) ?? 0) + 1);
+  }
+  const devUnit = new Map(list.flatMap((n) => {
+    const d = devOfNode(n);
+    return d && (devSessions.get(d) ?? 0) > 1 ? [[n.node_id, `dev:${d}`] as const] : [];
+  }));
   const unitOf = (id: string) => {
     const t = treeOf.get(id);
-    return t ? `tree:${t.tree_run}` : id;
+    return t ? `tree:${t.tree_run}` : devUnit.get(id) ?? id;
   };
   const unitStatuses = new Map<string, Status[]>();
   for (const n of list) {
@@ -550,6 +566,12 @@ function ControlBody({ focusNode, testBench }: { focusNode?: string; testBench: 
     unitStatuses.set(k, [...(unitStatuses.get(k) ?? []), ...statuses.get(n.node_id)!]);
   }
   for (const [k, st] of unitStatuses) {
+    if (k.startsWith("dev:")) {
+      const merged = new Set(st);
+      if (merged.has("running") || merged.has("paused") || merged.has("stopped")) merged.delete("idle");
+      unitStatuses.set(k, [...merged]);
+      continue;
+    }
     if (!k.startsWith("tree:")) continue;
     const merged = new Set(st);
     if (treeOf.get(k.slice(5))?.status === "running") merged.add("running");
@@ -558,7 +580,8 @@ function ControlBody({ focusNode, testBench }: { focusNode?: string; testBench: 
   }
   const units = [...unitStatuses.values()];
   const treeCount = [...unitStatuses.keys()].filter((k) => k.startsWith("tree:")).length;
-  const looseCount = units.length - treeCount;
+  const devCount = [...unitStatuses.keys()].filter((k) => k.startsWith("dev:")).length;
+  const looseCount = units.length - treeCount - devCount;
   // the heading counts what the "needs you" chip counts — one definition
   const needYou = units.filter((st) => st.includes("needs_you")).length;
   const shown = list.filter((n) => filter === "all" || unitStatuses.get(unitOf(n.node_id))!.includes(filter));
@@ -595,6 +618,7 @@ function ControlBody({ focusNode, testBench }: { focusNode?: string; testBench: 
         active: Math.max(fleetQ.data.totals.active, units.filter((st) => st.includes("running")).length) }} />}
       <div className="flex items-center gap-4" style={{ fontFamily: MONO, fontSize: 11, color: C.mut, marginBottom: 20 }}>
         <span data-testid="fleet-count">
+          {devCount > 0 && <>{devCount} developer{devCount === 1 ? "" : "s"} · </>}
           {looseCount} agent{looseCount === 1 ? "" : "s"}
           {treeCount > 0 && <> · {treeCount} tree{treeCount === 1 ? "" : "s"}</>} · live
           {otherSide > 0 && (
@@ -645,11 +669,44 @@ function ControlBody({ focusNode, testBench }: { focusNode?: string; testBench: 
           </div>
         )}
         {(() => {
-          // one row per tree, where its first agent would have been
+          // one row per tree, where its first agent would have been; one row
+          // per developer with more than one coding session, likewise
           const out: React.ReactNode[] = [];
           const done = new Set<string>();
+          const devOf = (m: NodeInfo) => (!treeOf.get(m.node_id) && isCodingSession(m.node_id)
+            && !m.example && m.profile?.developer) || null;
+          const byDev = new Map<string, NodeInfo[]>();
+          for (const m of shown) {
+            const d = devOf(m);
+            if (d) byDev.set(d, [...(byDev.get(d) ?? []), m]);
+          }
           shown.forEach((n) => {
             const tree = treeOf.get(n.node_id);
+            const dev = devOf(n);
+            if (!tree && dev && (byDev.get(dev)?.length ?? 0) > 1) {
+              if (done.has(`dev:${dev}`)) return;
+              done.add(`dev:${dev}`);
+              const sessions = byDev.get(dev)!;
+              const open = openDevs.has(dev) || sessions.some((m) => m.node_id === sel);
+              out.push(
+                <DeveloperRow key={`dev:${dev}`} developer={dev} first={out.length === 0} open={open}
+                  sessions={sessions} rows={sessions.map((m) => fleetRows.get(m.node_id))}
+                  st={sessions.flatMap((m) => statuses.get(m.node_id)!)}
+                  onToggle={() => setOpenDevs((cur) => {
+                    const next = new Set(cur);
+                    if (next.has(dev)) next.delete(dev); else next.add(dev);
+                    return next;
+                  })}>
+                  {sessions.map((m) => (
+                    <FleetRowView key={m.node_id} n={m} row={fleetRows.get(m.node_id)} locked={lockedOf(m.node_id)}
+                      look={lookOf.get(m.node_id)}
+                      st={statuses.get(m.node_id)!} first={false} selected={sel === m.node_id}
+                      onPick={() => pick(m.node_id)} />
+                  ))}
+                </DeveloperRow>,
+              );
+              return;
+            }
             if (!tree) {
               out.push(
                 <FleetRowView key={n.node_id} n={n} row={fleetRows.get(n.node_id)} locked={lockedOf(n.node_id)}
@@ -1357,6 +1414,44 @@ function PlanLock({ nodeId, reasons }: { nodeId: string; reasons: LockReason[] }
   );
 }
 
+/** One developer's coding sessions, folded: who, which agents, how many
+ * sessions, what needs a look — unfold to open one. */
+function DeveloperRow({ developer, sessions, rows, st, first, open, onToggle, children }: {
+  developer: string; sessions: NodeInfo[]; rows: (FleetRow | undefined)[]; st: Status[];
+  first: boolean; open: boolean; onToggle: () => void; children: React.ReactNode;
+}) {
+  const p = primary(st);
+  const color = STATUS_COLOR[p];
+  const sum = (k: "runs" | "calls" | "tainted" | "denied") => rows.reduce((a, r) => a + (r?.[k] ?? 0), 0);
+  const agents = [...new Set(sessions.map((s) => s.profile?.agent || (s.node_id.startsWith("codex-") ? "codex" : "claude-code")))]
+    .map((a) => (a === "codex" ? "Codex" : "Claude Code")).join(" + ");
+  const running = rows.filter((r) => r?.active_run).length;
+  const last = rows.map((r) => r?.last_ts ?? "").concat(sessions.map((s) => s.reported?.updated_ts ?? "")).sort().pop();
+  const tainted = sum("tainted");
+  const denied = sum("denied");
+  return (
+    <div data-testid={`developer-row-${developer}`} style={{ borderTop: first ? "none" : `1px solid ${C.line}` }}>
+      <div onClick={onToggle} className="px-4 py-3" style={{ cursor: "pointer" }}>
+        <div className="flex items-center gap-2.5 flex-wrap">
+          <Circle size={8} fill={color} color={color} />
+          <span style={{ fontFamily: MONO, fontSize: 13, color: C.text, flex: 1, minWidth: 120 }}>{developer}</span>
+          <span style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim }}>{agents}</span>
+        </div>
+        <div className="flex gap-3 flex-wrap" style={{ fontFamily: MONO, fontSize: 10.5, color: C.mut, marginTop: 4, marginLeft: 18 }}>
+          {running > 0
+            ? <span style={{ color: C.green }}>● {running} running</span>
+            : <span>{STATUS_LABEL[p]} · last active {lastActive(last || null)}</span>}
+          <span>{sessions.length} sessions · last 24h: {sum("calls")} calls</span>
+          {tainted > 0 && <span style={{ color: C.amber }}>{tainted} answer{tainted === 1 ? "" : "s"} from outside text</span>}
+          {denied > 0 && <span style={{ color: C.red }}>{denied} refused</span>}
+          <span style={{ color: C.steel }}>{open ? "▾ hide sessions" : "▸ show sessions"}</span>
+        </div>
+      </div>
+      {open && <div style={{ marginLeft: 22, borderLeft: `1px solid ${C.line}` }}>{children}</div>}
+    </div>
+  );
+}
+
 function TreeGroupRow({ tree, first, open, onToggle, locked, children }: {
   tree: TreeSummary; first: boolean; open: boolean; onToggle: () => void;
   locked?: LockReason[];
@@ -1579,5 +1674,5 @@ export function hasRealWork(nodes: { node_id: string; example?: boolean }[]): bo
 
 /** The refusal the agent was told, cut to its first clause. */
 function shortReason(reason: string): string {
-  return reason.replace(/^axor:\s*/, "").split(/ — |\. /)[0].slice(0, 90);
+  return refusalWords(reason).split(/ — |\. /)[0].slice(0, 90);
 }

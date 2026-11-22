@@ -19,7 +19,11 @@ export default function Tooltip({
 }) {
   const [open, setOpen] = useState(false);
   const id = useId();
-  if (!content) return <>{children}</>;
+  // a phone has no hover: a tap "entered" the control, focused it, and the
+  // hint stayed open over the page it had just opened. Hints are for pointers.
+  const hover = typeof window === "undefined" || !window.matchMedia
+    || window.matchMedia("(hover: hover)").matches;
+  if (!content || !hover) return <>{children}</>;
   return (
     <span
       style={{ position: "relative", display: "inline-flex" }}

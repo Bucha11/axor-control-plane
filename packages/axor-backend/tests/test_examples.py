@@ -49,6 +49,9 @@ async def test_examples_go_for_good_once_real_work_reports(tmp_path: pathlib.Pat
         assert all((await flagged()).values())
         assert (await c.get("/v1/workspace")).json()["work_started"] is True
 
+        totals = (await c.get("/v1/plane/fleet")).json()["totals"]
+        assert totals["runs"] == 0 and totals["lies"] == 0   # nothing of the examples' counted
+
         assert (await c.post("/v1/demo/seed-adapter-runs")).status_code == 200
         assert not {"ex_block", "ex_pass"} & await runs()
         assert (await c.get("/v1/runs/ex_block/events")).json()   # its page still opens

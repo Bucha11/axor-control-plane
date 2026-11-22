@@ -5,6 +5,7 @@
 // (/v1/replay/{run}/counterfactual — no model call, deterministic).
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { refusalWords } from "../refusal";
 import { api, ScrubberPayload, ScrubberStep } from "../api";
 import { navigate } from "../router";
 import { useApp } from "../store";
@@ -114,21 +115,12 @@ function origin(steps: ScrubberStep[], s: ScrubberStep): string | null {
 function plainReason(steps: ScrubberStep[], s: ScrubberStep): string {
   const raw = String(s.deny_reason ?? s.payload.reason ?? "");
   const gate = s.gate ?? s.deny_category ?? "";
-  if (/Refused by the axor rule/.test(raw)) return raw.split(" Refused by the axor rule")[0].replace(/^axor: /, "");
-  if (/turned off from the Control Plane|paused from the Control Plane|stopped from the Control Plane/.test(raw)) {
-    return raw.replace(/^axor: /, "");
-  }
-  if (gate === "taint_floor" || gate === "taint_enforcement" || /taint enforcement/.test(raw)) {
+  const words = refusalWords(raw, gate);
+  if (words === "what it was going to use came from text from outside") {
     const from = origin(steps, s);
     return `what it was going to use came from ${from ?? "text"} — text that came from outside`;
   }
-  if (gate === "carrier" || gate === "carrier_gate") return "it would have followed an instruction that came from outside text";
-  if (gate === "budget" || /budget/.test(raw)) return "the call budget was spent";
-  if (gate === "ssrf" || gate === "ssrf_gate") return "it pointed at an internal address";
-  if (gate === "value_policies" || gate === "value_policy") return "the value is not one of the allowed ones";
-  if (/not in the capability table/.test(raw)) return "this tool is not on the allowed list";
-  if (gate === "capability") return "this tool is not allowed here";
-  return raw || "refused";
+  return words;
 }
 
 const FAULT_WORDS: Record<string, string> = {

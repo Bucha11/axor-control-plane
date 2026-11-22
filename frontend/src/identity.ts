@@ -15,6 +15,15 @@ export interface Session {
   org: { org_id: string; role: string; tier: string };
 }
 
+// A validator's sentence, in the words of the form it came from.
+function plainField(d: { msg?: string; loc?: string[] }): string {
+  const field = String(d?.loc?.[d.loc.length - 1] ?? "");
+  const msg = d?.msg ?? "invalid input";
+  if (field === "email" || /email address/i.test(msg)) return "that is not an e-mail address we can send to";
+  if (field === "password" && /at least/i.test(msg)) return `the password is too short (${msg.replace(/^.*at least/i, "at least")})`;
+  return msg.replace(/^Value error,\s*/i, "");
+}
+
 export class IdentityError extends Error {
   constructor(
     readonly status: number,
@@ -49,7 +58,7 @@ async function post<T>(path: string, body: unknown): Promise<T> {
       typeof payload?.detail === "string"
         ? payload.detail
         : Array.isArray(payload?.detail) && payload.detail.length
-          ? payload.detail.map((d: { msg?: string }) => d?.msg ?? "invalid input").join("; ")
+          ? payload.detail.map((d: { msg?: string; loc?: string[] }) => plainField(d)).join("; ")
           : `login failed (${resp.status})`;
     throw new IdentityError(resp.status, detail);
   }

@@ -10,13 +10,13 @@ import { goHash, setConnection } from "./helpers";
 
 const GUEST = "gs_e2e_guest_token";
 
-async function hosted(page: Page, opts: { accountRequired?: boolean } = {}) {
+async function hosted(page: Page, opts: { accountRequired?: boolean; minutesLeft?: number } = {}) {
   const claimed: string[] = [];
   await page.route("**/v1/auth/status", (r) => r.fulfill({ json: {
     auth_enabled: true, authenticated: false, scopes: [], guest_sessions: true, guest: false } }));
   await page.route("**/v1/auth/guest", (r) => r.fulfill({ status: 201, json: {
     token: GUEST, org: "guest_e2e", ttl_seconds: 1800,
-    expires_at: new Date(Date.now() + 25 * 60_000).toISOString() } }));
+    expires_at: new Date(Date.now() + (opts.minutesLeft ?? 8) * 60_000).toISOString() } }));
   await page.route("**/v1/auth/claim-guest", async (r) => {
     claimed.push((r.request().postDataJSON() as { guest_token: string }).guest_token);
     await r.fulfill({ json: { claimed: true, moved: { runs: 2, desired_state: 1, events: 9 } } });
@@ -34,6 +34,14 @@ async function hosted(page: Page, opts: { accountRequired?: boolean } = {}) {
 }
 
 test.describe("guest", () => {
+  test("a fresh guest is not shown a clock: the header just offers to sign in", async ({ page }) => {
+    await hosted(page, { minutesLeft: 29 });
+    await setConnection(page, { mode: "demo" });
+    await goHash(page, "govern");
+    await expect(page.getByRole("button", { name: "sign in", exact: true })).toBeVisible();
+    await expect(page.getByText(/min left/)).toHaveCount(0);
+  });
+
   test("a visitor starts as a guest, sees the time left, and signing up claims the work", async ({ page }) => {
     const claimed = await hosted(page);
     await setConnection(page, { mode: "demo" });

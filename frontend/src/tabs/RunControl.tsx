@@ -9,6 +9,7 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { FlaskConical, Pause, Play, Square, Syringe } from "lucide-react";
+import { refusalWords } from "../refusal";
 import { api, KernelEvent, NodeRun } from "../api";
 import { navigate } from "../router";
 import { useApp } from "../store";
@@ -130,6 +131,7 @@ export default function RunControl({ runId }: { runId: string }) {
 
   return (
     <Shell>
+      <ExampleStory runId={runId} />
       {/* header: what this run is, and the controls that act on it */}
       <div style={{ fontFamily: MONO, fontSize: 11, color: C.mut, marginBottom: 6 }}>
         <span style={{ color: C.steel, cursor: "pointer" }}
@@ -302,6 +304,45 @@ export default function RunControl({ runId }: { runId: string }) {
   );
 }
 
+// The coding example, one session at a time: what a developer's own session
+// looks like here, then the next thing worth seeing.
+const EXAMPLE_STORY: Record<string, { title: string; body: string; next: [string, string][] }> = {
+  ex_coding_claude: {
+    title: "EXAMPLE · ONE CLAUDE CODE SESSION",
+    body: "Claude Code was asked to rate-limit login. It read a docs page — what came back is "
+      + "marked as text from outside. Then it ran the tests, they failed, and it said they passed: "
+      + "that is an incident.",
+    next: [["govern/run/ex_coding_codex", "next: Codex, in the same repository, tries the command from that page →"],
+           ["connect?for=coding", "connect your own agents →"]],
+  },
+  ex_coding_codex: {
+    title: "EXAMPLE · CODEX IN THE SAME REPOSITORY",
+    body: "Codex never read the docs page — but the command it tried came from it, and every agent "
+      + "in a repository shares one record of where text came from. Refused at the shell.",
+    next: [["trees/tree-example-coding", "and several agents on one task — a tree →"],
+           ["connect?for=coding", "connect your own agents →"]],
+  },
+};
+
+function ExampleStory({ runId }: { runId: string }) {
+  const story = EXAMPLE_STORY[runId];
+  if (!story) return null;
+  return (
+    <div data-testid="run-example-story" className="p-3 mb-4" style={{ background: C.panel,
+      border: `1px solid ${C.line}`, borderRadius: 8, fontFamily: MONO, fontSize: 11.5, lineHeight: 1.7 }}>
+      <div style={{ color: C.steel, fontSize: 10.5, letterSpacing: "0.06em" }}>{story.title}</div>
+      <div style={{ color: C.mut, margin: "2px 0 6px" }}>{story.body}</div>
+      <div className="flex gap-4 flex-wrap">
+        {story.next.map(([route, label]) => (
+          <button key={route} onClick={() => navigate(route)} data-testid={`run-example-${route.split(/[/?]/)[0]}`}
+            style={{ background: "none", border: "none", padding: 0, cursor: "pointer",
+                     fontFamily: MONO, fontSize: 11.5, color: C.steel }}>{label}</button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function Shell({ children }: { children: React.ReactNode }) {
   return <div style={{ maxWidth: 1040, margin: "0 auto" }}>{children}</div>;
 }
@@ -353,7 +394,12 @@ function Step({ e, first, runId, nodeId, refTool, tainted, appliedCuts, pendingC
       )}
       {e.kind === "tool_call" && e.verdict === "deny" && typeof p.reason === "string" && p.reason && (
         <div data-testid="refusal-reason" style={{ marginLeft: 64, color: C.red }}>
-          {p.reason.replace(/^axor:\s*/, "")}
+          {refusalWords(p.reason, e.gate ?? "")}
+          {/if this repository needs it/.test(p.reason) && (
+            <div style={{ color: C.dim }}>
+              to allow it here: {p.reason.split(/if this repository needs it,?\s*/)[1]}
+            </div>
+          )}
         </div>
       )}
       {quotes.filter(([, from]) => tainted.has(from)).map(([arg, from]) => (
@@ -367,7 +413,10 @@ function Step({ e, first, runId, nodeId, refTool, tainted, appliedCuts, pendingC
           {p.preview}
         </div>
       )}
-      {isTainted && (
+      {/* a coding agent (Claude Code, Codex) cannot take text back out of its
+          own conversation: no cut to offer there — its next calls are what
+          the kernel guards */}
+      {isTainted && !isCodingSession(nodeId) && (
         <div style={{ marginLeft: 64 }}>
           {pendingCut.includes(ref) && !appliedCuts.has(ref)
             ? <div className="mt-2" style={{ color: C.amber }}>cut sent — applied when the agent's context carries {ref}</div>

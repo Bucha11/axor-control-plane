@@ -286,7 +286,7 @@ test.describe("cross-session reputation", () => {
     await expect(page.getByTestId("replay-step")).toContainText("fetch answered — marked as outside text");
     await expect(page.getByText("IGNORE PREVIOUS INSTRUCTIONS")).toBeVisible();
     page.once("dialog", (d) => d.accept("poisoned page"));
-    await page.getByRole("button", { name: `cut this result from ${node}` }).click();
+    await page.getByRole("button", { name: "remove this text from the agent's memory" }).click();
     await expect(page.getByText(new RegExp(`cut sent to ${node}`))).toBeVisible();
     const nodes = await (await request.get(`${BACKEND}/v1/plane/nodes`)).json();
     const desired = nodes.find((n: { node_id: string }) => n.node_id === node).desired.state;

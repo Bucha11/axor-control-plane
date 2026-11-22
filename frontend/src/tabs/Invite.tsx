@@ -1,6 +1,6 @@
 // An invitation to a workspace (#/invite/<token>): what it is for, and joining —
 // with a new account, an account one already has, or the one signed in now.
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api";
 import { IdentityError, inviteInfo, login, signupInvited } from "../identity";
@@ -53,6 +53,12 @@ export default function Invite({ token }: { token: string }) {
       setBusy(false);
     }
   };
+
+  // the invitation names the address: it is filled in, not typed again
+  const forEmail = info.data?.for_email ?? null;
+  useEffect(() => {
+    if (forEmail) setEmail((cur) => cur || forEmail);
+  }, [forEmail]);
 
   if (info.isError) {
     return (

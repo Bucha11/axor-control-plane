@@ -198,11 +198,42 @@ test.describe("identity login (Settings)", () => {
     await expect(page.getByTestId("invite-upgrade")).toContainText("A second developer is on the Coding plan");
     expect(invited).toBe(false);
     // a viewer watches, and is free
+    // ...and the click invites them: one click, not a role switch and a second one
     await page.getByTestId("invite-as-viewer").click();
-    await expect(page.getByLabel("invite role")).toHaveValue("viewer");
-    await page.getByTestId("invite-make").click();
     await expect(page.getByTestId("invite-made")).toBeVisible();
+    await expect(page.getByLabel("invite role")).toHaveValue("viewer");
     expect(invited).toBe(true);
+  });
+
+  test("on the free plan, making a viewer a member offers the plan first", async ({ page }) => {
+    await page.route("**/identity/v1/signup-mode", jsonRoute(200, { mode: "open", signup: true }));
+    await page.route("**/identity/v1/login", jsonRoute(200, SESSION));
+    await page.route("**/identity/v1/me", jsonRoute(200, {
+      user: SESSION.user, active_org: "org_1", role: "owner",
+      memberships: [{ org_id: "org_1", role: "owner", name: "Acme", tier: "coding" }],
+    }));
+    await page.route("**/identity/v1/orgs/org_1/members", jsonRoute(200, { members: [
+      { user_id: "usr_1", email: "ada@acme.io", role: "owner", since: "2026-01-01" },
+      { user_id: "usr_2", email: "max@acme.io", role: "viewer", since: "2026-01-02" }] }));
+    await page.route("**/identity/v1/orgs/org_1/invites", jsonRoute(200, { invites: [] }));
+    let changed = false;
+    await page.route("**/identity/v1/orgs/org_1/members/usr_2", async (route) => {
+      changed = true;
+      await route.fulfill({ status: 200, contentType: "application/json", body: "{}" });
+    });
+    await page.route("**/v1/license/entitlements", jsonRoute(200, {
+      tier: "community", free: true, developers: 1, agent_families: 1, agent_family: null,
+      locked: {}, locked_trees: {}, reasons: {} }));
+    await goHash(page, "settings");
+    await page.getByLabel("email", { exact: true }).fill("ada@acme.io");
+    await page.getByLabel("password").fill("correct horse");
+    await page.getByRole("button", { name: "log in", exact: true }).click();
+    await page.getByLabel("role of max@acme.io").selectOption("member");
+    await expect(page.getByTestId("promote-upgrade")).toContainText("second developer");
+    expect(changed).toBe(false);
+    await page.getByTestId("promote-keep").click();
+    await expect(page.getByTestId("promote-upgrade")).toHaveCount(0);
+    expect(changed).toBe(false);
   });
 
   test("a used or withdrawn invitation says so", async ({ page }) => {

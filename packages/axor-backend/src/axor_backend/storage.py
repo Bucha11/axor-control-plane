@@ -1257,6 +1257,25 @@ class Store:
                 guest_sessions.c.claimed_by.is_(None)))).all()
         return len(rows)
 
+    async def guest_examples(self, token_hash: str) -> dict[str, int]:
+        """How many of a guest org's runs and agents are the product's examples
+        (the guest looked at an example): moved with the rest, but not the
+        guest's own work, so not what "moved into your account" counts."""
+        from axor_backend.demo import DEMO_SCENARIOS
+        from axor_backend.examples import is_example_node
+
+        async with self.engine.connect() as conn:
+            row = (await conn.execute(select(guest_sessions).where(
+                guest_sessions.c.token_hash == token_hash))).first()
+            if row is None:
+                return {}
+            run_rows = (await conn.execute(select(runs.c.scenario).where(
+                runs.c.org_id == row.org_id))).all()
+            node_rows = (await conn.execute(select(desired_state.c.node_id).where(
+                desired_state.c.org_id == row.org_id))).all()
+        return {"runs": sum(1 for r in run_rows if r.scenario in DEMO_SCENARIOS),
+                "desired_state": sum(1 for r in node_rows if is_example_node(r.node_id))}
+
     async def claim_guest(self, token_hash: str, to_org: str) -> dict[str, int]:
         """Move a guest org's rows into ``to_org``, in one transaction. The
         account wins a clash: a guest row whose key (minus the org) the

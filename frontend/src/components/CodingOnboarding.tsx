@@ -90,8 +90,15 @@ export default function CodingOnboarding({ then }: { then?: () => void }) {
     mutationFn: () => api.createMyKey(),
     onSuccess: (k) => setKey(k.secret),
   });
+  // the role as stored, not as this access token remembers it
+  const me = useQuery({ queryKey: ["identity-me"], queryFn: api.identityMe, enabled: !!email, retry: false });
+  const myRole = me.data?.memberships.find((m) => m.org_id === me.data?.active_org)?.role ?? me.data?.role;
+  const watchOnly = myRole === "viewer";
   const nodes = useQuery({ queryKey: ["nodes"], queryFn: api.nodes, refetchInterval: 3000 });
-  const sessions = (nodes.data ?? []).filter((n) => isCodingSession(n.node_id));
+  // this page is about the reader's own machine: never the product's examples,
+  // and — signed in — only the sessions that report as this person
+  const sessions = (nodes.data ?? []).filter((n) => isCodingSession(n.node_id) && !n.example
+    && (!email || !n.profile?.developer || n.profile.developer === email));
   // the first governed session IS the connection: the header stops asking
   const mode = useApp((s) => s.connection.mode);
   useEffect(() => {
@@ -173,6 +180,20 @@ export default function CodingOnboarding({ then }: { then?: () => void }) {
           </div>
           <IdentityLogin initialMode="signup" />
         </div>
+      ) : watchOnly ? (
+        <div data-testid="coding-viewer" style={{ border: `1px solid ${C.line}`, borderRadius: 8, padding: 14,
+          fontFamily: MONO, fontSize: 11.5, color: C.mut, lineHeight: 1.7 }}>
+          You joined <span style={{ color: C.text }}>{me.data?.memberships.find((m) => m.org_id === me.data?.active_org)?.name ?? "this workspace"}</span>{" "}
+          as a <span style={{ color: C.text }}>viewer</span>: you can watch the team's agents, not connect
+          your own. To connect this machine, ask an owner or admin to make you a member — this page
+          picks it up by itself.
+          <div className="mt-2">
+            <button onClick={() => navigate("govern")} data-testid="viewer-agents"
+              style={btn({ color: C.text, borderColor: C.steel, fontSize: 11, padding: "4px 12px" })}>
+              watch the team's agents →
+            </button>
+          </div>
+        </div>
       ) : (
         <>
           <Block id="connect" copied={copied} onCopy={copy} text={connectCmd} unready={needsKey && !key} />
@@ -189,7 +210,11 @@ export default function CodingOnboarding({ then }: { then?: () => void }) {
               : "this plane is open — no key needed."}
           </div>
           {mint.isError && (
-            <div style={{ ...hint, color: C.red }}>could not create a key ({(mint.error as Error).message})</div>
+            <div style={{ ...hint, color: C.red }}>
+              {/\b403\b/.test((mint.error as Error).message)
+                ? "your role here cannot connect a machine — ask an owner or admin to make you a member."
+                : `could not create a key — ${(mint.error as Error).message.replace(/^\d{3}\s*/, "")}`}
+            </div>
           )}
         </>
       )}

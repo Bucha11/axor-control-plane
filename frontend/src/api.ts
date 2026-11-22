@@ -774,6 +774,13 @@ async function af(path: string, init: RequestInit = {}, retried = false): Promis
   if (resp.status === 401 && !retried && token.startsWith("gs_") && (await renewGuest(token))) {
     return af(path, init, true);
   }
+  // Something the user DID was refused: their role may have changed since this
+  // access token was issued (an owner made them a member). The refresh reads
+  // the role afresh; one retry, never for a background read.
+  if (resp.status === 403 && !retried && (init.method ?? "GET").toUpperCase() !== "GET"
+      && useApp.getState().refreshToken && (await refreshSession(null))) {
+    return af(path, init, true);
+  }
   // only for something the user DID: a panel's background read that needs an
   // account shows that inline, it does not throw a sign-up in their face
   if (resp.status === 403 && (init.method ?? "GET").toUpperCase() !== "GET") {

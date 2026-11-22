@@ -27,7 +27,7 @@ async def app_client(tmp_path: pathlib.Path) -> AsyncIterator[tuple]:
         yield app, c
 
 
-async def _session(c: httpx.AsyncClient, node: str, agent: str, dev: str) -> None:
+async def _session(c: httpx.AsyncClient, node: str, agent: str, dev: str) -> dict:
     r = await c.post(f"/v1/plane/{node}/telemetry", json={
         "run_id": f"{node}-hb", "scenario": "live",
         "events": [{"seq": 0, "kind": "heartbeat",
@@ -36,7 +36,8 @@ async def _session(c: httpx.AsyncClient, node: str, agent: str, dev: str) -> Non
     assert r.status_code == 202, r.text
     r = await c.post(f"/v1/plane/{node}/profile",
                      json={"kind": "coding", "agent": agent, "developer": dev})
-    assert r.status_code == 204, r.text
+    assert r.status_code == 200, r.text
+    return r.json()
 
 
 async def _pause(c: httpx.AsyncClient, node: str) -> httpx.Response:
@@ -114,3 +115,12 @@ async def test_a_free_workspace_can_switch_the_family_it_keeps(app_client) -> No
 
     bad = await c.put("/v1/license/agent-family", json={"agent": "notepad"})
     assert bad.status_code == 400
+
+
+async def test_the_profile_answer_tells_a_locked_session_why(app_client) -> None:  # noqa: ANN001
+    """The sidecar says it to the developer in their own agent: the session is
+    protected on the machine, and not shown on the plane until the upgrade."""
+    _, c = app_client
+    assert (await _session(c, "claude-code-a1", "claude-code", "dev-ada")) == {"locked": []}
+    second = await _session(c, "claude-code-b1", "claude-code", "dev-bob")
+    assert second["locked"] == ["developer"] and "second developer" in second["detail"]

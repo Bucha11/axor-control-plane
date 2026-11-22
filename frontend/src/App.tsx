@@ -15,7 +15,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Circle, GraduationCap, Plug, Settings as SettingsIcon } from "lucide-react";
-import { api } from "./api";
+import { api, renewSession } from "./api";
 import { C, MONO } from "./theme";
 import { navigate, useRoute } from "./router";
 import { MODE_LABEL, isConnected, isGuestToken, useApp } from "./store";
@@ -57,7 +57,7 @@ type Journey = "coding" | "production" | "both";
 // catching made-up tool results and checking a rule change are production's;
 // a coding team's question before trusting a skill is coding's.
 const LOOP: { key: string; label: string; hint: string; for: Journey[] }[] = [
-  { key: "govern", label: "Agents", hint: "Your governed agents as a graph: pause, cap, stop — what sentinel sees across sessions, what probe says about their health.", for: ["coding", "production", "both"] },
+  { key: "govern", label: "Agents", hint: "Every agent and session, live: what each did, what was refused — pause, stop or cap one.", for: ["coding", "production", "both"] },
   { key: "policy", label: "Policy", hint: "What each agent may read, send and run — the rules enforced at the tool boundary.", for: ["production", "both"] },
   { key: "chaos", label: "Chaos tests", hint: "Break a tool on purpose and see what your agent says — on the example, through the proxy, on live agents' next run, or on a schedule.", for: ["production", "both"] },
   { key: "evidence", label: "Incidents", hint: "When an agent said a tool worked and it didn't, said the tests passed when they failed, or tried to send out what came from outside — caught in test runs and in your agents' work.", for: ["coding", "production", "both"] },
@@ -161,7 +161,8 @@ export default function App() {
   useEffect(() => {
     if (inSection && !lookedAround) setLookedAround(true);
   }, [inSection, lookedAround, setLookedAround]);
-  const firstVisit = key === "home" && !isConnected(mode) && !lookedAround;
+  // an invitation is one decision: join or not — no product menu around it
+  const firstVisit = (key === "home" && !isConnected(mode) && !lookedAround) || key === "invite";
 
   // A wide screen gets the navigation as a sidebar: the sections and, under
   // Agents, its views — instead of a row of sections plus a row of views on
@@ -253,6 +254,8 @@ export default function App() {
         </main>
         <Tour />
         <WorkspaceJourney />
+        <RoleSync />
+        <ExamplesGone />
       </div>
     );
   }
@@ -262,6 +265,8 @@ export default function App() {
       {body}
       <Tour />
       <WorkspaceJourney />
+      <RoleSync />
+      <ExamplesGone />
     </div>
   );
 }
@@ -269,6 +274,39 @@ export default function App() {
 /** What the workspace is for is the workspace's, not this browser's: a
  * teammate who joins sees what the team chose; the first choice made in a
  * workspace that has none becomes it. */
+/** The header said "example data" because the visitor opened an example. Once
+ * the workspace's own agents report, the examples are gone from every list:
+ * what is on screen is theirs, and the header says so. */
+function ExamplesGone() {
+  const apiToken = useApp((s) => s.apiToken);
+  const mode = useApp((s) => s.connection.mode);
+  const connect = useApp((s) => s.connect);
+  const ws = useQuery({ queryKey: ["workspace", apiToken], queryFn: api.workspace,
+                        enabled: mode === "demo", staleTime: 30_000, retry: false });
+  useEffect(() => {
+    if (mode === "demo" && ws.data?.work_started) connect("adapter", []);
+  }, [mode, ws.data?.work_started, connect]);
+  return null;
+}
+
+/** An owner changed this person's role: the access token still carries the old
+ * one until it is refreshed. /v1/me says both (the token's, and the
+ * membership as stored); when they differ, refresh, and every screen reads the
+ * new authority — no signing out and in again. */
+function RoleSync() {
+  const email = useApp((s) => s.identityEmail);
+  const qc = useQueryClient();
+  const me = useQuery({ queryKey: ["identity-me"], queryFn: api.identityMe, enabled: !!email,
+                        refetchInterval: 60_000, refetchOnWindowFocus: true, retry: false });
+  const d = me.data;
+  const stored = d?.memberships.find((m) => m.org_id === d.active_org)?.role;
+  useEffect(() => {
+    if (!d || !stored || stored === d.role) return;
+    void renewSession().then((ok) => { if (ok) void qc.invalidateQueries(); });
+  }, [d, stored, qc]);
+  return null;
+}
+
 function WorkspaceJourney() {
   const qc = useQueryClient();
   const journey = useApp((s) => s.journey);
@@ -577,6 +615,9 @@ function AccountButton() {
     const t = window.setInterval(() => tick((n) => n + 1), 30_000);
     return () => window.clearInterval(t);
   }, [guest]);
+  // a guest is not told about a clock from the first second: only when the
+  // half hour is nearly up is it worth saying, and then with what to do
+  const late = guest && new Date(guestExpiresAt).getTime() - Date.now() < 10 * 60_000;
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   // A local `docker compose up` runs with auth OFF: every request already
@@ -618,12 +659,12 @@ function AccountButton() {
         style={{
           background: "none", cursor: "pointer", borderRadius: 20, padding: "4px 12px",
           fontFamily: MONO, fontSize: 10.5,
-          border: `1px solid ${email ? C.line : guest ? C.amber : C.steel}`,
-          color: email ? C.mut : guest ? C.amber : C.steel,
+          border: `1px solid ${email ? C.line : late ? C.amber : C.steel}`,
+          color: email ? C.mut : late ? C.amber : C.steel,
           maxWidth: guest ? 260 : 180, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
         }}
       >
-        {email || (guest
+        {email || (late
           ? <><span className="hide-narrow">save your work · </span>guest, {guestTimeLeft(guestExpiresAt)}</>
           : "sign in")}
       </button>

@@ -31,7 +31,7 @@ export default function CutResult({ runId, valueRef, excised, nodeId: nodeProp }
       ) : queued || cut.isSuccess ? (
         <span style={{ color: C.amber }}>cut sent to {nodeId} — applied when its conversation carries {valueRef}</span>
       ) : (
-        <Tooltip content="Redact this tool result from the agent's context (and, for a file it read, the cached copy). A signed operator command; the reason is recorded.">
+        <Tooltip content={`${nodeId} stops seeing this result from its next step on (and, for a file it read, the cached copy). The reason you give is recorded.`}>
           <button
             onClick={() => {
               const reason = window.prompt(`Cut ${valueRef} from ${nodeId}'s context — reason (recorded):`);
@@ -39,7 +39,7 @@ export default function CutResult({ runId, valueRef, excised, nodeId: nodeProp }
             }}
             disabled={cut.isPending}
             style={btn({ color: C.amber, borderColor: C.amber, fontSize: 11, padding: "4px 10px" })}>
-            cut this result from {nodeId}
+            remove this text from the agent's memory
           </button>
         </Tooltip>
       )}

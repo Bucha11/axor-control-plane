@@ -131,8 +131,12 @@ function Team({ orgId, isAdmin }: { orgId: string; isAdmin: boolean }) {
   const needsSeat = ent.data?.free === true && ent.data.developers !== null
     && developers >= ent.data.developers && role !== "viewer";
   const [offer, setOffer] = useState(false);
+  // the plans, beside this page: an invite or a role change half made stays here
+  const openPricing = () => window.open(`${window.location.pathname}#/pricing?for=coding`, "_blank", "noopener");
+  // a viewer made a member or an admin is a developer too: the same moment
+  const [promote, setPromote] = useState<{ userId: string; email: string; to: string } | null>(null);
   const invite = useMutation({
-    mutationFn: () => api.createInvite(orgId, role, email.trim() || null, here()),
+    mutationFn: (as?: string) => api.createInvite(orgId, as ?? role, email.trim() || null, here()),
     onSuccess: (r) => {
       setMade({ link: inviteUrl(r.token), mailed: r.mailed, email: r.email });
       setCopied(false);
@@ -179,7 +183,13 @@ function Team({ orgId, isAdmin }: { orgId: string; isAdmin: boolean }) {
             {editable ? (
               <>
                 <select value={m.role} aria-label={`role of ${m.email}`} disabled={setRole2.isPending}
-                  onChange={(e) => setRole2.mutate({ userId: m.user_id, to: e.target.value })}
+                  onChange={(e) => {
+                    const to = e.target.value;
+                    const seat = ent.data?.free === true && ent.data.developers !== null
+                      && m.role === "viewer" && to !== "viewer" && developers >= ent.data.developers;
+                    if (seat) setPromote({ userId: m.user_id, email: m.email, to });
+                    else setRole2.mutate({ userId: m.user_id, to });
+                  }}
                   style={{ ...INPUT_STYLE, width: 90, padding: "1px 4px" }}>
                   {["admin", "member", "viewer"].map((r) => <option key={r} value={r}>{r}</option>)}
                 </select>
@@ -193,6 +203,26 @@ function Team({ orgId, isAdmin }: { orgId: string; isAdmin: boolean }) {
           </div>
         );
       })}
+      {promote && (
+        <div data-testid="promote-upgrade" className="mt-2 p-3" style={{ background: C.panel2, border: `1px solid ${C.amber}`, borderRadius: 6 }}>
+          <div style={{ color: C.text, marginBottom: 4 }}>
+            As a {promote.to}, {promote.email} is a second developer — that is the Coding plan.
+          </div>
+          <div style={{ color: C.mut, marginBottom: 8 }}>
+            $25 per developer per month — every developer's agents governed, shared skills and team memory.
+          </div>
+          <div className="flex gap-3 items-center flex-wrap">
+            <button type="button" data-testid="promote-upgrade-go" onClick={openPricing}
+              style={btn({ color: C.text, borderColor: C.amber, fontSize: 11, padding: "4px 12px" })}>
+              see the plan →
+            </button>
+            <button type="button" data-testid="promote-keep" onClick={() => setPromote(null)}
+              style={{ background: "none", border: "none", padding: 0, cursor: "pointer", color: C.steel, fontFamily: MONO, fontSize: 11 }}>
+              keep them a viewer
+            </button>
+          </div>
+        </div>
+      )}
       {(setRole2.isError || remove.isError) && (
         <div style={{ color: C.red, fontSize: 11 }}>{((setRole2.error ?? remove.error) as Error).message}</div>
       )}
@@ -201,7 +231,7 @@ function Team({ orgId, isAdmin }: { orgId: string; isAdmin: boolean }) {
           <form onSubmit={(e) => {
             e.preventDefault();
             if (needsSeat) { setOffer(true); return; }
-            if (!invite.isPending) invite.mutate();
+            if (!invite.isPending) invite.mutate(undefined);
           }}
             className="flex items-center gap-2 mt-2">
             <input type="email" value={email} placeholder="their e-mail (optional — or send the link yourself)"
@@ -223,12 +253,12 @@ function Team({ orgId, isAdmin }: { orgId: string; isAdmin: boolean }) {
                 $25 per developer per month — every developer's agents governed, shared skills and team memory.
               </div>
               <div className="flex gap-3 items-center flex-wrap">
-                <button type="button" data-testid="invite-upgrade-go" onClick={() => navigate("pricing?for=coding")}
+                <button type="button" data-testid="invite-upgrade-go" onClick={openPricing}
                   style={btn({ color: C.text, borderColor: C.amber, fontSize: 11, padding: "4px 12px" })}>
-                  upgrade →
+                  see the plan →
                 </button>
                 <button type="button" data-testid="invite-as-viewer"
-                  onClick={() => { setRole("viewer"); setOffer(false); }}
+                  onClick={() => { setRole("viewer"); setOffer(false); invite.mutate("viewer"); }}
                   style={{ background: "none", border: "none", padding: 0, cursor: "pointer", color: C.steel, fontFamily: MONO, fontSize: 11 }}>
                   or invite them as a viewer — free, they watch
                 </button>

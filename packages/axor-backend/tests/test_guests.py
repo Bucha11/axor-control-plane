@@ -153,6 +153,17 @@ async def test_signing_up_claims_the_guest_work(client: httpx.AsyncClient, priv)
     assert again.json()["claimed"] is False
 
 
+async def test_moved_counts_the_guests_own_work_not_the_examples(
+        client: httpx.AsyncClient, priv) -> None:  # noqa: ANN001
+    guest = (await client.post("/v1/auth/guest")).json()
+    g = _bearer(guest["token"])
+    assert (await client.post("/v1/demo/seed-adapter-runs", headers=g)).status_code == 200
+    user = _bearer(_mint(priv, org="org_ex", sub="usr_ex"))
+    claim = {"guest_token": guest["token"]}
+    r = await client.post("/v1/auth/claim-guest", headers=user, json=claim)
+    assert r.json()["claimed"] is True and "runs" not in r.json()["moved"]
+
+
 async def test_the_account_wins_a_clash(client: httpx.AsyncClient, priv) -> None:  # noqa: ANN001
     user = _bearer(_mint(priv, org="org_clash", sub="usr_c"))
     await client.post("/v1/plane/shared/command", headers=user,

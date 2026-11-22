@@ -926,6 +926,9 @@ async def fleet(request: Request) -> dict:
     now_dt = datetime.now(UTC)
     since = (now_dt - timedelta(hours=24)).isoformat()
     nodes = await ctx.store.list_nodes()
+    if await work_started(ctx.store):
+        # the totals are the workspace's own: the examples left the screens
+        nodes = [n for n in nodes if not is_example_node(n)]
     probes: dict[str, dict] = {}
     for nid in nodes:
         for p in await ctx.store.probe_report_history(nid, limit=200):
@@ -1131,8 +1134,8 @@ async def build_excision(node_id: str, body: dict, request: Request) -> dict:
 _PROFILE_KINDS = ("agent", "coding", "tree")
 
 
-@router.post("/{node_id}/profile", status_code=204)
-async def post_profile(node_id: str, body: dict, request: Request) -> None:
+@router.post("/{node_id}/profile")
+async def post_profile(node_id: str, body: dict, request: Request) -> dict:
     """What this node is, said once by the node: a production ``agent``, a
     ``coding`` agent session (Claude Code / Codex through their hooks), or a
     ``tree`` run. Coding sessions and tree runs are metered by the developer
@@ -1159,8 +1162,20 @@ async def post_profile(node_id: str, body: dict, request: Request) -> None:
     if repo and (len(repo) > 64 or not all(c.isalnum() or c in "-_." for c in repo)):
         raise HTTPException(400, "repo is an opaque id: letters, digits, -_. (at most 64)")
     label = "".join(c for c in str(body.get("repo_label") or "") if c.isprintable())[:100]
-    await _ctx(request).store.put_node_profile(node_id, kind, agent, developer, now(),
-                                               repo=repo, repo_label=label if repo else "")
+    ctx = _ctx(request)
+    await ctx.store.put_node_profile(node_id, kind, agent, developer, now(),
+                                     repo=repo, repo_label=label if repo else "")
+    # past the free plan, the session is kept but not shown or operated: the
+    # answer says so, and the sidecar tells the developer in their own agent
+    from axor_backend.ee.entitlements import REASONS, coding_entitlements, workspace_tier
+    from axor_backend.licensing import active_license
+
+    tier = workspace_tier(active_license(ctx, current_org_id()))
+    if kind == "coding" and tier == "community":
+        reasons = (await coding_entitlements(ctx.store, tier))["locked"].get(node_id) or []
+        if reasons:
+            return {"locked": reasons, "detail": REASONS[reasons[0]]}
+    return {"locked": []}
 
 
 @router.post("/{node_id}/reputation", status_code=201)

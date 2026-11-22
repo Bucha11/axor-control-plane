@@ -142,8 +142,12 @@ async def claim_guest(request: Request, body: dict) -> dict:
     token = body.get("guest_token")
     if not isinstance(token, str) or not token.startswith("gs_"):
         raise HTTPException(400, "guest_token is required")
-    moved = await request.app.state.store.claim_guest(hash_token(token), principal.org)
-    return {"claimed": bool(moved), "moved": moved}
+    store = request.app.state.store
+    examples = await store.guest_examples(hash_token(token))
+    moved = await store.claim_guest(hash_token(token), principal.org)
+    # what the person did, not the examples they looked at (those move too)
+    own = {t: n - examples.get(t, 0) for t, n in moved.items() if n - examples.get(t, 0) > 0}
+    return {"claimed": bool(moved), "moved": own}
 
 
 def _presented_a_token(request: Request) -> bool:

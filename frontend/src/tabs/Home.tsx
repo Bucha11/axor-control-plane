@@ -42,7 +42,8 @@ function FirstVisit() {
       if (which === "coding") await api.seedCoding();
       else await api.seedFleet();
       connect("demo");
-      navigate(which === "coding" ? "trees/tree-example-coding" : "govern");
+      // coding: one session first — what a developer's own looks like here
+      navigate(which === "coding" ? "govern/run/ex_coding_claude" : "govern");
     } catch (e) {
       setErr((e as Error).message);
     } finally {
