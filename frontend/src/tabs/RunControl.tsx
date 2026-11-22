@@ -400,6 +400,10 @@ function Step({ e, first, runId, nodeId, refTool, tainted, appliedCuts, pendingC
           {refusalWords(p.reason, e.gate ?? "")}
           {(() => {
             const reason = p.reason as string;
+            if (/team's policy refuses it/.test(reason)) {
+              return <div style={{ color: C.dim }}>your team's policy refuses it —{" "}
+                <span onClick={() => navigate("policy")} style={{ color: C.steel, cursor: "pointer" }}>Policy →</span></div>;
+            }
             const meant = reason.split(/If you want it, run it yourself:\s*/)[1];
             const allow = reason.split(/if this repository needs it,?\s*|or allow skill scripts in this repository:\s*/)[1];
             const hint = meant ? `if you meant it, run it yourself: ${meant}` : allow ? `to allow it here: ${allow}` : "";

@@ -218,6 +218,10 @@ test("past the free plan a session is kept but locked, and says what unlocks it"
 
   await setConnection(page, { mode: "adapter" });
   await goHash(page, "govern");
+  // a team's list is by person: the locked developer says so on their own row
+  const person = page.getByTestId(`developer-row-dev-lock-b-${tag}`);
+  await expect(person.getByTestId("plan-lock").first()).toContainText("second developer");
+  await person.getByText("▸ show sessions").click();
   const row = page.getByTestId(`agent-row-${second}`);
   await expect(row.getByTestId("plan-lock")).toContainText("second developer");
   await row.click();
@@ -239,6 +243,7 @@ test("the paid-plan notice folds, and a locked session stays out of the activity
   await goHash(page, "govern");
   // the activity feed carries the open session's heartbeat run, never the locked one's
   await expect(page.getByTestId("fleet-activity")).not.toContainText(second);
+  await page.getByTestId(`developer-row-dev-fold-b-${tag}`).getByText("▸ show sessions").click();
   await page.getByTestId(`agent-row-${second}`).click();
   const card = page.getByTestId("plan-lock-card");
   await expect(card).toContainText("still protected");

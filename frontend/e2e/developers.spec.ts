@@ -32,5 +32,6 @@ test("a session reads as what it was asked first", async ({ page, request }) => 
   expect(r.ok()).toBeTruthy();
   await setConnection(page, { mode: "adapter" });
   await goHash(page, "govern");
+  await page.getByTestId(`developer-row-dev-title-${node}`).getByText("▸ show sessions").click();
   await expect(page.getByTestId(`agent-row-${node}`)).toContainText("add a 10% discount over $100");
 });

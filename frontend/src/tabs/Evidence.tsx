@@ -132,6 +132,13 @@ export default function Evidence({ agent: agentParam }: { agent?: string } = {})
   });
   const all = useQuery({ queryKey: ["incidents", "all"], queryFn: () => api.incidents({}) });
   const agents = [...new Set((all.data?.items ?? []).map((i) => i.node_id))].sort();
+  // who and what: a coding session reads as its developer and its first request
+  const nodesQ = useQuery({ queryKey: ["nodes"], queryFn: api.nodes });
+  const labelOf = (id: string) => {
+    const pr = (nodesQ.data ?? []).find((n) => n.node_id === id)?.profile;
+    if (!pr?.title && !pr?.developer) return id;
+    return [pr.developer, pr.title ? `“${pr.title}”` : ""].filter(Boolean).join(" · ");
+  };
   const items = feed.data?.items ?? [];
   const nothingAtAll = all.isSuccess && all.data.items.length === 0;
 
@@ -188,7 +195,7 @@ export default function Evidence({ agent: agentParam }: { agent?: string } = {})
                 style={{ background: C.panel2, border: `1px solid ${C.line}`, borderRadius: 5, color: C.text,
                          fontFamily: MONO, fontSize: 11, padding: "3px 6px", marginLeft: 6 }}>
                 <option value="">any agent</option>
-                {agents.map((a) => <option key={a} value={a}>{a}</option>)}
+                {agents.map((a) => <option key={a} value={a}>{labelOf(a)}</option>)}
               </select>
             </div>
           </div>
@@ -203,7 +210,7 @@ export default function Evidence({ agent: agentParam }: { agent?: string } = {})
             </div>
           ) : (
             <div className="flex flex-col gap-2" data-testid="evidence-list">
-              {items.map((i) => <Item key={i.id} item={i} />)}
+              {items.map((i) => <Item key={i.id} item={i} who={labelOf(i.node_id)} />)}
             </div>
           )}
         </>
@@ -231,7 +238,7 @@ function StatusPick({ item }: { item: IncidentItem }) {
   );
 }
 
-function Item({ item }: { item: IncidentItem }) {
+function Item({ item, who }: { item: IncidentItem; who?: string }) {
   if (item.kind === "memory_worse") return <MemoryWorse item={item} />;
   const color = KIND_COLOR[item.kind];
   const toStep = () => navigate(`explain/${encodeURIComponent(item.run_id)}`,
@@ -283,6 +290,11 @@ function Item({ item }: { item: IncidentItem }) {
               {(() => {
                 const meant = item.reason.split(/If you want it, run it yourself:\s*/)[1];
                 const allow = item.reason.split(/if this repository needs it,?\s*|or allow skill scripts in this repository:\s*/)[1];
+                if (/team's policy refuses it/.test(item.reason)) {
+                  return <div style={{ color: C.dim }}>your team's policy refuses it —{" "}
+                    <button onClick={() => navigate("policy")} style={{ background: "none", border: "none", padding: 0,
+                      cursor: "pointer", color: C.steel, fontFamily: MONO, fontSize: 11 }}>Policy →</button></div>;
+                }
                 const hint = meant ? `if you meant it, run it yourself: ${meant}` : allow ? `to allow it here: ${allow}` : "";
                 return hint ? <div style={{ color: C.dim }}>{hint}</div> : null;
               })()}
@@ -292,7 +304,7 @@ function Item({ item }: { item: IncidentItem }) {
       )}
       <div className="flex items-center justify-between flex-wrap" style={{ gap: 8 }}>
         <span style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim }}>
-          agent {item.node_id} · {source(item.scenario)}
+          {who && who !== item.node_id ? who : <>agent {item.node_id}</>} · {source(item.scenario)}
         </span>
         <span className="flex gap-2 items-center">
           <StatusPick item={item} />

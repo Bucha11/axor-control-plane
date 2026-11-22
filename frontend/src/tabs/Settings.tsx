@@ -506,6 +506,9 @@ export default function Settings({ tab = "workspace" }: { tab?: string } = {}) {
     mutationFn: () => api.verifyLicense(licenseJson),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ["license-status"] });
+      // the plan just changed: what it allows (seats, families, memory) with it
+      void qc.invalidateQueries({ queryKey: ["entitlements"] });
+      void qc.invalidateQueries({ queryKey: ["billing"] });
       void qc.invalidateQueries({ queryKey: ["regression-schedule"] });
       void qc.invalidateQueries({ queryKey: ["regression-history"] });
     },

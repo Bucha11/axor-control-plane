@@ -564,7 +564,9 @@ function ControlBody({ focusNode, testBench }: { focusNode?: string; testBench: 
   }
   const devUnit = new Map(list.flatMap((n) => {
     const d = devOfNode(n);
-    return d && (devSessions.get(d) ?? 0) > 1 ? [[n.node_id, `dev:${d}`] as const] : [];
+    // a team's list is by person, even one with a single session; alone, one
+    // session is just a row
+    return d && ((devSessions.get(d) ?? 0) > 1 || devSessions.size > 1) ? [[n.node_id, `dev:${d}`] as const] : [];
   }));
   const unitOf = (id: string) => {
     const t = treeOf.get(id);
@@ -693,13 +695,14 @@ function ControlBody({ focusNode, testBench }: { focusNode?: string; testBench: 
           shown.forEach((n) => {
             const tree = treeOf.get(n.node_id);
             const dev = devOf(n);
-            if (!tree && dev && (byDev.get(dev)?.length ?? 0) > 1) {
+            if (!tree && dev && ((byDev.get(dev)?.length ?? 0) > 1 || byDev.size > 1)) {
               if (done.has(`dev:${dev}`)) return;
               done.add(`dev:${dev}`);
               const sessions = byDev.get(dev)!;
               const open = openDevs.has(dev) || sessions.some((m) => m.node_id === sel);
               out.push(
                 <DeveloperRow key={`dev:${dev}`} developer={dev} first={out.length === 0} open={open}
+                  locked={sessions.every((m) => lockedOf(m.node_id)) ? lockedOf(sessions[0].node_id) : undefined}
                   looks={sessions.flatMap((m) => {
                     const l = lookOf.get(m.node_id);
                     return l ? [{ ...l, node: m.node_id }] : [];
@@ -1435,8 +1438,8 @@ function PlanLock({ nodeId, reasons }: { nodeId: string; reasons: LockReason[] }
 
 /** One developer's coding sessions, folded: who, which agents, how many
  * sessions, what needs a look — unfold to open one. */
-function DeveloperRow({ developer, sessions, rows, st, first, open, onToggle, looks, children }: {
-  developer: string; sessions: NodeInfo[]; rows: (FleetRow | undefined)[]; st: Status[];
+function DeveloperRow({ developer, sessions, rows, st, first, open, onToggle, looks, locked, children }: {
+  developer: string; sessions: NodeInfo[]; rows: (FleetRow | undefined)[]; st: Status[]; locked?: LockReason[];
   looks: { label: string; more: number; node: string }[];
   first: boolean; open: boolean; onToggle: () => void; children: React.ReactNode;
 }) {
@@ -1455,6 +1458,8 @@ function DeveloperRow({ developer, sessions, rows, st, first, open, onToggle, lo
         <div className="flex items-center gap-2.5 flex-wrap">
           <Circle size={8} fill={color} color={color} />
           <span style={{ fontFamily: MONO, fontSize: 13, color: C.text, flex: 1, minWidth: 120 }}>{developer}</span>
+          {/* past the free plan, the developer is: said on their row, folded or not */}
+          {locked && <LockChip reasons={locked} />}
           {/* what needs a look, from any of the sessions — folded, it still says */}
           {looks.length > 0 && (
             <button data-testid={`developer-look-${developer}`}
@@ -1480,7 +1485,7 @@ function DeveloperRow({ developer, sessions, rows, st, first, open, onToggle, lo
           {running > 0
             ? <span style={{ color: C.green }}>● {running} running</span>
             : <span>{STATUS_LABEL[p]} · last active {lastActive(last || null)}</span>}
-          <span>{sessions.length} sessions · last 24h: {sum("calls")} calls</span>
+          <span>{sessions.length} session{sessions.length === 1 ? "" : "s"} · last 24h: {sum("calls")} calls</span>
           {tainted > 0 && <span style={{ color: C.amber }}>{tainted} answer{tainted === 1 ? "" : "s"} from outside text</span>}
           {denied > 0 && <span style={{ color: C.red }}>{denied} refused</span>}
           <span style={{ color: C.steel }}>{open ? "▾ hide sessions" : "▸ show sessions"}</span>
