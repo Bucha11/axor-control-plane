@@ -106,6 +106,37 @@ test.describe("identity login (Settings)", () => {
     expect(made).toMatchObject({ email: "bob@acme.io", role: "viewer" });
   });
 
+  test("single sign-on: a work address goes through its provider and comes back signed in", async ({ page }) => {
+    await page.route("**/identity/v1/sso/discover**", jsonRoute(200, { sso: true, workspace: "Acme", enforce: true }));
+    let started = "";
+    // the provider's round trip, short-circuited: back with a code for the workspace
+    await page.route("**/identity/v1/sso/start**", async (route) => {
+      started = route.request().url();
+      const back = new URL(new URL(route.request().url()).searchParams.get("return_to")!, "http://localhost");
+      await route.fulfill({ status: 302, headers: {
+        location: `${back.pathname}?axor_login=code-1234567890abcdef&axor_org=org_1${back.hash}` } });
+    });
+    let exchanged: unknown = null;
+    await page.route("**/identity/v1/oauth/exchange", async (route) => {
+      exchanged = route.request().postDataJSON();
+      await route.fulfill({ status: 200, contentType: "application/json",
+        body: JSON.stringify({ ...SESSION, user: { user_id: "usr_9", email: "anna@acme.io" }, created: true }) });
+    });
+    // a password at an enforced domain is refused with the way to go
+    await page.route("**/identity/v1/login", jsonRoute(403, { detail: {
+      code: "sso_required", detail: "Acme signs in with single sign-on — use “Sign in with SSO”" } }));
+    await goHash(page, "settings");
+    await page.getByLabel("email", { exact: true }).fill("anna@acme.io");
+    await page.getByLabel("password").fill("whatever-it-is");
+    await page.getByRole("button", { name: "log in", exact: true }).click();
+    await expect(page.getByText("Acme signs in with single sign-on — use “Sign in with SSO”")).toBeVisible();
+    await expect(page.getByTestId("sso-offer")).toContainText("Acme signs in with single sign-on");
+    await page.getByTestId("sso-continue").click();
+    await expect(page.getByText("signed in as anna@acme.io")).toBeVisible();
+    expect(started).toContain("email=anna%40acme.io");
+    expect(exchanged).toEqual({ code: "code-1234567890abcdef", org_id: "org_1" });
+  });
+
   test("who may: an admin lets one member stop teammates' sessions", async ({ page }) => {
     await page.route("**/identity/v1/login", jsonRoute(200, SESSION));
     await page.route("**/identity/v1/me", jsonRoute(200, {

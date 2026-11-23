@@ -28,6 +28,9 @@ export class IdentityError extends Error {
   constructor(
     readonly status: number,
     message: string,
+    // a reason the service named (``sso_required``: the workspace signs in
+    // with single sign-on)
+    readonly code?: string,
   ) {
     super(message);
   }
@@ -57,10 +60,13 @@ async function post<T>(path: string, body: unknown): Promise<T> {
     const detail =
       typeof payload?.detail === "string"
         ? payload.detail
-        : Array.isArray(payload?.detail) && payload.detail.length
-          ? payload.detail.map((d: { msg?: string; loc?: string[] }) => plainField(d)).join("; ")
-          : `login failed (${resp.status})`;
-    throw new IdentityError(resp.status, detail);
+        : typeof payload?.detail?.detail === "string"
+          ? payload.detail.detail
+          : Array.isArray(payload?.detail) && payload.detail.length
+            ? payload.detail.map((d: { msg?: string; loc?: string[] }) => plainField(d)).join("; ")
+            : `login failed (${resp.status})`;
+    throw new IdentityError(resp.status, detail,
+      typeof payload?.detail?.code === "string" ? payload.detail.code : undefined);
   }
   return payload as T;
 }
@@ -99,7 +105,7 @@ export async function inviteInfo(token: string): Promise<InviteInfo> {
 /** This page, as a way back for an e-mailed link or a provider sign-in. */
 export function here(): string {
   const params = new URLSearchParams(window.location.search);
-  for (const k of ["axor_login", "axor_login_error", "axor_verify", "axor_reset"]) params.delete(k);
+  for (const k of ["axor_login", "axor_login_error", "axor_verify", "axor_reset", "axor_org"]) params.delete(k);
   const query = params.toString();
   return window.location.pathname + (query ? `?${query}` : "") + window.location.hash;
 }
@@ -191,16 +197,34 @@ export function oauthStartUrl(provider: string): string {
 
 /** Trade the one-time code from the redirect for a session. `created` is true
  * when the sign-in made a new account. */
-export function oauthExchange(code: string): Promise<Session & { created: boolean }> {
-  return post<Session & { created: boolean }>("/v1/oauth/exchange", { code });
+export function oauthExchange(code: string, orgId?: string): Promise<Session & { created: boolean }> {
+  return post<Session & { created: boolean }>("/v1/oauth/exchange", orgId ? { code, org_id: orgId } : { code });
+}
+
+/** Whether a work address signs in with its workspace's single sign-on. */
+export async function ssoDiscover(email: string): Promise<{ sso: boolean; workspace?: string; enforce?: boolean }> {
+  try {
+    const resp = await fetch(`${IDENTITY_BASE}/v1/sso/discover?email=${encodeURIComponent(email)}`);
+    if (!resp.ok) return { sso: false };
+    return (await resp.json()) as { sso: boolean; workspace?: string; enforce?: boolean };
+  } catch {
+    return { sso: false };
+  }
+}
+
+/** Where to send the browser to sign in through the workspace's provider; it
+ * comes back here with `?axor_login=<code>&axor_org=<workspace>`. */
+export function ssoStartUrl(email: string): string {
+  return `${IDENTITY_BASE}/v1/sso/start?email=${encodeURIComponent(email)}&return_to=${encodeURIComponent(here())}`;
 }
 
 /** What a provider sign-in or an e-mailed link left in the address bar,
  * removed from it so a reload or a copied link does not carry it. */
-export function takeAuthReturn(): { code?: string; error?: string; verify?: string; reset?: string; invite?: string } | null {
+export function takeAuthReturn(): { code?: string; org?: string; error?: string; verify?: string; reset?: string; invite?: string } | null {
   const params = new URLSearchParams(window.location.search);
   const got = {
     code: params.get("axor_login") ?? undefined,
+    org: params.get("axor_org") ?? undefined,
     error: params.get("axor_login_error") ?? undefined,
     verify: params.get("axor_verify") ?? undefined,
     reset: params.get("axor_reset") ?? undefined,

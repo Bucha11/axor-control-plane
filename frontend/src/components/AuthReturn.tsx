@@ -48,7 +48,7 @@ export default function AuthReturn() {
         .catch((e) => setNote({ text: why(e, "could not confirm the address"), ok: false }));
     }
     if (back.code) {
-      oauthExchange(back.code)
+      oauthExchange(back.code, back.org)
         .then((s) => {
           setSession(s.access_token, s.refresh_token, s.user.email);
           if (s.created) track("signup_completed", "oauth");

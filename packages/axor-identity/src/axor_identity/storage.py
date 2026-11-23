@@ -16,6 +16,7 @@ from sqlalchemy import (
     MetaData,
     String,
     Table,
+    Text,
     UniqueConstraint,
     delete,
     func,
@@ -123,6 +124,23 @@ invites = Table(
     Column("used_by", String(64), nullable=True),
     Column("used_ts", String(40), nullable=True),
     Column("revoked", Boolean, nullable=False, default=False),
+)
+
+# A workspace's single sign-on (sso.py): its OpenID provider, the client this
+# service is registered as there, and the e-mail domains it signs people in
+# for. The secret is the provider's credential for this service: never shown
+# again once saved.
+org_sso = Table(
+    "org_sso", metadata,
+    Column("org_id", String(64), primary_key=True),
+    Column("issuer", String(500), nullable=False),
+    Column("client_id", String(300), nullable=False),
+    Column("client_secret", String(500), nullable=False),
+    Column("domains", Text, nullable=False),
+    Column("enforce", Boolean, nullable=False, default=False),
+    Column("default_role", String(24), nullable=False, default="member"),
+    Column("updated_by", String(64), nullable=False),
+    Column("updated_ts", String(40), nullable=False),
 )
 
 
@@ -449,6 +467,46 @@ class Store:
             await conn.execute(delete(email_tokens).where(email_tokens.c.expires_ts <= now_ts))
             await conn.execute(delete(oauth_states).where(oauth_states.c.expires_ts <= now_ts))
             await conn.execute(delete(login_codes).where(login_codes.c.expires_ts <= now_ts))
+
+    # ── single sign-on ────────────────────────────────────────────────────────
+    @staticmethod
+    def _sso_row(r: Any) -> dict[str, Any]:  # noqa: ANN401 - a Row
+        import json
+
+        return {"org_id": r.org_id, "issuer": r.issuer, "client_id": r.client_id,
+                "client_secret": r.client_secret, "domains": json.loads(r.domains),
+                "enforce": bool(r.enforce), "default_role": r.default_role,
+                "updated_by": r.updated_by, "updated_ts": r.updated_ts}
+
+    async def get_sso(self, org_id: str) -> dict[str, Any] | None:
+        async with self.engine.connect() as conn:
+            row = (await conn.execute(select(org_sso).where(org_sso.c.org_id == org_id))).first()
+        return self._sso_row(row) if row else None
+
+    async def all_sso(self) -> list[dict[str, Any]]:
+        async with self.engine.connect() as conn:
+            rows = (await conn.execute(select(org_sso))).all()
+        return [self._sso_row(r) for r in rows]
+
+    async def sso_for_domain(self, domain: str) -> dict[str, Any] | None:
+        """The workspace that signs this domain in, if one does (a domain is
+        one workspace's at most — the app keeps it so)."""
+        return next((c for c in await self.all_sso() if domain in c["domains"]), None)
+
+    async def put_sso(self, org_id: str, values: dict[str, Any]) -> None:
+        import json
+
+        row = {**values, "domains": json.dumps(sorted(values["domains"]))}
+        async with self.engine.begin() as conn:
+            done = await conn.execute(update(org_sso).where(org_sso.c.org_id == org_id)
+                                      .values(**row))
+            if not done.rowcount:
+                await conn.execute(insert(org_sso).values(org_id=org_id, **row))
+
+    async def delete_sso(self, org_id: str) -> bool:
+        async with self.engine.begin() as conn:
+            done = await conn.execute(delete(org_sso).where(org_sso.c.org_id == org_id))
+        return bool(done.rowcount)
 
     async def revoke_refresh(self, token_hash: str) -> bool:
         async with self.engine.begin() as conn:

@@ -21,6 +21,7 @@ from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, EmailStr, Field
 
+from axor_identity import sso
 from axor_identity.keys import SigningKey, load_signing_key
 from axor_identity.mail import Mailer, mailer_from_env
 from axor_identity.oauth import OAuthError, Provider, digest, pkce_pair, providers_from_env
@@ -130,6 +131,15 @@ _VERIFY_TTL = 24 * 3600
 _RESET_TTL = 3600
 _MAIL_GAP = 60
 _INVITE_TTL = 7 * 24 * 3600
+
+
+class SSOBody(BaseModel):
+    issuer: str = Field(min_length=8, max_length=500)
+    client_id: str = Field(min_length=1, max_length=300)
+    client_secret: str | None = Field(default=None, max_length=500)  # kept if left out
+    domains: list[str] = Field(min_length=1, max_length=20)
+    enforce: bool = False
+    default_role: str = "member"
 
 
 class ExchangeBody(BaseModel):
@@ -280,6 +290,7 @@ def create_app(database_url: str | None = None, *,
     async def login(body: LoginBody) -> dict:
         email = _norm_email(body.email)
         user = await store.get_user_by_email(email)
+        await _sso_enforced(email, user)
         # an account made through GitHub / Google has no password: it costs the
         # same as a wrong one and answers the same
         stored = user["password_hash"] if user and user["password_hash"] else None
@@ -571,6 +582,8 @@ def create_app(database_url: str | None = None, *,
         3. Neither → a new account and workspace, if this install takes signups.
         """
         ts = _now_iso()
+        await _sso_enforced(profile.email,
+                            await store.get_user_by_email(profile.email))
         linked = await store.user_for_identity(provider.name, profile.subject)
         if linked is not None:
             return linked, False
@@ -615,6 +628,210 @@ def create_app(database_url: str | None = None, *,
         session = await _issue_session(user, chosen["org_id"], chosen["role"],
                                        chosen["tier"])
         return {**session, "created": record["created"]}
+
+    # ── single sign-on (sso.py) ───────────────────────────────────────────────
+    # A workspace's admin registers this service with their OpenID provider and
+    # names the domains it signs in for; then a work address signs in there.
+    sso_callback = f"{public_url}/v1/sso/callback" if public_url else ""
+
+    def _http() -> httpx.AsyncClient:
+        return httpx.AsyncClient(transport=oauth_transport, timeout=15)
+
+    async def _sso_enforced(email: str, user: dict | None) -> None:
+        """A domain whose workspace signs in only with SSO: no password, no
+        GitHub / Google for its people. The workspace's owner keeps their
+        password — the way back in if the provider is misconfigured."""
+        held = await store.sso_for_domain(sso.domain_of(email))
+        if held is None or not held["enforce"]:
+            return
+        if user is not None and await store.role_in_org(user["user_id"], held["org_id"]) == "owner":
+            return
+        org = await store.get_org(held["org_id"])
+        raise HTTPException(403, {"code": "sso_required",
+                                  "detail": f"{(org or {}).get('name', 'your workspace')} signs in "
+                                            f"with single sign-on — use “Sign in with SSO”",
+                                  "start": f"/v1/sso/start?email={email}"})
+
+    def _sso_admin(org_id: str, caller: Claims) -> None:
+        if caller.org != org_id or not role_at_least(caller.role, "admin"):
+            raise HTTPException(403, "admin of this organization required")
+
+    async def _provable_domains(org_id: str) -> set[str]:
+        """The domains this workspace may claim: those of its owners' and
+        admins' own addresses, verified — and no public mailbox domain."""
+        out = set()
+        for m in await store.org_members(org_id):
+            if m["role"] not in ("owner", "admin"):
+                continue
+            user = await store.get_user(m["user_id"])
+            if user and user["email_verified"]:
+                out.add(sso.domain_of(user["email"]))
+        return out - sso.PUBLIC_DOMAINS
+
+    def _sso_view(org_id: str, held: dict | None, provable: set[str]) -> dict:
+        base = {"available": bool(public_url), "callback_url": sso_callback,
+                "provable_domains": sorted(provable)}
+        if held is None:
+            return {"configured": False, **base}
+        return {"configured": True, "issuer": held["issuer"], "client_id": held["client_id"],
+                "has_secret": bool(held["client_secret"]), "domains": held["domains"],
+                "enforce": held["enforce"], "default_role": held["default_role"],
+                "updated_by": held["updated_by"], "updated_ts": held["updated_ts"], **base}
+
+    @app.get("/v1/orgs/{org_id}/sso")
+    async def get_sso(org_id: str, caller: Claims = Depends(_caller)) -> dict:
+        _sso_admin(org_id, caller)
+        return _sso_view(org_id, await store.get_sso(org_id), await _provable_domains(org_id))
+
+    @app.put("/v1/orgs/{org_id}/sso")
+    async def put_sso(org_id: str, body: SSOBody, caller: Claims = Depends(_caller)) -> dict:
+        _sso_admin(org_id, caller)
+        if not public_url:
+            raise HTTPException(409, "single sign-on needs this service's public address "
+                                     "(AXOR_IDENTITY_PUBLIC_URL) — the provider sends "
+                                     "people back to it")
+        if body.default_role not in sso.DEFAULT_ROLES:
+            raise HTTPException(422, f"default_role is one of {list(sso.DEFAULT_ROLES)}")
+        held = await store.get_sso(org_id)
+        secret = body.client_secret or (held or {}).get("client_secret")
+        if not secret:
+            raise HTTPException(422, "the client secret the provider gave this app is needed")
+        domains = sorted({d.strip().lower().lstrip("@") for d in body.domains if d.strip()})
+        provable = await _provable_domains(org_id)
+        for d in domains:
+            if d in sso.PUBLIC_DOMAINS:
+                raise HTTPException(422, f"{d} is a public mailbox domain — nobody's to sign in")
+            if d not in provable:
+                raise HTTPException(422, {"code": "domain_unproven", "domain": d,
+                                          "detail": f"{d} is not the domain of an owner's or "
+                                                    f"admin's own confirmed address here — one "
+                                                    f"of them confirms an address at {d} first"})
+            other = await store.sso_for_domain(d)
+            if other is not None and other["org_id"] != org_id:
+                raise HTTPException(409, f"{d} signs in to another workspace already")
+        issuer = body.issuer.strip().rstrip("/")
+        try:
+            async with _http() as http:
+                await sso.discover(http, issuer, fresh=True)
+        except sso.SSOError as exc:
+            raise HTTPException(422, str(exc)) from exc
+        await store.put_sso(org_id, {"issuer": issuer, "client_id": body.client_id.strip(),
+                                     "client_secret": secret, "domains": domains,
+                                     "enforce": body.enforce, "default_role": body.default_role,
+                                     "updated_by": caller.email or caller.user_id,
+                                     "updated_ts": _now_iso()})
+        return _sso_view(org_id, await store.get_sso(org_id), provable)
+
+    @app.delete("/v1/orgs/{org_id}/sso", status_code=204)
+    async def delete_sso(org_id: str, caller: Claims = Depends(_caller)) -> None:
+        _sso_admin(org_id, caller)
+        await store.delete_sso(org_id)
+
+    @app.get("/v1/sso/discover")
+    async def sso_discover(email: str = "") -> dict:
+        """Whether a work address signs in with SSO — what the login form asks
+        before it shows the button. Says the workspace's name and nothing else."""
+        held = await store.sso_for_domain(sso.domain_of(_norm_email(email))) \
+            if public_url and "@" in email else None
+        if held is None:
+            return {"sso": False}
+        org = await store.get_org(held["org_id"])
+        return {"sso": True, "workspace": (org or {}).get("name", ""), "enforce": held["enforce"]}
+
+    @app.get("/v1/sso/start")
+    async def sso_start(email: str = "", org: str = "", return_to: str = "/") -> RedirectResponse:
+        target = _safe_return(return_to)
+        if target is None:
+            raise HTTPException(400, "return_to is not an address this service sends logins to")
+        email = _norm_email(email)
+        held = await store.get_sso(org) if org else await store.sso_for_domain(sso.domain_of(email))
+        if held is None or not public_url:
+            return RedirectResponse(_with_query(
+                target, axor_login_error="no single sign-on for that address — sign in "
+                                         "with your password, or ask your workspace's admin"), 302)
+        cfg = sso.Config.of(held)
+        try:
+            async with _http() as http:
+                doc = await sso.discover(http, cfg.issuer)
+        except sso.SSOError as exc:
+            return RedirectResponse(_with_query(target, axor_login_error=str(exc)), 302)
+        await store.sweep_expired(_now_iso())
+        state = secrets.token_urlsafe(32)
+        verifier, challenge = pkce_pair()
+        await store.put_state(digest(state), sso.PREFIX + cfg.org_id, verifier, target,
+                              _expiry(_STATE_TTL))
+        return RedirectResponse(sso.authorize_url(
+            doc, cfg, redirect_uri=sso_callback, state=state, challenge=challenge,
+            nonce=sso.nonce_for(verifier), login_hint=email), 302)
+
+    @app.get("/v1/sso/callback")
+    async def sso_callback_route(state: str = "", code: str = "", error: str = "",
+                                 error_description: str = "") -> RedirectResponse:
+        flight = await store.take_state(digest(state)) if state else None
+        if flight is None or not flight["provider"].startswith(sso.PREFIX) \
+                or flight["expires_ts"] <= _now_iso():
+            raise HTTPException(400, "this sign-in link has expired — start again")
+        back = flight["return_to"]
+        org_id = flight["provider"][len(sso.PREFIX):]
+        held = await store.get_sso(org_id)
+        if held is None:
+            return RedirectResponse(_with_query(
+                back, axor_login_error="single sign-on was turned off for this workspace"), 302)
+        if error or not code:
+            return RedirectResponse(_with_query(
+                back, axor_login_error=f"single sign-on was cancelled"
+                                       f"{': ' + error_description if error_description else ''}"),
+                302)
+        cfg = sso.Config.of(held)
+        try:
+            async with _http() as http:
+                doc = await sso.discover(http, cfg.issuer)
+                token = await sso.exchange(http, doc, cfg, code=code, redirect_uri=sso_callback,
+                                           verifier=flight["verifier"])
+                claims = await sso.verify(http, doc, cfg, token,
+                                          nonce=sso.nonce_for(flight["verifier"]))
+            user_id, created = await _sso_account(cfg, claims)
+        except sso.SSOError as exc:
+            return RedirectResponse(_with_query(back, axor_login_error=str(exc)), 302)
+        except HTTPException as exc:
+            return RedirectResponse(_with_query(back, axor_login_error=str(exc.detail)), 302)
+        raw = secrets.token_urlsafe(32)
+        await store.put_login_code(digest(raw), user_id, created, _expiry(_CODE_TTL))
+        return RedirectResponse(_with_query(back, axor_login=raw, axor_org=org_id), 302)
+
+    async def _sso_account(cfg: sso.Config, claims: dict) -> tuple[str, bool]:
+        """The account an SSO sign-in is, and its place in the workspace.
+
+        1. The provider's subject linked before → that account.
+        2. An account with this address → linked to it: the workspace proved
+           the domain (sso.py), so its provider speaks for its addresses.
+        3. Neither → a new account, its address vouched for by the provider.
+
+        Then a membership with the workspace's default role if there is none:
+        the provider says who works there. Never more than the default — a
+        role above it is the workspace admin's to give."""
+        ts = _now_iso()
+        provider = sso.PREFIX + cfg.org_id
+        subject = str(claims["sub"])[:128]
+        email = claims["email"]
+        created = False
+        user_id = await store.user_for_identity(provider, subject)
+        if user_id is None:
+            existing = await store.get_user_by_email(email)
+            if existing is not None:
+                user_id = existing["user_id"]
+                if not existing["email_verified"]:
+                    await store.mark_verified(
+                        user_id, drop_password=bool(existing["password_hash"]))
+                    await store.revoke_all_refresh(user_id)
+            else:
+                user_id = "usr_" + secrets.token_hex(8)
+                await store.create_user(user_id, email, None, ts, email_verified=True)
+                created = True
+            await store.link_identity(provider, subject, user_id, email, ts)
+        if await store.role_in_org(user_id, cfg.org_id) is None:
+            await store.add_membership(user_id, cfg.org_id, cfg.default_role, ts)
+        return user_id, created
 
     # ── e-mail: verification and password reset ───────────────────────────────
     def _expiry(seconds: int) -> str:

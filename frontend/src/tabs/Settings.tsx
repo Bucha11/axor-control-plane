@@ -10,7 +10,7 @@ import { api, BillingReport, BillingStatement, type Capability, type Permissions
 import { useCanAdmin } from "../team";
 import {
   IdentityError, emailAvailable, forgotPassword, here, login, logout, oauthProviders,
-  oauthStartUrl, signup, signupAvailable, type OAuthProvider,
+  oauthStartUrl, signup, signupAvailable, ssoDiscover, ssoStartUrl, type OAuthProvider,
 } from "../identity";
 import { navigate } from "../router";
 import { MODE_LABEL, useApp } from "../store";
@@ -110,6 +110,128 @@ function OrgMembers() {
       </div>
       <Team orgId={d.active_org} isAdmin={isAdmin} />
       <WhoMay orgId={d.active_org} isAdmin={isAdmin} />
+      {isAdmin && <SingleSignOn orgId={d.active_org} />}
+    </div>
+  );
+}
+
+/** A workspace's single sign-on (OpenID Connect): its provider, the client
+ *  this service is registered as there, the domains it signs in — proved by an
+ *  owner's or admin's own confirmed address — and whether it is the only way. */
+function SingleSignOn({ orgId }: { orgId: string }) {
+  const qc = useQueryClient();
+  const q = useQuery({ queryKey: ["sso", orgId], queryFn: () => api.sso(orgId), retry: false });
+  const [open, setOpen] = useState(false);
+  const [form, setForm] = useState({ issuer: "", client_id: "", client_secret: "", domains: "",
+                                     enforce: false, default_role: "member" });
+  const [copied, setCopied] = useState(false);
+  useEffect(() => {
+    const d = q.data;
+    if (d) setForm({ issuer: d.issuer ?? "", client_id: d.client_id ?? "", client_secret: "",
+                     domains: (d.domains ?? d.provable_domains).join(", "), enforce: !!d.enforce,
+                     default_role: d.default_role ?? "member" });
+  }, [q.data]);
+  const save = useMutation({
+    mutationFn: () => api.setSso(orgId, {
+      issuer: form.issuer.trim(), client_id: form.client_id.trim(),
+      ...(form.client_secret ? { client_secret: form.client_secret } : {}),
+      domains: form.domains.split(/[,\s]+/).filter(Boolean), enforce: form.enforce,
+      default_role: form.default_role }),
+    onSuccess: () => { setOpen(false); void qc.invalidateQueries({ queryKey: ["sso", orgId] }); },
+  });
+  const remove = useMutation({
+    mutationFn: () => api.removeSso(orgId),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ["sso", orgId] }),
+  });
+  const d = q.data;
+  if (!d) return null;
+  const set = (k: keyof typeof form) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) =>
+    setForm((f) => ({ ...f, [k]: e.target.type === "checkbox" ? (e.target as HTMLInputElement).checked : e.target.value }));
+  return (
+    <div data-testid="sso" className="mt-3">
+      <div style={{ color: C.dim, letterSpacing: "0.08em", fontSize: 10.5, marginBottom: 4 }}>SINGLE SIGN-ON</div>
+      {!d.available ? (
+        <div style={{ color: C.dim }}>
+          needs this service&apos;s public address (AXOR_IDENTITY_PUBLIC_URL) — the provider sends people back to it
+        </div>
+      ) : d.configured && !open ? (
+        <div data-testid="sso-on" style={{ lineHeight: 1.7 }}>
+          <span style={{ color: C.green }}>● on</span> — {d.domains?.join(", ")} sign in through{" "}
+          <span style={{ color: C.text }}>{d.issuer}</span>
+          {d.enforce ? <span style={{ color: C.amber }}> · the only way in (the owner keeps a password)</span>
+            : <span style={{ color: C.dim }}> · passwords still work</span>}
+          <span style={{ color: C.dim }}> · newcomers join as {d.default_role}</span>
+          <div className="flex gap-3">
+            <button onClick={() => setOpen(true)} data-testid="sso-edit"
+              style={{ background: "none", border: "none", padding: 0, cursor: "pointer", color: C.steel, fontFamily: MONO, fontSize: 11 }}>
+              change
+            </button>
+            <button onClick={() => { if (window.confirm("Turn single sign-on off? People sign in with passwords again.")) remove.mutate(); }}
+              style={{ background: "none", border: "none", padding: 0, cursor: "pointer", color: C.dim, fontFamily: MONO, fontSize: 11 }}>
+              turn off
+            </button>
+          </div>
+        </div>
+      ) : !open ? (
+        <div style={{ color: C.dim }}>
+          off — people sign in with a password, GitHub or Google.{" "}
+          <button onClick={() => setOpen(true)} data-testid="sso-setup"
+            style={{ background: "none", border: "none", padding: 0, cursor: "pointer", color: C.steel, fontFamily: MONO, fontSize: 11 }}>
+            set up SSO (Okta, Entra ID, Google Workspace, any OpenID provider)
+          </button>
+        </div>
+      ) : (
+        <form data-testid="sso-form" onSubmit={(e) => { e.preventDefault(); save.mutate(); }}
+          className="flex flex-col" style={{ gap: 6 }}>
+          <div style={{ color: C.mut, lineHeight: 1.6 }}>
+            1. In your provider, register a web app with this sign-in redirect:{" "}
+            <span data-testid="sso-callback" style={{ color: C.text }}>{d.callback_url}</span>{" "}
+            <button type="button" onClick={() => { void navigator.clipboard?.writeText(d.callback_url); setCopied(true); }}
+              style={{ background: "none", border: "none", padding: 0, cursor: "pointer", color: C.steel, fontFamily: MONO, fontSize: 11 }}>
+              {copied ? "copied" : "copy"}
+            </button>
+            <br />2. Give its issuer, client id and secret here.
+          </div>
+          <input value={form.issuer} onChange={set("issuer")} placeholder="issuer — https://acme.okta.com"
+            aria-label="issuer" style={INPUT_STYLE} data-testid="sso-issuer" />
+          <input value={form.client_id} onChange={set("client_id")} placeholder="client id" aria-label="client id"
+            style={INPUT_STYLE} data-testid="sso-client-id" />
+          <input type="password" value={form.client_secret} onChange={set("client_secret")} aria-label="client secret"
+            placeholder={d.has_secret ? "client secret — kept as it is if left empty" : "client secret"}
+            style={INPUT_STYLE} data-testid="sso-secret" />
+          <input value={form.domains} onChange={set("domains")} placeholder="domains — acme.com" aria-label="domains"
+            style={INPUT_STYLE} data-testid="sso-domains" />
+          <div style={{ color: C.dim, fontSize: 10.5 }}>
+            a domain is yours to sign in if an owner or admin here confirmed their own address at it
+            {d.provable_domains.length ? ` (${d.provable_domains.join(", ")})` : " — none yet: confirm your address first"}
+          </div>
+          <div className="flex items-center gap-4 flex-wrap">
+            <label className="flex items-center gap-1" style={{ cursor: "pointer" }}>
+              <input type="checkbox" checked={form.enforce} onChange={set("enforce")} data-testid="sso-enforce" />
+              the only way in for these domains
+            </label>
+            <label className="flex items-center gap-1">
+              newcomers join as
+              <select value={form.default_role} onChange={set("default_role")} aria-label="default role"
+                style={{ ...INPUT_STYLE, width: 100, padding: "1px 4px" }}>
+                <option value="member">member</option>
+                <option value="viewer">viewer</option>
+              </select>
+            </label>
+          </div>
+          {save.isError && <div data-testid="sso-error" style={{ color: C.red }}>{errorWords((save.error as Error).message)}</div>}
+          <div className="flex gap-2">
+            <button type="submit" disabled={save.isPending} data-testid="sso-save"
+              style={btn({ color: C.text, borderColor: C.steel, fontSize: 11, padding: "4px 12px" })}>
+              {save.isPending ? "checking the provider…" : "save"}
+            </button>
+            <button type="button" onClick={() => setOpen(false)}
+              style={{ background: "none", border: "none", padding: 0, cursor: "pointer", color: C.dim, fontFamily: MONO, fontSize: 11 }}>
+              cancel
+            </button>
+          </div>
+        </form>
+      )}
     </div>
   );
 }
@@ -414,6 +536,19 @@ export function IdentityLogin({ onDone, initialMode = "login" }: {
   const [providers, setProviders] = useState<OAuthProvider[]>([]);
   const [canMail, setCanMail] = useState(false);
   const [sent, setSent] = useState<string | null>(null);
+  // a work address whose workspace signs in with single sign-on
+  const [ssoFor, setSsoFor] = useState<{ workspace: string; enforce: boolean } | null>(null);
+  const checkSso = async (address: string) => {
+    if (!address.includes("@")) { setSsoFor(null); return; }
+    const d = await ssoDiscover(address.trim());
+    setSsoFor(d.sso ? { workspace: d.workspace ?? "", enforce: !!d.enforce } : null);
+  };
+  const startSso = async () => {
+    if (!email.includes("@")) { setError("type your work e-mail first — it says which workspace"); return; }
+    const d = await ssoDiscover(email.trim());
+    if (!d.sso) { setError("no single sign-on for that address — sign in with your password"); return; }
+    window.location.href = ssoStartUrl(email.trim());
+  };
   useEffect(() => {
     void signupAvailable().then(setCanSignup);
     void oauthProviders().then(setProviders);
@@ -469,6 +604,7 @@ export function IdentityLogin({ onDone, initialMode = "login" }: {
       onDone?.();
     } catch (err) {
       setError(err instanceof IdentityError ? err.message : "login failed");
+      if (err instanceof IdentityError && err.code === "sso_required") void checkSso(email);
     } finally {
       setBusy(false);
     }
@@ -502,7 +638,18 @@ export function IdentityLogin({ onDone, initialMode = "login" }: {
         </>
       )}
       <input type="email" autoComplete="email" value={email} placeholder="email"
-        onChange={(e) => setEmail(e.target.value)} style={INPUT_STYLE} aria-label="email" />
+        onChange={(e) => setEmail(e.target.value)} onBlur={() => { if (mode === "login") void checkSso(email); }}
+        style={INPUT_STYLE} aria-label="email" />
+      {mode === "login" && ssoFor && (
+        <div data-testid="sso-offer" className="flex items-center gap-2 flex-wrap"
+          style={{ fontFamily: MONO, fontSize: 11, color: C.mut }}>
+          <span>{ssoFor.workspace ? `${ssoFor.workspace} signs in` : "your workspace signs in"} with single sign-on</span>
+          <button type="button" data-testid="sso-continue" onClick={() => void startSso()}
+            style={btn({ color: C.text, borderColor: C.steel, fontSize: 11, padding: "4px 12px" })}>
+            continue with SSO →
+          </button>
+        </div>
+      )}
       {mode !== "forgot" && (
       <input type="password" value={password} placeholder="password"
         autoComplete={mode === "signup" ? "new-password" : "current-password"}
@@ -523,6 +670,12 @@ export function IdentityLogin({ onDone, initialMode = "login" }: {
           style={btn({ color: C.steel, borderColor: C.steel, fontSize: 11, padding: "5px 14px" })}>
           {busy ? "…" : mode === "signup" ? "create workspace" : mode === "forgot" ? "send reset link" : "log in"}
         </button>
+        {mode === "login" && !ssoFor && (
+          <button type="button" data-testid="sso-start" onClick={() => void startSso()}
+            style={btn({ color: C.dim, fontSize: 10.5, padding: "5px 10px" })}>
+            sign in with SSO
+          </button>
+        )}
         {mode === "login" && canMail && (
           <button type="button" onClick={() => { setError(null); setSent(null); setMode("forgot"); }}
             style={btn({ color: C.dim, fontSize: 10.5, padding: "5px 10px" })}>

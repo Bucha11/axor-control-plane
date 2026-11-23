@@ -584,6 +584,12 @@ export interface BillingStatement {
   // an admin's seat limit, and the developers past it (not shown, not billed)
   seat_cap?: number | null; over_cap?: number;
 }
+/** A workspace's single sign-on, as its admin sees it (never the secret). */
+export interface SSOConfig {
+  configured: boolean; available: boolean; callback_url: string; provable_domains: string[];
+  issuer?: string; client_id?: string; has_secret?: boolean; domains?: string[];
+  enforce?: boolean; default_role?: string; updated_by?: string; updated_ts?: string;
+}
 /** What a workspace lets people do to the team's agents, beyond their own. */
 export type Capability = "stop_others" | "brake" | "exceptions" | "skills" | "memory" | "production";
 export interface Permissions {
@@ -1157,6 +1163,17 @@ export const api = {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ return_to: returnTo }),
     }).then((r) => j<{ sent_to: string }>(r)),
+  // a workspace's single sign-on (an owner or admin)
+  sso: (orgId: string) =>
+    af(`${IDENTITY_BASE}/v1/orgs/${encodeURIComponent(orgId)}/sso`).then((r) => j<SSOConfig>(r)),
+  setSso: (orgId: string, body: { issuer: string; client_id: string; client_secret?: string;
+                                   domains: string[]; enforce: boolean; default_role: string }) =>
+    af(`${IDENTITY_BASE}/v1/orgs/${encodeURIComponent(orgId)}/sso`, {
+      method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(body),
+    }).then((r) => j<SSOConfig>(r)),
+  removeSso: (orgId: string) =>
+    af(`${IDENTITY_BASE}/v1/orgs/${encodeURIComponent(orgId)}/sso`, { method: "DELETE" })
+      .then((r) => { if (!r.ok) throw new Error(`${r.status}`); }),
   orgMembers: (orgId: string) =>
     af(`${IDENTITY_BASE}/v1/orgs/${encodeURIComponent(orgId)}/members`).then((r) =>
       j<{ members: { user_id: string; email: string; role: string; since: string }[] }>(r)),
