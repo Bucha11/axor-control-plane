@@ -85,6 +85,20 @@ leg each), publishes to PyPI via OIDC, and pushes `axor-platform` /
 Actions tab without moving the tag (useful if GHCR succeeds but PyPI needs a
 retry).
 
+### The offline bundle (for air-gapped customers)
+
+Once the images are on GHCR, build the archive an air-gapped install is
+carried in, and put its digests in the release notes:
+
+```bash
+cd deploy/offline
+./bundle.sh 0.1.0                 # add --with-lab for a bundle with Axor Lab
+cat axor-offline-0.1.0/MANIFEST.txt   # the digests to publish
+```
+
+It holds no secrets, so it can be attached to the release or handed over
+however the customer prefers. `deploy/offline/README.md` is the install side.
+
 ## The images (GHCR) — and the one setting that makes them usable
 
 Two images are published from the same `Release` workflow:

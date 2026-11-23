@@ -104,6 +104,16 @@ anything else.
 phone-home; expiry degrades EE features to read-only and **never disables
 safety features**.
 
+**Air-gapped install.** `deploy/offline` builds one archive — images, stack,
+installer — for a host with no route out. Nothing in the product calls out on
+its own: no telemetry, no update check, no licence server, and the web app
+serves its own fonts and assets. What can leave the network is only what the
+operator configures: notification webhooks, SMTP, an identity provider. The
+offline Caddyfile has ACME off, so TLS is the company's own certificate or
+Caddy's local CA, and the compose override pins every image to what was
+loaded (`pull_policy: never`) — a missing image fails loudly instead of
+reaching for a registry.
+
 **Known non-goals (current release).**
 - The proxy is not a sandbox. By default it observes and injects test-bench
   faults and does not block traffic; in guard mode it refuses tool calls by

@@ -1,0 +1,33 @@
+# The only entry point of an air-gapped install. No ACME: a machine with no
+# route out cannot answer Let's Encrypt, and Caddy would retry for ever while
+# serving nothing. `install.sh` writes tls.caddy next to this file, with either
+#
+#   tls /certs/tls.crt /certs/tls.key     the certificate your own CA issued
+#   tls internal                          Caddy's local CA, trusted by hand
+#
+# No `encode` here: compressing an SSE response can hold events in the encoder
+# buffer, and the app streams live runs over SSE. Caddy flushes
+# text/event-stream responses immediately without it.
+{
+	# nothing to renew, nothing to ask: stay off the network entirely
+	auto_https off
+	admin off
+}
+
+(common) {
+	import /etc/caddy/tls.caddy
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		-Server
+	}
+}
+
+# The frontend nginx serves the SPA and proxies /v1, /axor and /identity itself.
+{$CP_HOST} {
+	import common
+	reverse_proxy frontend:8080
+}
+
+# Optional sites. install.sh --with-lab writes sites/lab.caddy; with no file
+# there this glob matches nothing and Caddy carries on.
+import /etc/caddy/sites/*.caddy

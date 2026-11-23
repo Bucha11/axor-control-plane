@@ -13,13 +13,14 @@ history, notification routing (channels + node globs)** · coding agents
 subagents) · **Business (EE): single sign-on (OIDC + SAML 2.0 with signed
 requests, encrypted assertions and IdP-initiated sign-in), SCIM 2.0 with
 group→role mapping, session limits, per-capability permissions, full audit
-trail with export, retention and monthly report**.
+trail with export, retention and monthly report** · air-gapped install (one
+offline bundle: images, stack, installer; your own certificate or a local CA).
 
 **Next**: OpenAI Agents SDK + CrewAI wrap recipes ·
 landing + docs site · benchmark harness (catch-rate table) · load-ceiling doc.
 
-**Later (needs demand)**: hosted multi-tenant · HA backend · air-gapped
-bundle · private benchmark registry.
+**Later (needs demand)**: hosted multi-tenant · HA backend · private
+benchmark registry · SLA and a support process.
 
 **Non-goals**: prompt filtering (we govern execution, not text) · a pager (we
 emit webhooks; PagerDuty is a consumer) · blocking at the proxy (enforcement

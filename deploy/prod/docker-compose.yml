@@ -33,7 +33,7 @@ x-logging: &logging
 
 services:
   caddy:
-    image: caddy:2-alpine
+    image: ${CADDY_IMAGE:-caddy:2-alpine}
     restart: unless-stopped
     ports:
       - "80:80"
@@ -51,7 +51,7 @@ services:
     logging: *logging
 
   postgres:
-    image: postgres:16-alpine
+    image: ${POSTGRES_IMAGE:-postgres:16-alpine}
     restart: unless-stopped
     environment:
       POSTGRES_DB: axor
@@ -228,7 +228,7 @@ services:
   # The Lab app does no rate limiting and does not serve /identity; this nginx
   # does both (Caddy has no built-in rate limiter).
   lab-edge:
-    image: nginx:1.27-alpine
+    image: ${NGINX_IMAGE:-nginx:1.27-alpine}
     restart: unless-stopped
     expose: ["8080"]
     volumes:

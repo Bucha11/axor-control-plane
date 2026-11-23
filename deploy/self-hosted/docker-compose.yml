@@ -17,7 +17,7 @@ x-logging: &id001
     max-file: '3'
 services:
   caddy:
-    image: caddy:2-alpine
+    image: ${CADDY_IMAGE:-caddy:2-alpine}
     restart: unless-stopped
     ports:
     - 80:80
@@ -37,7 +37,7 @@ services:
     - frontend
     logging: *id001
   postgres:
-    image: postgres:16-alpine
+    image: ${POSTGRES_IMAGE:-postgres:16-alpine}
     restart: unless-stopped
     environment:
       POSTGRES_DB: axor
@@ -229,7 +229,7 @@ services:
   # hosted deployment runs (deploy/prod/lab-nginx.conf)
   lab-edge:
     profiles: ["lab"]
-    image: nginx:1.27-alpine
+    image: ${NGINX_IMAGE:-nginx:1.27-alpine}
     restart: unless-stopped
     expose: ["8080"]
     volumes:

@@ -123,6 +123,11 @@ settings — see [`deploy/self-hosted/`](deploy/self-hosted/README.md). Signup
 defaults to `first-only` there: the first account claims the install and
 everyone after it is refused, so a public hostname is not a public sign-up page.
 
+On a network with no route out, [`deploy/offline/`](deploy/offline/README.md)
+builds one archive — images, stack, installer — that installs the whole thing
+air-gapped. Nothing phones home: the licence is verified offline, and the web
+app carries its own fonts and assets.
+
 Prefer not to build? The same images are published to GHCR on every release
 (`:latest`) and every push to main (`:edge`):
 

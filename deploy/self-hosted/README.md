@@ -74,6 +74,14 @@ Roles are `viewer` < `member` < `admin` < `owner`. In `closed` mode a colleague
 has no account to add, so invite them while signup is `first-only`, or switch
 to `open` for as long as it takes.
 
+## No route out?
+
+`deploy/offline` builds one archive — the images, this stack and an installer
+— for a host with no internet at all: `bundle.sh` where there is a network,
+`install.sh` where there is not. TLS there is your own certificate or Caddy's
+local CA, never Let's Encrypt. See
+[`deploy/offline/README.md`](../offline/README.md).
+
 ## Single sign-on, SCIM and the licence
 
 Business and above sign people in through the company's identity provider

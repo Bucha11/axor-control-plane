@@ -1,0 +1,29 @@
+# Layered over deploy/self-hosted/docker-compose.yml on an air-gapped install
+# (install.sh puts COMPOSE_FILE in .env, so plain `docker compose …` picks both
+# up afterwards). Two things change, and nothing else: every image comes from
+# what `docker load` put on this machine, and Caddy is given the certificate
+# and the TLS snippet install.sh wrote.
+#
+# `pull_policy: never` is the point of this file. Without it a missing or
+# mistyped tag sends docker to a registry it cannot reach, and the install
+# hangs instead of saying what is wrong.
+services:
+  caddy:
+    pull_policy: never
+    volumes:
+    - ./tls.caddy:/etc/caddy/tls.caddy:ro
+    - ./certs:/certs:ro
+  postgres:
+    pull_policy: never
+  backend:
+    pull_policy: never
+  identity:
+    pull_policy: never
+  proxy:
+    pull_policy: never
+  frontend:
+    pull_policy: never
+  lab:
+    pull_policy: never
+  lab-edge:
+    pull_policy: never

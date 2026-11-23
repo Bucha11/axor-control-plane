@@ -57,6 +57,7 @@ else
         -e "s|^AXOR_PG_PASSWORD=.*|AXOR_PG_PASSWORD=$(secret)|" \
         -e "s|^AXOR_API_TOKEN=.*|AXOR_API_TOKEN=$(secret)|" \
         -e "s|^AXOR_PROXY_TOKEN=.*|AXOR_PROXY_TOKEN=$(secret)|" \
+        -e "s|^AXOR_LAB_CONTROL_TOKEN=.*|AXOR_LAB_CONTROL_TOKEN=$(secret)|" \
         -e "/^AXOR_IDENTITY_SIGNING_KEY=/d" \
         .env.example > .env
     printf 'AXOR_IDENTITY_SIGNING_KEY="%s"\n' "$PEM" >> .env

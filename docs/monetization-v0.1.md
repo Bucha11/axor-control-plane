@@ -62,7 +62,7 @@ Two meters: production agents count as **governed nodes**, coding agents
 | **Business** | $0 | — | $40 / developer, $75 / node past 1 | Coding + SSO (OIDC, SAML), SCIM, who may, full audit trail + export, retention, monthly report |
 | **Team** | $299 / mo | 10 nodes, 5 developers | $75 / node, $40 / developer | production runtime control, attestations, scheduled regression CI + history; includes Business |
 | **Security** | $1,500 / mo | 50 nodes, 25 developers | $50 / node, $40 / developer | Team + incident → regression, policy comparison |
-| **Enterprise** | contracted (from ~$30k / yr) | negotiated | negotiated | Security + air-gapped / VPC, SLA, private benchmark registry |
+| **Enterprise** | contracted (from ~$30k / yr) | negotiated | negotiated | Security + SLA and support, private benchmark registry (the air-gapped bundle ships on every rung) |
 
 Why Team and Security seats cost $40, not $25: a seat beyond their allowance
 is a Business seat, so Team is never the cheaper way to buy what Business
