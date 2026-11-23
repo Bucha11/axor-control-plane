@@ -21,7 +21,7 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.responses import JSONResponse, RedirectResponse, Response
 from pydantic import BaseModel, EmailStr, Field
 
-from axor_identity import licensing, sso
+from axor_identity import licensing, saml, sso
 from axor_identity.keys import SigningKey, load_signing_key
 from axor_identity.mail import Mailer, mailer_from_env
 from axor_identity.oauth import OAuthError, Provider, digest, pkce_pair, providers_from_env
@@ -134,9 +134,16 @@ _INVITE_TTL = 7 * 24 * 3600
 
 
 class SSOBody(BaseModel):
-    issuer: str = Field(min_length=8, max_length=500)
-    client_id: str = Field(min_length=1, max_length=300)
+    protocol: str = "oidc"                 # oidc | saml
+    # OpenID Connect: the provider and this app's client there
+    issuer: str = Field(default="", max_length=500)
+    client_id: str = Field(default="", max_length=300)
     client_secret: str | None = Field(default=None, max_length=500)  # kept if left out
+    # SAML: the provider's metadata — or its SSO URL, entity id and certificate
+    saml_metadata: str | None = Field(default=None, max_length=200_000)
+    saml_sso_url: str = Field(default="", max_length=1000)
+    saml_entity_id: str = Field(default="", max_length=500)
+    saml_cert: str = Field(default="", max_length=20_000)
     domains: list[str] = Field(min_length=1, max_length=20)
     enforce: bool = False
     default_role: str = "member"
@@ -709,9 +716,16 @@ def create_app(database_url: str | None = None, *,
                   plan_ok: bool = True) -> dict:
         base = {"available": bool(public_url), "callback_url": sso_callback,
                 "provable_domains": sorted(provable), "plan_ok": plan_ok}
+        base |= {"saml_entity_id_ours": f"{public_url}/v1/saml/{org_id}",
+                 "saml_acs_url": f"{public_url}/v1/saml/acs",
+                 "saml_metadata_url": f"{public_url}/v1/saml/{org_id}/metadata"}
         if held is None:
             return {"configured": False, **base}
-        return {"configured": True, "issuer": held["issuer"], "client_id": held["client_id"],
+        return {"configured": True, "protocol": held.get("protocol", "oidc"),
+                "saml_sso_url": held.get("saml_sso_url", ""),
+                "saml_entity_id": held.get("saml_entity_id", ""),
+                "has_cert": bool(held.get("saml_cert")),
+                "issuer": held["issuer"], "client_id": held["client_id"],
                 "has_secret": bool(held["client_secret"]), "domains": held["domains"],
                 "enforce": held["enforce"], "default_role": held["default_role"],
                 "updated_by": held["updated_by"], "updated_ts": held["updated_ts"], **base}
@@ -735,9 +749,11 @@ def create_app(database_url: str | None = None, *,
                                                 "($40 per developer) — see Pricing"})
         if body.default_role not in sso.DEFAULT_ROLES:
             raise HTTPException(422, f"default_role is one of {list(sso.DEFAULT_ROLES)}")
+        if body.protocol not in ("oidc", "saml"):
+            raise HTTPException(422, "protocol is oidc or saml")
         held = await store.get_sso(org_id)
-        secret = body.client_secret or (held or {}).get("client_secret")
-        if not secret:
+        secret = body.client_secret or (held or {}).get("client_secret") or ""
+        if body.protocol == "oidc" and not secret:
             raise HTTPException(422, "the client secret the provider gave this app is needed")
         domains = sorted({d.strip().lower().lstrip("@") for d in body.domains if d.strip()})
         provable = await _provable_domains(org_id)
@@ -752,17 +768,40 @@ def create_app(database_url: str | None = None, *,
             other = await store.sso_for_domain(d)
             if other is not None and other["org_id"] != org_id:
                 raise HTTPException(409, f"{d} signs in to another workspace already")
+        common = {"domains": domains, "enforce": body.enforce,
+                  "default_role": body.default_role, "protocol": body.protocol,
+                  "updated_by": caller.email or caller.user_id, "updated_ts": _now_iso()}
+        if body.protocol == "saml":
+            try:
+                if body.saml_metadata:
+                    idp = saml.from_metadata(body.saml_metadata)
+                else:
+                    cert = body.saml_cert or (held or {}).get("saml_cert") or ""
+                    if not body.saml_sso_url.startswith(("https://", "http://localhost")) \
+                            or not cert:
+                        raise saml.SAMLError("give the provider's metadata, or its single "
+                                             "sign-on URL (https) and its certificate")
+                    idp = saml.IdP(body.saml_sso_url.strip(), body.saml_entity_id.strip(),
+                                   saml.normalize_cert(cert))
+            except saml.SAMLError as exc:
+                raise HTTPException(422, str(exc)) from exc
+            await store.put_sso(org_id, {**common, "issuer": "", "client_id": "",
+                                         "client_secret": "", "saml_sso_url": idp.sso_url,
+                                         "saml_entity_id": idp.entity_id,
+                                         "saml_cert": idp.cert_pem})
+            return _sso_view(org_id, await store.get_sso(org_id), provable)
         issuer = body.issuer.strip().rstrip("/")
+        if len(issuer) < 8 or not body.client_id.strip():
+            raise HTTPException(422, "the provider's issuer and this app's client id are needed")
         try:
             async with _http() as http:
                 await sso.discover(http, issuer, fresh=True)
         except sso.SSOError as exc:
             raise HTTPException(422, str(exc)) from exc
-        await store.put_sso(org_id, {"issuer": issuer, "client_id": body.client_id.strip(),
-                                     "client_secret": secret, "domains": domains,
-                                     "enforce": body.enforce, "default_role": body.default_role,
-                                     "updated_by": caller.email or caller.user_id,
-                                     "updated_ts": _now_iso()})
+        await store.put_sso(org_id, {**common, "issuer": issuer,
+                                     "client_id": body.client_id.strip(),
+                                     "client_secret": secret, "saml_sso_url": "",
+                                     "saml_entity_id": "", "saml_cert": ""})
         return _sso_view(org_id, await store.get_sso(org_id), provable)
 
     @app.delete("/v1/orgs/{org_id}/sso", status_code=204)
@@ -792,6 +831,16 @@ def create_app(database_url: str | None = None, *,
             return RedirectResponse(_with_query(
                 target, axor_login_error="no single sign-on for that address — sign in "
                                          "with your password, or ask your workspace's admin"), 302)
+        if held.get("protocol") == "saml":
+            await store.sweep_expired(_now_iso())
+            relay = secrets.token_urlsafe(32)
+            url, request_id = saml.authn_request(
+                saml.IdP(held["saml_sso_url"], held["saml_entity_id"], held["saml_cert"]),
+                entity_id=f"{public_url}/v1/saml/{held['org_id']}",
+                acs_url=f"{public_url}/v1/saml/acs", relay_state=relay)
+            await store.put_state(digest(relay), saml.PREFIX + held["org_id"], request_id,
+                                  target, _expiry(_STATE_TTL))
+            return RedirectResponse(url, 302)
         cfg = sso.Config.of(held)
         try:
             async with _http() as http:
@@ -841,6 +890,51 @@ def create_app(database_url: str | None = None, *,
         raw = secrets.token_urlsafe(32)
         await store.put_login_code(digest(raw), user_id, created, _expiry(_CODE_TTL))
         return RedirectResponse(_with_query(back, axor_login=raw, axor_org=org_id), 302)
+
+    @app.get("/v1/saml/{org_id}/metadata")
+    async def saml_metadata(org_id: str) -> Response:
+        """This service as a SAML service provider for the workspace — what its
+        admin gives the identity provider."""
+        if not public_url:
+            raise HTTPException(404, "no public address set")
+        return Response(saml.sp_metadata(f"{public_url}/v1/saml/{org_id}",
+                                         f"{public_url}/v1/saml/acs"),
+                        media_type="application/samlmetadata+xml")
+
+    @app.post("/v1/saml/acs")
+    async def saml_acs(request: Request) -> RedirectResponse:
+        """The provider posts its SAMLResponse here (HTTP-POST binding)."""
+        from urllib.parse import parse_qs
+
+        form = parse_qs((await request.body()).decode(errors="replace"))
+        relay = (form.get("RelayState") or [""])[0]
+        flight = await store.take_state(digest(relay)) if relay else None
+        if flight is None or not flight["provider"].startswith(saml.PREFIX) \
+                or flight["expires_ts"] <= _now_iso():
+            raise HTTPException(400, "this sign-in has expired, or was not started here — "
+                                     "start again from the login form")
+        back = flight["return_to"]
+        org_id = flight["provider"][len(saml.PREFIX):]
+        held = await store.get_sso(org_id)
+        if held is None or held.get("protocol") != "saml":
+            return RedirectResponse(_with_query(
+                back, axor_login_error="single sign-on was changed for this workspace — "
+                                       "start again"), 303)
+        try:
+            claims = saml.read_response(
+                (form.get("SAMLResponse") or [""])[0],
+                saml.IdP(held["saml_sso_url"], held["saml_entity_id"], held["saml_cert"]),
+                entity_id=f"{public_url}/v1/saml/{org_id}", acs_url=f"{public_url}/v1/saml/acs",
+                request_id=flight["verifier"], domains=tuple(held["domains"]))
+            user_id, created = await _sso_account(sso.Config.of(held), claims)
+        except saml.SAMLError as exc:
+            return RedirectResponse(_with_query(back, axor_login_error=str(exc)), 303)
+        except HTTPException as exc:
+            return RedirectResponse(_with_query(back, axor_login_error=str(exc.detail)), 303)
+        raw = secrets.token_urlsafe(32)
+        await store.put_login_code(digest(raw), user_id, created, _expiry(_CODE_TTL))
+        # 303: the browser follows a POST's answer with a GET
+        return RedirectResponse(_with_query(back, axor_login=raw, axor_org=org_id), 303)
 
     async def _sso_account(cfg: sso.Config, claims: dict) -> tuple[str, bool]:
         """The account an SSO sign-in is, and its place in the workspace.

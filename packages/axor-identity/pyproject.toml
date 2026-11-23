@@ -11,8 +11,11 @@ classifiers = [
   "Programming Language :: Python :: 3.12",
 ]
 dependencies = [
-  "fastapi>=0.111", "uvicorn>=0.29",
-  "sqlalchemy[asyncio]>=2.0", "asyncpg>=0.29", "aiosqlite>=0.20",
+  "fastapi>=0.111",
+  "uvicorn>=0.29",
+  "sqlalchemy[asyncio]>=2.0",
+  "asyncpg>=0.29",
+  "aiosqlite>=0.20",
   "alembic>=1.13",
   "argon2-cffi>=23.1",
   "pyjwt[crypto]>=2.8",
@@ -21,6 +24,8 @@ dependencies = [
   "pydantic[email]>=2.0",
   # the token and profile calls of sign-in with GitHub / Google
   "httpx>=0.27",
+  # SAML 2.0 sign-in: the provider's XML signature (and lxml under it)
+  "signxml>=4.0",
 ]
 
 [project.urls]

@@ -167,6 +167,43 @@ test.describe("identity login (Settings)", () => {
     await expect(scim).toContainText("not used yet");
   });
 
+  test("SAML: the admin sees what to give the provider and pastes its metadata", async ({ page }) => {
+    await page.route("**/identity/v1/login", jsonRoute(200, SESSION));
+    await page.route("**/identity/v1/me", jsonRoute(200, {
+      user: SESSION.user, active_org: "org_1", role: "owner",
+      memberships: [{ org_id: "org_1", role: "owner", name: "Acme", tier: "business" }],
+    }));
+    await page.route("**/identity/v1/orgs/org_1/members", jsonRoute(200, { members: [] }));
+    await page.route("**/identity/v1/orgs/org_1/invites", jsonRoute(200, { invites: [] }));
+    const base = { available: true, plan_ok: true, callback_url: "https://cp.acme.io/identity/v1/sso/callback",
+      provable_domains: ["acme.io"], saml_entity_id_ours: "https://cp.acme.io/identity/v1/saml/org_1",
+      saml_acs_url: "https://cp.acme.io/identity/v1/saml/acs",
+      saml_metadata_url: "https://cp.acme.io/identity/v1/saml/org_1/metadata" };
+    let sent: Record<string, unknown> | null = null;
+    await page.route("**/identity/v1/orgs/org_1/sso", async (route) => {
+      if (route.request().method() === "PUT") sent = route.request().postDataJSON();
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(sent
+        ? { ...base, configured: true, protocol: "saml", saml_entity_id: "https://idp.acme.io/saml",
+            saml_sso_url: "https://idp.acme.io/sso", has_cert: true, domains: ["acme.io"],
+            enforce: false, default_role: "member" }
+        : { ...base, configured: false }) });
+    });
+    await goHash(page, "settings");
+    await page.getByLabel("email", { exact: true }).fill("ada@acme.io");
+    await page.getByLabel("password").fill("correct horse");
+    await page.getByRole("button", { name: "log in", exact: true }).click();
+    await page.getByTestId("sso-setup").click();
+    await page.getByTestId("sso-protocol-saml").check();
+    const ours = page.getByTestId("sso-saml-ours");
+    await expect(ours).toContainText("https://cp.acme.io/identity/v1/saml/acs");
+    await expect(ours).toContainText("https://cp.acme.io/identity/v1/saml/org_1");
+    await page.getByTestId("sso-saml-metadata").fill("<md:EntityDescriptor entityID=\"https://idp.acme.io/saml\"/>");
+    await page.getByTestId("sso-save").click();
+    await expect(page.getByTestId("sso-on")).toContainText("SAML · https://idp.acme.io/saml");
+    expect(sent).toMatchObject({ protocol: "saml", domains: ["acme.io"],
+                                 saml_metadata: "<md:EntityDescriptor entityID=\"https://idp.acme.io/saml\"/>" });
+  });
+
   test("who may: an admin lets one member stop teammates' sessions", async ({ page }) => {
     await page.route("**/identity/v1/login", jsonRoute(200, SESSION));
     await page.route("**/identity/v1/me", jsonRoute(200, {

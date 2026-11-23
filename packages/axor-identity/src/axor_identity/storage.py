@@ -144,6 +144,11 @@ org_sso = Table(
     Column("default_role", String(24), nullable=False, default="member"),
     Column("updated_by", String(64), nullable=False),
     Column("updated_ts", String(40), nullable=False),
+    # oidc | saml — and SAML's provider (saml.py): its SSO URL, entity id, cert
+    Column("protocol", String(8), nullable=False, default="oidc"),
+    Column("saml_sso_url", String(1000), nullable=False, default=""),
+    Column("saml_entity_id", String(500), nullable=False, default=""),
+    Column("saml_cert", Text, nullable=False, default=""),
 )
 
 # The bearer token a workspace's identity provider provisions people with
@@ -577,7 +582,9 @@ class Store:
         return {"org_id": r.org_id, "issuer": r.issuer, "client_id": r.client_id,
                 "client_secret": r.client_secret, "domains": json.loads(r.domains),
                 "enforce": bool(r.enforce), "default_role": r.default_role,
-                "updated_by": r.updated_by, "updated_ts": r.updated_ts}
+                "updated_by": r.updated_by, "updated_ts": r.updated_ts,
+                "protocol": r.protocol or "oidc", "saml_sso_url": r.saml_sso_url or "",
+                "saml_entity_id": r.saml_entity_id or "", "saml_cert": r.saml_cert or ""}
 
     async def get_sso(self, org_id: str) -> dict[str, Any] | None:
         async with self.engine.connect() as conn:

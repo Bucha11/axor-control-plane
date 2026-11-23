@@ -220,19 +220,29 @@ function SingleSignOn({ orgId }: { orgId: string }) {
   const qc = useQueryClient();
   const q = useQuery({ queryKey: ["sso", orgId], queryFn: () => api.sso(orgId), retry: false });
   const [open, setOpen] = useState(false);
-  const [form, setForm] = useState({ issuer: "", client_id: "", client_secret: "", domains: "",
+  const [form, setForm] = useState({ protocol: "oidc" as "oidc" | "saml", issuer: "", client_id: "",
+                                     client_secret: "", saml_metadata: "", saml_sso_url: "",
+                                     saml_entity_id: "", saml_cert: "", domains: "",
                                      enforce: false, default_role: "member" });
   const [copied, setCopied] = useState(false);
   useEffect(() => {
     const d = q.data;
-    if (d) setForm({ issuer: d.issuer ?? "", client_id: d.client_id ?? "", client_secret: "",
+    if (d) setForm({ protocol: d.protocol ?? "oidc", issuer: d.issuer ?? "", client_id: d.client_id ?? "",
+                     client_secret: "", saml_metadata: "", saml_sso_url: d.saml_sso_url ?? "",
+                     saml_entity_id: d.saml_entity_id ?? "", saml_cert: "",
                      domains: (d.domains ?? d.provable_domains).join(", "), enforce: !!d.enforce,
                      default_role: d.default_role ?? "member" });
   }, [q.data]);
   const save = useMutation({
     mutationFn: () => api.setSso(orgId, {
-      issuer: form.issuer.trim(), client_id: form.client_id.trim(),
-      ...(form.client_secret ? { client_secret: form.client_secret } : {}),
+      protocol: form.protocol,
+      ...(form.protocol === "oidc" ? {
+        issuer: form.issuer.trim(), client_id: form.client_id.trim(),
+        ...(form.client_secret ? { client_secret: form.client_secret } : {}),
+      } : form.saml_metadata.trim() ? { saml_metadata: form.saml_metadata } : {
+        saml_sso_url: form.saml_sso_url.trim(), saml_entity_id: form.saml_entity_id.trim(),
+        ...(form.saml_cert ? { saml_cert: form.saml_cert } : {}),
+      }),
       domains: form.domains.split(/[,\s]+/).filter(Boolean), enforce: form.enforce,
       default_role: form.default_role }),
     onSuccess: () => { setOpen(false); void qc.invalidateQueries({ queryKey: ["sso", orgId] }); },
@@ -243,7 +253,7 @@ function SingleSignOn({ orgId }: { orgId: string }) {
   });
   const d = q.data;
   if (!d) return null;
-  const set = (k: keyof typeof form) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) =>
+  const set = (k: keyof typeof form) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) =>
     setForm((f) => ({ ...f, [k]: e.target.type === "checkbox" ? (e.target as HTMLInputElement).checked : e.target.value }));
   return (
     <div data-testid="sso" className="mt-3">
@@ -255,7 +265,7 @@ function SingleSignOn({ orgId }: { orgId: string }) {
       ) : d.configured && !open ? (
         <div data-testid="sso-on" style={{ lineHeight: 1.7 }}>
           <span style={{ color: C.green }}>● on</span> — {d.domains?.join(", ")} sign in through{" "}
-          <span style={{ color: C.text }}>{d.issuer}</span>
+          <span style={{ color: C.text }}>{d.protocol === "saml" ? `SAML · ${d.saml_entity_id || d.saml_sso_url}` : d.issuer}</span>
           {d.enforce ? <span style={{ color: C.amber }}> · the only way in (the owner keeps a password)</span>
             : <span style={{ color: C.dim }}> · passwords still work</span>}
           <span style={{ color: C.dim }}> · newcomers join as {d.default_role}</span>
@@ -281,12 +291,22 @@ function SingleSignOn({ orgId }: { orgId: string }) {
           off — people sign in with a password, GitHub or Google.{" "}
           <button onClick={() => setOpen(true)} data-testid="sso-setup"
             style={{ background: "none", border: "none", padding: 0, cursor: "pointer", color: C.steel, fontFamily: MONO, fontSize: 11 }}>
-            set up SSO (Okta, Entra ID, Google Workspace, any OpenID provider)
+            set up SSO (Okta, Entra ID, Google Workspace — OpenID Connect or SAML)
           </button>
         </div>
       ) : (
         <form data-testid="sso-form" onSubmit={(e) => { e.preventDefault(); save.mutate(); }}
           className="flex flex-col" style={{ gap: 6 }}>
+          <div className="flex gap-4">
+            {(["oidc", "saml"] as const).map((p) => (
+              <label key={p} className="flex items-center gap-1" style={{ cursor: "pointer" }}>
+                <input type="radio" name="sso-protocol" checked={form.protocol === p} data-testid={`sso-protocol-${p}`}
+                  onChange={() => setForm((f) => ({ ...f, protocol: p }))} />
+                {p === "oidc" ? "OpenID Connect" : "SAML 2.0"}
+              </label>
+            ))}
+          </div>
+          {form.protocol === "oidc" ? (<>
           <div style={{ color: C.mut, lineHeight: 1.6 }}>
             1. In your provider, register a web app with this sign-in redirect:{" "}
             <span data-testid="sso-callback" style={{ color: C.text }}>{d.callback_url}</span>{" "}
@@ -303,6 +323,28 @@ function SingleSignOn({ orgId }: { orgId: string }) {
           <input type="password" value={form.client_secret} onChange={set("client_secret")} aria-label="client secret"
             placeholder={d.has_secret ? "client secret — kept as it is if left empty" : "client secret"}
             style={INPUT_STYLE} data-testid="sso-secret" />
+          </>) : (<>
+          <div data-testid="sso-saml-ours" style={{ color: C.mut, lineHeight: 1.6 }}>
+            1. In your provider, add a SAML app with — or give it our metadata,{" "}
+            <span style={{ color: C.text }}>{d.saml_metadata_url}</span>:
+            <br />&nbsp;&nbsp;entity id (audience) <span style={{ color: C.text }}>{d.saml_entity_id_ours}</span>
+            <br />&nbsp;&nbsp;ACS (reply) URL <span style={{ color: C.text }}>{d.saml_acs_url}</span>
+            <br />&nbsp;&nbsp;name ID: the e-mail address; assertions signed
+            <br />2. Paste its metadata here — or its SSO URL, entity id and certificate.
+          </div>
+          <textarea value={form.saml_metadata} onChange={set("saml_metadata")} rows={3}
+            placeholder="the provider's metadata XML (<EntityDescriptor …>)" aria-label="provider metadata"
+            style={{ ...INPUT_STYLE, resize: "vertical" }} data-testid="sso-saml-metadata" />
+          {!form.saml_metadata.trim() && (<>
+            <input value={form.saml_sso_url} onChange={set("saml_sso_url")} placeholder="SSO URL — https://idp…/saml/sso"
+              aria-label="SSO URL" style={INPUT_STYLE} data-testid="sso-saml-url" />
+            <input value={form.saml_entity_id} onChange={set("saml_entity_id")} placeholder="the provider's entity id (issuer)"
+              aria-label="provider entity id" style={INPUT_STYLE} />
+            <textarea value={form.saml_cert} onChange={set("saml_cert")} rows={2}
+              placeholder={d.has_cert ? "signing certificate — kept as it is if left empty" : "signing certificate (PEM)"}
+              aria-label="provider certificate" style={{ ...INPUT_STYLE, resize: "vertical" }} />
+          </>)}
+          </>)}
           <input value={form.domains} onChange={set("domains")} placeholder="domains — acme.com" aria-label="domains"
             style={INPUT_STYLE} data-testid="sso-domains" />
           <div style={{ color: C.dim, fontSize: 10.5 }}>
