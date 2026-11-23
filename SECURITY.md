@@ -58,6 +58,35 @@ least-privilege and stored hashed. Share links are scoped by design — one
 case, its own unguessable token (128-bit), revocable, no navigation to
 anything else.
 
+**Single sign-on and SCIM (axor-identity, Business and above).**
+- *Who may configure it.* Only a workspace's owner or admin, and only on a
+  licence the identity service verified itself with the pinned vendor key. It
+  never takes the plane's word for the plan.
+- *Which domains.* A workspace claims an e-mail domain only if the verified
+  address of one of its owners or admins proves it. Public mail domains are
+  refused. One domain belongs to one workspace.
+- *OIDC.* Authorization code flow with PKCE, a nonce bound to the verifier,
+  and the ID token verified against the provider's JWKS (issuer, audience,
+  expiry). `email_verified: false` is refused.
+- *SAML.* The XML signature is checked against the certificate the admin
+  pinned (signxml), and only the signed element is read afterwards, so a
+  wrapped or unsigned assertion is never consulted. XML is parsed without
+  DTDs, entities or network access. Issuer, audience, recipient, time window
+  (3 minutes' skew) and `InResponseTo` are checked. The request ID is kept
+  with the single-use sign-in state, so a replayed response has nothing to
+  answer.
+- *Enforced SSO* takes passwords and GitHub/Google sign-in away from people
+  at the workspace's domains. The owner keeps a password as the way back in
+  if the provider breaks.
+- *SCIM.* One bearer token per workspace, stored hashed, shown once, and
+  replaceable. A deprovisioned person loses their membership and their
+  refresh tokens in that workspace, and the plane revokes their API keys
+  (service token signed with the identity key, valid 2 minutes). The owner
+  cannot be deprovisioned.
+- *Not yet.* Signed AuthnRequests, encrypted assertions and IdP-initiated
+  sign-in are not supported. Membership changes made by SCIM are not yet on
+  the plane's audit trail.
+
 **EE license.** Verified offline with a pinned vendor Ed25519 key. No
 phone-home; expiry degrades EE features to read-only and **never disables
 safety features**.

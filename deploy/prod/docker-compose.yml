@@ -83,6 +83,8 @@ services:
       AXOR_OPERATOR_KEYS: ${AXOR_OPERATOR_KEYS:-{}}
       AXOR_VENDOR_PUBKEY: ${AXOR_VENDOR_PUBKEY:-}
       AXOR_ORG: ${AXOR_ORG:-}
+      # a licence given here instead of pasted in Settings → Billing
+      AXOR_LICENSE: ${AXOR_LICENSE:-}
       AXOR_VAULT_CREDS_TOKEN: ${AXOR_VAULT_CREDS_TOKEN:-}
       AXOR_VAULT_SIGNING_TOKEN: ${AXOR_VAULT_SIGNING_TOKEN:-}
       AXOR_IDENTITY_JWKS_URL: http://identity:8402/.well-known/jwks.json
@@ -113,6 +115,32 @@ services:
       AXOR_IDENTITY_SIGNING_KEY: ${AXOR_IDENTITY_SIGNING_KEY:?set AXOR_IDENTITY_SIGNING_KEY in .env}
       # open | first-only | closed. See SIGNUP_MODES in axor_identity.app.
       AXOR_IDENTITY_SIGNUP: ${AXOR_IDENTITY_SIGNUP:-open}
+      # Where browsers and identity providers reach this service. Single
+      # sign-on (OIDC and SAML), SCIM and "sign in with GitHub/Google" are
+      # offered only with it: the OIDC redirect, the SAML ACS and the SCIM base
+      # are all addresses under it.
+      AXOR_IDENTITY_PUBLIC_URL: ${AXOR_IDENTITY_PUBLIC_URL:-https://${CP_HOST}/identity}
+      # The vendor's licence key — the same the backend pins. A workspace's
+      # Business licence, verified with it, is what turns SSO and SCIM on.
+      AXOR_VENDOR_PUBKEY: ${AXOR_VENDOR_PUBKEY:-}
+      AXOR_ORG: ${AXOR_ORG:-}
+      # A person SCIM deactivates also loses the keys their machines report
+      # with on this plane (a 2-minute service token signed with the key above).
+      AXOR_IDENTITY_PLANE_URL: ${AXOR_IDENTITY_PLANE_URL:-http://backend:8400}
+      # Lab signs in through this same service: its address may be returned to.
+      AXOR_IDENTITY_RETURN_ORIGINS: ${AXOR_IDENTITY_RETURN_ORIGINS:-https://${LAB_HOST}}
+      # How long a sign-in lasts without coming back (seconds; 14 days by default).
+      AXOR_IDENTITY_REFRESH_TTL: ${AXOR_IDENTITY_REFRESH_TTL:-1209600}
+      # Sign in with GitHub / Google (optional). Register the provider's app with
+      # <public url>/v1/oauth/<github|google>/callback.
+      AXOR_IDENTITY_GITHUB_CLIENT_ID: ${AXOR_IDENTITY_GITHUB_CLIENT_ID:-}
+      AXOR_IDENTITY_GITHUB_CLIENT_SECRET: ${AXOR_IDENTITY_GITHUB_CLIENT_SECRET:-}
+      AXOR_IDENTITY_GOOGLE_CLIENT_ID: ${AXOR_IDENTITY_GOOGLE_CLIENT_ID:-}
+      AXOR_IDENTITY_GOOGLE_CLIENT_SECRET: ${AXOR_IDENTITY_GOOGLE_CLIENT_SECRET:-}
+      # Mail for address checks, password resets and invitations (optional):
+      # smtp://user:pass@host:587 (STARTTLS) or smtps://…:465.
+      AXOR_IDENTITY_SMTP_URL: ${AXOR_IDENTITY_SMTP_URL:-}
+      AXOR_IDENTITY_MAIL_FROM: ${AXOR_IDENTITY_MAIL_FROM:-}
     depends_on:
       postgres: {condition: service_healthy}
     healthcheck:

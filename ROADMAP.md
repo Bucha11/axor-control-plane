@@ -8,13 +8,18 @@ cascade) · two-sided regression CI · MCP onboarding (HTTP + stdio servers, the
 proxy spawns stdio gateways) · streaming passthrough · webhook notifications +
 dead-letter · scoped API keys · alembic migrations · retention · concurrent
 runs per proxy · offline EE license · **Team (EE): scheduled corpus CI + run
-history, notification routing (channels + node globs)**.
+history, notification routing (channels + node globs)** · coding agents
+(Claude Code / Codex hooks, developer seats, seat cap, agent trees and
+subagents) · **Business (EE): single sign-on (OIDC + SAML 2.0), SCIM 2.0 with
+group→role mapping, per-capability permissions, full audit trail with export,
+retention and monthly report**.
 
 **Next**: OpenAI Agents SDK + CrewAI wrap recipes ·
 landing + docs site · benchmark harness (catch-rate table) · load-ceiling doc.
 
-**Later (needs demand)**: hosted multi-tenant ·
-SSO/RBAC (Enterprise) · scheduled corpus CI + history (Team) · HA backend.
+**Later (needs demand)**: hosted multi-tenant · HA backend · SAML extras
+(signed AuthnRequests, encrypted assertions, IdP-initiated sign-in) ·
+air-gapped bundle · private benchmark registry.
 
 **Non-goals**: prompt filtering (we govern execution, not text) · a pager (we
 emit webhooks; PagerDuty is a consumer) · blocking at the proxy (enforcement

@@ -103,11 +103,15 @@ costs a paying customer their entitlement.
               [--governed-nodes <negotiated>] \
               --expires-at <end of the paid period>
       (the ceiling defaults to the rung's allowance —
-       community 1, team 10, security 50; enterprise is negotiated
-       and must be passed)
+       community 1, coding 1, business 1, team 10, security 50;
+       enterprise is negotiated and must be passed)
 4. usage: bill `billable_nodes` at the rung's overage rate
-      team $75/node/mo, security $50/node/mo,
+      coding / business / team $75/node/mo, security $50/node/mo,
       community free, enterprise contracted
+   and developer seats past the rung's included ones
+      coding $25/developer/mo; business, team, security $40/developer/mo
+      (included: community 1, team 5, security 25)
+   — the statement (`GET /v1/license/invoice?month=…`) carries both lines.
 5. return {"license_json": ...}
 ```
 

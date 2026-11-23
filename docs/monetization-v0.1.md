@@ -27,8 +27,8 @@ The spec already drilled the holes on this line: §9 deferred "team features, SS
 | Notifications (§16) | ✅ webhook | routing rules, per-team channels |
 | EvidenceCase export (§8.3) | ✅ PDF/link | **compliance report generator** (period reports: interventions, attestations w/ reasons, denial stats — audit-ready) |
 | Topology (§12.1) | ✅ per connection | **fleet view**: all agents across teams, cross-connection search |
-| Identity | local tokens, GitHub OAuth | SSO/SAML/SCIM, RBAC (viewer/operator/admin) |
-| Retention | local files, yours | managed retention policies, legal hold, audit log export |
+| Identity | accounts, GitHub/Google sign-in, roles (viewer/member/admin/owner) | **Business+:** SSO (OIDC, SAML 2.0) enforceable per domain, SCIM 2.0 with groups → roles, per-capability permissions (who may) |
+| Retention | local files, yours | **Business+:** full audit trail of controls with CSV/JSON export, per-workspace retention, monthly report · legal hold (planned) |
 | Vault (§14.2) | ✅ mechanism + sink-side injection + attested dispense + envelope mode | fleet key management, rotation policies at scale, a real secret store underneath (decision #13) |
 | Support | community | SLA, private channel, upgrade assistance |
 
@@ -46,7 +46,30 @@ Two deliberately strong paid anchors: **compliance reports** (EvidenceCase + app
 - License encodes: org, tier, node ceiling, expiry. EE features check it at startup; expiry degrades gracefully to read-only EE (never disables safety features — Line 1).
 - Optional, off-by-default usage telemetry. Security buyers assume phone-home; being provably free of it differentiates.
 
-## 5. Tiers & pricing sketch
+## 5. Tiers & pricing
+
+### The ladder as shipped (2026-11)
+
+The source of truth is `ee/pricing.py` (rates) and `ee/license.py` (what each
+rung includes); the pricing page and its calculator read the same numbers.
+Two meters: production agents count as **governed nodes**, coding agents
+(Claude Code / Codex) as the **developers** running them that month.
+
+| Rung | Base | Included | Beyond | What it adds |
+|---|---|---|---|---|
+| **Community** | $0 | 1 developer, 1 node | — (a 2nd developer locks until paid) | all safety, local enforcement, one agent family |
+| **Coding** | $0 | — | $25 / developer, $75 / node past 1 | the team: seats, both agent families, trees, team policy, memory, skills, pairs; seat cap + bill forecast |
+| **Business** | $0 | — | $40 / developer, $75 / node past 1 | Coding + SSO (OIDC, SAML), SCIM, who may, full audit trail + export, retention, monthly report |
+| **Team** | $299 / mo | 10 nodes, 5 developers | $75 / node, $40 / developer | production runtime control, attestations, scheduled regression CI + history; includes Business |
+| **Security** | $1,500 / mo | 50 nodes, 25 developers | $50 / node, $40 / developer | Team + incident → regression, policy comparison |
+| **Enterprise** | contracted (from ~$30k / yr) | negotiated | negotiated | Security + air-gapped / VPC, SLA, private benchmark registry |
+
+Why Team and Security seats cost $40, not $25: a seat beyond their allowance
+is a Business seat, so Team is never the cheaper way to buy what Business
+sells. Past about four production nodes, Team's base beats Coding's per-node
+price, and the calculator says so.
+
+### The original sketch (v0.1)
 
 | Tier | Price shape | For |
 |---|---|---|

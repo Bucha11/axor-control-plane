@@ -138,6 +138,28 @@ give the image tags to roll to. It needs these repository secrets:
 Pin exact versions (`AXOR_TAG=0.14.2`, `LAB_TAG=…`) once you have real users.
 Then a rollback is just the previous tag plus the pre-upgrade dump.
 
+## Single sign-on, SCIM and the licence
+
+Business and above sign people in through the company's identity provider
+(OpenID Connect or SAML 2.0) and let it add and remove them (SCIM 2.0). On
+this install that needs two things in `.env`:
+
+- `AXOR_VENDOR_PUBKEY` (and `AXOR_ORG`), which come with the licence. Both the
+  plane and the login service check licences with this key.
+- The login service's public address. It defaults to
+  `https://$CP_HOST/identity`; set `AXOR_IDENTITY_PUBLIC_URL` only if browsers
+  reach it somewhere else. Identity providers are given addresses under it:
+  the OIDC redirect, the SAML ACS, and the SCIM base `…/identity/scim/v2`.
+
+Then paste the licence in Settings → Billing, or set `AXOR_LICENSE`. The
+owner sets up SSO and SCIM in Settings → workspace. `docs/sso-scim.md` walks
+through Okta, Entra ID and Google Workspace step by step.
+
+The login service reaches the plane on the compose network
+(`AXOR_IDENTITY_PLANE_URL`, `http://backend:8400`). A person the provider
+deactivates loses the keys their machines report with, as well as their
+membership.
+
 ## Security checklist
 
 Required values are enforced: compose refuses to start without the API token,
