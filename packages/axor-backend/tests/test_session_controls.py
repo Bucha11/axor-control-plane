@@ -83,3 +83,19 @@ async def test_a_paused_or_stopped_tree_says_so(client: httpx.AsyncClient) -> No
                                                              "nodes": {}, "items": []})
         assert r.status_code == 204, r.text
         assert (await client.get("/v1/trees/tree-ctl-1")).json()["status"] == status
+
+
+async def test_a_title_and_a_profile_sent_at_once_both_land(client: httpx.AsyncClient) -> None:
+    import asyncio
+
+    for i in range(8):
+        node = f"codex-race-many-{i}"
+        await asyncio.gather(
+            client.post(f"/v1/plane/{node}/title", json={"title": f"task {i}"}),
+            client.post(f"/v1/plane/{node}/profile",
+                        json={"kind": "coding", "agent": "codex", "developer": "dev-ada"}),
+            _heartbeat(client, node))
+    profiles = {n["node_id"]: n["profile"] for n in (await client.get("/v1/plane/nodes")).json()}
+    for i in range(8):
+        prof = profiles[f"codex-race-many-{i}"]
+        assert (prof["kind"], prof["agent"], prof["title"]) == ("coding", "codex", f"task {i}")

@@ -2053,7 +2053,19 @@ class Store:
         """First word wins: a node is what it said it was when it first
         reported, so a later profile cannot move it out of the fleet count.
         The repository is the exception — it is not metered, and a session
-        whose first profile came from an older sidecar learns it later."""
+        whose first profile came from an older sidecar learns it later. The
+        session's title is sent at the same moment: if its placeholder row lands
+        between our look and our insert, the second try fills that row in."""
+        for attempt in (1, 2):
+            try:
+                await self._put_node_profile(node_id, kind, agent, developer, ts, repo, repo_label)
+                return
+            except IntegrityError:
+                if attempt == 2:
+                    raise
+
+    async def _put_node_profile(self, node_id: str, kind: str, agent: str, developer: str,
+                                ts: str, repo: str, repo_label: str) -> None:
         org = current_org_id()
         async with self.engine.begin() as conn:
             held = (await conn.execute(select(node_profiles.c.node_id, node_profiles.c.repo,
@@ -2099,9 +2111,17 @@ class Store:
                 node_profiles.c.org_id == org, node_profiles.c.node_id == node_id))).first()
             if held is not None:
                 return False
-            await conn.execute(node_profiles.insert().values(
-                org_id=org, node_id=node_id, kind="", agent="", developer="",
-                first_ts="", repo="", repo_label="", title=title[:120]))
+            try:
+                async with conn.begin_nested():
+                    await conn.execute(node_profiles.insert().values(
+                        org_id=org, node_id=node_id, kind="", agent="", developer="",
+                        first_ts="", repo="", repo_label="", title=title[:120]))
+            except IntegrityError:
+                # the profile landed meanwhile: name it now
+                done = await conn.execute(update(node_profiles).where(
+                    node_profiles.c.org_id == org, node_profiles.c.node_id == node_id,
+                    node_profiles.c.title == "").values(title=title[:120]))
+                return bool(done.rowcount)
         return True
 
     async def coding_profiles(self) -> list[dict[str, str]]:
