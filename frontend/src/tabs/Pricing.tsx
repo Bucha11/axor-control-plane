@@ -13,6 +13,7 @@ import Coach from "../components/Coach";
 import Tabs from "../components/Tabs";
 import { LAB_SHIPPED } from "../flags";
 import { navigate, useRoute } from "../router";
+import { ADDS, quotes, RUNG_NAME, type Rung } from "../quote";
 
 // A feature is either shipping today or on the roadmap. We mark the difference
 // explicitly rather than listing aspirational capabilities as if they exist — a
@@ -39,7 +40,7 @@ export const JOURNEYS: { id: Journey; label: string; blurb: string }[] = [
   { id: "production", label: "A production agent",
     blurb: "Your own agent in production, wrapped and governed — priced per governed node." },
   { id: "both", label: "Both",
-    blurb: "One plan: the production fleet and your developers' coding agents." },
+    blurb: "Your developers' coding agents and your production agents: say how many, and see what each plan costs." },
 ];
 
 interface Tier {
@@ -117,7 +118,7 @@ const TIERS: Tier[] = [
     price: "$25 / developer / mo",
     priceNote: "card · per developer whose coding agents ran that month",
     module: "Coding agents + Control Plane",
-    who: "teams governing Claude Code and Codex · no production runtime needed",
+    who: "teams governing Claude Code and Codex · and a production agent or two",
     features: [
       { text: "everything free, plus what you pay for:", plus: true },
       { text: "Claude Code and Codex together — one writes, the other reviews, in one tree" },
@@ -127,10 +128,11 @@ const TIERS: Tier[] = [
       { text: "pair with people from outside the team — up to 3 guests per session, on their own free accounts" },
       { text: "reputation per agent and model, across the team's sessions" },
       { text: "billed per developer whose agents ran that month — not per session, repo or tree" },
+      { text: "a production agent or two as well: one included, then $75 per agent a month — pause, stop and cap them from the plane" },
     ],
     kind: "paid",
-    note: "paid — coding agents only; add production agents with Team",
-    journeys: ["coding"],
+    note: "paid — coding agents, and a few production agents; past about four of those, Team is cheaper",
+    journeys: ["coding", "both"],
     highlightFor: ["coding"],
   },
   {
@@ -186,7 +188,6 @@ const TIERS: Tier[] = [
     kind: "paid",
     note: "paid — the primary commercial unit",
     journeys: ["production", "both"],
-    highlightFor: ["both"],
   },
   {
     name: "Enterprise Platform",
@@ -268,6 +269,10 @@ export default function Pricing() {
   const route = useRoute();
   const [journey, setJourney] = useState<Journey>(() => initialJourney(route.query));
   const shown = TIERS.filter((t) => t.journeys.includes(journey)).map(shownTier);
+  // the calculator's two numbers, and the cheapest rung for them
+  const [devs, setDevs] = useState(5);
+  const [agents, setAgents] = useState(1);
+  const calc = quotes(devs, agents);
   return (
     <div style={{ maxWidth: 1040, margin: "0 auto" }}>
       <Coach id="pricing" title="Pricing — one ladder">
@@ -304,14 +309,20 @@ export default function Pricing() {
           ? "Free: one developer and one agent family. A developer is counted once a month, however many sessions, agents or trees they ran."
           : journey === "production"
             ? "Community → Team Workspace → Security Workspace → Enterprise Platform. What grows with the rung is the governed fleet, not the feature matrix."
-            : "Team and Security include developer seats, so one plan covers the fleet and the coding agents. Only coding agents? The Coding plan is cheaper."}
+            : null}
       </div>
+      {journey === "both" && (
+        <Calculator devs={devs} agents={agents} setDevs={setDevs} setAgents={setAgents} calc={calc} />
+      )}
 
       <div className="flex gap-4" style={{ flexWrap: "wrap" }}>
         {shown.map((base) => {
           const { cta, ...over } = base.on?.[journey] ?? {};
           const t: Tier = { ...base, ...over };
-          const highlight = t.highlightFor?.includes(journey) ?? false;
+          // on Both, the cheapest plan for the numbers above
+          const highlight = journey === "both"
+            ? RUNG_NAME[calc.best.rung] === t.name
+            : t.highlightFor?.includes(journey) ?? false;
           const meta = KIND_META[t.kind];
           return (
             <div
@@ -480,6 +491,71 @@ export default function Pricing() {
           planned
         </span>{" "}
         are on the roadmap, not yet shipped — everything else runs today.
+      </div>
+    </div>
+  );
+}
+
+
+/** Both ways in: how many developers run coding agents, how many production
+ *  agents — what each plan costs a month, and the cheapest. List prices; the
+ *  bill itself is drawn from what actually ran (Settings → Billing). */
+function Calculator({ devs, agents, setDevs, setAgents, calc }: {
+  devs: number; agents: number; setDevs: (n: number) => void; setAgents: (n: number) => void;
+  calc: ReturnType<typeof quotes>;
+}) {
+  const field = { background: C.bg, border: `1px solid ${C.line}`, borderRadius: 5, color: C.text,
+                  fontFamily: MONO, fontSize: 13, padding: "4px 8px", width: 80 };
+  const num = (v: string) => Math.max(0, Math.min(10_000, Math.floor(Number(v) || 0)));
+  const best = calc.best;
+  // the next rung up that costs more but adds something — the reason to pay it
+  const next = calc.all.find((q) => q.ok && q.total > best.total && ADDS[q.rung as Rung]);
+  return (
+    <div data-testid="pricing-calculator" className="p-4" style={{ background: C.panel, border: `1px solid ${C.steel}`,
+      borderRadius: 10, marginBottom: 24, fontFamily: MONO, fontSize: 12, color: C.mut, lineHeight: 1.7 }}>
+      <div className="flex gap-6 flex-wrap items-end">
+        <label className="flex flex-col gap-1">
+          <span style={{ fontSize: 10.5, color: C.dim }}>developers who run coding agents</span>
+          <input type="number" min={0} value={devs} aria-label="developers" data-testid="calc-devs"
+            onChange={(e) => setDevs(num(e.target.value))} style={field} />
+        </label>
+        <label className="flex flex-col gap-1">
+          <span style={{ fontSize: 10.5, color: C.dim }}>production agents</span>
+          <input type="number" min={0} value={agents} aria-label="production agents" data-testid="calc-agents"
+            onChange={(e) => setAgents(num(e.target.value))} style={field} />
+        </label>
+        <div style={{ flex: 1, minWidth: 220 }} data-testid="calc-best">
+          <div style={{ fontSize: 10.5, color: C.dim }}>cheapest</div>
+          <span style={{ color: C.text, fontSize: 15 }}>{RUNG_NAME[best.rung]} — ${best.total.toLocaleString("en-US")} / month</span>
+        </div>
+      </div>
+      <div className="mt-3" data-testid="calc-lines" style={{ fontSize: 11 }}>
+        {best.lines.length === 0 ? (
+          <div>free — one developer with one agent family (Claude Code or Codex), one production agent</div>
+        ) : best.lines.map((l, i) => (
+          <div key={i} className="flex gap-3">
+            <span style={{ flex: 1 }}>{l.text}</span>
+            <span style={{ color: C.text }}>${l.amount.toLocaleString("en-US")}</span>
+          </div>
+        ))}
+      </div>
+      {next && (
+        <div className="mt-2" data-testid="calc-next" style={{ fontSize: 11, color: C.dim }}>
+          {RUNG_NAME[next.rung]} is ${(next.total - best.total).toLocaleString("en-US")} more
+          (${next.total.toLocaleString("en-US")}) and adds {ADDS[next.rung as Rung]}.
+        </div>
+      )}
+      <div className="mt-3 flex gap-4 flex-wrap" data-testid="calc-all" style={{ fontSize: 10.5 }}>
+        {calc.all.map((q) => (
+          <span key={q.rung} style={{ color: q.rung === best.rung ? C.text : C.dim }}>
+            {RUNG_NAME[q.rung]}: {q.ok ? `$${q.total.toLocaleString("en-US")}` : `— ${q.why}`}
+          </span>
+        ))}
+        <span style={{ color: C.dim }}>Enterprise: by contract</span>
+      </div>
+      <div className="mt-2" style={{ fontSize: 10, color: C.dim }}>
+        list prices a month. A developer counts once a month when their agents run; a production agent is
+        billed on the month&apos;s peak. What gets blocked never depends on the plan.
       </div>
     </div>
   );

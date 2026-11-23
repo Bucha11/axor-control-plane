@@ -1,0 +1,72 @@
+// What a workspace would pay a month on each rung, from how many developers
+// run coding agents and how many production agents it governs — and which rung
+// is the cheapest. The same list prices as the backend's rate card
+// (ee/pricing.py: RATE_CARD, SEAT_PRICE, TIER_NODE_CEILING, TIER_DEVELOPER_SEATS):
+// change one, change the other (tests/test_billing_tab.py and e2e/pricing.spec.ts
+// check the same cases).
+
+export type Rung = "community" | "coding" | "team" | "security";
+
+interface Card {
+  base: number;          // dollars a month
+  nodes: number;         // governed nodes included
+  perNode: number;       // dollars per node past them
+  seats: number;         // developers included
+  perSeat: number;       // dollars per developer past them
+}
+
+export const CARD: Record<Rung, Card> = {
+  community: { base: 0, nodes: 1, perNode: 0, seats: 1, perSeat: 0 },
+  coding: { base: 0, nodes: 1, perNode: 75, seats: 0, perSeat: 25 },
+  team: { base: 299, nodes: 10, perNode: 75, seats: 5, perSeat: 25 },
+  security: { base: 1500, nodes: 50, perNode: 50, seats: 25, perSeat: 25 },
+};
+
+export const RUNG_NAME: Record<Rung, string> = {
+  community: "Community", coding: "Coding", team: "Team Workspace", security: "Security Workspace",
+};
+
+// What a rung adds over the one below it, in what ships today — the reason to
+// pay more than the cheapest when it is not the cheapest.
+export const ADDS: Partial<Record<Rung, string>> = {
+  team: "regression CI on a schedule with its history, scheduled chaos tests, alert routing by channel",
+  security: "incident → regression conversion, policy / kernel comparison",
+};
+
+export interface Quote {
+  rung: Rung;
+  ok: boolean;           // the rung takes this workspace at all
+  why?: string;          // why not
+  total: number;
+  lines: { text: string; amount: number }[];
+}
+
+export function quote(rung: Rung, developers: number, nodes: number): Quote {
+  const c = CARD[rung];
+  const d = Math.max(0, Math.floor(developers));
+  const n = Math.max(0, Math.floor(nodes));
+  if (rung === "community" && (d > c.seats || n > c.nodes)) {
+    return { rung, ok: false, total: 0, lines: [],
+      why: d > c.seats ? "the free plan is one developer" : "the free plan governs one production agent" };
+  }
+  const extraNodes = Math.max(0, n - c.nodes);
+  const extraSeats = Math.max(0, d - c.seats);
+  const lines: { text: string; amount: number }[] = [];
+  if (c.base) lines.push({ text: `${RUNG_NAME[rung]} — ${c.nodes} agents and ${c.seats} developers included`, amount: c.base });
+  if (extraSeats && c.perSeat) {
+    lines.push({ text: `${extraSeats} developer${extraSeats === 1 ? "" : "s"} × $${c.perSeat}`, amount: extraSeats * c.perSeat });
+  }
+  if (extraNodes && c.perNode) {
+    lines.push({ text: `${extraNodes} production agent${extraNodes === 1 ? "" : "s"} past the ${c.nodes} included × $${c.perNode}`,
+                 amount: extraNodes * c.perNode });
+  }
+  return { rung, ok: true, total: lines.reduce((k, l) => k + l.amount, 0), lines };
+}
+
+/** Every rung's quote, and the cheapest that takes the workspace (the lower
+ *  rung on a tie). */
+export function quotes(developers: number, nodes: number): { all: Quote[]; best: Quote } {
+  const all = (Object.keys(CARD) as Rung[]).map((r) => quote(r, developers, nodes));
+  const best = all.filter((q) => q.ok).reduce((a, b) => (b.total < a.total ? b : a));
+  return { all, best };
+}

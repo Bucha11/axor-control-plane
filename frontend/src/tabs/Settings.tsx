@@ -1040,7 +1040,7 @@ function Billing({ coding, prod }: { coding: boolean; prod: boolean }) {
           {TIER_NAME[plan.tier] ?? plan.tier}
           <span style={{ color: C.mut }}>
             {plan.tier === "community" ? " — $0: one developer and one agent family, one governed node"
-              : plan.tier === "coding" ? ` — ${plan.seat} per developer whose agents ran that month`
+              : plan.tier === "coding" ? ` — ${plan.seat} per developer whose agents ran that month · production agents: 1 included, then $75 each`
                 : plan.priced ? ` — ${plan.base} a month · ${plan.included_developers} developers and ${plan.included_nodes} governed nodes included, then ${plan.seat} per developer`
                   : " — contracted"}
           </span>

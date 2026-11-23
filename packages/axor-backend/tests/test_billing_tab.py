@@ -74,3 +74,32 @@ async def test_the_example_sessions_are_never_billed(open_client: httpx.AsyncCli
     coding = next(e for e in body["if_paid"] if e["tier"] == "coding")
     assert coding["active_developers"] == 1
     assert [d["developer"] for d in coding["developers"]] == ["dev-real"]
+
+
+def test_a_coding_team_pays_for_a_production_agent_past_the_one_included() -> None:
+    """No jump to Team's base for one production agent: Coding bills a node
+    past the one every rung includes at the per-node price."""
+    from axor_backend.ee.pricing import statement
+
+    st = statement(month="2026-10", organization="Acme", workspace_tier="coding",
+                   included_nodes=1, peak_nodes=3, peak_day="2026-10-05",
+                   included_developers=0, active_developers=2)
+    assert st.billable_nodes == 2 and st.overage_cents == 150_00
+    assert st.seat_cents == 50_00 and st.total_cents == 200_00
+
+
+def test_the_rate_card_gives_the_pricing_calculators_numbers() -> None:
+    """frontend/src/quote.ts prices the same rungs for the Pricing page:
+    e2e/pricing.spec.ts checks these cases there."""
+    from axor_backend.ee.license import TIER_DEVELOPER_SEATS, TIER_NODE_CEILING
+    from axor_backend.ee.pricing import statement
+
+    def total(tier: str, devs: int, nodes: int) -> int:
+        return statement(month="2026-10", organization="x", workspace_tier=tier,
+                         included_nodes=TIER_NODE_CEILING[tier], peak_nodes=nodes,
+                         peak_day=None, included_developers=TIER_DEVELOPER_SEATS[tier],
+                         active_developers=devs).total_cents // 100
+
+    assert (total("coding", 20, 1), total("team", 20, 1)) == (500, 674)
+    assert (total("coding", 20, 4), total("team", 20, 4)) == (725, 674)
+    assert (total("coding", 0, 12), total("team", 0, 12)) == (825, 449)

@@ -37,9 +37,15 @@ from datetime import UTC, date, datetime
 # `community` is free and cannot overage: the free rung is where safety lives,
 # and safety never costs (monetization Line 1). `enterprise` is absent because
 # it is contracted — see the module docstring.
+#
+# `coding` has no base price: it is its seats. A coding team that also wraps a
+# production agent or two pays for those nodes past the one every rung includes,
+# at Team's per-node price — instead of jumping to Team's base for one agent.
+# Past about four nodes Team is the cheaper rung, and the pricing calculator
+# says so.
 RATE_CARD: dict[str, tuple[int, int]] = {
     "community": (0, 0),
-    "coding": (0, 0),
+    "coding": (0, 75_00),
     "team": (299_00, 75_00),
     "security": (1_500_00, 50_00),
 }
