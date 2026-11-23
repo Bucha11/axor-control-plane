@@ -111,6 +111,72 @@ function OrgMembers() {
       <Team orgId={d.active_org} isAdmin={isAdmin} />
       <WhoMay orgId={d.active_org} isAdmin={isAdmin} />
       {isAdmin && <SingleSignOn orgId={d.active_org} />}
+      {isAdmin && <Provisioning orgId={d.active_org} />}
+    </div>
+  );
+}
+
+/** Provisioning (SCIM 2.0): the workspace's identity provider creates people
+ *  here and takes them away — out of the workspace, their sessions ended. */
+function Provisioning({ orgId }: { orgId: string }) {
+  const qc = useQueryClient();
+  const q = useQuery({ queryKey: ["scim", orgId], queryFn: () => api.scim(orgId), retry: false });
+  const [made, setMade] = useState<string | null>(null);
+  const make = useMutation({
+    mutationFn: () => api.scimToken(orgId),
+    onSuccess: (r) => { setMade(r.token); void qc.invalidateQueries({ queryKey: ["scim", orgId] }); },
+  });
+  const revoke = useMutation({
+    mutationFn: () => api.revokeScim(orgId),
+    onSuccess: () => { setMade(null); void qc.invalidateQueries({ queryKey: ["scim", orgId] }); },
+  });
+  const d = q.data;
+  if (!d || !d.available) return null;
+  const link = { background: "none", border: "none", padding: 0, cursor: "pointer", fontFamily: MONO, fontSize: 11 } as const;
+  return (
+    <div data-testid="scim" className="mt-3">
+      <div style={{ color: C.dim, letterSpacing: "0.08em", fontSize: 10.5, marginBottom: 4 }}>PROVISIONING (SCIM)</div>
+      {!d.plan_ok ? (
+        <div style={{ color: C.dim }}>
+          people come and go with your identity provider — on the{" "}
+          <a href="#/pricing?for=coding" style={{ color: C.steel }}>Business plan</a>
+        </div>
+      ) : (
+        <div style={{ lineHeight: 1.7 }}>
+          <div>
+            SCIM base URL <span data-testid="scim-base" style={{ color: C.text }}>{d.base_url}</span>
+            {d.enabled
+              ? <span style={{ color: C.dim }}> · token since {d.created_ts?.slice(0, 10)}
+                  {d.last_used_ts ? `, last used ${d.last_used_ts.slice(0, 16).replace("T", " ")}` : ", not used yet"}</span>
+              : <span style={{ color: C.dim }}> · no token yet</span>}
+          </div>
+          <div style={{ color: C.dim, fontSize: 10.5 }}>
+            your provider creates people here and deactivates them: they leave the workspace and their
+            sessions end. Roles stay yours to set here.
+          </div>
+          {made && (
+            <div data-testid="scim-token" className="mt-1 p-2" style={{ background: C.panel2, border: `1px solid ${C.line}`, borderRadius: 5 }}>
+              <div style={{ color: C.mut }}>give your provider this token — it is shown once:</div>
+              <div style={{ color: C.green, wordBreak: "break-all" }}>{made}</div>
+            </div>
+          )}
+          <div className="flex gap-3">
+            <button data-testid="scim-make" disabled={make.isPending} style={{ ...link, color: C.steel }}
+              onClick={() => { if (!d.enabled || window.confirm("Make a new token? The one your provider has stops working.")) make.mutate(); }}>
+              {d.enabled ? "make a new token" : "make a token"}
+            </button>
+            {d.enabled && (
+              <button style={{ ...link, color: C.dim }} disabled={revoke.isPending}
+                onClick={() => { if (window.confirm("Turn provisioning off? The provider's token stops working.")) revoke.mutate(); }}>
+                turn off
+              </button>
+            )}
+          </div>
+          {(make.isError || revoke.isError) && (
+            <div style={{ color: C.red }}>{errorWords(((make.error ?? revoke.error) as Error).message)}</div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -1282,7 +1348,7 @@ function Billing({ coding, prod }: { coding: boolean; prod: boolean }) {
           {TIER_NAME[plan.tier] ?? plan.tier}
           <span style={{ color: C.mut }}>
             {plan.tier === "community" ? " — $0: one developer and one agent family, one governed node"
-              : plan.tier === "coding" ? ` — ${plan.seat} per developer whose agents ran that month · production agents: 1 included, then $75 each`
+              : plan.tier === "coding" || plan.tier === "business" ? ` — ${plan.seat} per developer whose agents ran that month · production agents: 1 included, then $75 each`
                 : plan.priced ? ` — ${plan.base} a month · ${plan.included_developers} developers and ${plan.included_nodes} governed nodes included, then ${plan.seat} per developer`
                   : " — contracted"}
           </span>

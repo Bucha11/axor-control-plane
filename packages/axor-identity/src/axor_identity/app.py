@@ -17,8 +17,8 @@ from collections.abc import AsyncIterator
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 import httpx
-from fastapi import Depends, FastAPI, Header, HTTPException
-from fastapi.responses import RedirectResponse
+from fastapi import Depends, FastAPI, Header, HTTPException, Request
+from fastapi.responses import JSONResponse, RedirectResponse, Response
 from pydantic import BaseModel, EmailStr, Field
 
 from axor_identity import licensing, sso
@@ -875,6 +875,241 @@ def create_app(database_url: str | None = None, *,
         if await store.role_in_org(user_id, cfg.org_id) is None:
             await store.add_membership(user_id, cfg.org_id, cfg.default_role, ts)
         return user_id, created
+
+    # ── SCIM 2.0: people come and go with the workspace's identity provider ───
+    # The provider holds a bearer token for one workspace and creates, updates
+    # and deactivates its people here (RFC 7643/7644, the Users resource). A
+    # person deactivated or deleted leaves the workspace: their membership goes,
+    # their sessions in it end, and — when the control plane is wired here —
+    # the keys their machines report with are revoked.
+    scim_base = f"{public_url}/scim/v2" if public_url else ""
+    plane_url = (os.environ.get("AXOR_IDENTITY_PLANE_URL") or "").strip().rstrip("/")
+    plane_token = (os.environ.get("AXOR_IDENTITY_PLANE_TOKEN") or "").strip()
+    _USER = "urn:ietf:params:scim:schemas:core:2.0:User"
+    _LIST = "urn:ietf:params:scim:api:messages:2.0:ListResponse"
+    _ERR = "urn:ietf:params:scim:api:messages:2.0:Error"
+    _PATCH = "urn:ietf:params:scim:api:messages:2.0:PatchOp"
+    _SCIM = "application/scim+json"
+
+    def _scim(body: dict, status: int = 200) -> JSONResponse:
+        return JSONResponse(body, status_code=status, media_type=_SCIM)
+
+    def _scim_error(status: int, detail: str, scim_type: str = "") -> JSONResponse:
+        return _scim({"schemas": [_ERR], "status": str(status), "detail": detail,
+                      **({"scimType": scim_type} if scim_type else {})}, status)
+
+    class _ScimRefused(Exception):
+        def __init__(self, status: int, detail: str, scim_type: str = "") -> None:
+            self.status, self.detail, self.scim_type = status, detail, scim_type
+
+    @app.exception_handler(_ScimRefused)
+    async def _scim_refused(_request: Request, exc: _ScimRefused) -> JSONResponse:
+        return _scim_error(exc.status, exc.detail, exc.scim_type)
+
+    async def _scim_org(authorization: str | None = Header(default=None)) -> str:
+        if not authorization or not authorization.lower().startswith("bearer "):
+            raise _ScimRefused(401, "a bearer token is required")
+        org_id = await store.org_for_scim(digest(authorization.split(" ", 1)[1].strip()),
+                                          _now_iso())
+        if org_id is None:
+            raise _ScimRefused(401, "this token provisions no workspace here")
+        if not await _on_business(org_id):
+            raise _ScimRefused(403, "provisioning is on the Business plan")
+        return org_id
+
+    def _user_resource(user: dict, active: bool) -> dict:
+        return {"schemas": [_USER], "id": user["user_id"], "userName": user["email"],
+                "active": active, "emails": [{"value": user["email"], "primary": True}],
+                "meta": {"resourceType": "User", "created": user.get("created_ts", ""),
+                         "location": f"{scim_base}/Users/{user['user_id']}"}}
+
+    async def _scim_domains(org_id: str) -> set[str]:
+        held = await store.get_sso(org_id)
+        return set(held["domains"]) if held else await _provable_domains(org_id)
+
+    async def _deprovision(org_id: str, user_id: str) -> None:
+        role = await store.role_in_org(user_id, org_id)
+        if role is None:
+            return
+        if role == "owner":
+            raise _ScimRefused(409, "the workspace's owner is not deprovisioned from the "
+                                    "identity provider — they are its way back in", "mutability")
+        await store.remove_member(user_id, org_id)
+        await store.revoke_refresh_in_org(user_id, org_id)
+        if plane_url and plane_token:
+            try:
+                async with _http() as http:
+                    await http.delete(f"{plane_url}/v1/keys/of/{user_id}",
+                                      headers={"Authorization": f"Bearer {plane_token}"})
+            except httpx.HTTPError as exc:
+                logging.getLogger("axor_identity.scim").warning(
+                    "could not revoke %s's keys on the control plane: %s", user_id, exc)
+
+    async def _provision(org_id: str, user_id: str) -> None:
+        if await store.role_in_org(user_id, org_id) is None:
+            held = await store.get_sso(org_id)
+            await store.add_membership(user_id, org_id,
+                                       held["default_role"] if held else "member", _now_iso())
+
+    async def _scim_body(request: Request) -> dict:
+        try:
+            body = await request.json()
+        except ValueError as exc:
+            raise _ScimRefused(400, "the body is not JSON", "invalidSyntax") from exc
+        if not isinstance(body, dict):
+            raise _ScimRefused(400, "the body is a JSON object", "invalidSyntax")
+        return body
+
+    def _active(value: object) -> bool:
+        return value not in (False, "false", "False", "FALSE", 0)
+
+    async def _member_user(org_id: str, user_id: str) -> dict:
+        user = await store.get_user(user_id)
+        if user is None or await store.role_in_org(user_id, org_id) is None:
+            raise _ScimRefused(404, f"no user {user_id} in this workspace")
+        return user
+
+    @app.get("/v1/orgs/{org_id}/scim")
+    async def scim_status(org_id: str, caller: Claims = Depends(_caller)) -> dict:
+        _sso_admin(org_id, caller)
+        held = await store.scim_of(org_id)
+        return {"available": bool(public_url), "plan_ok": await _on_business(org_id),
+                "base_url": scim_base, "enabled": held is not None, **(held or {})}
+
+    @app.post("/v1/orgs/{org_id}/scim/token", status_code=201)
+    async def scim_token(org_id: str, caller: Claims = Depends(_caller)) -> dict:
+        """A new token for the identity provider — shown once; the old one stops."""
+        _sso_admin(org_id, caller)
+        if not public_url:
+            raise HTTPException(409, "provisioning needs this service's public address "
+                                     "(AXOR_IDENTITY_PUBLIC_URL)")
+        if not await _on_business(org_id):
+            raise HTTPException(402, {"code": "plan_required", "plan": "business",
+                                      "detail": "provisioning (SCIM) is on the Business plan"})
+        raw = "scim_" + secrets.token_urlsafe(32)
+        await store.put_scim_token(org_id, digest(raw), caller.email or caller.user_id,
+                                   _now_iso())
+        return {"token": raw, "base_url": scim_base}
+
+    @app.delete("/v1/orgs/{org_id}/scim/token", status_code=204)
+    async def scim_token_revoke(org_id: str, caller: Claims = Depends(_caller)) -> None:
+        _sso_admin(org_id, caller)
+        await store.delete_scim(org_id)
+
+    @app.get("/scim/v2/ServiceProviderConfig")
+    async def scim_config() -> JSONResponse:
+        return _scim({
+            "schemas": ["urn:ietf:params:scim:schemas:core:2.0:ServiceProviderConfig"],
+            "patch": {"supported": True}, "bulk": {"supported": False, "maxOperations": 0,
+                                                   "maxPayloadSize": 0},
+            "filter": {"supported": True, "maxResults": 200},
+            "changePassword": {"supported": False}, "sort": {"supported": False},
+            "etag": {"supported": False},
+            "authenticationSchemes": [{"type": "oauthbearertoken", "name": "Bearer token",
+                                       "description": "the workspace's SCIM token"}]})
+
+    @app.get("/scim/v2/ResourceTypes")
+    async def scim_types() -> JSONResponse:
+        return _scim({"schemas": [_LIST], "totalResults": 1, "Resources": [{
+            "schemas": ["urn:ietf:params:scim:schemas:core:2.0:ResourceType"], "id": "User",
+            "name": "User", "endpoint": "/Users", "schema": _USER}]})
+
+    @app.get("/scim/v2/Users")
+    async def scim_users(filter: str = "", startIndex: int = 1, count: int = 100,  # noqa: A002, N803
+                         org_id: str = Depends(_scim_org)) -> JSONResponse:
+        members = await store.org_members(org_id)
+        if filter:
+            import re
+
+            m = re.fullmatch(r'\s*(userName|emails(?:\.value)?|externalId)\s+eq\s+"([^"]*)"\s*',
+                             filter, re.IGNORECASE)
+            if not m:
+                raise _ScimRefused(400, "only userName eq \"…\" is filtered on", "invalidFilter")
+            want = m.group(2).strip().lower()
+            members = [x for x in members if x["email"].lower() == want]
+        start = max(1, startIndex)
+        page = members[start - 1:start - 1 + max(0, min(count, 200))]
+        users = [await store.get_user(x["user_id"]) for x in page]
+        return _scim({"schemas": [_LIST], "totalResults": len(members), "startIndex": start,
+                      "itemsPerPage": len(page),
+                      "Resources": [_user_resource(u, True) for u in users if u]})
+
+    @app.get("/scim/v2/Users/{user_id}")
+    async def scim_user(user_id: str, org_id: str = Depends(_scim_org)) -> JSONResponse:
+        return _scim(_user_resource(await _member_user(org_id, user_id), True))
+
+    @app.post("/scim/v2/Users")
+    async def scim_create(request: Request, org_id: str = Depends(_scim_org)) -> JSONResponse:
+        body = await _scim_body(request)
+        emails = [e.get("value") for e in body.get("emails") or [] if isinstance(e, dict)]
+        email = _norm_email(str(body.get("userName") or next(iter(emails), "") or ""))
+        if "@" not in email:
+            raise _ScimRefused(400, "userName is the person's e-mail address", "invalidValue")
+        if sso.domain_of(email) not in await _scim_domains(org_id):
+            raise _ScimRefused(400, f"{email} is not at one of this workspace's domains",
+                               "invalidValue")
+        user = await store.get_user_by_email(email)
+        if user is not None and await store.role_in_org(user["user_id"], org_id):
+            raise _ScimRefused(409, f"{email} is in this workspace already", "uniqueness")
+        if user is None:
+            user_id = "usr_" + secrets.token_hex(8)
+            await store.create_user(user_id, email, None, _now_iso(), email_verified=True)
+            user = await store.get_user(user_id)
+        active = _active(body.get("active", True))
+        if active:
+            await _provision(org_id, user["user_id"])
+        return _scim(_user_resource(user, active), 201)
+
+    @app.put("/scim/v2/Users/{user_id}")
+    async def scim_replace(user_id: str, request: Request,
+                           org_id: str = Depends(_scim_org)) -> JSONResponse:
+        body = await _scim_body(request)
+        user = await store.get_user(user_id)
+        if user is None:
+            raise _ScimRefused(404, f"no user {user_id}")
+        active = _active(body.get("active", True))
+        if active:
+            await _provision(org_id, user_id)
+        else:
+            await _deprovision(org_id, user_id)
+        return _scim(_user_resource(user, active))
+
+    @app.patch("/scim/v2/Users/{user_id}")
+    async def scim_patch(user_id: str, request: Request,
+                         org_id: str = Depends(_scim_org)) -> JSONResponse:
+        """Okta and Entra ID deactivate with a PATCH of ``active`` — as a path,
+        or inside a value object; the op's case and the value's type vary."""
+        body = await _scim_body(request)
+        user = await store.get_user(user_id)
+        if user is None:
+            raise _ScimRefused(404, f"no user {user_id}")
+        active = await store.role_in_org(user_id, org_id) is not None
+        for op in body.get("Operations") or []:
+            if not isinstance(op, dict) or str(op.get("op", "")).lower() not in ("replace", "add"):
+                continue
+            path, value = str(op.get("path") or ""), op.get("value")
+            if path.lower() == "active":
+                active = _active(value)
+            elif not path and isinstance(value, dict) and "active" in value:
+                active = _active(value["active"])
+        if active:
+            await _provision(org_id, user_id)
+        else:
+            await _deprovision(org_id, user_id)
+        return _scim(_user_resource(user, active))
+
+    @app.delete("/scim/v2/Users/{user_id}", status_code=204)
+    async def scim_delete(user_id: str, org_id: str = Depends(_scim_org)) -> Response:
+        if await store.get_user(user_id) is None:
+            raise _ScimRefused(404, f"no user {user_id}")
+        await _deprovision(org_id, user_id)
+        return Response(status_code=204)
+
+    @app.get("/scim/v2/Groups")
+    async def scim_groups(org_id: str = Depends(_scim_org)) -> JSONResponse:
+        # roles are set in the workspace, not pushed as groups
+        return _scim({"schemas": [_LIST], "totalResults": 0, "startIndex": 1,
+                      "itemsPerPage": 0, "Resources": []})
 
     # ── e-mail: verification and password reset ───────────────────────────────
     def _expiry(seconds: int) -> str:

@@ -146,6 +146,17 @@ org_sso = Table(
     Column("updated_ts", String(40), nullable=False),
 )
 
+# The bearer token a workspace's identity provider provisions people with
+# (SCIM, scim.py): only its hash, one per workspace.
+scim_tokens = Table(
+    "scim_tokens", metadata,
+    Column("org_id", String(64), primary_key=True),
+    Column("token_hash", String(64), nullable=False, unique=True),
+    Column("created_by", String(320), nullable=False),
+    Column("created_ts", String(40), nullable=False),
+    Column("last_used_ts", String(40), nullable=True),
+)
+
 
 def make_engine(url: str) -> AsyncEngine:
     return create_async_engine(url)
@@ -378,6 +389,43 @@ class Store:
             await conn.execute(update(refresh_tokens)
                                .where(refresh_tokens.c.user_id == user_id)
                                .values(revoked=True))
+
+    async def revoke_refresh_in_org(self, user_id: str, org_id: str) -> None:
+        """Their sessions in one workspace end; those in others go on."""
+        async with self.engine.begin() as conn:
+            await conn.execute(update(refresh_tokens)
+                               .where(refresh_tokens.c.user_id == user_id,
+                                      refresh_tokens.c.org_id == org_id)
+                               .values(revoked=True))
+
+    # ── SCIM ──────────────────────────────────────────────────────────────────
+    async def put_scim_token(self, org_id: str, token_hash: str, by: str, ts: str) -> None:
+        async with self.engine.begin() as conn:
+            await conn.execute(delete(scim_tokens).where(scim_tokens.c.org_id == org_id))
+            await conn.execute(insert(scim_tokens).values(
+                org_id=org_id, token_hash=token_hash, created_by=by, created_ts=ts))
+
+    async def scim_of(self, org_id: str) -> dict[str, Any] | None:
+        async with self.engine.connect() as conn:
+            row = (await conn.execute(select(scim_tokens)
+                                      .where(scim_tokens.c.org_id == org_id))).first()
+        return None if row is None else {"org_id": row.org_id, "created_by": row.created_by,
+                                         "created_ts": row.created_ts,
+                                         "last_used_ts": row.last_used_ts}
+
+    async def org_for_scim(self, token_hash: str, ts: str) -> str | None:
+        async with self.engine.begin() as conn:
+            row = (await conn.execute(select(scim_tokens.c.org_id)
+                                      .where(scim_tokens.c.token_hash == token_hash))).first()
+            if row is not None:
+                await conn.execute(update(scim_tokens).where(scim_tokens.c.org_id == row.org_id)
+                                   .values(last_used_ts=ts))
+        return row.org_id if row else None
+
+    async def delete_scim(self, org_id: str) -> bool:
+        async with self.engine.begin() as conn:
+            done = await conn.execute(delete(scim_tokens).where(scim_tokens.c.org_id == org_id))
+        return bool(done.rowcount)
 
     # ── sign in with a provider ───────────────────────────────────────────────
     async def user_for_identity(self, provider: str, subject: str) -> str | None:

@@ -1172,6 +1172,17 @@ export const api = {
       method: "PUT", headers: { "content-type": "application/json" },
       body: JSON.stringify({ license_json: licenseJson }),
     }).then((r) => j<{ tier: string; expires_at: string }>(r)),
+  // provisioning (SCIM): the workspace's identity provider adds and removes people
+  scim: (orgId: string) =>
+    af(`${IDENTITY_BASE}/v1/orgs/${encodeURIComponent(orgId)}/scim`).then((r) => j<{
+      available: boolean; plan_ok: boolean; base_url: string; enabled: boolean;
+      created_by?: string; created_ts?: string; last_used_ts?: string | null }>(r)),
+  scimToken: (orgId: string) =>
+    af(`${IDENTITY_BASE}/v1/orgs/${encodeURIComponent(orgId)}/scim/token`, { method: "POST" })
+      .then((r) => j<{ token: string; base_url: string }>(r)),
+  revokeScim: (orgId: string) =>
+    af(`${IDENTITY_BASE}/v1/orgs/${encodeURIComponent(orgId)}/scim/token`, { method: "DELETE" })
+      .then((r) => { if (!r.ok) throw new Error(`${r.status}`); }),
   // a workspace's single sign-on (an owner or admin)
   sso: (orgId: string) =>
     af(`${IDENTITY_BASE}/v1/orgs/${encodeURIComponent(orgId)}/sso`).then((r) => j<SSOConfig>(r)),

@@ -137,6 +137,36 @@ test.describe("identity login (Settings)", () => {
     expect(exchanged).toEqual({ code: "code-1234567890abcdef", org_id: "org_1" });
   });
 
+  test("provisioning: on Business an admin makes the provider's token, shown once", async ({ page }) => {
+    await page.route("**/identity/v1/login", jsonRoute(200, SESSION));
+    await page.route("**/identity/v1/me", jsonRoute(200, {
+      user: SESSION.user, active_org: "org_1", role: "owner",
+      memberships: [{ org_id: "org_1", role: "owner", name: "Acme", tier: "business" }],
+    }));
+    await page.route("**/identity/v1/orgs/org_1/members", jsonRoute(200, { members: [
+      { user_id: "usr_1", email: "ada@acme.io", role: "owner", since: "2026-01-01" }] }));
+    await page.route("**/identity/v1/orgs/org_1/invites", jsonRoute(200, { invites: [] }));
+    let enabled = false;
+    await page.route("**/identity/v1/orgs/org_1/scim", async (route) => route.fulfill({
+      status: 200, contentType: "application/json", body: JSON.stringify({
+        available: true, plan_ok: true, base_url: "https://cp.acme.io/identity/scim/v2", enabled,
+        ...(enabled ? { created_ts: "2026-11-23T10:00:00Z", last_used_ts: null } : {}) }) }));
+    await page.route("**/identity/v1/orgs/org_1/scim/token", async (route) => {
+      enabled = true;
+      await route.fulfill({ status: 201, contentType: "application/json", body: JSON.stringify({
+        token: "scim_abcdef123456", base_url: "https://cp.acme.io/identity/scim/v2" }) });
+    });
+    await goHash(page, "settings");
+    await page.getByLabel("email", { exact: true }).fill("ada@acme.io");
+    await page.getByLabel("password").fill("correct horse");
+    await page.getByRole("button", { name: "log in", exact: true }).click();
+    const scim = page.getByTestId("scim");
+    await expect(scim.getByTestId("scim-base")).toHaveText("https://cp.acme.io/identity/scim/v2");
+    await scim.getByTestId("scim-make").click();
+    await expect(scim.getByTestId("scim-token")).toContainText("scim_abcdef123456");
+    await expect(scim).toContainText("not used yet");
+  });
+
   test("who may: an admin lets one member stop teammates' sessions", async ({ page }) => {
     await page.route("**/identity/v1/login", jsonRoute(200, SESSION));
     await page.route("**/identity/v1/me", jsonRoute(200, {
