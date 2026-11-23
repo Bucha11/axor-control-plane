@@ -130,6 +130,15 @@ function Provisioning({ orgId }: { orgId: string }) {
     mutationFn: () => api.revokeScim(orgId),
     onSuccess: () => { setMade(null); void qc.invalidateQueries({ queryKey: ["scim", orgId] }); },
   });
+  const groups = useQuery({ queryKey: ["scim-groups", orgId], queryFn: () => api.scimGroups(orgId),
+                            retry: false, enabled: !!q.data?.enabled });
+  const mapGroup = useMutation({
+    mutationFn: ({ id, role }: { id: string; role: string }) => api.mapScimGroup(orgId, id, role),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ["scim-groups", orgId] });
+      void qc.invalidateQueries({ queryKey: ["org-members", orgId] });
+    },
+  });
   const d = q.data;
   if (!d || !d.available) return null;
   const link = { background: "none", border: "none", padding: 0, cursor: "pointer", fontFamily: MONO, fontSize: 11 } as const;
@@ -172,6 +181,29 @@ function Provisioning({ orgId }: { orgId: string }) {
               </button>
             )}
           </div>
+          {(groups.data?.groups ?? []).length > 0 && (
+            <div className="mt-2" data-testid="scim-groups">
+              <div style={{ color: C.dim, fontSize: 10.5 }}>
+                your provider&apos;s groups — map one to a role and its people get it (the highest of
+                their groups; out of all mapped groups, the default). The owner never moves.
+              </div>
+              {groups.data!.groups.map((g) => (
+                <div key={g.group_id} className="flex gap-3 items-center" style={{ padding: "2px 0" }}>
+                  <span style={{ color: C.text, flex: 1 }}>{g.display_name}</span>
+                  <span style={{ color: C.dim }}>{g.members} {g.members === 1 ? "person" : "people"}</span>
+                  <select value={g.role ?? "none"} aria-label={`role of the group ${g.display_name}`}
+                    data-testid={`scim-group-${g.display_name}`} disabled={mapGroup.isPending}
+                    onChange={(e) => mapGroup.mutate({ id: g.group_id, role: e.target.value })}
+                    style={{ ...INPUT_STYLE, width: 110, padding: "1px 4px" }}>
+                    <option value="none">no role</option>
+                    <option value="viewer">viewer</option>
+                    <option value="member">member</option>
+                    <option value="admin">admin</option>
+                  </select>
+                </div>
+              ))}
+            </div>
+          )}
           {(make.isError || revoke.isError) && (
             <div style={{ color: C.red }}>{errorWords(((make.error ?? revoke.error) as Error).message)}</div>
           )}

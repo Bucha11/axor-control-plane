@@ -157,6 +157,19 @@ scim_tokens = Table(
     Column("last_used_ts", String(40), nullable=True),
 )
 
+# A group the identity provider pushes (SCIM), its people, and the role an
+# admin mapped to it: a member's role is the highest of their groups'.
+scim_groups = Table(
+    "scim_groups", metadata,
+    Column("group_id", String(40), primary_key=True),
+    Column("org_id", String(64), nullable=False, index=True),
+    Column("display_name", String(300), nullable=False),
+    Column("external_id", String(300), nullable=True),
+    Column("members", Text, nullable=False, default="[]"),
+    Column("role", String(24), nullable=True),
+    Column("created_ts", String(40), nullable=False),
+)
+
 
 def make_engine(url: str) -> AsyncEngine:
     return create_async_engine(url)
@@ -425,6 +438,42 @@ class Store:
     async def delete_scim(self, org_id: str) -> bool:
         async with self.engine.begin() as conn:
             done = await conn.execute(delete(scim_tokens).where(scim_tokens.c.org_id == org_id))
+        return bool(done.rowcount)
+
+    @staticmethod
+    def _group_row(r: Any) -> dict[str, Any]:  # noqa: ANN401 - a Row
+        import json
+
+        return {"group_id": r.group_id, "org_id": r.org_id, "display_name": r.display_name,
+                "external_id": r.external_id, "members": json.loads(r.members),
+                "role": r.role, "created_ts": r.created_ts}
+
+    async def scim_groups_of(self, org_id: str) -> list[dict[str, Any]]:
+        async with self.engine.connect() as conn:
+            rows = (await conn.execute(select(scim_groups).where(scim_groups.c.org_id == org_id)
+                                       .order_by(scim_groups.c.display_name))).all()
+        return [self._group_row(r) for r in rows]
+
+    async def scim_group(self, org_id: str, group_id: str) -> dict[str, Any] | None:
+        async with self.engine.connect() as conn:
+            row = (await conn.execute(select(scim_groups).where(
+                scim_groups.c.org_id == org_id, scim_groups.c.group_id == group_id))).first()
+        return self._group_row(row) if row else None
+
+    async def put_scim_group(self, group: dict[str, Any]) -> None:
+        import json
+
+        values = {**group, "members": json.dumps(sorted(set(group["members"])))}
+        async with self.engine.begin() as conn:
+            done = await conn.execute(update(scim_groups).where(
+                scim_groups.c.group_id == group["group_id"]).values(**values))
+            if not done.rowcount:
+                await conn.execute(insert(scim_groups).values(**values))
+
+    async def delete_scim_group(self, org_id: str, group_id: str) -> bool:
+        async with self.engine.begin() as conn:
+            done = await conn.execute(delete(scim_groups).where(
+                scim_groups.c.org_id == org_id, scim_groups.c.group_id == group_id))
         return bool(done.rowcount)
 
     # ── sign in with a provider ───────────────────────────────────────────────

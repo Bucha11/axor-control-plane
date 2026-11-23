@@ -164,3 +164,87 @@ async def test_a_deprovisioned_person_s_keys_are_revoked_on_the_plane(
         await c.delete(f"/scim/v2/Users/{anna['id']}", headers=h)
     assert seen == [("DELETE", f"https://plane.acme.dev/v1/keys/of/{anna['id']}",
                      "Bearer plane-master")]
+
+
+
+async def test_without_an_operator_token_the_plane_gets_a_signed_one(
+        tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Any tenancy: a two-minute token signed by this service, for the
+    workspace, as its admin — the plane already trusts these keys."""
+    import jwt as pyjwt
+
+    monkeypatch.setenv("AXOR_IDENTITY_PLANE_URL", "https://plane.acme.dev")
+    monkeypatch.delenv("AXOR_IDENTITY_PLANE_TOKEN", raising=False)
+    seen: list[str] = []
+
+    def plane(request: httpx.Request) -> httpx.Response:
+        seen.append(request.headers.get("authorization", "").removeprefix("Bearer "))
+        return httpx.Response(200, json={"revoked": []})
+
+    key = load_signing_key(generate_pem(), kid="k")
+    application = create_app(f"sqlite+aiosqlite:///{tmp_path}/s.db", signing_key=key,
+                             providers={}, public_url=PUBLIC, mailer=False,
+                             oauth_transport=httpx.MockTransport(plane))
+    async with application.router.lifespan_context(application), httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=application), base_url="http://identity") as c:
+        olga, made = await _workspace(c, application)
+        h = _idp(made["token"])
+        made_anna = await c.post("/scim/v2/Users", headers=h, json={"userName": "anna@acme.dev"})
+        await c.delete(f"/scim/v2/Users/{made_anna.json()['id']}", headers=h)
+    claims = pyjwt.decode(seen[0], key.private_key.public_key(), algorithms=["EdDSA"])
+    assert claims["org"] == olga["org"]["org_id"] and claims["role"] == "admin"
+    assert claims["exp"] - claims["iat"] == 120
+
+
+async def test_groups_give_roles_once_an_admin_maps_them(c, app) -> None:  # noqa: ANN001
+    olga, made = await _workspace(c, app)
+    org = olga["org"]["org_id"]
+    admin_h = {"Authorization": f"Bearer {olga['access_token']}"}
+    h = _idp(made["token"])
+    ids = {}
+    for who in ("anna", "boris", "vera"):
+        r = await c.post("/scim/v2/Users", headers=h, json={"userName": f"{who}@acme.dev"})
+        ids[who] = r.json()["id"]
+
+    async def roles() -> dict:
+        got = (await c.get(f"/v1/orgs/{org}/members", headers=admin_h)).json()["members"]
+        return {m["email"].split("@")[0]: m["role"] for m in got}
+
+    # Okta pushes a group with its people
+    leads = (await c.post("/scim/v2/Groups", headers=h, json={
+        "displayName": "eng-leads", "members": [{"value": ids["anna"]}]})).json()
+    watchers = (await c.post("/scim/v2/Groups", headers=h, json={
+        "displayName": "auditors", "members": [{"value": ids["vera"]}]})).json()
+    # pushed but not mapped: nothing moves
+    assert (await roles())["anna"] == "member"
+    listed = (await c.get(f"/v1/orgs/{org}/scim/groups", headers=admin_h)).json()["groups"]
+    assert {g["display_name"]: g["members"] for g in listed} == {"auditors": 1, "eng-leads": 1}
+    await c.put(f"/v1/orgs/{org}/scim/groups/{leads['id']}", json={"role": "admin"},
+                headers=admin_h)
+    await c.put(f"/v1/orgs/{org}/scim/groups/{watchers['id']}", json={"role": "viewer"},
+                headers=admin_h)
+    assert await roles() == {"olga": "owner", "anna": "admin", "boris": "member", "vera": "viewer"}
+    # Okta adds Boris to the leads
+    await c.patch(f"/scim/v2/Groups/{leads['id']}", headers=h, json={
+        "Operations": [{"op": "add", "path": "members", "value": [{"value": ids["boris"]}]}]})
+    assert (await roles())["boris"] == "admin"
+    # Okta removes Anna by filter; Entra ID removes Boris with the value
+    await c.patch(f"/scim/v2/Groups/{leads['id']}", headers=h, json={
+        "Operations": [{"op": "remove", "path": f'members[value eq "{ids["anna"]}"]'}]})
+    await c.patch(f"/scim/v2/Groups/{leads['id']}", headers=h, json={
+        "Operations": [{"op": "Remove", "path": "members", "value": [{"value": ids["boris"]}]}]})
+    # out of every mapped group: the workspace's default role
+    assert (await roles())["anna"] == "member" and (await roles())["boris"] == "member"
+    # the owner in a viewer group stays the owner
+    await c.patch(f"/scim/v2/Groups/{watchers['id']}", headers=h, json={
+        "Operations": [{"op": "Add", "path": "members",
+                        "value": [{"value": olga["user"]["user_id"]}]}]})
+    assert (await roles())["olga"] == "owner"
+    found = (await c.get("/scim/v2/Groups", headers=h,
+                         params={"filter": 'displayName eq "auditors"'})).json()
+    assert found["totalResults"] == 1 and len(found["Resources"][0]["members"]) == 2
+    # the group goes: its role with it
+    assert (await c.delete(f"/scim/v2/Groups/{watchers['id']}", headers=h)).status_code == 204
+    assert (await roles())["vera"] == "member"
+    dup = await c.post("/scim/v2/Groups", headers=h, json={"displayName": "ENG-LEADS"})
+    assert dup.status_code == 409

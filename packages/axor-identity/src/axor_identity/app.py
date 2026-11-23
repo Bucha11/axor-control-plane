@@ -936,11 +936,17 @@ def create_app(database_url: str | None = None, *,
                                     "identity provider — they are its way back in", "mutability")
         await store.remove_member(user_id, org_id)
         await store.revoke_refresh_in_org(user_id, org_id)
-        if plane_url and plane_token:
+        if plane_url:
+            # the plane trusts this service's signature: a two-minute token for
+            # this workspace, as its admin — no shared secret, any tenancy. An
+            # operator token, if one is set, is used instead (an older plane).
+            bearer = plane_token or issue_access(
+                signing_key, user_id="svc_identity", email="scim@identity-provider",
+                org=org_id, role="admin", tier="community", ttl=120)
             try:
                 async with _http() as http:
                     await http.delete(f"{plane_url}/v1/keys/of/{user_id}",
-                                      headers={"Authorization": f"Bearer {plane_token}"})
+                                      headers={"Authorization": f"Bearer {bearer}"})
             except httpx.HTTPError as exc:
                 logging.getLogger("axor_identity.scim").warning(
                     "could not revoke %s's keys on the control plane: %s", user_id, exc)
@@ -1105,11 +1111,155 @@ def create_app(database_url: str | None = None, *,
         await _deprovision(org_id, user_id)
         return Response(status_code=204)
 
+    # ── SCIM groups → roles ──────────────────────────────────────────────────
+    # The provider pushes its groups and their people; an admin maps a group to
+    # a role here. Once any group is mapped, a member's role follows their
+    # groups: the highest mapped role among them, else the workspace's default.
+    # The owner's role never moves; nobody becomes owner.
+    _GROUP = "urn:ietf:params:scim:schemas:core:2.0:Group"
+    _MAPPABLE = ("viewer", "member", "admin")
+
+    def _group_resource(g: dict) -> dict:
+        return {"schemas": [_GROUP], "id": g["group_id"], "displayName": g["display_name"],
+                **({"externalId": g["external_id"]} if g.get("external_id") else {}),
+                "members": [{"value": m} for m in g["members"]],
+                "meta": {"resourceType": "Group", "created": g["created_ts"],
+                         "location": f"{scim_base}/Groups/{g['group_id']}"}}
+
+    async def _apply_group_roles(org_id: str, user_ids: set[str]) -> None:
+        groups = await store.scim_groups_of(org_id)
+        if not any(g["role"] for g in groups):
+            return                       # no mapping: roles stay the workspace's
+        held = await store.get_sso(org_id)
+        default = held["default_role"] if held else "member"
+        for uid in user_ids:
+            current = await store.role_in_org(uid, org_id)
+            if current is None or current == "owner":
+                continue
+            mapped = [g["role"] for g in groups if g["role"] and uid in g["members"]]
+            role = max(mapped, key=_rank) if mapped else default
+            if role != current:
+                await store.set_member_role(uid, org_id, role)
+
+    def _member_ids(raw: object) -> set[str]:
+        return {str(m.get("value")) for m in raw or [] if isinstance(m, dict) and m.get("value")} \
+            if isinstance(raw, list) else set()
+
+    async def _group_or_404(org_id: str, group_id: str) -> dict:
+        g = await store.scim_group(org_id, group_id)
+        if g is None:
+            raise _ScimRefused(404, f"no group {group_id} in this workspace")
+        return g
+
     @app.get("/scim/v2/Groups")
-    async def scim_groups(org_id: str = Depends(_scim_org)) -> JSONResponse:
-        # roles are set in the workspace, not pushed as groups
-        return _scim({"schemas": [_LIST], "totalResults": 0, "startIndex": 1,
-                      "itemsPerPage": 0, "Resources": []})
+    async def scim_groups(filter: str = "", org_id: str = Depends(_scim_org)) -> JSONResponse:  # noqa: A002
+        groups = await store.scim_groups_of(org_id)
+        if filter:
+            import re
+
+            m = re.fullmatch(r'\s*displayName\s+eq\s+"([^"]*)"\s*', filter, re.IGNORECASE)
+            if not m:
+                raise _ScimRefused(400, 'only displayName eq "…" is filtered on', "invalidFilter")
+            groups = [g for g in groups if g["display_name"].lower() == m.group(1).lower()]
+        return _scim({"schemas": [_LIST], "totalResults": len(groups), "startIndex": 1,
+                      "itemsPerPage": len(groups),
+                      "Resources": [_group_resource(g) for g in groups]})
+
+    @app.get("/scim/v2/Groups/{group_id}")
+    async def scim_group(group_id: str, org_id: str = Depends(_scim_org)) -> JSONResponse:
+        return _scim(_group_resource(await _group_or_404(org_id, group_id)))
+
+    @app.post("/scim/v2/Groups")
+    async def scim_group_create(request: Request, org_id: str = Depends(_scim_org)) -> JSONResponse:
+        body = await _scim_body(request)
+        name = str(body.get("displayName") or "").strip()[:300]
+        if not name:
+            raise _ScimRefused(400, "a group has a displayName", "invalidValue")
+        held_groups = await store.scim_groups_of(org_id)
+        if any(g["display_name"].lower() == name.lower() for g in held_groups):
+            raise _ScimRefused(409, f"a group {name!r} exists", "uniqueness")
+        g = {"group_id": "grp_" + secrets.token_hex(8), "org_id": org_id, "display_name": name,
+             "external_id": str(body.get("externalId") or "")[:300] or None,
+             "members": sorted(_member_ids(body.get("members"))), "role": None,
+             "created_ts": _now_iso()}
+        await store.put_scim_group(g)
+        return _scim(_group_resource(g), 201)
+
+    @app.put("/scim/v2/Groups/{group_id}")
+    async def scim_group_replace(group_id: str, request: Request,
+                                 org_id: str = Depends(_scim_org)) -> JSONResponse:
+        body = await _scim_body(request)
+        g = await _group_or_404(org_id, group_id)
+        before = set(g["members"])
+        g["display_name"] = str(body.get("displayName") or g["display_name"])[:300]
+        g["members"] = sorted(_member_ids(body.get("members")))
+        await store.put_scim_group(g)
+        await _apply_group_roles(org_id, before | set(g["members"]))
+        return _scim(_group_resource(g))
+
+    @app.patch("/scim/v2/Groups/{group_id}")
+    async def scim_group_patch(group_id: str, request: Request,
+                               org_id: str = Depends(_scim_org)) -> JSONResponse:
+        """Okta: add members, remove ``members[value eq "id"]``; Entra ID: Add /
+        Remove with the members in the value; both: replace displayName."""
+        import re
+
+        body = await _scim_body(request)
+        g = await _group_or_404(org_id, group_id)
+        before = set(g["members"])
+        members = set(g["members"])
+        for op in body.get("Operations") or []:
+            if not isinstance(op, dict):
+                continue
+            kind = str(op.get("op", "")).lower()
+            path, value = str(op.get("path") or ""), op.get("value")
+            one = re.fullmatch(r'\s*members\[\s*value\s+eq\s+"([^"]+)"\s*\]\s*', path)
+            if kind == "add" and path.lower() == "members":
+                members |= _member_ids(value)
+            elif kind == "remove" and one:
+                members.discard(one.group(1))
+            elif kind == "remove" and path.lower() == "members":
+                members = members - _member_ids(value) if value else set()
+            elif kind == "replace" and path.lower() == "members":
+                members = _member_ids(value)
+            elif kind == "replace" and (path.lower() == "displayname" or isinstance(value, dict)):
+                name = value.get("displayName") if isinstance(value, dict) else value
+                if name:
+                    g["display_name"] = str(name)[:300]
+        g["members"] = sorted(members)
+        await store.put_scim_group(g)
+        await _apply_group_roles(org_id, before | members)
+        return _scim(_group_resource(g))
+
+    @app.delete("/scim/v2/Groups/{group_id}", status_code=204)
+    async def scim_group_delete(group_id: str, org_id: str = Depends(_scim_org)) -> Response:
+        g = await _group_or_404(org_id, group_id)
+        await store.delete_scim_group(org_id, group_id)
+        await _apply_group_roles(org_id, set(g["members"]))
+        return Response(status_code=204)
+
+    @app.get("/v1/orgs/{org_id}/scim/groups")
+    async def scim_groups_admin(org_id: str, caller: Claims = Depends(_caller)) -> dict:
+        _sso_admin(org_id, caller)
+        return {"groups": [{"group_id": g["group_id"], "display_name": g["display_name"],
+                            "members": len(g["members"]), "role": g["role"]}
+                           for g in await store.scim_groups_of(org_id)]}
+
+    @app.put("/v1/orgs/{org_id}/scim/groups/{group_id}")
+    async def map_scim_group(org_id: str, group_id: str, body: RoleBody,
+                             caller: Claims = Depends(_caller)) -> dict:
+        """The role a group gives (viewer, member, admin), or "none"."""
+        _sso_admin(org_id, caller)
+        g = await store.scim_group(org_id, group_id)
+        if g is None:
+            raise HTTPException(404, "no such group")
+        if body.role not in (*_MAPPABLE, "none"):
+            raise HTTPException(422, f"role is one of {[*_MAPPABLE, 'none']}")
+        g["role"] = None if body.role == "none" else body.role
+        await store.put_scim_group(g)
+        everyone = {m["user_id"] for m in await store.org_members(org_id)}
+        await _apply_group_roles(org_id, everyone)
+        return {"group_id": group_id, "role": g["role"]}
 
     # ── e-mail: verification and password reset ───────────────────────────────
     def _expiry(seconds: int) -> str:

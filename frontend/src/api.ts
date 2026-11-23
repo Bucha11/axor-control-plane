@@ -1180,6 +1180,13 @@ export const api = {
   scimToken: (orgId: string) =>
     af(`${IDENTITY_BASE}/v1/orgs/${encodeURIComponent(orgId)}/scim/token`, { method: "POST" })
       .then((r) => j<{ token: string; base_url: string }>(r)),
+  scimGroups: (orgId: string) =>
+    af(`${IDENTITY_BASE}/v1/orgs/${encodeURIComponent(orgId)}/scim/groups`).then((r) =>
+      j<{ groups: { group_id: string; display_name: string; members: number; role: string | null }[] }>(r)),
+  mapScimGroup: (orgId: string, groupId: string, role: string) =>
+    af(`${IDENTITY_BASE}/v1/orgs/${encodeURIComponent(orgId)}/scim/groups/${encodeURIComponent(groupId)}`, {
+      method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ role }),
+    }).then((r) => j<{ group_id: string; role: string | null }>(r)),
   revokeScim: (orgId: string) =>
     af(`${IDENTITY_BASE}/v1/orgs/${encodeURIComponent(orgId)}/scim/token`, { method: "DELETE" })
       .then((r) => { if (!r.ok) throw new Error(`${r.status}`); }),
