@@ -1,0 +1,130 @@
+"""Who may do what to the team's agents: owners and admins always, viewers
+never, members as the workspace says — and named people, whatever their role.
+The defaults are what the plane did before; each change is on the audit trail."""
+from __future__ import annotations
+
+import base64
+import pathlib
+import time
+from collections.abc import AsyncIterator
+
+import httpx
+import jwt
+import pytest
+from axor_backend.app import create_app
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
+KID = "k1"
+ORG = "org_team"
+
+
+def _jwks(priv: Ed25519PrivateKey) -> dict:
+    raw = priv.public_key().public_bytes(serialization.Encoding.Raw,
+                                         serialization.PublicFormat.Raw)
+    x = base64.urlsafe_b64encode(raw).rstrip(b"=").decode()
+    return {"keys": [{"kty": "OKP", "crv": "Ed25519", "x": x, "use": "sig",
+                      "alg": "EdDSA", "kid": KID}]}
+
+
+@pytest.fixture
+def priv() -> Ed25519PrivateKey:
+    return Ed25519PrivateKey.generate()
+
+
+@pytest.fixture
+async def c(tmp_path: pathlib.Path, priv: Ed25519PrivateKey) -> AsyncIterator[httpx.AsyncClient]:
+    app = create_app(database_url=f"sqlite+aiosqlite:///{tmp_path}/p.db",
+                     operator_keys={}, allow_unsigned=True, api_token="master-x",
+                     identity_jwks=_jwks(priv))
+    async with app.router.lifespan_context(app), httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://cp.test") as client:
+        yield client
+
+
+@pytest.fixture
+def who(priv: Ed25519PrivateKey):  # noqa: ANN201
+    def as_(email: str, role: str) -> dict:
+        now = int(time.time())
+        token = jwt.encode({"iss": "axor-identity", "sub": f"usr_{email}", "eml": email,
+                            "org": ORG, "role": role, "tier": "community",
+                            "iat": now, "exp": now + 900}, priv, algorithm="EdDSA",
+                           headers={"kid": KID})
+        return {"Authorization": f"Bearer {token}"}
+    return as_
+
+
+async def _session(c: httpx.AsyncClient, h: dict, node: str) -> None:
+    r = await c.post(f"/v1/plane/{node}/profile", headers=h,
+                     json={"kind": "coding", "agent": "claude-code", "developer": "x"})
+    assert r.status_code < 300, r.text
+    await c.post(f"/v1/plane/{node}/telemetry", headers=h, json={"run_id": f"{node}-hb", "events": [
+        {"seq": 0, "kind": "heartbeat", "payload": {"applied_version": 0, "level": "NORMAL",
+                                                    "budget_remaining": None}}]})
+
+
+async def test_a_lead_stops_a_teammates_session_once_let(c: httpx.AsyncClient, who) -> None:  # noqa: ANN001
+    ivan, petr = who("ivan@team.dev", "member"), who("petr@team.dev", "member")
+    olga = who("olga@team.dev", "admin")
+    await _session(c, ivan, "claude-code-ivan-1")
+    stop = {"version": 1, "state": {"stopped": True}}
+    r = await c.post("/v1/plane/claude-code-ivan-1/command", json=stop, headers=petr)
+    assert r.status_code == 403 and r.json()["detail"]["code"] == "not_your_session"
+    # what petr may, before and after: the screens offer only that
+    assert (await c.get("/v1/permissions", headers=petr)).json()["you"]["stop_others"] is False
+    r = await c.put("/v1/permissions", headers=olga,
+                    json={"stop_others": {"people": ["Petr@team.dev"]}})
+    assert r.status_code == 200
+    assert r.json()["capabilities"]["stop_others"]["people"] == ["petr@team.dev"]
+    assert (await c.get("/v1/permissions", headers=petr)).json()["you"]["stop_others"] is True
+    assert (await c.post("/v1/plane/claude-code-ivan-1/command", json=stop,
+                         headers=petr)).status_code == 202
+    # a member cannot give it themselves
+    assert (await c.put("/v1/permissions", headers=ivan,
+                        json={"stop_others": {"members": True}})).status_code == 403
+    trail = (await c.get("/v1/audit", headers=olga)).json()["items"]
+    granted = next(t for t in trail if t["action"] == "permission_granted")
+    assert granted["target"] == "stop_others" and granted["detail"] == {"to": "petr@team.dev"}
+    assert granted["who"] == "olga@team.dev"
+
+
+async def test_the_brake_and_exceptions_for_whoever_is_let(c: httpx.AsyncClient, who) -> None:  # noqa: ANN001
+    petr, olga = who("petr@team.dev", "member"), who("olga@team.dev", "owner")
+    assert (await c.put("/v1/coding/brake", json={"on": True}, headers=petr)).status_code == 403
+    exc = {"exceptions": [{"rule": "secrets", "path": "tests/fixtures/*"}]}
+    assert (await c.put("/v1/coding/exceptions", json=exc, headers=petr)).status_code == 403
+    await c.put("/v1/permissions", headers=olga,
+                json={"brake": {"members": True}, "exceptions": {"people": ["petr@team.dev"]}})
+    assert (await c.put("/v1/coding/brake", json={"on": True, "reason": "incident"},
+                        headers=petr)).status_code == 200
+    r = await c.put("/v1/coding/exceptions", json=exc, headers=petr)
+    assert r.status_code == 200 and r.json()["exceptions"][0]["by"] == "petr@team.dev"
+    # the rules themselves stay the admin's
+    assert (await c.put("/v1/coding/rules", json={"allow": []}, headers=petr)).status_code == 403
+
+
+async def test_skills_and_memory_can_be_taken_from_members(c: httpx.AsyncClient, who) -> None:  # noqa: ANN001
+    petr, olga = who("petr@team.dev", "member"), who("olga@team.dev", "admin")
+    # members may by default — as before
+    off = await c.put("/v1/coding/skills/pdf", json={"off": True}, headers=petr)
+    assert off.status_code == 200
+    await c.put("/v1/permissions", headers=olga, json={"skills": {"members": False},
+                                                       "memory": {"members": False}})
+    r = await c.put("/v1/coding/skills/pdf", json={"off": False}, headers=petr)
+    assert r.status_code == 403 and r.json()["detail"]["capability"] == "skills"
+    assert (await c.put("/v1/memory/settings", json={"fresh_days": 10},
+                        headers=petr)).status_code == 403
+    # an admin always may
+    on = await c.put("/v1/coding/skills/pdf", json={"off": False}, headers=olga)
+    assert on.status_code == 200
+    # a viewer never — whatever is granted to members
+    viewer = who("vera@team.dev", "viewer")
+    assert (await c.get("/v1/permissions", headers=viewer)).json()["you"] == {
+        k: False for k in ("stop_others", "brake", "exceptions", "skills", "memory", "production")}
+
+
+async def test_bad_permissions_are_refused(c: httpx.AsyncClient, who) -> None:  # noqa: ANN001
+    olga = who("olga@team.dev", "admin")
+    for body in ({}, {"fly": {"members": True}}, {"brake": {"members": "yes"}},
+                 {"brake": {"people": ["not-an-email"]}}):
+        assert (await c.put("/v1/permissions", json=body, headers=olga)).status_code == 400

@@ -13,8 +13,8 @@ from typing import Any
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import Response
 
-from axor_backend import audit
-from axor_backend.deps import StoreDep
+from axor_backend import audit, permissions
+from axor_backend.deps import PrincipalDep, StoreDep
 
 router = APIRouter(prefix="/v1/audit", tags=["audit"])
 
@@ -84,11 +84,12 @@ def _kinds(raw: str) -> tuple[str, ...]:
 
 
 @router.get("")
-async def read_audit(store: StoreDep, limit: int = 100, action: str = "", who: str = "",
-                     target: str = "", since: str = "", until: str = "",
-                     kinds: str = "") -> dict:
+async def read_audit(store: StoreDep, principal: PrincipalDep, limit: int = 100,
+                     action: str = "", who: str = "", target: str = "",
+                     since: str = "", until: str = "", kinds: str = "") -> dict:
     """The trail, newest first: ``action`` exact, ``who`` and ``target`` as a
     part of the name, ``since`` / ``until`` as ISO dates or instants."""
+    permissions.require_admin(principal)
     limit = max(1, min(int(limit), 1000))
     rows = [r for r in await _all(store, _kinds(kinds), since, until, EXPORT_MAX)
             if _matches(r, action, who, target)]
@@ -97,10 +98,12 @@ async def read_audit(store: StoreDep, limit: int = 100, action: str = "", who: s
 
 
 @router.get("/export")
-async def export_audit(store: StoreDep, format: str = "csv", since: str = "",  # noqa: A002
+async def export_audit(store: StoreDep, principal: PrincipalDep,
+                       format: str = "csv", since: str = "",  # noqa: A002
                        until: str = "", kinds: str = "") -> Response:
     """The whole trail in a range, as a file: CSV for a spreadsheet, JSON lines
     for an archive or a SIEM."""
+    permissions.require_admin(principal)
     if format not in ("csv", "jsonl"):
         raise HTTPException(400, "format is csv or jsonl")
     rows = await _all(store, _kinds(kinds), since, until, EXPORT_MAX)

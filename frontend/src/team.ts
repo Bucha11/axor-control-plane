@@ -3,7 +3,7 @@
 // with (people from outside the team are the paid plan), so the screens do not
 // offer it. An open plane, a guest, or one still loading: offered (examples).
 import { useQuery } from "@tanstack/react-query";
-import { api } from "./api";
+import { api, type Capability } from "./api";
 import { useApp } from "./store";
 
 export function useHasTeam(): boolean {
@@ -14,6 +14,17 @@ export function useHasTeam(): boolean {
                              enabled: !!org, retry: false, staleTime: 60_000 });
   if (!email || !members.data) return true;
   return members.data.members.length > 1;
+}
+
+/** Whether the person here may do something to the team's agents beyond
+ *  their own (the workspace's permissions). A plane without them answers as
+ *  before: an owner or admin for what was theirs, anyone for the rest. */
+export function useMay(): (cap: Capability) => boolean {
+  const admin = useCanAdmin();
+  const q = useQuery({ queryKey: ["permissions"], queryFn: api.permissions, retry: false,
+                       staleTime: 30_000 });
+  return (cap) => q.data?.you[cap]
+    ?? (cap === "stop_others" || cap === "brake" || cap === "exceptions" ? admin : true);
 }
 
 /** Whether the person here decides the team's policy: an owner or admin — or

@@ -104,9 +104,12 @@ EXPECTED: dict[tuple[str, str], str] = {
     ("GET", "/v1/coding/skills"): "read",
     ("PUT", "/v1/coding/skills/{name}"): "operate",
     ("GET", "/v1/coding/rules"): "read",
-    ("PUT", "/v1/coding/rules"): "admin",
+    ("PUT", "/v1/coding/rules"): "operate",
     ("GET", "/v1/coding/brake"): "read",
-    ("PUT", "/v1/coding/brake"): "admin",
+    ("PUT", "/v1/coding/brake"): "operate",
+    ("PUT", "/v1/coding/exceptions"): "operate",
+    ("GET", "/v1/permissions"): "read",
+    ("PUT", "/v1/permissions"): "operate",
     ("GET", "/v1/coding/say/{node_id}"): "read",
     ("POST", "/v1/coding/say/{node_id}"): "operate",
     ("GET", "/v1/skill-evals"): "read",
@@ -170,8 +173,8 @@ EXPECTED: dict[tuple[str, str], str] = {
     # the license status it sits next to.
     ("GET", "/v1/license/usage"): "read",
     ("GET", "/v1/license/entitlements"): "read|ingest",
-    ("PUT", "/v1/license/agent-family"): "admin",
-    ("PUT", "/v1/license/seat-cap"): "admin",
+    ("PUT", "/v1/license/agent-family"): "operate",
+    ("PUT", "/v1/license/seat-cap"): "operate",
     # The statement drawn from that usage. Their own bill, so `read` — the same
     # bar as the usage it is computed from.
     ("GET", "/v1/license/invoice"): "read",
@@ -181,8 +184,8 @@ EXPECTED: dict[tuple[str, str], str] = {
     # The listing shows what exists; a revoke erases it from there and not from
     # here. Same scope: reading who was ever issued what is enumeration too.
     ("GET", "/v1/keys/audit"): "admin",
-    ("GET", "/v1/audit"): "admin",
-    ("GET", "/v1/audit/export"): "admin",
+    ("GET", "/v1/audit"): "operate",
+    ("GET", "/v1/audit/export"): "operate",
     ("DELETE", "/v1/keys/{key_id}"): "admin",
     ("PUT", "/v1/keys/{key_id}"): "admin",   # a key's role, changed in place
     # a member's own ingest-only key (routers/keys: create_my_key)

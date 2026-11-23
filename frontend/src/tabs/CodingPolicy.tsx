@@ -7,12 +7,15 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, CodingException, CodingRules } from "../api";
 import { C, MONO, btn } from "../theme";
 import { errorWords } from "../refusal";
-import { useCanAdmin } from "../team";
+import { useCanAdmin, useMay } from "../team";
 
 export default function CodingPolicy() {
   const qc = useQueryClient();
   const q = useQuery({ queryKey: ["coding-rules"], queryFn: api.codingRules });
   const canEdit = useCanAdmin();
+  // exceptions and trusted sources: whoever the workspace lets grant them
+  const may = useMay();
+  const canGrant = canEdit || may("exceptions");
   const [allow, setAllow] = useState<Set<string>>(new Set());
   const [mode, setMode] = useState<"enforce" | "observe">("enforce");
   useEffect(() => {
@@ -99,8 +102,8 @@ export default function CodingPolicy() {
         {save.isSuccess && <span style={{ color: C.green }}>saved — every sidecar picks it up within a minute</span>}
         {save.isError && <span style={{ color: C.red }}>{errorWords((save.error as Error).message)}</span>}
       </div>
-      {d && <Exceptions d={d} canEdit={canEdit} />}
-      {d && <TrustedSources d={d} canEdit={canEdit} />}
+      {d && <Exceptions d={d} canEdit={canGrant} />}
+      {d && <TrustedSources d={d} canEdit={canGrant} />}
     </div>
   );
 }
@@ -118,7 +121,7 @@ function useSaveMore() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: ({ d, more }: { d: CodingRules; more: { exceptions?: CodingException[]; trusted_sources?: string[] } }) =>
-      api.setCodingRules(d.allow, d.mode, more),
+      api.setCodingExceptions(more),
     onSuccess: () => void qc.invalidateQueries({ queryKey: ["coding-rules"] }),
   });
 }

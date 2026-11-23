@@ -32,6 +32,7 @@ from axor_backend.routers import (
     memory_api,
     notifications_api,
     pair_api,
+    permissions_api,
     provenance_api,
     runs,
     setup_health_api,
@@ -68,6 +69,7 @@ ALL_ROUTERS: tuple[APIRouter, ...] = (
     license_api.router,
     keys.router,
     audit_api.router,
+    permissions_api.router,
     health.router,
     version.router,
 )

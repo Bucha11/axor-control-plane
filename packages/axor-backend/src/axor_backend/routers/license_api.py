@@ -216,11 +216,15 @@ async def license_entitlements(state: StateDep, store: StoreDep) -> dict:
 
 
 @router.put("/agent-family")
-async def choose_agent_family(body: dict, request: Request, store: StoreDep) -> dict:
+async def choose_agent_family(body: dict, request: Request, store: StoreDep,
+                              principal: PrincipalDep) -> dict:
     """Which agent family the free plan keeps — Claude Code or Codex. Without
     a choice it is the first to report; this lets a workspace that started on
     one switch to the other. Sessions of the other family stay recorded and
-    locked, and come back when the choice does."""
+    locked, and come back when the choice does. An owner or admin."""
+    from axor_backend import permissions
+
+    permissions.require_admin(principal)
     from axor_backend.ee.entitlements import FAMILY_SETTING, KNOWN_FAMILIES
 
     agent = body.get("agent")
@@ -338,11 +342,15 @@ async def _forecast(store: StoreDep, current: dict, tier: str, included_nodes: i
 
 
 @router.put("/seat-cap")
-async def set_seat_cap(body: dict, request: Request, state: StateDep, store: StoreDep) -> dict:
+async def set_seat_cap(body: dict, request: Request, state: StateDep, store: StoreDep,
+                       principal: PrincipalDep) -> dict:
     """An admin's limit on developer seats (``{"cap": n}``, or ``null`` for
     none). Past it a developer's sessions are protected but not shown,
     operated or billed. It cannot go below the seats this month already used:
-    that work was done, and is billed."""
+    that work was done, and is billed. An owner or admin."""
+    from axor_backend import permissions
+
+    permissions.require_admin(principal)
     from axor_backend.ee.seats import MAX_CAP, SEAT_CAP_SETTING, month_seats
 
     lic = active_license(state, current_org_id())

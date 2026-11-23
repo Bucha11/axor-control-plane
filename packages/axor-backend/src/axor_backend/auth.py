@@ -105,8 +105,9 @@ _READ_POLICY: tuple[tuple[str, str], ...] = (
     ("/v1/keys/mine", "ingest"),
     # Listing keys is credential enumeration: ids, scopes, labels, dates.
     ("/v1/keys", "admin"),
-    # Who did what to whose agent — and the export of it.
-    ("/v1/audit", "admin"),
+    # Who did what to whose agent — and the export of it: an owner or admin
+    # (checked by role in the handler, permissions.require_admin).
+    ("/v1/audit", "operate"),
     # Every enrolment with the nodes allowed to dispense it — the map of which
     # node can reach which tool credential.
     ("/v1/vault/creds/health", "admin"),
@@ -188,8 +189,14 @@ _WRITE_POLICY: tuple[tuple[str, str], ...] = (
     # guest from outside the team where the pair lets them (routers/pair_api)
     ("/v1/pair", "read"),
     # what every developer's agent may do is the admin's decision
-    ("/v1/coding/rules", "admin"),
-    ("/v1/coding/brake", "admin"),   # holds every coding agent of the team
+    # (an owner or admin: checked by role in the handler, permissions.require_admin)
+    ("/v1/coding/rules", "operate"),
+    # the team's brake: an operator's, and the handler asks the workspace's
+    # permissions who of them (routers/coding_api, permissions.py)
+    ("/v1/coding/brake", "operate"),
+    # who may do what to the team's agents: an owner's or admin's decision,
+    # checked by role in the handler (permissions.require_admin)
+    ("/v1/permissions", "operate"),
     # turning a skill off — or on — for every developer is an operator's decision
     ("/v1/coding/", "operate"),
     ("/v1/plane/", "operate"),        # command / facts / cascade-stop
@@ -224,8 +231,8 @@ _WRITE_POLICY: tuple[tuple[str, str], ...] = (
     # changes the deployment's entitlement state — admin, and never open.
     ("/v1/license/verify", "admin"),
     # which agent family the free plan keeps: a workspace decision
-    ("/v1/license/agent-family", "admin"),
-    ("/v1/license/seat-cap", "admin"),   # the workspace's limit on developer seats
+    ("/v1/license/agent-family", "operate"),
+    ("/v1/license/seat-cap", "operate"),   # the workspace's limit on developer seats
 )
 
 # Served without auth even when it is enabled — as (method, prefix) pairs, not

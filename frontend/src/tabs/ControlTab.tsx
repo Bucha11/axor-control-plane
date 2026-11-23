@@ -1,7 +1,7 @@
 // Control: a tree that is quiet when healthy (main-tabs mockup, ControlTab).
 // Wired to /v1/plane/nodes; divergence between desired and reported is rendered, not hidden.
 import { refusalWords } from "../refusal";
-import { useCanAdmin, useHasTeam, useMine } from "../team";
+import { useHasTeam, useMay, useMine } from "../team";
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Circle, Gauge, GitBranch, Lock, Pause, Play, Square, Syringe } from "lucide-react";
@@ -344,7 +344,8 @@ export default function ControlTab({ focusNode }: { focusNode?: string }) {
 function ControlBody({ focusNode, testBench }: { focusNode?: string; testBench: boolean }) {
   const hasTeam = useHasTeam();
   const mine = useMine();
-  const canAdmin = useCanAdmin();
+  // a teammate's session: an owner or admin, or whoever the workspace lets
+  const canAdmin = useMay()("stop_others");
   const qc = useQueryClient();
   const nodes = useQuery({
     queryKey: ["nodes"],
@@ -1307,7 +1308,8 @@ const STATUS_COLOR: Record<Status, string> = {
  *  held call waits for the release; everyone sees that the brake is on. */
 function TeamBrake() {
   const qc = useQueryClient();
-  const canAdmin = useCanAdmin();
+  // an owner or admin — or whoever the workspace lets pull the brake
+  const canAdmin = useMay()("brake");
   const journey = useApp((s) => s.journey);
   const brake = useQuery({ queryKey: ["brake"], queryFn: api.brake, refetchInterval: 10000, retry: false });
   const set = useMutation({

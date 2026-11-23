@@ -96,9 +96,12 @@ async def _count_control(ctx: Any, node_id: str, delta: dict) -> None:  # noqa: 
 
 async def _require_yours(ctx: Any, request: Request, node_id: str) -> None:  # noqa: ANN401
     """A coding session (or tree run) is its developer's: they pause, stop, cap
-    or replan it — and an owner or admin, who answers for the team's agents.
-    A teammate does not act on someone else's session. An open plane or an
-    operator key has one operator, who may."""
+    or replan it — and an owner or admin, who answers for the team's agents,
+    and whoever the workspace lets stop teammates' sessions (permissions).
+    A production agent is steered by whoever the workspace lets. An open plane
+    or an operator key has one operator, who may."""
+    from axor_backend import permissions
+
     principal = getattr(request.state, "principal", None)
     if getattr(principal, "kind", None) != "user" or not getattr(principal, "email", None):
         return
@@ -106,13 +109,20 @@ async def _require_yours(ctx: Any, request: Request, node_id: str) -> None:  # n
         return
     profile = (await ctx.store.node_kinds()).get(node_id) or {}
     if profile.get("kind") not in ("coding", "tree"):
+        if not await permissions.may(ctx.store, principal, "production"):
+            raise HTTPException(403, {"code": "not_permitted", "capability": "production",
+                                      "detail": "this workspace lets only some people steer its "
+                                                "production agents — ask an admin"})
         return
     dev = str(profile.get("developer") or "")
     # an opaque developer id (a machine key) names nobody: the team's session
-    if "@" in dev and dev.lower() != str(principal.email).lower():
-        raise HTTPException(403, {"code": "not_your_session",
-                                  "detail": f"this is {dev}'s session — they, or an owner or "
-                                            f"admin, pause and stop it. Ask to pair to watch it."})
+    if "@" in dev and dev.lower() != str(principal.email).lower() \
+            and not await permissions.may(ctx.store, principal, "stop_others"):
+        raise HTTPException(403, {
+            "code": "not_your_session",
+            "detail": f"this is {dev}'s session — they, an owner or admin, or whoever the "
+                      f"workspace lets stop teammates' sessions pause and stop it. Ask to "
+                      f"pair to watch it."})
 
 
 @router.post("/{node_id}/command", status_code=202)

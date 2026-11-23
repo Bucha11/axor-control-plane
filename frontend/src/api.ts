@@ -584,6 +584,12 @@ export interface BillingStatement {
   // an admin's seat limit, and the developers past it (not shown, not billed)
   seat_cap?: number | null; over_cap?: number;
 }
+/** What a workspace lets people do to the team's agents, beyond their own. */
+export type Capability = "stop_others" | "brake" | "exceptions" | "skills" | "memory" | "production";
+export interface Permissions {
+  capabilities: Record<Capability, { what: string; members: boolean; people: string[] }>;
+  you: Record<Capability, boolean>;
+}
 /** One act on the workspace's audit trail. */
 export interface AuditItem {
   id: string; ts: string; kind: "control" | "api_key"; action: string;
@@ -1491,11 +1497,25 @@ export const api = {
       method: "PUT", headers: { "content-type": "application/json" },
       body: JSON.stringify({ allow, mode, ...more }),
     }).then((r) => j<CodingRules>(r)),
+  // the team's exceptions and trusted sources alone — for whoever the
+  // workspace lets grant them, not only the admin who sets the rules
+  setCodingExceptions: (more: { exceptions?: CodingException[]; trusted_sources?: string[] }) =>
+    af("/v1/coding/exceptions", {
+      method: "PUT", headers: { "content-type": "application/json" },
+      body: JSON.stringify(more),
+    }).then((r) => j<CodingRules>(r)),
   // one more exception, on top of the team's policy as it is now
   addCodingException: async (e: CodingException): Promise<CodingRules> => {
     const now: CodingRules = await api.codingRules();
-    return api.setCodingRules(now.allow, now.mode, { exceptions: [...now.exceptions, e] });
+    return api.setCodingExceptions({ exceptions: [...now.exceptions, e] });
   },
+  // who may do what to the team's agents, and what the caller may
+  permissions: () => af("/v1/permissions").then((r) => j<Permissions>(r)),
+  setPermissions: (change: Partial<Record<Capability, { members?: boolean; people?: string[] }>>) =>
+    af("/v1/permissions", {
+      method: "PUT", headers: { "content-type": "application/json" },
+      body: JSON.stringify(change),
+    }).then((r) => j<Permissions>(r)),
   setSkillOff: (name: string, off: boolean) =>
     af(`/v1/coding/skills/${encodeURIComponent(name)}`, {
       method: "PUT",

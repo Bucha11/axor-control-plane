@@ -106,6 +106,48 @@ test.describe("identity login (Settings)", () => {
     expect(made).toMatchObject({ email: "bob@acme.io", role: "viewer" });
   });
 
+  test("who may: an admin lets one member stop teammates' sessions", async ({ page }) => {
+    await page.route("**/identity/v1/login", jsonRoute(200, SESSION));
+    await page.route("**/identity/v1/me", jsonRoute(200, {
+      user: SESSION.user, active_org: "org_1", role: "owner",
+      memberships: [{ org_id: "org_1", role: "owner", name: "Acme", tier: "coding" }],
+    }));
+    await page.route("**/identity/v1/orgs/org_1/members", jsonRoute(200, { members: [
+      { user_id: "usr_1", email: "ada@acme.io", role: "owner", since: "2026-01-01" },
+      { user_id: "usr_2", email: "bo@acme.io", role: "member", since: "2026-01-02" }] }));
+    await page.route("**/identity/v1/orgs/org_1/invites", jsonRoute(200, { invites: [] }));
+    const caps = {
+      stop_others: { what: "pause, stop and cap a teammate's coding session or tree", members: false, people: [] as string[] },
+      brake: { what: "hold every coding agent of the team at once (the team's brake)", members: false, people: [] as string[] },
+      exceptions: { what: "let one refused thing through for the team, or trust a source", members: false, people: [] as string[] },
+      skills: { what: "turn a skill off for the team, or share one with it", members: true, people: [] as string[] },
+      memory: { what: "decide what goes into the team's memory", members: true, people: [] as string[] },
+      production: { what: "pause, stop and steer production agents", members: true, people: [] as string[] },
+    };
+    const sent: unknown[] = [];
+    await page.route("**/v1/permissions", async (route) => {
+      if (route.request().method() === "PUT") {
+        const body = route.request().postDataJSON() as Record<string, { people?: string[] }>;
+        sent.push(body);
+        if (body.stop_others?.people) caps.stop_others.people = body.stop_others.people;
+      }
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({
+        capabilities: caps, you: Object.fromEntries(Object.keys(caps).map((k) => [k, true])) }) });
+    });
+    await goHash(page, "settings");
+    await page.getByLabel("email", { exact: true }).fill("ada@acme.io");
+    await page.getByLabel("password").fill("correct horse");
+    await page.getByRole("button", { name: "log in", exact: true }).click();
+    const row = page.getByTestId("may-stop_others");
+    await expect(row).toContainText("pause, stop and cap a teammate's coding session");
+    // only members can be named: the owner already may
+    await expect(page.getByTestId("may-stop_others-add").locator("option")).toHaveText(["+ a person…", "bo@acme.io"]);
+    await page.getByTestId("may-stop_others-add").selectOption("bo@acme.io");
+    await expect(row).toContainText("bo@acme.io");
+    expect(sent).toEqual([{ stop_others: { people: ["bo@acme.io"] } }]);
+    await expect(page.getByTestId("may-skills-members")).toBeChecked();
+  });
+
   test("an admin changes a teammate's role, or takes them off — never the owner's", async ({ page }) => {
     await page.route("**/identity/v1/login", jsonRoute(200, SESSION));
     await page.route("**/identity/v1/me", jsonRoute(200, {

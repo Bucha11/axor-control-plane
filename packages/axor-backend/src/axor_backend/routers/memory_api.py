@@ -124,8 +124,19 @@ async def team_memory(request: Request, store: StoreDep) -> dict:
             "plan_tier": memory.PLAN_TIER}
 
 
+async def _permitted(store: StoreDep, principal: object) -> None:
+    from axor_backend import permissions
+
+    if not await permissions.may(store, principal, "memory"):
+        raise HTTPException(403, {"code": "not_permitted", "capability": "memory",
+                                  "detail": "this workspace lets only some people decide what "
+                                            "goes into the team's memory — ask an admin"})
+
+
 @router.put("/v1/memory/settings")
-async def memory_settings(body: dict, request: Request, store: StoreDep) -> dict:
+async def memory_settings(body: dict, request: Request, store: StoreDep,
+                          principal: PrincipalDep) -> dict:
+    await _permitted(store, principal)
     days = body.get("fresh_days")
     if not isinstance(days, int) or not 1 <= days <= 365:
         raise HTTPException(400, "fresh_days is a whole number of days, 1 to 365")
@@ -154,6 +165,7 @@ async def memory_of_session(node_id: str, store: StoreDep) -> dict:
 @router.put("/v1/memory/{item_id}")
 async def set_status(item_id: int, body: dict, request: Request, store: StoreDep,
                      principal: PrincipalDep) -> dict:
+    await _permitted(store, principal)
     status = body.get("status")
     if status not in ("on", "off"):
         raise HTTPException(400, 'body is {"status": "on"} or {"status": "off"}')
@@ -185,6 +197,7 @@ async def set_status(item_id: int, body: dict, request: Request, store: StoreDep
 @router.post("/v1/memory/notes", status_code=201)
 async def add_note(body: dict, request: Request, store: StoreDep,
                    principal: PrincipalDep) -> dict:
+    await _permitted(store, principal)
     repo = str(body.get("repo", ""))
     text = " ".join(str(body.get("text", "")).split())
     if not repo or repo not in await store.repo_labels():

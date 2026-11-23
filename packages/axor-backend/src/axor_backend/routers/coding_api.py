@@ -164,7 +164,10 @@ async def rules_for_screen(store: StoreDep) -> dict:
 async def set_rules(body: dict, request: Request, store: StoreDep,
                     principal: PrincipalDep) -> dict:
     """The team's rules: ``{"allow": [rule ids], "mode": "enforce"|"observe"}``.
-    Admin: it decides what every developer's agent may do."""
+    An owner or admin: it decides what every developer's agent may do."""
+    from axor_backend import permissions
+
+    permissions.require_admin(principal)
     known = {r["id"] for r in _catalog()}
     allow = body.get("allow")
     if not isinstance(allow, list) or not all(isinstance(x, str) and x in known for x in allow):
@@ -188,6 +191,39 @@ async def set_rules(body: dict, request: Request, store: StoreDep,
                                     "exceptions": exceptions, "trusted_sources": sources,
                                     "by": _by(principal), "ts": now_ts})
     await _audit_rules(store, request, held, sorted(set(allow)), mode, exceptions, sources)
+    return await _rules(store)
+
+
+async def _permitted(store: Any, principal: object, cap: str) -> None:  # noqa: ANN401
+    from axor_backend import permissions
+
+    if not await permissions.may(store, principal, cap):
+        raise HTTPException(403, {"code": "not_permitted", "capability": cap,
+                                  "detail": f"this workspace lets only some people "
+                                            f"{permissions.CAPABILITIES[cap][0]} — ask an admin"})
+
+
+@router.put("/exceptions")
+async def set_exceptions(body: dict, request: Request, store: StoreDep,
+                         principal: PrincipalDep) -> dict:
+    """The team's exceptions and trusted sources alone, without its rules —
+    for whoever the workspace lets grant them (permissions: exceptions), not
+    only the admin who sets the rules. Either list may be left out."""
+    await _permitted(store, principal, "exceptions")
+    known = {r["id"] for r in _catalog()}
+    held = await _rules(store)
+    now_ts = datetime.now(UTC).isoformat()
+    exceptions = (_exceptions(body["exceptions"], known) if "exceptions" in body
+                  else held["exceptions"])
+    for e in exceptions:
+        e["by"] = e["by"] or _by(principal)
+        e["ts"] = e["ts"] or now_ts
+    sources = (_sources(body["trusted_sources"]) if "trusted_sources" in body
+               else held["trusted_sources"])
+    await store.set_setting(RULES, {"allow": held["allow"], "mode": held["mode"],
+                                    "exceptions": exceptions, "trusted_sources": sources,
+                                    "by": _by(principal), "ts": now_ts})
+    await _audit_rules(store, request, held, held["allow"], held["mode"], exceptions, sources)
     return await _rules(store)
 
 
@@ -257,6 +293,7 @@ async def set_skill(name: str, body: dict, request: Request, principal: Principa
                     store: StoreDep) -> dict:
     if not _NAME.match(name):
         raise HTTPException(400, "a skill name is a plain id (letters, digits, - _ . :)")
+    await _permitted(store, principal, "skills")
     if isinstance(body.get("team"), bool):
         return await _set_team(name, body["team"], request, principal, store)
     if not isinstance(body.get("off"), bool):
@@ -384,8 +421,10 @@ async def set_brake(body: dict, request: Request, principal: PrincipalDep) -> di
     """Hold every coding agent of the team at once — an incident (a skill gone
     bad, an agent sending things out) — and let them go again. Every sidecar
     sees it with the team's policy, within half a minute; a held call waits
-    for the release, then goes on."""
+    for the release, then goes on. An owner or admin — and whoever the
+    workspace lets pull it (permissions: brake)."""
     store = request.app.state.store
+    await _permitted(store, principal, "brake")
     on = bool(body.get("on"))
     value = {"on": on, "by": _by(principal), "ts": datetime.now(UTC).isoformat(),
              "reason": str(body.get("reason") or "")[:200]}

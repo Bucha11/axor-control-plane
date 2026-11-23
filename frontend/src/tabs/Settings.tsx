@@ -6,7 +6,7 @@ import { useEffect, useState } from "react";
 import { track } from "../funnel";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Check, Copy, Loader2, Trash2 } from "lucide-react";
-import { api, BillingReport, BillingStatement } from "../api";
+import { api, BillingReport, BillingStatement, type Capability, type Permissions } from "../api";
 import { useCanAdmin } from "../team";
 import {
   IdentityError, emailAvailable, forgotPassword, here, login, logout, oauthProviders,
@@ -109,6 +109,71 @@ function OrgMembers() {
         )}
       </div>
       <Team orgId={d.active_org} isAdmin={isAdmin} />
+      <WhoMay orgId={d.active_org} isAdmin={isAdmin} />
+    </div>
+  );
+}
+
+/** Who may do what to the team's agents beyond their own: members as a whole,
+ *  or named people (a lead on call stops a teammate's runaway session without
+ *  being made an admin). Owners and admins always may; viewers never. */
+function WhoMay({ orgId, isAdmin }: { orgId: string; isAdmin: boolean }) {
+  const qc = useQueryClient();
+  const q = useQuery({ queryKey: ["permissions"], queryFn: api.permissions, retry: false });
+  const members = useQuery({ queryKey: ["org-members", orgId], queryFn: () => api.orgMembers(orgId), retry: false });
+  const save = useMutation({
+    mutationFn: (change: Parameters<typeof api.setPermissions>[0]) => api.setPermissions(change),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ["permissions"] }),
+  });
+  if (!q.data) return null;
+  const caps = Object.entries(q.data.capabilities) as [Capability, Permissions["capabilities"][Capability]][];
+  // people who may be named: members (owners and admins already may, viewers never)
+  const named = (members.data?.members ?? []).filter((m) => m.role === "member").map((m) => m.email);
+  return (
+    <div data-testid="who-may" className="mt-3">
+      <div style={{ color: C.dim, letterSpacing: "0.08em", fontSize: 10.5, marginBottom: 4 }}>WHO MAY</div>
+      <div style={{ color: C.dim, fontSize: 10.5, marginBottom: 6, lineHeight: 1.6 }}>
+        beyond their own agents — owners and admins always, viewers never
+      </div>
+      {caps.map(([cap, c]) => {
+        const left = named.filter((e) => !c.people.includes(e));
+        return (
+          <div key={cap} data-testid={`may-${cap}`} className="flex gap-2 items-center flex-wrap"
+            style={{ padding: "3px 0", borderTop: `1px solid ${C.line}` }}>
+            <span style={{ color: C.text, flex: "1 1 260px" }}>{c.what}</span>
+            <label className="flex items-center gap-1" style={{ cursor: isAdmin ? "pointer" : "default" }}>
+              <input type="checkbox" checked={c.members} disabled={!isAdmin || save.isPending}
+                aria-label={`members may ${c.what}`} data-testid={`may-${cap}-members`}
+                onChange={(e) => save.mutate({ [cap]: { members: e.target.checked } })} />
+              members
+            </label>
+            {c.people.map((p) => (
+              <span key={p} style={{ color: C.steel, border: `1px solid ${C.line}`, borderRadius: 20, padding: "0 7px" }}>
+                {p}
+                {isAdmin && (
+                  <button aria-label={`take ${cap} from ${p}`} disabled={save.isPending}
+                    onClick={() => save.mutate({ [cap]: { people: c.people.filter((x) => x !== p) } })}
+                    style={{ background: "none", border: "none", padding: "0 0 0 5px", cursor: "pointer", color: C.dim, fontFamily: MONO }}>
+                    ×
+                  </button>
+                )}
+              </span>
+            ))}
+            {isAdmin && !c.members && left.length > 0 && (
+              <select value="" aria-label={`let someone ${c.what}`} data-testid={`may-${cap}-add`}
+                onChange={(e) => e.target.value && save.mutate({ [cap]: { people: [...c.people, e.target.value] } })}
+                style={{ ...INPUT_STYLE, width: 150, padding: "1px 4px" }}>
+                <option value="">+ a person…</option>
+                {left.map((e) => <option key={e} value={e}>{e}</option>)}
+              </select>
+            )}
+            {!isAdmin && (
+              <span style={{ color: q.data!.you[cap] ? C.green : C.dim }}>{q.data!.you[cap] ? "you may" : "not you"}</span>
+            )}
+          </div>
+        );
+      })}
+      {save.isError && <div style={{ color: C.red }}>{errorWords((save.error as Error).message)}</div>}
     </div>
   );
 }

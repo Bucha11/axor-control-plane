@@ -27,6 +27,7 @@ const WORDS: Record<string, string> = {
   seat_limit: "set the seat limit to", seat_limit_removed: "removed the seat limit",
   agent_family: "kept on the free plan", key_mint: "minted the key", key_revoke: "revoked the key",
   key_change: "changed what this key may do:",
+  permission_granted: "let", permission_withdrawn: "no longer lets",
 };
 
 function detailWords(it: AuditItem): string {
@@ -37,6 +38,7 @@ function detailWords(it: AuditItem): string {
   if (typeof d.note === "string") parts.push(`“${d.note}”`);
   if (typeof d.text === "string") parts.push(`“${d.text}”`);
   if (typeof d.asked_by === "string") parts.push(`asked by ${d.asked_by}`);
+  if (typeof d.to === "string") parts.push(`→ ${d.to}`);
   if (Array.isArray(d.invited) && d.invited.length) parts.push(`invited ${d.invited.join(", ")}`);
   if (typeof d.repo === "string") parts.push(`in ${d.repo}`);
   if (Array.isArray(d.scopes)) parts.push(d.scopes.join(", "));
