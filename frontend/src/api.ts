@@ -591,6 +591,7 @@ export interface SSOConfig {
   protocol?: "oidc" | "saml"; saml_sso_url?: string; saml_entity_id?: string; has_cert?: boolean;
   // what the admin gives a SAML provider: this service as its service provider
   saml_entity_id_ours?: string; saml_acs_url?: string; saml_metadata_url?: string;
+  saml_cert_url?: string; certs?: number; saml_sign_requests?: boolean; saml_idp_initiated?: boolean;
   issuer?: string; client_id?: string; has_secret?: boolean; domains?: string[];
   enforce?: boolean; default_role?: string; updated_by?: string; updated_ts?: string;
 }
@@ -1221,6 +1222,7 @@ export const api = {
   setSso: (orgId: string, body: { protocol?: "oidc" | "saml"; issuer?: string; client_id?: string;
                                    client_secret?: string; saml_metadata?: string; saml_sso_url?: string;
                                    saml_entity_id?: string; saml_cert?: string;
+                                   saml_sign_requests?: boolean; saml_idp_initiated?: boolean;
                                    domains: string[]; enforce: boolean; default_role: string }) =>
     af(`${IDENTITY_BASE}/v1/orgs/${encodeURIComponent(orgId)}/sso`, {
       method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(body),

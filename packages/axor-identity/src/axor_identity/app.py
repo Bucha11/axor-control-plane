@@ -148,7 +148,9 @@ class SSOBody(BaseModel):
     saml_metadata: str | None = Field(default=None, max_length=200_000)
     saml_sso_url: str = Field(default="", max_length=1000)
     saml_entity_id: str = Field(default="", max_length=500)
-    saml_cert: str = Field(default="", max_length=20_000)
+    saml_cert: str = Field(default="", max_length=40_000)  # one PEM, or two in rotation
+    saml_sign_requests: bool = False      # the provider wants our requests signed (ADFS)
+    saml_idp_initiated: bool = False      # take sign-ins started on the provider's dashboard
     domains: list[str] = Field(min_length=1, max_length=20)
     enforce: bool = False
     default_role: str = "member"
@@ -837,13 +839,17 @@ def create_app(database_url: str | None = None, *,
                 "provable_domains": sorted(provable), "plan_ok": plan_ok}
         base |= {"saml_entity_id_ours": f"{public_url}/v1/saml/{org_id}",
                  "saml_acs_url": f"{public_url}/v1/saml/acs",
-                 "saml_metadata_url": f"{public_url}/v1/saml/{org_id}/metadata"}
+                 "saml_metadata_url": f"{public_url}/v1/saml/{org_id}/metadata",
+                 "saml_cert_url": f"{public_url}/v1/saml/{org_id}/certificate"}
         if held is None:
             return {"configured": False, **base}
         return {"configured": True, "protocol": held.get("protocol", "oidc"),
                 "saml_sso_url": held.get("saml_sso_url", ""),
                 "saml_entity_id": held.get("saml_entity_id", ""),
                 "has_cert": bool(held.get("saml_cert")),
+                "certs": len(saml.IdP("", "", held.get("saml_cert", "")).certs),
+                "saml_sign_requests": held.get("saml_sign_requests", False),
+                "saml_idp_initiated": held.get("saml_idp_initiated", False),
                 "issuer": held["issuer"], "client_id": held["client_id"],
                 "has_secret": bool(held["client_secret"]), "domains": held["domains"],
                 "enforce": held["enforce"], "default_role": held["default_role"],
@@ -901,13 +907,15 @@ def create_app(database_url: str | None = None, *,
                         raise saml.SAMLError("give the provider's metadata, or its single "
                                              "sign-on URL (https) and its certificate")
                     idp = saml.IdP(body.saml_sso_url.strip(), body.saml_entity_id.strip(),
-                                   saml.normalize_cert(cert))
+                                   saml.normalize_certs(cert))
             except saml.SAMLError as exc:
                 raise HTTPException(422, str(exc)) from exc
             await store.put_sso(org_id, {**common, "issuer": "", "client_id": "",
                                          "client_secret": "", "saml_sso_url": idp.sso_url,
                                          "saml_entity_id": idp.entity_id,
-                                         "saml_cert": idp.cert_pem})
+                                         "saml_cert": idp.cert_pem,
+                                         "saml_sign_requests": body.saml_sign_requests,
+                                         "saml_idp_initiated": body.saml_idp_initiated})
             await _on_trail(org_id, "sso_set", idp.entity_id or idp.sso_url, who=_who(caller),
                             protocol="saml", domains=domains, enforce=body.enforce,
                             default_role=body.default_role)
@@ -923,7 +931,8 @@ def create_app(database_url: str | None = None, *,
         await store.put_sso(org_id, {**common, "issuer": issuer,
                                      "client_id": body.client_id.strip(),
                                      "client_secret": secret, "saml_sso_url": "",
-                                     "saml_entity_id": "", "saml_cert": ""})
+                                     "saml_entity_id": "", "saml_cert": "",
+                                     "saml_sign_requests": False, "saml_idp_initiated": False})
         await _on_trail(org_id, "sso_set", issuer, who=_who(caller), protocol="oidc",
                         domains=domains, enforce=body.enforce, default_role=body.default_role)
         return _sso_view(org_id, await store.get_sso(org_id), provable)
@@ -960,10 +969,12 @@ def create_app(database_url: str | None = None, *,
         if held.get("protocol") == "saml":
             await store.sweep_expired(_now_iso())
             relay = secrets.token_urlsafe(32)
+            sp = await _sp_key(held["org_id"]) if held.get("saml_sign_requests") else None
             url, request_id = saml.authn_request(
                 saml.IdP(held["saml_sso_url"], held["saml_entity_id"], held["saml_cert"]),
                 entity_id=f"{public_url}/v1/saml/{held['org_id']}",
-                acs_url=f"{public_url}/v1/saml/acs", relay_state=relay)
+                acs_url=f"{public_url}/v1/saml/acs", relay_state=relay,
+                sign_key_pem=sp["key_pem"] if sp else None)
             await store.put_state(digest(relay), saml.PREFIX + held["org_id"], request_id,
                                   target, _expiry(_STATE_TTL))
             return RedirectResponse(url, 302)
@@ -1017,15 +1028,42 @@ def create_app(database_url: str | None = None, *,
         await store.put_login_code(digest(raw), user_id, created, _expiry(_CODE_TTL))
         return RedirectResponse(_with_query(back, axor_login=raw, axor_org=org_id), 302)
 
+    async def _sp_key(org_id: str) -> dict:
+        """The workspace's own SAML key pair, made the first time it is asked
+        for (its metadata, a signed request, an encrypted assertion)."""
+        held = await store.sp_key(org_id)
+        if held is None:
+            key_pem, cert_pem = saml.new_sp_key(f"{public_url}/v1/saml/{org_id}")
+            await store.put_sp_key(org_id, key_pem, cert_pem, _now_iso())
+            held = await store.sp_key(org_id)
+        return held or {}
+
+    async def _known_org(org_id: str) -> None:
+        if not public_url:
+            raise HTTPException(404, "no public address set")
+        if await store.get_org(org_id) is None:
+            raise HTTPException(404, "no such workspace")
+
     @app.get("/v1/saml/{org_id}/metadata")
     async def saml_metadata(org_id: str) -> Response:
         """This service as a SAML service provider for the workspace — what its
-        admin gives the identity provider."""
-        if not public_url:
-            raise HTTPException(404, "no public address set")
+        admin gives the identity provider: entity id, ACS URL, our
+        certificate (to check our requests and encrypt to us)."""
+        await _known_org(org_id)
+        held = await store.get_sso(org_id) or {}
+        sp = await _sp_key(org_id)
         return Response(saml.sp_metadata(f"{public_url}/v1/saml/{org_id}",
-                                         f"{public_url}/v1/saml/acs"),
+                                         f"{public_url}/v1/saml/acs", sp.get("cert_pem"),
+                                         sign_requests=bool(held.get("saml_sign_requests"))),
                         media_type="application/samlmetadata+xml")
+
+    @app.get("/v1/saml/{org_id}/certificate")
+    async def saml_certificate(org_id: str) -> Response:
+        """Our certificate alone, for a provider that takes a file (Entra ID's
+        verification certificate, ADFS's encryption tab)."""
+        await _known_org(org_id)
+        return Response((await _sp_key(org_id))["cert_pem"], media_type="application/x-pem-file",
+                        headers={"Content-Disposition": 'attachment; filename="axor-saml.pem"'})
 
     @app.post("/v1/saml/acs")
     async def saml_acs(request: Request) -> RedirectResponse:
@@ -1034,13 +1072,24 @@ def create_app(database_url: str | None = None, *,
 
         form = parse_qs((await request.body()).decode(errors="replace"))
         relay = (form.get("RelayState") or [""])[0]
+        answer = (form.get("SAMLResponse") or [""])[0]
         flight = await store.take_state(digest(relay)) if relay else None
-        if flight is None or not flight["provider"].startswith(saml.PREFIX) \
-                or flight["expires_ts"] <= _now_iso():
-            raise HTTPException(400, "this sign-in has expired, or was not started here — "
-                                     "start again from the login form")
-        back = flight["return_to"]
-        org_id = flight["provider"][len(saml.PREFIX):]
+        if flight is not None and flight["provider"].startswith(saml.PREFIX) \
+                and flight["expires_ts"] > _now_iso():
+            # we asked: the answer must be to that request
+            back, request_id = flight["return_to"], flight["verifier"]
+            org_id = flight["provider"][len(saml.PREFIX):]
+        else:
+            # nobody here asked: a sign-in started on the provider's dashboard,
+            # taken only where the workspace said so
+            org_id = saml.audience_org(answer, f"{public_url}/v1/saml/") or ""
+            started = await store.get_sso(org_id) if org_id else None
+            if not (started and started.get("protocol") == "saml"
+                    and started.get("saml_idp_initiated")):
+                raise HTTPException(400, "this sign-in has expired, or was not started here — "
+                                         "start again from the login form")
+            back = _safe_return(relay if relay.startswith("/") else "/") or _safe_return("/")
+            request_id = None
         held = await store.get_sso(org_id)
         if held is None or held.get("protocol") != "saml":
             return RedirectResponse(_with_query(
@@ -1048,10 +1097,18 @@ def create_app(database_url: str | None = None, *,
                                        "start again"), 303)
         try:
             claims = saml.read_response(
-                (form.get("SAMLResponse") or [""])[0],
+                answer,
                 saml.IdP(held["saml_sso_url"], held["saml_entity_id"], held["saml_cert"]),
                 entity_id=f"{public_url}/v1/saml/{org_id}", acs_url=f"{public_url}/v1/saml/acs",
-                request_id=flight["verifier"], domains=tuple(held["domains"]))
+                request_id=request_id, domains=tuple(held["domains"]),
+                sp_key_pem=(await _sp_key(org_id)).get("key_pem"))
+            if request_id is None:
+                await store.sweep_expired(_now_iso())
+                if not claims["assertion_id"] or not await store.first_use(
+                        digest(f"saml-assertion:{org_id}:{claims['assertion_id']}"),
+                        claims["until"]):
+                    raise saml.SAMLError("this sign-in was used already — start again "
+                                         "from your provider")
             user_id, created = await _sso_account(sso.Config.of(held), claims)
         except saml.SAMLError as exc:
             return RedirectResponse(_with_query(back, axor_login_error=str(exc)), 303)

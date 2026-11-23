@@ -281,6 +281,7 @@ function SingleSignOn({ orgId }: { orgId: string }) {
   const [form, setForm] = useState({ protocol: "oidc" as "oidc" | "saml", issuer: "", client_id: "",
                                      client_secret: "", saml_metadata: "", saml_sso_url: "",
                                      saml_entity_id: "", saml_cert: "", domains: "",
+                                     saml_sign_requests: false, saml_idp_initiated: false,
                                      enforce: false, default_role: "member" });
   const [copied, setCopied] = useState(false);
   useEffect(() => {
@@ -288,6 +289,7 @@ function SingleSignOn({ orgId }: { orgId: string }) {
     if (d) setForm({ protocol: d.protocol ?? "oidc", issuer: d.issuer ?? "", client_id: d.client_id ?? "",
                      client_secret: "", saml_metadata: "", saml_sso_url: d.saml_sso_url ?? "",
                      saml_entity_id: d.saml_entity_id ?? "", saml_cert: "",
+                     saml_sign_requests: !!d.saml_sign_requests, saml_idp_initiated: !!d.saml_idp_initiated,
                      domains: (d.domains ?? d.provable_domains).join(", "), enforce: !!d.enforce,
                      default_role: d.default_role ?? "member" });
   }, [q.data]);
@@ -297,9 +299,12 @@ function SingleSignOn({ orgId }: { orgId: string }) {
       ...(form.protocol === "oidc" ? {
         issuer: form.issuer.trim(), client_id: form.client_id.trim(),
         ...(form.client_secret ? { client_secret: form.client_secret } : {}),
-      } : form.saml_metadata.trim() ? { saml_metadata: form.saml_metadata } : {
-        saml_sso_url: form.saml_sso_url.trim(), saml_entity_id: form.saml_entity_id.trim(),
-        ...(form.saml_cert ? { saml_cert: form.saml_cert } : {}),
+      } : {
+        saml_sign_requests: form.saml_sign_requests, saml_idp_initiated: form.saml_idp_initiated,
+        ...(form.saml_metadata.trim() ? { saml_metadata: form.saml_metadata } : {
+          saml_sso_url: form.saml_sso_url.trim(), saml_entity_id: form.saml_entity_id.trim(),
+          ...(form.saml_cert ? { saml_cert: form.saml_cert } : {}),
+        }),
       }),
       domains: form.domains.split(/[,\s]+/).filter(Boolean), enforce: form.enforce,
       default_role: form.default_role }),
@@ -387,8 +392,11 @@ function SingleSignOn({ orgId }: { orgId: string }) {
             <span style={{ color: C.text }}>{d.saml_metadata_url}</span>:
             <br />&nbsp;&nbsp;entity id (audience) <span style={{ color: C.text }}>{d.saml_entity_id_ours}</span>
             <br />&nbsp;&nbsp;ACS (reply) URL <span style={{ color: C.text }}>{d.saml_acs_url}</span>
-            <br />&nbsp;&nbsp;name ID: the e-mail address; assertions signed
-            <br />2. Paste its metadata here — or its SSO URL, entity id and certificate.
+            <br />&nbsp;&nbsp;name ID: the e-mail address; assertions signed (encrypting them is fine)
+            <br />&nbsp;&nbsp;our certificate, for a provider that asks for a file:{" "}
+            <a href={d.saml_cert_url} download data-testid="sso-saml-cert" style={{ color: C.steel }}>axor-saml.pem</a>
+            <br />2. Paste its metadata here — or its SSO URL, entity id and certificate
+            {d.certs && d.certs > 1 ? <span style={{ color: C.dim }}> (holding {d.certs} while it rotates)</span> : null}.
           </div>
           <textarea value={form.saml_metadata} onChange={set("saml_metadata")} rows={3}
             placeholder="the provider's metadata XML (<EntityDescriptor …>)" aria-label="provider metadata"
@@ -401,7 +409,20 @@ function SingleSignOn({ orgId }: { orgId: string }) {
             <textarea value={form.saml_cert} onChange={set("saml_cert")} rows={2}
               placeholder={d.has_cert ? "signing certificate — kept as it is if left empty" : "signing certificate (PEM)"}
               aria-label="provider certificate" style={{ ...INPUT_STYLE, resize: "vertical" }} />
+            <div style={{ color: C.dim, fontSize: 10.5 }}>while the provider rotates its certificate, paste both, one after the other</div>
           </>)}
+          <div className="flex items-center gap-4 flex-wrap">
+            <label className="flex items-center gap-1" style={{ cursor: "pointer" }}>
+              <input type="checkbox" checked={form.saml_sign_requests} onChange={set("saml_sign_requests")}
+                data-testid="sso-saml-sign" />
+              sign our requests (ADFS asks for it)
+            </label>
+            <label className="flex items-center gap-1" style={{ cursor: "pointer" }}>
+              <input type="checkbox" checked={form.saml_idp_initiated} onChange={set("saml_idp_initiated")}
+                data-testid="sso-saml-idp-initiated" />
+              sign in from the provider&apos;s dashboard too
+            </label>
+          </div>
           </>)}
           <input value={form.domains} onChange={set("domains")} placeholder="domains — acme.com" aria-label="domains"
             style={INPUT_STYLE} data-testid="sso-domains" />

@@ -211,7 +211,8 @@ test.describe("identity login (Settings)", () => {
     const base = { available: true, plan_ok: true, callback_url: "https://cp.acme.io/identity/v1/sso/callback",
       provable_domains: ["acme.io"], saml_entity_id_ours: "https://cp.acme.io/identity/v1/saml/org_1",
       saml_acs_url: "https://cp.acme.io/identity/v1/saml/acs",
-      saml_metadata_url: "https://cp.acme.io/identity/v1/saml/org_1/metadata" };
+      saml_metadata_url: "https://cp.acme.io/identity/v1/saml/org_1/metadata",
+      saml_cert_url: "https://cp.acme.io/identity/v1/saml/org_1/certificate" };
     let sent: Record<string, unknown> | null = null;
     await page.route("**/identity/v1/orgs/org_1/sso", async (route) => {
       if (route.request().method() === "PUT") sent = route.request().postDataJSON();
@@ -230,10 +231,15 @@ test.describe("identity login (Settings)", () => {
     const ours = page.getByTestId("sso-saml-ours");
     await expect(ours).toContainText("https://cp.acme.io/identity/v1/saml/acs");
     await expect(ours).toContainText("https://cp.acme.io/identity/v1/saml/org_1");
+    await expect(page.getByTestId("sso-saml-cert")).toHaveAttribute(
+      "href", "https://cp.acme.io/identity/v1/saml/org_1/certificate");
     await page.getByTestId("sso-saml-metadata").fill("<md:EntityDescriptor entityID=\"https://idp.acme.io/saml\"/>");
+    await page.getByTestId("sso-saml-sign").check();
+    await page.getByTestId("sso-saml-idp-initiated").check();
     await page.getByTestId("sso-save").click();
     await expect(page.getByTestId("sso-on")).toContainText("SAML · https://idp.acme.io/saml");
     expect(sent).toMatchObject({ protocol: "saml", domains: ["acme.io"],
+                                 saml_sign_requests: true, saml_idp_initiated: true,
                                  saml_metadata: "<md:EntityDescriptor entityID=\"https://idp.acme.io/saml\"/>" });
   });
 

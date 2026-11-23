@@ -157,6 +157,20 @@ org_sso = Table(
     Column("saml_sso_url", String(1000), nullable=False, default=""),
     Column("saml_entity_id", String(500), nullable=False, default=""),
     Column("saml_cert", Text, nullable=False, default=""),
+    # sign our requests with the workspace's key (ADFS asks); take sign-ins
+    # started on the provider's dashboard
+    Column("saml_sign_requests", Boolean, nullable=False, default=False),
+    Column("saml_idp_initiated", Boolean, nullable=False, default=False),
+)
+
+# The workspace's own SAML key pair: it signs our requests, providers encrypt
+# assertions to it. The certificate is in our metadata; the key never leaves.
+saml_sp_keys = Table(
+    "saml_sp_keys", metadata,
+    Column("org_id", String(64), primary_key=True),
+    Column("key_pem", Text, nullable=False),
+    Column("cert_pem", Text, nullable=False),
+    Column("created_ts", String(40), nullable=False),
 )
 
 # The bearer token a workspace's identity provider provisions people with
@@ -623,7 +637,40 @@ class Store:
                 "enforce": bool(r.enforce), "default_role": r.default_role,
                 "updated_by": r.updated_by, "updated_ts": r.updated_ts,
                 "protocol": r.protocol or "oidc", "saml_sso_url": r.saml_sso_url or "",
-                "saml_entity_id": r.saml_entity_id or "", "saml_cert": r.saml_cert or ""}
+                "saml_entity_id": r.saml_entity_id or "", "saml_cert": r.saml_cert or "",
+                "saml_sign_requests": bool(r.saml_sign_requests),
+                "saml_idp_initiated": bool(r.saml_idp_initiated)}
+
+    async def sp_key(self, org_id: str) -> dict[str, Any] | None:
+        async with self.engine.connect() as conn:
+            row = (await conn.execute(select(saml_sp_keys).where(
+                saml_sp_keys.c.org_id == org_id))).first()
+        return {"key_pem": row.key_pem, "cert_pem": row.cert_pem} if row else None
+
+    async def put_sp_key(self, org_id: str, key_pem: str, cert_pem: str, ts: str) -> None:
+        """First one wins: two requests racing to make a key keep one."""
+        from sqlalchemy.exc import IntegrityError
+
+        try:
+            async with self.engine.begin() as conn:
+                await conn.execute(insert(saml_sp_keys).values(
+                    org_id=org_id, key_pem=key_pem, cert_pem=cert_pem, created_ts=ts))
+        except IntegrityError:
+            pass
+
+    async def first_use(self, key: str, expires_ts: str) -> bool:
+        """True the first time ``key`` is seen before it expires — an
+        assertion ID, say. A second insert of the same key fails."""
+        from sqlalchemy.exc import IntegrityError
+
+        try:
+            async with self.engine.begin() as conn:
+                await conn.execute(insert(oauth_states).values(
+                    state_hash=key, provider="seen", verifier="", return_to="",
+                    expires_ts=expires_ts))
+        except IntegrityError:
+            return False
+        return True
 
     async def get_sso(self, org_id: str) -> dict[str, Any] | None:
         async with self.engine.connect() as conn:

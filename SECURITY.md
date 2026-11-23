@@ -90,8 +90,15 @@ anything else.
 - *Sessions.* A workspace can cap how long a sign-in lasts, counted from the
   sign-in across refreshes. An admin can end every other sign-in at once. A
   removed member's refresh tokens are revoked at once.
-- *Not yet.* Signed AuthnRequests, encrypted assertions and IdP-initiated
-  sign-in are not supported.
+- *SAML keys and options.* Each workspace has its own RSA key pair, made on
+  first use and kept in the identity database. It signs AuthnRequests when
+  the workspace asks and decrypts assertions encrypted to it: RSA-OAEP only,
+  never PKCS#1 v1.5, and every decryption failure gives the same answer. An
+  encrypted assertion must still be signed, by the response over the
+  ciphertext or inside. IdP-initiated sign-in is off unless a workspace turns
+  it on. Then the assertion must answer no request and name this service as
+  its audience, and its ID is accepted once. Two provider certificates can be
+  held while it rotates.
 
 **EE license.** Verified offline with a pinned vendor Ed25519 key. No
 phone-home; expiry degrades EE features to read-only and **never disables

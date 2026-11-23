@@ -8,7 +8,7 @@ an admin.
 
 - [Before you start](#before-you-start)
 - [OpenID Connect](#openid-connect) — [Okta](#okta-oidc) · [Entra ID](#entra-id-oidc) · [Google Workspace](#google-workspace-oidc)
-- [SAML 2.0](#saml-20) — [Okta](#okta-saml) · [Entra ID](#entra-id-saml) · [Google Workspace](#google-workspace-saml)
+- [SAML 2.0](#saml-20) — [Okta](#okta-saml) · [Entra ID](#entra-id-saml) · [Google Workspace](#google-workspace-saml) · [ADFS](#adfs)
 - [Turning passwords off](#turning-passwords-off)
 - [How long a sign-in lasts](#how-long-a-sign-in-lasts)
 - [SCIM provisioning](#scim-provisioning) — [Okta](#okta-scim) · [Entra ID](#entra-id-scim)
@@ -91,11 +91,18 @@ Choose **SAML 2.0** in the section. It shows what to give the provider:
 | Entity ID (audience) | `<public url>/v1/saml/<workspace id>` |
 | ACS (reply) URL | `<public url>/v1/saml/acs` |
 | Our metadata | `<public url>/v1/saml/<workspace id>/metadata` |
+| Our certificate | `<public url>/v1/saml/<workspace id>/certificate` |
 | Name ID | the person's e-mail address |
+
+The certificate belongs to the workspace: a key pair made for it the first
+time it is asked for, valid ten years. Providers use it to check signed
+requests and to encrypt assertions to Axor. It is also in the metadata.
 
 Then paste **the provider's metadata XML** into Axor. Instead of the
 metadata, you can fill in its SSO URL (HTTP-Redirect binding), its entity id
-and its signing certificate (PEM).
+and its signing certificate (PEM). While the provider rotates its
+certificate, paste both PEMs one after the other. Its metadata can also carry
+both. Axor takes an assertion signed by either.
 
 What Axor expects:
 
@@ -107,9 +114,21 @@ What Axor expects:
   URL. It answers the request Axor sent (`InResponseTo`) and is inside its
   time window (3 minutes' skew allowed).
 
-Not supported yet: signed AuthnRequests, encrypted assertions, and sign-in
-started from the provider's dashboard (IdP-initiated). Start from Axor's
-login form.
+Options, both off by default:
+
+- **Sign our requests (ADFS asks for it).** Axor signs its AuthnRequests
+  (HTTP-Redirect binding, RSA-SHA256) with the workspace's key. Give the
+  provider our metadata or certificate so it can check them.
+- **Sign in from the provider's dashboard too** (IdP-initiated). A tile in
+  Okta, or *My Apps* in Entra ID, signs people in without the login form. The
+  assertion must not answer a request, must name Axor's entity ID as its
+  audience, and is accepted only once. Leave this off unless people ask for
+  it: a sign-in Axor did not start is the weaker one.
+
+**Encrypted assertions** need no switch. If the provider encrypts to our
+certificate, Axor decrypts with the workspace's key: RSA-OAEP key transport
+with AES-GCM or AES-CBC. RSA 1.5 key transport is refused. An encrypted
+assertion still has to be signed, by the response around it or inside.
 
 ### Okta (SAML)
 
@@ -117,8 +136,12 @@ login form.
 2. **Single sign-on URL**: the ACS URL; tick *Use this for Recipient URL and
    Destination URL*. **Audience URI (SP Entity ID)**: the entity ID.
 3. **Name ID format**: EmailAddress. **Application username**: Email.
-4. Finish. Then **Sign On → SAML 2.0 → Metadata details → Metadata URL**:
+4. Optional: **Show Advanced Settings → Assertion Encryption: Encrypted**,
+   with Axor's certificate as the encryption certificate.
+5. Finish. Then **Sign On → SAML 2.0 → Metadata details → Metadata URL**:
    open it and paste the XML into Axor.
+6. For the Okta dashboard tile, tick *sign in from the provider's dashboard
+   too* in Axor.
 
 ### Entra ID (SAML)
 
@@ -134,6 +157,21 @@ login form.
    file into Axor. Entra signs the assertion by default, which is what Axor
    expects.
 5. **Users and groups**: assign the people who should get in.
+6. Optional: **Token encryption → Import certificate** with Axor's
+   certificate (`axor-saml.pem`) and activate it.
+
+### ADFS
+
+1. **Relying Party Trusts → Add Relying Party Trust → Claims aware →
+   Import data about the relying party published online**. Use Axor's
+   metadata URL, which brings the ACS URL, the entity ID and the certificate
+   for signed requests and encryption.
+2. **Claim issuance policy**: *Send LDAP Attributes as Claims*, E-Mail-Addresses
+   → E-Mail Address. Then *Transform an Incoming Claim*: E-Mail Address → Name
+   ID, format Email.
+3. In Axor, paste ADFS's metadata
+   (`https://<adfs host>/FederationMetadata/2007-06/FederationMetadata.xml`) and
+   tick **sign our requests**.
 
 ### Google Workspace (SAML)
 
@@ -247,7 +285,10 @@ common ones:
 | *is not at a domain this workspace signs in* | the provider sent an address at another domain: check the Name ID, the `email` claim, or the domains listed |
 | *the assertion is for another service* | the provider's Audience / Entity ID is not Axor's entity ID |
 | *the response's signature does not hold* | the certificate pasted is not the one signing now (rotated?): paste the current metadata again |
-| *the assertion was not issued for this sign-in* | the sign-in was started from the provider's dashboard (not supported yet), or the Recipient / Reply URL is not Axor's ACS URL |
+| *the assertion was not issued for this sign-in* | the Recipient / Reply URL is not Axor's ACS URL, or a dashboard sign-in arrived while *sign in from the provider's dashboard* is off |
+| *does not decrypt with this workspace's key* | the provider encrypts to an old or another certificate: give it Axor's metadata again |
+| *wrapped with RSA 1.5* | set the provider's key transport to RSA-OAEP |
+| *this sign-in was used already* | a dashboard sign-in was replayed, or the browser posted it twice: start again |
 | *the provider did not say who signed in* | no e-mail address in the Name ID or attributes |
 | *needs this service's public address* | self-hosted: `AXOR_IDENTITY_PUBLIC_URL` is not set |
 | SCIM test fails with 401 | the token was replaced, or the header is not `Bearer` |
