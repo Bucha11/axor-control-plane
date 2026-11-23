@@ -216,6 +216,8 @@ export interface FleetRow {
   calls: number;
   tainted: number;
   denied: number;
+  // calls held by a control (paused, stopped, a budget, the team's brake)
+  held?: number;
   lies: number;
 }
 
@@ -1058,7 +1060,7 @@ function signingArmed(): boolean {
 
 // ── agent tree runs (axor-wrap `tree run`) ───────────────────────────────────
 export interface TreeSummary {
-  tree_run: string; status: "running" | "done" | "failed"; updated_ts: string;
+  tree_run: string; status: "running" | "paused" | "stopped" | "done" | "failed"; updated_ts: string;
   task: string; nodes: number; agents: number;
   members?: string[];
   agent_families?: string[];
@@ -1089,7 +1091,7 @@ export interface TreeItem {
   untrusted: boolean; excised: boolean;
 }
 export interface TreeRun {
-  tree_run: string; status: "running" | "done" | "failed"; updated_ts: string; task: string;
+  tree_run: string; status: "running" | "paused" | "stopped" | "done" | "failed"; updated_ts: string; task: string;
   stages: string[][];
   nodes: Record<string, TreeNode>;
   items: TreeItem[];
@@ -1506,6 +1508,20 @@ export const api = {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ node_id: nodeId, outside, invite }),
     }).then((r) => j<{ token: string; node_id: string; outside: boolean; expires_ts: string }>(r)),
+  // the developer, to their own agent (the notes channel)
+  sayToAgent: (nodeId: string, text: string) =>
+    af(`/v1/coding/say/${encodeURIComponent(nodeId)}`, {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ text }),
+    }).then((r) => j<{ id: number }>(r)),
+  saidToAgent: (nodeId: string) =>
+    af(`/v1/coding/say/${encodeURIComponent(nodeId)}`).then((r) =>
+      j<{ notes: (PairNote & { pair: boolean })[] }>(r)),
+  // the team's brake: every coding agent held at once (admin)
+  brake: () => af("/v1/coding/brake").then((r) => j<{ on: boolean; by?: string; ts?: string; reason?: string }>(r)),
+  setBrake: (on: boolean, reason = "") =>
+    af("/v1/coding/brake", {
+      method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ on, reason }),
+    }).then((r) => j<{ on: boolean; by: string; ts: string; reason: string }>(r)),
   // asking to pair on a teammate's session; the developer lets you in, or not
   pairRequests: () => af("/v1/pair/requests").then((r) =>
     j<{ to_me: PairRequest[]; mine: PairRequest[] }>(r)),

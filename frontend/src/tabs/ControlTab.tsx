@@ -626,6 +626,7 @@ function ControlBody({ focusNode, testBench }: { focusNode?: string; testBench: 
           : needYou === 1 ? <>One agent needs attention.</>
           : <>{needYou} agents need attention.</>}
       </h1>
+      <TeamBrake />
       <StatusChips units={units} filter={filter} setFilter={setFilter} />
       {/* "running now" counts what the list counts: a running tree is one */}
       {fleetQ.data && <FleetTotals totals={{ ...fleetQ.data.totals,
@@ -844,20 +845,28 @@ function ControlBody({ focusNode, testBench }: { focusNode?: string; testBench: 
                 ? `${desired.state.budget_cap_calls} calls`
                 : "unlimited"}
             </span>
+            {isCodingNode(node) && typeof desired?.state.budget_cap_calls === "number" && (
+              <span data-testid="budget-left" style={{ color: C.dim }}>
+                · {Math.max(0, (desired.state.budget_cap_calls as number) - (fleetRows.get(node.node_id)?.calls ?? 0))} left
+              </span>
+            )}
             <input
               type="number"
               min={0}
               value={budgetInput}
               onChange={(e) => setBudgetInput(e.target.value)}
-              placeholder="set / lower"
+              placeholder={isCodingNode(node) ? "N more calls" : "set / lower"}
+              aria-label="budget"
               disabled={stopped || command.isPending}
               style={{ width: 92, background: C.bg, border: `1px solid ${C.line}`, borderRadius: 4, color: C.text, fontFamily: MONO, fontSize: 11, padding: "4px 7px", outline: "none" }}
             />
             <Tooltip content="Cap how many tool calls this agent may still make. You can set a cap or tighten it — raising it past the current cap is refused by the adapter (decrease-only).">
               <button
                 onClick={() => {
-                  const n = parseInt(budgetInput, 10);
-                  if (Number.isNaN(n) || n < 0) { setCmdError("cap must be a non-negative integer"); return; }
+                  const entered = parseInt(budgetInput, 10);
+                  if (Number.isNaN(entered) || entered < 0) { setCmdError("cap must be a non-negative integer"); return; }
+                  // a coding session: "N more calls" from where it is now
+                  const n = isCodingNode(node) ? (fleetRows.get(node.node_id)?.calls ?? 0) + entered : entered;
                   const cur = typeof desired?.state.budget_cap_calls === "number" ? desired.state.budget_cap_calls : null;
                   if (cur != null && n > cur) { setCmdError(`can only lower the cap — ${n} > current ${cur} (the adapter refuses widening)`); return; }
                   send({ budget_cap_calls: n });
@@ -927,6 +936,7 @@ function ControlBody({ focusNode, testBench }: { focusNode?: string; testBench: 
                   <Square size={12} /> Cascade stop
                 </button>
               </Tooltip>
+              {!isCodingNode(node) && <>
               <Tooltip content="Ask the agent to drop its current plan and reconsider next turn. Your reason is recorded on the run.">
                 <button
                   onClick={() => {
@@ -962,9 +972,13 @@ function ControlBody({ focusNode, testBench }: { focusNode?: string; testBench: 
                   <Syringe size={12} /> Inject next turn
                 </button>
               </Tooltip>
+              </>}
             </div>
           )}
 
+          {isCodingNode(node) && mine(node.profile?.developer) && !stopped && (
+            <SayToAgent nodeId={node.node_id} />
+          )}
           </>}
 
           {/* What is actually holding this node down, and what vouching for it
@@ -1054,6 +1068,46 @@ function NeedsALook({ nodeId, items }: { nodeId: string; items: IncidentItem[] }
 
 type PendingExperiment = { id: string; faults: { tool: string; mode: string }[] };
 
+
+/** Say something to your own agent while it works — from here or a phone: it
+ *  reaches the agent at its next step as your words, and you see it land. */
+function SayToAgent({ nodeId }: { nodeId: string }) {
+  const qc = useQueryClient();
+  const [text, setText] = useState("");
+  const said = useQuery({ queryKey: ["said", nodeId], queryFn: () => api.saidToAgent(nodeId),
+                          refetchInterval: 3000, retry: false });
+  const send = useMutation({
+    mutationFn: () => api.sayToAgent(nodeId, text.trim()),
+    onSuccess: () => { setText(""); void qc.invalidateQueries({ queryKey: ["said", nodeId] }); },
+  });
+  const notes = (said.data?.notes ?? []).filter((n) => !n.pair).slice(-3);
+  return (
+    <div data-testid="say-to-agent" className="mt-4" style={{ fontFamily: MONO, fontSize: 11, color: C.mut }}>
+      <div style={{ marginBottom: 6 }}>say to the agent</div>
+      {notes.map((n) => (
+        <div key={n.id} data-testid="said" style={{ marginBottom: 4, lineHeight: 1.5 }}>
+          <span style={{ color: C.text, fontFamily: "inherit" }}>“{n.text}”</span>{" "}
+          <span style={{ color: n.delivered_ts ? C.green : C.dim }}>
+            {n.delivered_ts ? `· given ${n.delivered_at === "prompt" ? "with the next prompt" : `after ${n.delivered_at}`}` : "· waiting for its next step"}
+          </span>
+        </div>
+      ))}
+      <div className="flex gap-2 items-start">
+        <textarea value={text} onChange={(e) => setText(e.target.value)} rows={2} aria-label="say to the agent"
+          onKeyDown={(e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && text.trim()) send.mutate(); }}
+          placeholder="e.g. use the existing token table, not a new one"
+          style={{ flex: 1, background: C.bg, border: `1px solid ${C.line}`, borderRadius: 4, color: C.text,
+                   fontFamily: "inherit", fontSize: 12, padding: "6px 8px", outline: "none", resize: "vertical" }} />
+        <button data-testid="say-send" onClick={() => send.mutate()} disabled={!text.trim() || send.isPending}
+          style={btn({ fontSize: 11, padding: "6px 12px", color: text.trim() ? C.text : C.dim })}>send</button>
+      </div>
+      <div style={{ color: C.dim, fontSize: 10.5, marginTop: 4 }}>
+        reaches the agent at its next step, as your words — you see it in your agent too
+      </div>
+      {send.error && <div style={{ color: C.red, marginTop: 4 }}>{(send.error as Error).message}</div>}
+    </div>
+  );
+}
 
 /** Someone else's coding session: theirs to pause and stop (or an owner's or
  *  admin's) — a teammate asks to pair, and is let in or not. */
@@ -1188,6 +1242,49 @@ const STATUS_COLOR: Record<Status, string> = {
 
 /** A coding agent's session or one of its tree runs (what the node said it is
  * when it first reported); everything else is a production agent. */
+/** The team's brake: an admin holds every coding agent at once (an incident —
+ *  a skill gone bad, an agent sending things out) and lets them go again. A
+ *  held call waits for the release; everyone sees that the brake is on. */
+function TeamBrake() {
+  const qc = useQueryClient();
+  const canAdmin = useCanAdmin();
+  const journey = useApp((s) => s.journey);
+  const brake = useQuery({ queryKey: ["brake"], queryFn: api.brake, refetchInterval: 10000, retry: false });
+  const set = useMutation({
+    mutationFn: ({ on, reason }: { on: boolean; reason: string }) => api.setBrake(on, reason),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ["brake"] }),
+  });
+  if (journey === "production" || !brake.isSuccess) return null;
+  if (brake.data.on) {
+    return (
+      <div data-testid="brake-on" className="mb-3 px-3 py-2 flex items-center gap-3 flex-wrap"
+        style={{ border: `1px solid ${C.amber}`, borderRadius: 6, fontFamily: MONO, fontSize: 11.5, color: C.amber }}>
+        <span style={{ flex: 1 }}>
+          every coding agent of the team is held{brake.data.by ? ` — ${brake.data.by}` : ""}
+          {brake.data.reason ? `: ${brake.data.reason}` : ""}. Held calls wait and go on when it is lifted.
+        </span>
+        {canAdmin && (
+          <button data-testid="brake-off" onClick={() => set.mutate({ on: false, reason: "" })} disabled={set.isPending}
+            style={btn({ fontSize: 11, padding: "3px 10px", color: C.green, borderColor: C.green })}>let them go</button>
+        )}
+      </div>
+    );
+  }
+  if (!canAdmin) return null;
+  return (
+    <div className="mb-2" style={{ fontFamily: MONO, fontSize: 11 }}>
+      <button data-testid="brake-pull" disabled={set.isPending}
+        onClick={() => {
+          const reason = window.prompt("Hold every coding agent of the team — why (they see it)?");
+          if (reason != null) set.mutate({ on: true, reason });
+        }}
+        style={{ background: "none", border: "none", padding: 0, cursor: "pointer", color: C.dim, fontFamily: MONO, fontSize: 11 }}>
+        ⏸ hold every agent of the team…
+      </button>
+    </div>
+  );
+}
+
 function isCodingNode(n: NodeInfo): boolean {
   return n.profile?.kind === "coding" || n.profile?.kind === "tree";
 }
@@ -1484,7 +1581,9 @@ function DeveloperRow({ developer, sessions, rows, st, first, open, onToggle, lo
   looks: { label: string; more: number; node: string }[];
   first: boolean; open: boolean; onToggle: () => void; children: React.ReactNode;
 }) {
-  const p = primary(st);
+  // a person is as their most urgent session — but one stopped session does
+  // not make a developer whose other sessions run look stopped
+  const p = st.includes("needs_you") ? "needs_you" : st.includes("running") ? "running" : primary(st);
   const color = STATUS_COLOR[p];
   const sum = (k: "runs" | "calls" | "tainted" | "denied") => rows.reduce((a, r) => a + (r?.[k] ?? 0), 0);
   const agents = [...new Set(sessions.map((s) => s.profile?.agent || (s.node_id.startsWith("codex-") ? "codex" : "claude-code")))]

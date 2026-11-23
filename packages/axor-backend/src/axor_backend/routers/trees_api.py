@@ -17,7 +17,7 @@ from fastapi import APIRouter, HTTPException, Request
 router = APIRouter(prefix="/v1/trees", tags=["trees"])
 
 _ID = re.compile(r"^[A-Za-z0-9_.:-]{1,64}$")
-_STATUSES = ("running", "done", "failed")
+_STATUSES = ("running", "paused", "stopped", "done", "failed")
 MAX_DOC_BYTES = 1_000_000
 
 

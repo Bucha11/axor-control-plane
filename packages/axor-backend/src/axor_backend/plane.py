@@ -110,7 +110,8 @@ async def _require_yours(ctx: Any, request: Request, node_id: str) -> None:  # n
     if profile.get("kind") not in ("coding", "tree"):
         return
     dev = str(profile.get("developer") or "")
-    if dev and dev.lower() != str(principal.email).lower():
+    # an opaque developer id (a machine key) names nobody: the team's session
+    if "@" in dev and dev.lower() != str(principal.email).lower():
         raise HTTPException(403, {"code": "not_your_session",
                                   "detail": f"this is {dev}'s session — they, or an owner or "
                                             f"admin, pause and stop it. Ask to pair to watch it."})

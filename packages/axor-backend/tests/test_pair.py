@@ -299,3 +299,18 @@ async def test_the_developer_says_something_to_their_own_agent(
                       json={"ids": [pending[0]["id"]], "at": "Bash"})
     said = (await client.get(f"/v1/coding/say/{node}", headers=ada)).json()["notes"]
     assert said[0]["delivered_at"] == "Bash" and said[0]["pair"] is False
+
+
+async def test_a_session_reported_by_a_machine_key_names_nobody(
+        app, client: httpx.AsyncClient, priv: Ed25519PrivateKey) -> None:  # noqa: ANN001
+    """Its developer is an opaque id, not a person: the team's session, as before."""
+    from axor_backend.tenancy import set_current_org
+
+    sam = _user(priv, "org_acme", "sam@acme.io", role="member")
+    node = "claude-code-machine-1"
+    set_current_org("org_acme")
+    await app.state.store.put_node_profile(node, "coding", "claude-code", "dev-ci-1",
+                                           "2026-11-23T10:00:00+00:00")
+    r = await client.post("/v1/pair", json={"node_id": node}, headers=sam)
+    assert r.status_code == 201, r.text
+    assert (await client.get(f"/v1/pair/{r.json()['token']}/feed", headers=sam)).status_code == 200

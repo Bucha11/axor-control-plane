@@ -536,3 +536,65 @@ test.describe("the team's policy for coding agents", () => {
     await request.put(`${B}/v1/coding/skills/quick-setup`, { data: { off: false } });
   });
 });
+
+test.describe("session controls for coding agents", () => {
+  const B = "http://127.0.0.1:8400";
+
+  test("say to your own agent: it lands at its next step, and you see it", async ({ page, request }) => {
+    const claude = "claude-code-example-3f9a21c0";
+    await request.post(`${B}/v1/demo/seed-coding`);
+    await setConnection(page, { mode: "demo" });
+    await journey(page, "coding");
+    await goHash(page, `govern/${claude}`);
+    const say = page.getByTestId("say-to-agent");
+    await say.getByLabel("say to the agent").fill("use the existing token table, not a new one");
+    await say.getByTestId("say-send").click();
+    await expect(say.getByTestId("said").last()).toContainText("waiting for its next step");
+    const pending = await (await request.get(`${B}/v1/coding/notes/${claude}`)).json();
+    const mine = pending.notes.filter((n: { text: string }) => n.text.startsWith("use the existing token table"));
+    expect(mine[0].own).toBe(true);
+    await request.post(`${B}/v1/coding/notes/${claude}/delivered`, { data: { ids: [mine[0].id], at: "Edit" } });
+    await expect(say.getByTestId("said").last()).toContainText("given after Edit");
+    // no replan / inject on a coding session: one way to speak to it
+    await page.getByRole("button", { name: "more…" }).click();
+    await expect(page.getByRole("button", { name: /Replan/ })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: /Inject next turn/ })).toHaveCount(0);
+  });
+
+  test("the team's brake holds every agent, and lets them go", async ({ page, request }) => {
+    await request.post(`${B}/v1/demo/seed-coding`);
+    await setConnection(page, { mode: "demo" });
+    await journey(page, "coding");
+    await goHash(page, "govern");
+    page.once("dialog", (d) => void d.accept("a skill gone bad"));
+    await page.getByTestId("brake-pull").click();
+    await expect(page.getByTestId("brake-on")).toContainText("every coding agent of the team is held");
+    await expect(page.getByTestId("brake-on")).toContainText("a skill gone bad");
+    expect((await (await request.get(`${B}/v1/coding/policy`)).json()).brake.on).toBe(true);
+    await page.getByTestId("brake-off").click();
+    await expect(page.getByTestId("brake-on")).toHaveCount(0);
+    expect((await (await request.get(`${B}/v1/coding/policy`)).json()).brake).toBeUndefined();
+  });
+
+  test("a running tree pauses and stops as a whole", async ({ page, request }) => {
+    const tree = "tree-e2e-ctl1";
+    await request.post(`${B}/v1/plane/${tree}/profile`, { data: { kind: "tree" } });
+    await request.post(`${B}/v1/plane/${tree}/telemetry`, { data: { run_id: `${tree}-hb`, events: [
+      { seq: 0, kind: "heartbeat", payload: { applied_version: 0, level: "NORMAL", budget_remaining: null } }] } });
+    await request.post(`${B}/v1/trees/${tree}`, { data: { status: "running", task: "Add caching",
+      stages: [["read"]], nodes: { read: { agent: "codex", model: "", count: 1, access: "read", out: "findings",
+        after: [], runs: [{ index: 0, node_id: "node_e2e1", status: "running" }] } }, items: [], flow: {} } });
+    await setConnection(page, { mode: "demo" });
+    await journey(page, "coding");
+    await goHash(page, `trees/${tree}`);
+    await page.getByTestId("tree-pause").click();
+    await expect(page.getByTestId("tree-pause")).toHaveText("resume the tree");
+    const desired = async () => ((await (await request.get(`${B}/v1/plane/nodes`)).json())
+      .find((n: { node_id: string }) => n.node_id === tree)?.desired?.state) ?? {};
+    expect((await desired()).paused).toBe(true);
+    page.once("dialog", (d) => void d.accept());
+    await page.getByTestId("tree-stop").click();
+    await expect(page.getByTestId("tree-stopping")).toBeVisible();
+    expect((await desired()).stopped).toBe(true);
+  });
+});

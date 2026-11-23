@@ -29,5 +29,6 @@ export function useCanAdmin(): boolean {
  *  them. An open plane (nobody signed in) has one operator, whose all are. */
 export function useMine(): (developer?: string | null) => boolean {
   const email = (useApp((s) => s.identityEmail) || "").toLowerCase();
-  return (developer) => !email || !developer || developer.toLowerCase() === email;
+  // a developer that is an opaque id (a machine key) names nobody: the team's
+  return (developer) => !email || !developer || !developer.includes("@") || developer.toLowerCase() === email;
 }

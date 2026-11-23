@@ -80,10 +80,12 @@ def _person(principal: Any) -> bool:  # noqa: ANN401
 
 
 def _mine(principal: Any, profile: dict) -> bool:  # noqa: ANN401
+    """The caller's own session. A session whose developer is an opaque id (a
+    machine key, not a person's own) names nobody: it is the team's, as before."""
     if not _person(principal):
         return True
     dev = str(profile.get("developer") or "").lower()
-    return not dev or dev == str(principal.email).lower()
+    return "@" not in dev or dev == str(principal.email).lower()
 
 
 def not_yours(profile: dict) -> HTTPException:
@@ -128,7 +130,7 @@ def _opened_by_developer(pair: dict, profile: dict) -> bool:
     """A pair opened by someone other than the session's developer (before
     pairs were by invitation) is void: it lets nobody in."""
     by, dev = str(pair["created_by"]).lower(), str(profile.get("developer") or "").lower()
-    return not by or "@" not in by or not dev or by == dev
+    return not by or "@" not in by or "@" not in dev or by == dev
 
 
 def _visible(pair: dict, principal: Any) -> bool:  # noqa: ANN401

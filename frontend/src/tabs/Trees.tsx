@@ -10,6 +10,7 @@ import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, type TreeItem, type TreeNode, type TreeRun } from "../api";
 import { navigate } from "../router";
+import { errorWords } from "../refusal";
 import { useApp } from "../store";
 import { C, MONO, btn } from "../theme";
 import Tooltip from "../components/Tooltip";
@@ -17,7 +18,7 @@ import Tooltip from "../components/Tooltip";
 const LIVE_MS = 2000;
 const IDLE_MS = 15000;
 
-const STATUS_COLOR: Record<string, string> = {
+const STATUS_COLOR: Record<string, string> = { paused: C.amber, stopped: C.red,
   running: C.green, ok: C.dim, done: C.dim, failed: C.red, denied: C.red,
 };
 
@@ -72,7 +73,7 @@ function TreeView({ treeRun }: { treeRun: string }) {
     queryKey: ["tree", treeRun],
     queryFn: async () => {
       const t = await api.tree(treeRun);
-      setLive(t.status === "running");
+      setLive(t.status === "running" || t.status === "paused");
       return t;
     },
     refetchInterval: live ? LIVE_MS : IDLE_MS,
@@ -119,6 +120,10 @@ function TreeView({ treeRun }: { treeRun: string }) {
         <span data-testid="tree-status" style={{ fontFamily: MONO, fontSize: 12, color: STATUS_COLOR[t.status] ?? C.dim }}>
           ● {t.status}
         </span>
+        {self && (t.status === "running" || t.status === "paused") && (
+          <TreeControls treeRun={treeRun} version={self.desired?.version ?? 0}
+            paused={self.desired?.state.paused === true} stopping={self.desired?.state.stopped === true} />
+        )}
       </div>
       {example && <ExampleIntro tree={t} onLight={light} />}
       {locked && (
@@ -179,6 +184,33 @@ function TreeView({ treeRun }: { treeRun: string }) {
         </div>
       )}
     </Shell>
+  );
+}
+
+/** The whole tree: pause it (running nodes hold, the next stage waits) or stop
+ *  it (running nodes end their turn, no further stage starts). */
+function TreeControls({ treeRun, version, paused, stopping }: {
+  treeRun: string; version: number; paused: boolean; stopping: boolean;
+}) {
+  const qc = useQueryClient();
+  const [err, setErr] = useState("");
+  const send = useMutation({
+    mutationFn: (state: Record<string, unknown>) => api.command(treeRun, version + 1, state),
+    onSuccess: () => { setErr(""); void qc.invalidateQueries({ queryKey: ["nodes"] }); void qc.invalidateQueries({ queryKey: ["tree", treeRun] }); },
+    onError: (e: Error) => setErr(errorWords(e.message)),
+  });
+  if (stopping) return <span data-testid="tree-stopping" style={{ fontFamily: MONO, fontSize: 11, color: C.red }}>stopping…</span>;
+  return (
+    <span className="flex items-center gap-2" style={{ marginLeft: "auto" }}>
+      <button data-testid="tree-pause" onClick={() => send.mutate({ paused: !paused })} disabled={send.isPending}
+        style={btn({ fontSize: 11, padding: "4px 12px", color: paused ? C.green : C.amber, borderColor: paused ? C.green : C.amber })}>
+        {paused ? "resume the tree" : "pause the tree"}
+      </button>
+      <button data-testid="tree-stop" disabled={send.isPending}
+        onClick={() => { if (window.confirm("Stop this tree? Running nodes end their turn; no further stage starts.")) send.mutate({ stopped: true }); }}
+        style={btn({ fontSize: 11, padding: "4px 12px", color: C.red, borderColor: C.red })}>stop the tree</button>
+      {err && <span style={{ fontFamily: MONO, fontSize: 11, color: C.red }}>{err}</span>}
+    </span>
   );
 }
 

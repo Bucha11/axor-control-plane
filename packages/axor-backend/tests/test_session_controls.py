@@ -75,3 +75,11 @@ async def test_a_title_before_the_profile_is_kept(client: httpx.AsyncClient) -> 
                 if n["node_id"] == node)["profile"]
     assert prof["title"] == "write integration tests" and prof["kind"] == "coding"
     assert prof["agent"] == "codex"
+
+
+async def test_a_paused_or_stopped_tree_says_so(client: httpx.AsyncClient) -> None:
+    for status in ("paused", "stopped"):
+        r = await client.post("/v1/trees/tree-ctl-1", json={"status": status, "task": "t",
+                                                             "nodes": {}, "items": []})
+        assert r.status_code == 204, r.text
+        assert (await client.get("/v1/trees/tree-ctl-1")).json()["status"] == status
