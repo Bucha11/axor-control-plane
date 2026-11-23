@@ -280,3 +280,22 @@ async def test_a_pair_someone_else_opened_on_your_session_is_void(
                                       False)
     assert (await client.get("/v1/pair", headers=sam)).json()["pairs"] == []
     assert (await client.get("/v1/pair/legacy-token-0000000/feed", headers=sam)).status_code == 404
+
+
+async def test_the_developer_says_something_to_their_own_agent(
+        client: httpx.AsyncClient, priv: Ed25519PrivateKey) -> None:
+    ada = _user(priv, "org_acme", "ada@acme.io", role="member")
+    sam = _user(priv, "org_acme", "sam@acme.io", role="member")
+    await _session(client, ada)
+    node = "claude-code-ada-1"
+    r = await client.post(f"/v1/coding/say/{node}", headers=sam, json={"text": "stop it"})
+    assert r.status_code == 403
+    r = await client.post(f"/v1/coding/say/{node}", headers=ada,
+                          json={"text": "use the existing token table"})
+    assert r.status_code == 201
+    pending = (await client.get(f"/v1/coding/notes/{node}", headers=ada)).json()["notes"]
+    assert pending[0]["own"] is True and pending[0]["text"] == "use the existing token table"
+    await client.post(f"/v1/coding/notes/{node}/delivered", headers=ada,
+                      json={"ids": [pending[0]["id"]], "at": "Bash"})
+    said = (await client.get(f"/v1/coding/say/{node}", headers=ada)).json()["notes"]
+    assert said[0]["delivered_at"] == "Bash" and said[0]["pair"] is False

@@ -187,6 +187,7 @@ _WRITE_POLICY: tuple[tuple[str, str], ...] = (
     ("/v1/pair", "read"),
     # what every developer's agent may do is the admin's decision
     ("/v1/coding/rules", "admin"),
+    ("/v1/coding/brake", "admin"),   # holds every coding agent of the team
     # turning a skill off — or on — for every developer is an operator's decision
     ("/v1/coding/", "operate"),
     ("/v1/plane/", "operate"),        # command / facts / cascade-stop

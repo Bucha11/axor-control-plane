@@ -23,8 +23,14 @@ from collections import deque
 EVENTS = (
     "visit", "guest_started", "demo_fleet_loaded", "lie_caught",
     "signup_prompt_shown", "signup_completed", "guest_claimed", "agent_connected",
+    "control_used",
 )
-CLIENT_EVENTS = frozenset(EVENTS) - {"agent_connected"}
+CLIENT_EVENTS = frozenset(EVENTS) - {"agent_connected", "control_used"}
+# which session controls people use (detail = the control, never who or where):
+# what is worth building on, measured instead of guessed
+CONTROLS = ("pause", "resume", "stop", "budget", "replan", "inject", "cascade_stop",
+            "tree_pause", "tree_resume", "tree_stop", "say", "brake_on", "brake_off",
+            "pair_open", "pair_note", "ask_to_pair", "pair_let_in")
 _ID = re.compile(r"^[A-Za-z0-9_-]{8,64}$")
 _DETAIL = re.compile(r"^[a-z0-9 _.-]{0,64}$")
 PER_IP_PER_MIN = 60
@@ -38,6 +44,19 @@ FUNNEL: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("signed up", ("signup_completed",)),
     ("kept their guest work", ("guest_claimed",)),
 )
+
+
+async def used(store: object, control: str) -> None:
+    """One use of a session control, anonymously (funnel_events)."""
+    if control not in CONTROLS:
+        return
+    from datetime import UTC, datetime
+
+    try:
+        await store.add_funnel_event(datetime.now(UTC).isoformat(), "server",  # type: ignore[attr-defined]
+                                     "control_used", control)
+    except Exception:  # noqa: BLE001 - a count never breaks a control
+        pass
 
 
 def valid(event: object, session_id: object, detail: object) -> bool:

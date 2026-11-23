@@ -32,6 +32,7 @@ import json
 import re
 from collections import Counter
 from datetime import UTC, datetime
+from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
 
@@ -60,7 +61,9 @@ async def policy(request: Request, store: StoreDep) -> dict:
     rules = await _rules(store)
     return {"skills_off": sorted(await _off(request)), "skills_team": team,
             **({"rules": {k: rules[k] for k in ("allow", "mode", "exceptions", "trusted_sources")}}
-               if rules["set"] else {})}
+               if rules["set"] else {}),
+            # an admin's brake: every coding agent of the team held at once
+            **({"brake": brake} if (brake := await _brake(store)) else {})}
 
 
 # ── the team's rules for coding agents ───────────────────────────────────────
@@ -318,3 +321,35 @@ async def team_bundle(name: str, store: StoreDep) -> dict:
     if shared is None or not shared["live"]:
         raise HTTPException(404, f"'{name}' is not on for the team")
     return {"name": name, "version": shared["live"]["version"], "files": shared["live"]["files"]}
+
+
+# ── the team's brake ─────────────────────────────────────────────────────────
+
+BRAKE = "coding_brake"
+
+
+async def _brake(store: Any) -> dict | None:  # noqa: ANN401
+    value = await store.get_setting(BRAKE)
+    return value if isinstance(value, dict) and value.get("on") else None
+
+
+@router.get("/brake")
+async def get_brake(request: Request) -> dict:
+    return await _brake(request.app.state.store) or {"on": False}
+
+
+@router.put("/brake")
+async def set_brake(body: dict, request: Request, principal: PrincipalDep) -> dict:
+    """Hold every coding agent of the team at once — an incident (a skill gone
+    bad, an agent sending things out) — and let them go again. Every sidecar
+    sees it with the team's policy, within half a minute; a held call waits
+    for the release, then goes on."""
+    store = request.app.state.store
+    on = bool(body.get("on"))
+    value = {"on": on, "by": _by(principal), "ts": datetime.now(UTC).isoformat(),
+             "reason": str(body.get("reason") or "")[:200]}
+    await store.set_setting(BRAKE, value)
+    from axor_backend.funnel import used
+
+    await used(store, "brake_on" if on else "brake_off")
+    return value

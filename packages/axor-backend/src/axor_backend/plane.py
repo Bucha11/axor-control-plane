@@ -80,6 +80,22 @@ async def _require_plan(ctx: Any, node_id: str) -> None:  # noqa: ANN401
                                   "detail": REASONS[reasons[0]]})
 
 
+async def _count_control(ctx: Any, node_id: str, delta: dict) -> None:  # noqa: ANN401
+    """Which control was used (anonymously, funnel.used) — what is worth building on."""
+    from axor_backend.funnel import used
+
+    tree = ((await ctx.store.node_kinds()).get(node_id) or {}).get("kind") == "tree"
+    if "stopped" in delta and delta["stopped"]:
+        await used(ctx.store, "tree_stop" if tree else "stop")
+    elif "paused" in delta:
+        what = "pause" if delta["paused"] else "resume"
+        await used(ctx.store, f"tree_{what}" if tree else what)
+    for key, name in (("budget_cap_calls", "budget"), ("replan", "replan"),
+                      ("pending_injection", "inject")):
+        if key in delta:
+            await used(ctx.store, name)
+
+
 async def _require_yours(ctx: Any, request: Request, node_id: str) -> None:  # noqa: ANN401
     """A coding session (or tree run) is its developer's: they pause, stop, cap
     or replan it — and an owner or admin, who answers for the team's agents.
@@ -108,6 +124,7 @@ async def command(node_id: str, body: dict, request: Request) -> dict:
         raise HTTPException(400, "command requires a non-empty `state` delta")
     await _require_plan(ctx, node_id)
     await _require_yours(ctx, request, node_id)
+    await _count_control(ctx, node_id, delta)
     if "pending_experiment" in delta:
         _check_experiment(delta["pending_experiment"])
     version = body.get("version")
@@ -210,6 +227,9 @@ async def cascade_stop(node_id: str, request: Request, body: dict | None = None)
     (deprecated: structure should derive from traced spawn events)."""
     ctx = _ctx(request)
     await _require_yours(ctx, request, node_id)
+    from axor_backend.funnel import used
+
+    await used(ctx.store, "cascade_stop")
     if not ctx.keyring.empty:
         body = body or {}
         delta = {"stopped": True, "cascade": True}
@@ -883,7 +903,12 @@ def _run_summary(run: dict, lines: list[dict], probes: dict, now_dt: Any) -> dic
         "tool_calls": len(calls),
         "tools": sorted({str((ln.get("payload") or {}).get("tool", "")) for ln in calls} - {""}),
         "tainted_refs": [r for r in tainted if r],
-        "denied": sum(1 for ln in lines if ln.get("verdict") == "deny"),
+        # a call held by a control (a pause, a stop, a budget, the team's brake)
+        # is not a rule refusing it: counted apart
+        "denied": sum(1 for ln in lines if ln.get("verdict") == "deny"
+                      and not (ln.get("payload") or {}).get("control")),
+        "held": sum(1 for ln in lines if ln.get("verdict") == "deny"
+                    and (ln.get("payload") or {}).get("control")),
         "evidence": [e.get("deviation") for e in (run.get("evidence") or []) if e.get("deviation")],
         "probe": ({"verdict": probe["overall_verdict"], "escape_count": probe["escape_count"]}
                   if probe else None),
@@ -959,7 +984,7 @@ async def fleet(request: Request) -> dict:
             if p.get("session_id"):
                 probes[p["session_id"]] = p
     stats = {nid: {"node_id": nid, "active_run": None, "current_tool": None, "last_ts": None,
-                   "runs": 0, "calls": 0, "tainted": 0, "denied": 0, "lies": 0}
+                   "runs": 0, "calls": 0, "tainted": 0, "denied": 0, "held": 0, "lies": 0}
              for nid in nodes}
     seen_runs: set[str] = set()
     for run in await ctx.store.list_runs():   # newest first
@@ -978,6 +1003,7 @@ async def fleet(request: Request) -> dict:
             st["calls"] += summary["tool_calls"]
             st["tainted"] += len(summary["tainted_refs"])
             st["denied"] += summary["denied"]
+            st["held"] += summary.get("held", 0)
             st["lies"] += len(summary["evidence"])
             if summary["active"] and st["active_run"] is None:
                 st["active_run"] = summary["run_id"]

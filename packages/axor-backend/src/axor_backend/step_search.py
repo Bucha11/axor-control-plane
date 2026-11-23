@@ -25,7 +25,7 @@ import re
 from datetime import UTC, datetime
 from typing import Any
 
-OUTCOMES = ("refused", "would_refuse", "let_through", "outside")
+OUTCOMES = ("refused", "held", "would_refuse", "let_through", "outside")
 DOES = ("runs_code", "changes_files", "sends_out", "deletes")
 
 _RUNS_CODE = {"bash", "shell", "exec", "run_shell", "execute", "terminal", "run_command",
@@ -130,8 +130,9 @@ def search(
         args = p.get("args") if isinstance(p.get("args"), dict) else {}
         if kind == "tool_call":
             refused = line.get("verdict") == "deny"
-            label = ("refused" if refused else "would_refuse" if p.get("would_deny")
-                     else "let_through")
+            # held by someone's control (paused, stopped, a budget) — not refused
+            label = ("held" if refused and p.get("control") else "refused" if refused
+                     else "would_refuse" if p.get("would_deny") else "let_through")
             did = what_it_did(name, args, p.get("normalized"))
             refs = p.get("arg_refs") if isinstance(p.get("arg_refs"), dict) else {}
             # the sidecar ships what a call's arguments carry (`carries`)

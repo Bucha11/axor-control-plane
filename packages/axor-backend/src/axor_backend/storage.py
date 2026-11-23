@@ -1156,6 +1156,16 @@ class Store:
         return [{"id": r.id, "by": r.by, "text": r.text, "ts": r.ts, "outside": bool(r.outside),
                  "delivered_ts": r.delivered_ts, "delivered_at": r.delivered_at} for r in rows]
 
+    async def notes_of_node(self, node_id: str, limit: int = 20) -> list[dict[str, Any]]:
+        """The latest notes to one session, from anyone, with where they landed."""
+        async with self.engine.connect() as conn:
+            rows = (await conn.execute(select(pair_notes).where(
+                pair_notes.c.org_id == current_org_id(), pair_notes.c.node_id == node_id,
+            ).order_by(pair_notes.c.id.desc()).limit(limit))).all()
+        return [{"id": r.id, "by": r.by, "text": r.text, "ts": r.ts, "outside": bool(r.outside),
+                 "delivered_ts": r.delivered_ts, "delivered_at": r.delivered_at,
+                 "pair": bool(r.token)} for r in reversed(rows)]
+
     async def pending_notes(self, node_id: str, since_ts: str) -> list[dict[str, Any]]:
         """Notes for one agent session not yet given to it (newer than since)."""
         async with self.engine.connect() as conn:
@@ -1334,11 +1344,14 @@ class Store:
                 .where(funnel_events.c.ts >= since))).all()
         sessions: dict[str, set[str]] = {}
         prompts: dict[str, int] = {}
+        controls: dict[str, int] = {}
         for r in rows:
             sessions.setdefault(r.event, set()).add(r.session_id)
             if r.event == "signup_prompt_shown":
                 prompts[r.detail or "unspecified"] = prompts.get(r.detail or "unspecified", 0) + 1
-        return {"sessions": sessions, "prompts": prompts,
+            if r.event == "control_used":
+                controls[r.detail] = controls.get(r.detail, 0) + 1
+        return {"sessions": sessions, "prompts": prompts, "controls": controls,
                 "events": {k: sum(1 for r in rows if r.event == k) for k in sessions}}
 
     # ── guest sessions (hosted visitors without an account) ─────────────────
@@ -2043,10 +2056,17 @@ class Store:
         whose first profile came from an older sidecar learns it later."""
         org = current_org_id()
         async with self.engine.begin() as conn:
-            held = (await conn.execute(select(node_profiles.c.node_id, node_profiles.c.repo).where(
+            held = (await conn.execute(select(node_profiles.c.node_id, node_profiles.c.repo,
+                                              node_profiles.c.kind).where(
                 node_profiles.c.org_id == org,
                 node_profiles.c.node_id == node_id))).first()
-            if held is None:
+            if held is not None and not held.kind:
+                # the placeholder a title made before the profile came in
+                await conn.execute(update(node_profiles).where(
+                    node_profiles.c.org_id == org, node_profiles.c.node_id == node_id,
+                ).values(kind=kind, agent=agent, developer=developer, first_ts=ts,
+                         repo=repo, repo_label=repo_label))
+            elif held is None:
                 await conn.execute(node_profiles.insert().values(
                     org_id=org, node_id=node_id, kind=kind, agent=agent,
                     developer=developer, first_ts=ts, repo=repo, repo_label=repo_label))
@@ -2064,13 +2084,25 @@ class Store:
                 for r in rows}
 
     async def set_node_title(self, node_id: str, title: str) -> bool:
-        """Name a session once: the first request said in it. False when the
-        node has no profile yet, or already has a title."""
+        """Name a session once: the first request said in it. False when it
+        already has a title. A title that arrives before the session's profile
+        (the two are sent at once) is kept on a placeholder row the profile
+        then fills in."""
+        org = current_org_id()
         async with self.engine.begin() as conn:
             done = await conn.execute(update(node_profiles).where(
-                node_profiles.c.org_id == current_org_id(), node_profiles.c.node_id == node_id,
+                node_profiles.c.org_id == org, node_profiles.c.node_id == node_id,
                 node_profiles.c.title == "").values(title=title[:120]))
-        return bool(done.rowcount)
+            if done.rowcount:
+                return True
+            held = (await conn.execute(select(node_profiles.c.node_id).where(
+                node_profiles.c.org_id == org, node_profiles.c.node_id == node_id))).first()
+            if held is not None:
+                return False
+            await conn.execute(node_profiles.insert().values(
+                org_id=org, node_id=node_id, kind="", agent="", developer="",
+                first_ts="", repo="", repo_label="", title=title[:120]))
+        return True
 
     async def coding_profiles(self) -> list[dict[str, str]]:
         """Every coding session this workspace has seen, first to report first

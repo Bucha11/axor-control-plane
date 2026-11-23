@@ -118,6 +118,9 @@ async def open_pair(body: dict, request: Request, store: StoreDep,
         raise _plan_required("inviting people from outside the team is on the paid plan — "
                              "teammates can join on any plan")
     invited = [str(e).strip().lower() for e in body.get("invite") or [] if str(e).strip()][:20]
+    from axor_backend.funnel import used
+
+    await used(store, "pair_open")
     return await _open(store, node_id, _who(principal), outside, invited)
 
 
@@ -179,6 +182,9 @@ async def ask_to_pair(body: dict, store: StoreDep, principal: PrincipalDep) -> d
         raise HTTPException(400, "this is your own session — open a pair on it")
     rid = await store.add_pair_request(node_id, _who(principal), str(profile.get("developer")),
                                        _now().isoformat())
+    from axor_backend.funnel import used
+
+    await used(store, "ask_to_pair")
     return {"id": rid, "status": "pending"}
 
 
@@ -213,6 +219,9 @@ async def decide_request(request_id: int, body: dict, store: StoreDep,
         await store.decide_pair_request(request_id, "declined", _now().isoformat())
         return {"id": request_id, "status": "declined"}
     pair = await _open(store, req["node_id"], _who(principal), False, [req["by"]])
+    from axor_backend.funnel import used
+
+    await used(store, "pair_let_in")
     await store.decide_pair_request(request_id, "accepted", _now().isoformat(), pair["token"])
     return {"id": request_id, "status": "accepted", "token": pair["token"]}
 
@@ -331,6 +340,9 @@ async def send_note(token: str, body: dict, request: Request, store: StoreDep,
     by = _who(principal) or ("a teammate" if you == "teammate" else "a guest")
     note_id = await store.add_pair_note(token, pair["node_id"], by, text, _now().isoformat(),
                                         outside=you == "guest")
+    from axor_backend.funnel import used
+
+    await used(store, "pair_note")
     return {"id": note_id}
 
 
@@ -353,7 +365,51 @@ async def notes_for_agent(node_id: str, store: StoreDep, principal: PrincipalDep
     news += [f"{r['by']} asks to pair on this session (watch it live, send your agent "
              f"notes). Let them in or not on the Control Plane, Pair sessions."
              for r in await store.untold_pair_requests(node_id)]
-    return {"notes": await store.pending_notes(node_id, since), "news": news}
+    developer = str(((await store.node_kinds()).get(node_id) or {}).get("developer") or "").lower()
+    notes = await store.pending_notes(node_id, since)
+    for n in notes:
+        # the developer's own words, from the plane's session panel or a phone
+        n["own"] = bool(developer) and str(n.get("by", "")).lower() == developer
+    return {"notes": notes, "news": news}
+
+
+# ── the developer, to their own agent ────────────────────────────────────────
+
+@router.post("/v1/coding/say/{node_id}", status_code=201)
+async def say_to_agent(node_id: str, body: dict, store: StoreDep,
+                       principal: PrincipalDep) -> dict:
+    """A note from the session's developer to their own agent — from the
+    plane's session panel, or a phone while a long run goes on. It reaches the
+    agent at its next step, like the notes of a pair, as the developer's words."""
+    profile = (await store.node_kinds()).get(node_id)
+    if profile is None or profile.get("kind") != "coding":
+        raise HTTPException(404, "no coding session by that id in this workspace")
+    if not _mine(principal, profile):
+        raise HTTPException(403, {"code": "not_your_session",
+                                  "detail": f"this is {profile.get('developer')}'s session — "
+                                            f"only they speak to its agent; ask to pair to "
+                                            f"send it a note"})
+    text = str(body.get("text", "")).strip()
+    if not text:
+        raise HTTPException(400, "a note has text")
+    if len(text) > NOTE_MAX:
+        raise HTTPException(413, f"a note is at most {NOTE_MAX} characters")
+    by = _who(principal) or str(profile.get("developer") or "the developer")
+    note_id = await store.add_pair_note("", node_id, by, text, _now().isoformat())
+    from axor_backend.funnel import used
+
+    await used(store, "say")
+    return {"id": note_id}
+
+
+@router.get("/v1/coding/say/{node_id}")
+async def notes_to_agent(node_id: str, store: StoreDep, principal: PrincipalDep) -> dict:
+    """The latest notes to this session and where each landed — the
+    developer's panel. Someone else's session: its developer's to read."""
+    profile = (await store.node_kinds()).get(node_id) or {}
+    if not _mine(principal, profile):
+        raise not_yours(profile)
+    return {"notes": await store.notes_of_node(node_id)}
 
 
 @router.post("/v1/coding/notes/{node_id}/delivered")

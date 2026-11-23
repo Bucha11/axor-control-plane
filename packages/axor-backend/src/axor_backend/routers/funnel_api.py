@@ -61,4 +61,6 @@ async def report(request: Request, days: int = 30) -> dict:
         "steps": steps,
         "signup_prompts": counts["prompts"],
         "agents_connected": counts["events"].get("agent_connected", 0),
+        # which session controls are used, and how often
+        "controls_used": counts.get("controls", {}),
     }
