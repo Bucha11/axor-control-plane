@@ -90,6 +90,11 @@ async def test_a_lead_stops_a_teammates_session_once_let(c: httpx.AsyncClient, w
     granted = next(t for t in trail if t["action"] == "permission_granted")
     assert granted["target"] == "stop_others" and granted["detail"] == {"to": "petr@team.dev"}
     assert granted["who"] == "olga@team.dev"
+    # the month's report names it: who acted on whose session
+    report = (await c.get("/v1/audit/report", headers=olga)).json()
+    assert report["on_others_sessions"] == [{
+        "ts": report["on_others_sessions"][0]["ts"], "who": "petr@team.dev", "action": "stop",
+        "session": "claude-code-ivan-1", "developer": "ivan@team.dev"}]
 
 
 async def test_the_brake_and_exceptions_for_whoever_is_let(c: httpx.AsyncClient, who) -> None:  # noqa: ANN001

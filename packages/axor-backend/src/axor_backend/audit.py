@@ -19,6 +19,8 @@ from axor_backend.clock import now
 
 KIND = "control"
 KEY_KIND = "api_key"          # routers/keys.py — the credential acts, shown alongside
+RETENTION_SETTING = "audit_retention_days"
+MIN_RETENTION_DAYS = 30
 
 # a node command's state keys, said as the act
 _DELTA_ACTS = (

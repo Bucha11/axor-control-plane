@@ -55,7 +55,7 @@ VAULT_AUDIT_BACKSTOP = 100_000
 # what to bound — and so adding one is a single edit here rather than a log
 # nothing ever trims. `api_key` is the credential-lifecycle log: every mint and
 # revoke of an API key (routers/keys.py), which used to leave no trace at all.
-VAULT_AUDIT_KINDS = ("creds_dispense", "signing", "api_key")
+VAULT_AUDIT_KINDS = ("creds_dispense", "signing", "api_key", "control")
 
 # JSON payload columns: real JSONB on Postgres (indexable, queryable), portable
 # JSON (stored as TEXT, auto-(de)serialised) on SQLite for dev/tests. One column
@@ -3142,6 +3142,16 @@ class Store:
         so a lexicographic compare is chronological (same as `runs`)."""
         async with self.engine.begin() as conn:
             return (await conn.execute(delete(vault_audit).where(
+                vault_audit.c.created_ts < cutoff_ts,
+                vault_audit.c.org_id == current_org_id(),
+            ))).rowcount
+
+    async def prune_audit_kinds_older_than(self, kinds: tuple[str, ...],
+                                           cutoff_ts: str) -> int:
+        """A workspace's own retention for some of its logs (the audit trail)."""
+        async with self.engine.begin() as conn:
+            return (await conn.execute(delete(vault_audit).where(
+                vault_audit.c.kind.in_(kinds),
                 vault_audit.c.created_ts < cutoff_ts,
                 vault_audit.c.org_id == current_org_id(),
             ))).rowcount

@@ -3,7 +3,7 @@
 // limit, a skill — and the keys minted and revoked. Filtered here, exported as
 // CSV or JSON lines for an archive. Admins only (the plane says so with 403).
 import { useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, type AuditItem } from "../api";
 import { C, MONO, btn } from "../theme";
 import { errorWords } from "../refusal";
@@ -28,6 +28,7 @@ const WORDS: Record<string, string> = {
   agent_family: "kept on the free plan", key_mint: "minted the key", key_revoke: "revoked the key",
   key_change: "changed what this key may do:",
   permission_granted: "let", permission_withdrawn: "no longer lets",
+  audit_retention: "set how long the audit trail is kept:",
 };
 
 function detailWords(it: AuditItem): string {
@@ -53,6 +54,59 @@ function save(blob: Blob, name: string): void {
   a.download = name;
   a.click();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+/** Business: how long the trail is kept, and a month of it as a reviewer
+ *  reads it (who acted on whose agent, every exception, permission, brake). */
+function KeepAndReport({ field }: { field: React.CSSProperties }) {
+  const qc = useQueryClient();
+  const keep = useQuery({ queryKey: ["audit-retention"], queryFn: api.auditRetention, retry: false });
+  const setKeep = useMutation({
+    mutationFn: (days: number | null) => api.setAuditRetention(days),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ["audit-retention"] });
+      void qc.invalidateQueries({ queryKey: ["audit"] });
+    },
+  });
+  const [month, setMonth] = useState(new Date().toISOString().slice(0, 7));
+  const report = useQuery({ queryKey: ["audit-report", month], queryFn: () => api.auditReport(month),
+                            retry: false });
+  const r = report.data;
+  return (
+    <div style={{ marginBottom: 10 }}>
+      <div className="flex gap-2 items-center flex-wrap" data-testid="audit-retention">
+        <span>keep the trail</span>
+        <select value={keep.data?.days ?? ""} aria-label="keep the trail" style={field}
+          disabled={setKeep.isPending}
+          onChange={(e) => setKeep.mutate(e.target.value ? Number(e.target.value) : null)}>
+          <option value="">as long as the deployment keeps it</option>
+          {[90, 180, 365, 730, 2555].map((d) => <option key={d} value={d}>{d >= 365 ? `${Math.round(d / 365)} year${d >= 730 ? "s" : ""}` : `${d} days`}</option>)}
+        </select>
+        {setKeep.data && setKeep.data.pruned > 0 && (
+          <span style={{ color: C.dim }}>{setKeep.data.pruned} older act{setKeep.data.pruned === 1 ? "" : "s"} dropped</span>
+        )}
+      </div>
+      <div className="flex gap-2 items-center flex-wrap mt-2" data-testid="audit-report">
+        <span>monthly report</span>
+        <input type="month" value={month} onChange={(e) => setMonth(e.target.value)} aria-label="report month" style={field} />
+        {r && (
+          <>
+            <span style={{ color: C.text }}>{r.acts} act{r.acts === 1 ? "" : "s"}</span>
+            <span>· {Object.keys(r.by_person).length} {Object.keys(r.by_person).length === 1 ? "person" : "people"}</span>
+            <span style={{ color: r.on_others_sessions.length ? C.amber : C.dim }}>
+              · {r.on_others_sessions.length} on someone else&apos;s agent
+            </span>
+            <span>· {r.policy_changes.length} policy, {r.permission_changes.length} permission change{r.permission_changes.length === 1 ? "" : "s"}, {r.brakes.length} brake{r.brakes.length === 1 ? "" : "s"}</span>
+            <button data-testid="audit-report-save"
+              onClick={() => save(new Blob([JSON.stringify(r, null, 2)], { type: "application/json" }), `axor-audit-report-${r.month}.json`)}
+              style={btn({ color: C.mut, fontSize: 11, padding: "2px 8px" })}>
+              save the report
+            </button>
+          </>
+        )}
+      </div>
+    </div>
+  );
 }
 
 export default function AuditTrail() {
@@ -124,6 +178,7 @@ export default function AuditTrail() {
           <a href="#/pricing?for=coding" style={{ color: C.steel }}>Business plan</a>
         </div>
       )}
+      {q.data && !q.data.window_days && <KeepAndReport field={field} />}
       <div style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 8 }}>
         {(q.data?.items ?? []).length === 0 && (
           <div className="p-3" style={{ color: C.dim }}>

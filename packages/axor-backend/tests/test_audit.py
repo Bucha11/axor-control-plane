@@ -125,3 +125,35 @@ async def test_below_business_the_trail_is_the_last_30_days_and_not_exported(
     assert [r["action"] for r in body["items"]] == ["brake_on"]
     r = await client.get("/v1/audit/export")
     assert r.status_code == 402 and r.json()["detail"]["plan"] == "business"
+
+
+async def test_the_workspace_keeps_its_trail_as_long_as_it_says(client: httpx.AsyncClient) -> None:
+    store = client.app.state.store  # type: ignore[attr-defined]
+    old = {"ts": "2020-01-01T00:00:00+00:00", "action": "pause", "target": "x",
+           "by": {"kind": "open", "who": "operator"}}
+    await store.add_vault_audit("control", old, old["ts"])
+    await client.put("/v1/coding/brake", json={"on": True})
+    assert (await client.put("/v1/audit/retention", json={"days": 7})).status_code == 400
+    r = await client.put("/v1/audit/retention", json={"days": 90})
+    assert r.status_code == 200 and r.json() == {"days": 90, "pruned": 1}
+    acts = [i["action"] for i in (await client.get("/v1/audit")).json()["items"]]
+    assert "pause" not in acts and acts[0] == "audit_retention"
+    assert (await client.get("/v1/audit/retention")).json() == {"days": 90}
+
+
+async def test_a_month_s_report_says_who_acted_on_whose_agent(client: httpx.AsyncClient) -> None:
+    node = "claude-code-report-1"
+    await _session(client, node)            # dev-ada's: no address, nobody's
+    await client.post(f"/v1/plane/{node}/command", json={"version": 1, "state": {"paused": True}})
+    await client.put("/v1/coding/brake", json={"on": True, "reason": "incident 42"})
+    await client.put("/v1/coding/rules", json={
+        "allow": [], "exceptions": [{"rule": "secrets", "path": "tests/fixtures/*"}]})
+    report = (await client.get("/v1/audit/report")).json()
+    assert report["acts"] == 3 and report["by_action"]["pause"] == 1
+    assert report["by_person"]["operator"]["brake_on"] == 1
+    assert report["brakes"][0]["detail"] == {"reason": "incident 42"}
+    assert report["policy_changes"][0]["target"] == "secrets: tests/fixtures/*"
+    assert report["on_others_sessions"] == []
+    assert (await client.get("/v1/audit/report", params={"month": "May"})).status_code == 400
+    assert (await client.get("/v1/audit/report",
+                             params={"month": "2020-01"})).json()["acts"] == 0

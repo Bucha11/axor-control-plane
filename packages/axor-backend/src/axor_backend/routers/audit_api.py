@@ -104,6 +104,75 @@ async def read_audit(request: Request, store: StoreDep, principal: PrincipalDep,
             "actions": sorted({r["action"] for r in rows}), "window_days": window}
 
 
+@router.get("/retention")
+async def get_retention(store: StoreDep, principal: PrincipalDep) -> dict:
+    permissions.require_admin(principal)
+    days = await store.get_setting(audit.RETENTION_SETTING)
+    return {"days": days if isinstance(days, int) else None}
+
+
+@router.put("/retention")
+async def set_retention(body: dict, request: Request, store: StoreDep,
+                        principal: PrincipalDep) -> dict:
+    """How long this workspace keeps its audit trail: ``{"days": n}`` (30 or
+    more), or ``{"days": null}`` to keep it for the deployment's window. Rows
+    older go at the next sweep — and now."""
+    from axor_backend.lifecycle import prune_audit_trail
+
+    permissions.require_admin(principal)
+    permissions.require_business(request, "the audit trail's retention")
+    days = body.get("days")
+    if days is not None and (not isinstance(days, int) or isinstance(days, bool)
+                             or not audit.MIN_RETENTION_DAYS <= days <= 3650):
+        raise HTTPException(400, f"days is {audit.MIN_RETENTION_DAYS} to 3650, or null")
+    await store.set_setting(audit.RETENTION_SETTING, days)
+    await audit.record(store, request, "audit_retention", str(days) if days else "the deployment's")
+    return {"days": days, "pruned": await prune_audit_trail(store)}
+
+
+@router.get("/report")
+async def compliance_report(request: Request, store: StoreDep, principal: PrincipalDep,
+                            month: str = "") -> dict:
+    """One month of the trail as a reviewer reads it: how many acts of each
+    kind and by whom, who acted on someone else's agent, every exception and
+    permission granted or withdrawn, every brake with its reason."""
+    import re
+
+    permissions.require_admin(principal)
+    permissions.require_business(request, "the monthly compliance report")
+    month = month or datetime.now(UTC).strftime("%Y-%m")
+    if not re.fullmatch(r"\d{4}-\d{2}", month):
+        raise HTTPException(400, "month is YYYY-MM")
+    y, m = int(month[:4]), int(month[5:])
+    end = f"{y + (m == 12):04d}-{(m % 12) + 1:02d}-01"
+    rows = [r for r in await _all(store, KINDS, f"{month}-01", "", EXPORT_MAX) if r["ts"] < end]
+    profiles = await store.node_kinds()
+    by_action: dict[str, int] = {}
+    by_person: dict[str, dict[str, int]] = {}
+    for r in rows:
+        by_action[r["action"]] = by_action.get(r["action"], 0) + 1
+        person = by_person.setdefault(r["who"] or "—", {})
+        person[r["action"]] = person.get(r["action"], 0) + 1
+    on_others = []
+    for r in rows:
+        dev = str((profiles.get(r["target"]) or {}).get("developer") or "")
+        if r["kind"] == audit.KIND and "@" in dev and "@" in r["who"] \
+                and dev.lower() != r["who"].lower():
+            on_others.append({"ts": r["ts"], "who": r["who"], "action": r["action"],
+                              "session": r["target"], "developer": dev})
+    pick = ("exception_granted", "exception_withdrawn", "source_trusted", "source_untrusted",
+            "rule_allowed", "rule_refused", "rules_mode")
+    return {
+        "month": month, "acts": len(rows), "by_action": dict(sorted(by_action.items())),
+        "by_person": dict(sorted(by_person.items())),
+        "on_others_sessions": on_others,
+        "policy_changes": [r for r in rows if r["action"] in pick],
+        "permission_changes": [r for r in rows if r["action"].startswith("permission_")],
+        "brakes": [r for r in rows if r["action"] in ("brake_on", "brake_off")],
+        "keys": [r for r in rows if r["kind"] == audit.KEY_KIND],
+    }
+
+
 @router.get("/export")
 async def export_audit(request: Request, store: StoreDep, principal: PrincipalDep,
                        format: str = "csv", since: str = "",  # noqa: A002

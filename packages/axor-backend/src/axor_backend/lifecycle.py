@@ -205,6 +205,7 @@ async def prune_once(state: Any) -> None:  # noqa: ANN401
                         "the dropped rows are gone.",
                         dropped, kind, org,
                     )
+            await prune_audit_trail(state.store)
             if cutoff is None:
                 continue
             pruned = await state.store.prune_runs_older_than(cutoff)
@@ -221,6 +222,18 @@ async def prune_once(state: Any) -> None:  # noqa: ANN401
                 )
     finally:
         set_current_org(PUBLIC_ORG)
+
+
+async def prune_audit_trail(store: Any) -> int:  # noqa: ANN401
+    """The workspace's own retention for its audit trail (Settings → audit):
+    rows older than it go; unset keeps them for the deployment's window."""
+    from axor_backend.audit import KEY_KIND, KIND, RETENTION_SETTING
+
+    days = await store.get_setting(RETENTION_SETTING)
+    if not isinstance(days, int) or days <= 0:
+        return 0
+    cutoff = (datetime.now(UTC) - timedelta(days=days)).isoformat()
+    return await store.prune_audit_kinds_older_than((KIND, KEY_KIND), cutoff)
 
 
 async def retention_loop(state: Any) -> None:  # noqa: ANN401

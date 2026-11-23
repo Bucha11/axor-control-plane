@@ -598,6 +598,13 @@ export interface Permissions {
   you: Record<Capability, boolean>;
   editable?: boolean;      // changing them is the Business plan's
 }
+/** A month of the audit trail, as a reviewer reads it. */
+export interface AuditReport {
+  month: string; acts: number; by_action: Record<string, number>;
+  by_person: Record<string, Record<string, number>>;
+  on_others_sessions: { ts: string; who: string; action: string; session: string; developer: string }[];
+  policy_changes: AuditItem[]; permission_changes: AuditItem[]; brakes: AuditItem[]; keys: AuditItem[];
+}
 /** One act on the workspace's audit trail. */
 export interface AuditItem {
   id: string; ts: string; kind: "control" | "api_key"; action: string;
@@ -1824,6 +1831,13 @@ export const api = {
     for (const [k, v] of Object.entries(q)) if (v !== undefined && v !== "") p.set(k, String(v));
     return af(`/v1/audit?${p}`).then((r) => j<{ items: AuditItem[]; total: number; actions: string[]; window_days?: number | null }>(r));
   },
+  auditRetention: () => af("/v1/audit/retention").then((r) => j<{ days: number | null }>(r)),
+  setAuditRetention: (days: number | null) =>
+    af("/v1/audit/retention", { method: "PUT", headers: { "content-type": "application/json" },
+                                 body: JSON.stringify({ days }) })
+      .then((r) => j<{ days: number | null; pruned: number }>(r)),
+  auditReport: (month: string) =>
+    af(`/v1/audit/report?month=${encodeURIComponent(month)}`).then((r) => j<AuditReport>(r)),
   // the whole trail as a file — fetched with the session's token, saved by the page
   auditExport: async (format: "csv" | "jsonl", since?: string): Promise<{ blob: Blob; name: string }> => {
     const r = await af(`/v1/audit/export?format=${format}${since ? `&since=${encodeURIComponent(since)}` : ""}`);

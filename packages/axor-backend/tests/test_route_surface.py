@@ -185,6 +185,9 @@ EXPECTED: dict[tuple[str, str], str] = {
     # here. Same scope: reading who was ever issued what is enumeration too.
     ("GET", "/v1/keys/audit"): "admin",
     ("GET", "/v1/audit"): "operate",
+    ("GET", "/v1/audit/retention"): "operate",
+    ("PUT", "/v1/audit/retention"): "operate",
+    ("GET", "/v1/audit/report"): "operate",
     ("GET", "/v1/audit/export"): "operate",
     ("DELETE", "/v1/keys/{key_id}"): "admin",
     ("PUT", "/v1/keys/{key_id}"): "admin",   # a key's role, changed in place
