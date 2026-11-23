@@ -203,7 +203,7 @@ export default function Evidence({ agent: agentParam }: { agent?: string } = {})
               <button onClick={() => setStatus("")} style={chip(status === "")}>any status</button>
               <select aria-label="agent" value={agent} onChange={(e) => setAgent(e.target.value)}
                 style={{ background: C.panel2, border: `1px solid ${C.line}`, borderRadius: 5, color: C.text,
-                         fontFamily: MONO, fontSize: 11, padding: "3px 6px", marginLeft: 6 }}>
+                         fontFamily: MONO, fontSize: 11, padding: "3px 6px", marginLeft: 6, maxWidth: 220 }}>
                 <option value="">any agent</option>
                 {agents.map((a) => <option key={a} value={a}>{labelOf(a)}</option>)}
               </select>

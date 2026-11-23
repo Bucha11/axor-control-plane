@@ -30,7 +30,7 @@ async def put_tree(tree_run: str, body: dict, request: Request) -> None:
         raise HTTPException(400, f"status must be one of {list(_STATUSES)}")
     if not isinstance(body.get("nodes", {}), dict) or not isinstance(body.get("items", []), list):
         raise HTTPException(400, "nodes is an object, items a list")
-    doc = {k: body[k] for k in ("task", "stages", "nodes", "items", "flow", "excised")
+    doc = {k: body[k] for k in ("task", "stages", "nodes", "items", "flow", "excised", "seq")
            if k in body}
     if len(json.dumps(doc)) > MAX_DOC_BYTES:
         raise HTTPException(413, f"a tree snapshot is at most {MAX_DOC_BYTES} bytes")

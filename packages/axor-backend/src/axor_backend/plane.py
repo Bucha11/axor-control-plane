@@ -1213,9 +1213,16 @@ async def post_profile(node_id: str, body: dict, request: Request) -> dict:
     if repo and (len(repo) > 64 or not all(c.isalnum() or c in "-_." for c in repo)):
         raise HTTPException(400, "repo is an opaque id: letters, digits, -_. (at most 64)")
     label = "".join(c for c in str(body.get("repo_label") or "") if c.isprintable())[:100]
+    # a subagent: the session that started it (a node id, like this one)
+    parent = str(body.get("parent") or "")
+    if parent and (kind != "coding" or len(parent) > 200
+                   or not all(c.isalnum() or c in "-_.:" for c in parent)):
+        raise HTTPException(400, "parent is the node id of the coding session that "
+                                 "started this subagent")
     ctx = _ctx(request)
     await ctx.store.put_node_profile(node_id, kind, agent, developer, now(),
-                                     repo=repo, repo_label=label if repo else "")
+                                     repo=repo, repo_label=label if repo else "",
+                                     parent=parent)
     # past the free plan, the session is kept but not shown or operated: the
     # answer says so, and the sidecar tells the developer in their own agent
     from axor_backend.ee.entitlements import REASONS, coding_entitlements, workspace_tier

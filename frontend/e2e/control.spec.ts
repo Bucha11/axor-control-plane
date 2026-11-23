@@ -362,6 +362,28 @@ test.describe("cross-session reputation", () => {
     expect(state.pending_excision.target_refs).toEqual(["tc9"]);
   });
 
+  test("the activity feed: a call and its answer are one line, an answer is said not dumped", async ({ page, request }) => {
+    const node = uniqueNode("feed-one");
+    await seedNode(request, node);
+    const line = (seq: number, kind: string, payload: object) => ({
+      schema_version: "1.0", seq, node_id: node, kind, ts: new Date(Date.now() + seq * 1000).toISOString(),
+      causal_root: null, gate: null, verdict: null, payload,
+    });
+    await request.post(`${BACKEND}/v1/plane/${node}/telemetry`, { data: { run_id: `${node}-r1`, events: [
+      line(0, "tool_call", { tool: "Grep", tool_call_id: "g1", args: { pattern: "limiter", path: "src" } }),
+      line(1, "tool_result", { tool: "Grep", value_ref: "g1", status: "ok", root: { sources: [] } }),
+      line(2, "claim", { text: JSON.stringify({ findings: [{ claim: "login has no limiter", file: "src/auth.py" }] }) }),
+    ] } });
+    await setConnection(page, { mode: "adapter" });
+    await goHash(page, "control");
+    const feed = page.getByTestId("fleet-activity");
+    await expect(feed.getByText("Grep · “limiter” in src").first()).toBeVisible();
+    // the call is not a second line beside its answer
+    await expect(feed.getByTestId("feed-row").filter({ hasText: "“limiter” in src" })).toHaveCount(1);
+    await expect(feed.getByText("found 1 thing: login has no limiter").first()).toBeVisible();
+    await expect(feed).not.toContainText('{"findings"');
+  });
+
   test("the fleet console: status chips filter, 24h totals, and the activity feed", async ({ page, request }) => {
     const busy = uniqueNode("fleet-busy");
     const held = uniqueNode("fleet-held");
@@ -394,8 +416,9 @@ test.describe("cross-session reputation", () => {
 
     // the activity feed carries the call; clicking it opens that run
     const feed = page.getByTestId("fleet-activity");
-    await expect(feed.getByText("called slow_search").first()).toBeVisible();
-    await feed.getByText("called slow_search").first().click();
+    // one line per call: the tool and what it was about, "…" while in flight
+    await expect(feed.getByText(/^slow_search/).first()).toBeVisible();
+    await feed.getByText(/^slow_search/).first().click();
     await expect(page).toHaveURL(new RegExp(`govern/run/${busy}-r1`));
   });
 });

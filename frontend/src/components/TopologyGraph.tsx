@@ -10,6 +10,7 @@
 import { Lock } from "lucide-react";
 import { TopologyEdge, TopologyNode, TopologyPayload } from "../api";
 import { C, MONO } from "../theme";
+import type { TreeMember } from "../treeLabels";
 
 const LEVEL_COLOR: Record<string, string> = {
   NORMAL: C.green,
@@ -35,14 +36,42 @@ interface Layout {
   rowWidth: number;
 }
 
-function layout(payload: TopologyPayload): Layout {
-  const selfNodes = payload.nodes.filter((n) => n.kind === "self");
+/** A tree's agents are drawn while it runs, or when you picked one of them;
+ *  a finished tree is its one node — twelve trees of ten agents side by side
+ *  were a strip of dots. */
+function drawn(id: string, members: Map<string, TreeMember> | undefined, selected: string | null): boolean {
+  const trees = new Map([...(members?.values() ?? [])].map((m) => [m.tree.tree_run, m.tree]));
+  const tree = members?.get(id)?.tree ?? trees.get(id);
+  if (!tree) return true;
+  const live = (tree.status === "running" || tree.status === "paused") && !tree.quiet;
+  if (live || selected === tree.tree_run) return true;
+  const pick = selected ? members?.get(selected) : undefined;
+  return pick?.tree.tree_run === tree.tree_run;
+}
+
+/** What a node is called under its circle: a tree's agent by its node
+ *  ("read 3"), a tree by its task, anything else by its id — cut short. */
+function shortLabel(id: string, members?: Map<string, TreeMember>, names?: Map<string, string>): string {
+  const m = members?.get(id);
+  if (m) return m.count > 1 ? `${m.node} ${m.index + 1}` : m.node;
+  const tree = [...(members?.values() ?? [])].find((x) => x.tree.tree_run === id)?.tree;
+  const name = tree?.task ? `tree: ${tree.task}` : names?.get(id) ?? id;
+  return name.length > 18 ? `${name.slice(0, 17)}…` : name;
+}
+
+function layout(payload: TopologyPayload, members?: Map<string, TreeMember>,
+                selected: string | null = null, names?: Map<string, string>): Layout {
+  const selfNodes = payload.nodes.filter((n) => n.kind === "self" && drawn(n.node_id, members, selected));
   const peers = payload.nodes.filter((n) => n.kind === "peer");
   const childOf = new Map<string, string>();
   for (const e of payload.edges) {
     if (e.kind === "delegation") childOf.set(e.to, e.from);
   }
   const depth = (id: string): number => {
+    // a tree's agent sits on its stage's row, under the tree: every run is
+    // spawned by the tree's root, so by edges alone a tree is one wide fan
+    const m = members?.get(id);
+    if (m) return depth(m.tree.tree_run) + 1 + m.stage;
     let d = 0;
     let cur = childOf.get(id);
     let guard = 0;
@@ -60,20 +89,28 @@ function layout(payload: TopologyPayload): Layout {
   const pos = new Map<string, Pos>();
   const maxDepth = Math.max(0, ...rows.keys());
   const widest = Math.max(1, ...[...rows.values()].map((ids) => ids.length));
-  // ~70 units per node keeps labels from overlapping; 260 is the old minimum.
-  const rowWidth = Math.max(260, (widest + 1) * 70);
+  // room for the longest label in the widest row; 260 is the old minimum
+  const longest = Math.max(4, ...selfNodes.map((n) => shortLabel(n.node_id, members, names).length));
+  const per = Math.min(130, Math.max(70, longest * 6 + 14));
+  const rowWidth = Math.max(260, (widest + 1) * per);
+  // a run's place in its row: its tree, its node, its index — not its id
+  const order = (id: string) => {
+    const m = members?.get(id);
+    return m ? `${m.tree.tree_run}\u0000${String(m.stage).padStart(3, "0")}${m.node}\u0000${String(m.index).padStart(3, "0")}` : id;
+  };
+  const step = maxDepth === 0 ? 0 : Math.max(220 / maxDepth, 85);
   for (const [d, ids] of rows) {
-    ids.sort();
+    ids.sort((a, b) => order(a).localeCompare(order(b)));
     ids.forEach((id, i) => {
       pos.set(id, {
         x: 60 + ((i + 1) * rowWidth) / (ids.length + 1),
-        y: 70 + (maxDepth === 0 ? 0 : (d * 220) / Math.max(1, maxDepth)),
+        y: 70 + d * step,
       });
     });
   }
   const peerX = 40 + rowWidth + 30 + 70;
   peers.forEach((p, i) => pos.set(p.node_id, { x: peerX, y: 100 + i * 90 }));
-  const height = Math.max(340, 100 + Math.max(0, peers.length - 1) * 90 + 70);
+  const height = Math.max(340, 100 + Math.max(0, peers.length - 1) * 90 + 70, 70 + maxDepth * step + 80);
   const width = peers.length ? peerX + 80 : 40 + rowWidth + 30 + 150;
   return { pos, width, height, rowWidth };
 }
@@ -82,12 +119,19 @@ export default function TopologyGraph({
   payload,
   selected,
   onSelect,
+  members,
+  names,
 }: {
   payload: TopologyPayload;
   selected: string | null;
   onSelect: (id: string) => void;
+  // a tree's agents: drawn by stage and named by their node ("read 3")
+  members?: Map<string, TreeMember>;
+  // what a session is called: its title (the developer's first request)
+  names?: Map<string, string>;
 }) {
-  const { pos, width, height, rowWidth } = layout(payload);
+  const { pos, width, height, rowWidth } = layout(payload, members, selected, names);
+  const labelOf = (id: string) => shortLabel(id, members, names);
   const hasPeers = payload.nodes.some((n) => n.kind === "peer");
   const hasReputation = payload.nodes.some(
     (n) => n.reputation?.flagged || n.reputation?.watch,
@@ -162,7 +206,8 @@ export default function TopologyGraph({
               {isPeer && <Lock x={p.x - 5} y={p.y - 5} width={10} height={10} color={C.violet} />}
               <text x={p.x} y={p.y + 30} textAnchor="middle"
                 fill={selected === n.node_id ? C.text : C.mut} fontSize="9.5" fontFamily={MONO}>
-                {n.node_id}
+                <title>{n.node_id}</title>
+                {labelOf(n.node_id)}
               </text>
               {!isPeer && level !== "NORMAL" && (
                 <text x={p.x} y={p.y + 41} textAnchor="middle"

@@ -192,7 +192,7 @@ export default function ReplaySearch({ query }: { query: Record<string, string> 
         <div className="flex gap-2 items-center flex-wrap">
           <span style={label}>agent</span>
           <select aria-label="agent" value={query.agent ?? ""} onChange={(e) => set({ agent: e.target.value })}
-            style={{ ...field, minWidth: 200 }}>
+            style={{ ...field, width: "min(260px, 100%)", minWidth: 0 }}>
             <option value="">any agent</option>
             {agents.map((a) => <option key={a} value={a}>{a}</option>)}
           </select>

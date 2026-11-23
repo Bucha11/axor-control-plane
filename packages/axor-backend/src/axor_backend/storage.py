@@ -13,6 +13,7 @@ import json
 import logging
 import random
 from collections.abc import Callable
+from datetime import UTC, datetime
 from typing import Any, NamedTuple
 
 from sqlalchemy import (
@@ -408,6 +409,9 @@ node_profiles = Table(
     # a coding session's title: the developer's first request in it (axor-wrap
     # sidecar), so a list of sessions reads as a list of tasks
     Column("title", String(120), nullable=False, server_default=""),
+    # a subagent (Claude Code's Agent tool) names the session that started it;
+    # its type ("Explore") is its agent
+    Column("parent", String(200), nullable=False, server_default=""),
 )
 
 # Agent tree runs (axor-wrap `tree run`): the latest snapshot of each run —
@@ -868,16 +872,21 @@ class Store:
 
     # ── sign-up funnel ────────────────────────────────────────────────────
 
-    async def put_tree_run(self, tree_run: str, status: str, doc: dict, ts: str) -> None:
+    async def put_tree_run(self, tree_run: str, status: str, doc: dict, ts: str) -> bool:
         org = current_org_id()
         body = json.dumps(doc, separators=(",", ":"))
         async with self.engine.begin() as conn:
+            held = (await conn.execute(select(tree_runs.c.status, tree_runs.c.doc).where(
+                tree_runs.c.org_id == org, tree_runs.c.tree_run == tree_run))).first()
+            if held is not None and _older_tree(held.status, held.doc, status, doc):
+                return False
             done = await conn.execute(tree_runs.update().where(
                 tree_runs.c.org_id == org, tree_runs.c.tree_run == tree_run,
             ).values(updated_ts=ts, status=status, doc=body))
             if not done.rowcount:
                 await conn.execute(tree_runs.insert().values(
                     org_id=org, tree_run=tree_run, updated_ts=ts, status=status, doc=body))
+        return True
 
     async def get_tree_run(self, tree_run: str) -> dict[str, Any] | None:
         async with self.engine.connect() as conn:
@@ -886,8 +895,10 @@ class Store:
                 tree_runs.c.tree_run == tree_run))).first()
         if row is None:
             return None
-        return {"tree_run": row.tree_run, "status": row.status,
-                "updated_ts": row.updated_ts, **json.loads(row.doc)}
+        doc = json.loads(row.doc)
+        status, quiet = _tree_said(row.status, row.updated_ts, doc, datetime.now(UTC))
+        return {"tree_run": row.tree_run, "updated_ts": row.updated_ts, **doc,
+                "status": status, "quiet": quiet}
 
     # ── the team's memory ─────────────────────────────────────────────────────
 
@@ -1307,12 +1318,22 @@ class Store:
                 select(tree_runs).where(tree_runs.c.org_id == current_org_id())
                 .order_by(tree_runs.c.updated_ts.desc()).limit(limit))).all()
         out = []
+        now = datetime.now(UTC)
         for row in rows:
             doc = json.loads(row.doc)
             nodes = doc.get("nodes") or {}
             members = [str(r["node_id"]) for n in nodes.values()
                        for r in (n.get("runs") or []) if r.get("node_id")]
-            out.append({"tree_run": row.tree_run, "status": row.status,
+            status, quiet = _tree_said(row.status, row.updated_ts, doc, now)
+            out.append({"tree_run": row.tree_run, "status": status,
+                        # a running tree that has said nothing for a while: its
+                        # process died mid-way
+                        "quiet": quiet,
+                        # its stages, each node's runs in order — how a list
+                        # draws the tree instead of a flat row of agents
+                        "stages": [[_tree_node(name, nodes.get(name) or {}) for name in stage]
+                                   for stage in (doc.get("stages") or [])
+                                   if isinstance(stage, list)],
                         "updated_ts": row.updated_ts, "task": doc.get("task", ""),
                         "nodes": len(nodes),
                         "agents": sum(len(n.get("runs") or []) for n in nodes.values()),
@@ -2049,7 +2070,7 @@ class Store:
 
     async def put_node_profile(self, node_id: str, kind: str, agent: str,
                                developer: str, ts: str, repo: str = "",
-                               repo_label: str = "") -> None:
+                               repo_label: str = "", parent: str = "") -> None:
         """First word wins: a node is what it said it was when it first
         reported, so a later profile cannot move it out of the fleet count.
         The repository is the exception — it is not metered, and a session
@@ -2058,14 +2079,15 @@ class Store:
         between our look and our insert, the second try fills that row in."""
         for attempt in (1, 2):
             try:
-                await self._put_node_profile(node_id, kind, agent, developer, ts, repo, repo_label)
+                await self._put_node_profile(node_id, kind, agent, developer, ts, repo, repo_label,
+                                             parent)
                 return
             except IntegrityError:
                 if attempt == 2:
                     raise
 
     async def _put_node_profile(self, node_id: str, kind: str, agent: str, developer: str,
-                                ts: str, repo: str, repo_label: str) -> None:
+                                ts: str, repo: str, repo_label: str, parent: str = "") -> None:
         org = current_org_id()
         async with self.engine.begin() as conn:
             held = (await conn.execute(select(node_profiles.c.node_id, node_profiles.c.repo,
@@ -2077,11 +2099,12 @@ class Store:
                 await conn.execute(update(node_profiles).where(
                     node_profiles.c.org_id == org, node_profiles.c.node_id == node_id,
                 ).values(kind=kind, agent=agent, developer=developer, first_ts=ts,
-                         repo=repo, repo_label=repo_label))
+                         repo=repo, repo_label=repo_label, parent=parent))
             elif held is None:
                 await conn.execute(node_profiles.insert().values(
                     org_id=org, node_id=node_id, kind=kind, agent=agent,
-                    developer=developer, first_ts=ts, repo=repo, repo_label=repo_label))
+                    developer=developer, first_ts=ts, repo=repo, repo_label=repo_label,
+                    parent=parent))
             elif repo and not held.repo:
                 await conn.execute(update(node_profiles).where(
                     node_profiles.c.org_id == org, node_profiles.c.node_id == node_id,
@@ -2092,7 +2115,8 @@ class Store:
             rows = (await conn.execute(select(node_profiles).where(
                 node_profiles.c.org_id == current_org_id()))).all()
         return {r.node_id: {"kind": r.kind, "agent": r.agent, "developer": r.developer,
-                            "repo": r.repo, "repo_label": r.repo_label, "title": r.title}
+                            "repo": r.repo, "repo_label": r.repo_label, "title": r.title,
+                            **({"parent": r.parent} if r.parent else {})}
                 for r in rows}
 
     async def set_node_title(self, node_id: str, title: str) -> bool:
@@ -3316,6 +3340,63 @@ async def _reassign(conn: Any, table: Table, src: str, dst: str) -> int:  # noqa
         await conn.execute(table.delete().where(table.c.org_id == src, clash))
     result = await conn.execute(table.update().where(table.c.org_id == src).values(org_id=dst))
     return int(result.rowcount or 0)
+
+
+TREE_QUIET_S = 600
+
+
+def _age_s(ts: str, now: Any) -> float:  # noqa: ANN401 - a datetime
+    try:
+        return (now - datetime.fromisoformat(str(ts))).total_seconds()
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _tree_said(status: str, updated_ts: str, doc: dict, now: Any) -> tuple[str, bool]:  # noqa: ANN401
+    """(status, quiet) for a tree as stored. A running tree that has gone
+    quiet with every run it planned finished did end — its last snapshot was
+    lost — so it is said as its runs say; one quiet mid-way is said quiet."""
+    if status not in ("running", "paused") or _age_s(updated_ts, now) <= TREE_QUIET_S:
+        return status, False
+    nodes = doc.get("nodes") or {}
+    runs, planned = [], 0
+    for node in nodes.values():
+        if not isinstance(node, dict):
+            continue
+        planned += int(node.get("count") or 1) if str(node.get("count") or "1").isdigit() else 1
+        runs += [r for r in node.get("runs") or [] if isinstance(r, dict)]
+    if runs and len(runs) >= planned and not any(r.get("status") == "running" for r in runs):
+        return ("done" if all(r.get("status") == "ok" for r in runs) else "failed"), False
+    return status, True
+
+
+def _tree_node(name: str, node: dict) -> dict[str, Any]:
+    try:
+        count = max(1, int(node.get("count") or 1))
+    except (TypeError, ValueError):
+        count = 1
+    return {"node": str(name), "agent": str(node.get("agent") or ""),
+            "access": str(node.get("access") or ""), "count": count,
+            "runs": [{"index": r.get("index", k), "node_id": r.get("node_id") or None,
+                      "status": str(r.get("status") or "")}
+                     for k, r in enumerate(node.get("runs") or []) if isinstance(r, dict)]}
+
+
+_TREE_ENDED = ("done", "failed", "stopped")
+
+
+def _older_tree(held_status: str, held_doc: str, status: str, doc: dict) -> bool:
+    """A tree snapshot that arrives after a newer one: by its ``seq`` when the
+    run numbers them, and in any case a finished tree is never put back to
+    running or paused by a snapshot from before it finished."""
+    if held_status in _TREE_ENDED and status not in _TREE_ENDED:
+        return True
+    try:
+        held_seq = int(json.loads(held_doc).get("seq") or 0)
+        seq = int(doc.get("seq") or 0)
+    except (TypeError, ValueError, AttributeError):
+        return False
+    return bool(seq and held_seq and seq < held_seq)
 
 
 def _run_row(row: Any) -> dict[str, Any]:  # noqa: ANN401 - SQLAlchemy Row

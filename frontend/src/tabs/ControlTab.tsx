@@ -10,6 +10,7 @@ import { describeAck } from "./RunControl";
 import Coverage from "../components/Coverage";
 import TopologyGraph, { PeerCard } from "../components/TopologyGraph";
 import { navigate } from "../router";
+import { treeMembers, treeProgress, type TreeMember } from "../treeLabels";
 import { isAdapter, useApp } from "../store";
 import { C, MONO, btn } from "../theme";
 import Coach from "../components/Coach";
@@ -413,7 +414,12 @@ function ControlBody({ focusNode, testBench }: { focusNode?: string; testBench: 
     treeOf.set(t.tree_run, t);
     for (const m of t.members ?? []) treeOf.set(m, t);
   }
-  const [openTrees, setOpenTrees] = useState<Set<string>>(new Set());
+  // what each of a tree's agents is: "read 3 of 6", its stage
+  const memberOf = treeMembers(treesQ.data?.trees);
+  // a running tree is open until you fold it; a finished one folded
+  const [treeFold, setTreeFold] = useState<Map<string, boolean>>(new Map());
+  const treeOpen = (t: TreeSummary) => treeFold.get(t.tree_run)
+    ?? ((t.status === "running" || t.status === "paused") && !t.quiet);
   // a developer's coding sessions fold into one row: a day of Claude Code is
   // many sessions, and the list is about people's agents, not every session
   const [openDevs, setOpenDevs] = useState<Set<string>>(new Set());
@@ -557,7 +563,19 @@ function ControlBody({ focusNode, testBench }: { focusNode?: string; testBench: 
   // and its statuses are its agents' together (one agent needing you puts the
   // tree in "needs you"; one running makes it running, not idle).
   // ...and a developer's folded sessions are one row too
-  const devOfNode = (n: NodeInfo) => (!treeOf.get(n.node_id) && isCodingSession(n.node_id)
+  // a subagent is a branch of the session that started it: drawn under it,
+  // counted with it
+  const listed = new Map(list.map((n) => [n.node_id, n]));
+  const parentOf = (n: NodeInfo) => {
+    const up = n.profile?.parent;
+    return up && listed.has(up) ? up : null;
+  };
+  const subsOf = new Map<string, NodeInfo[]>();
+  for (const n of list) {
+    const up = parentOf(n);
+    if (up) subsOf.set(up, [...(subsOf.get(up) ?? []), n]);
+  }
+  const devOfNode = (n: NodeInfo) => (!parentOf(n) && !treeOf.get(n.node_id) && isCodingSession(n.node_id)
     && !n.example && n.profile?.developer) || null;
   const devSessions = new Map<string, number>();
   for (const n of list) {
@@ -570,7 +588,10 @@ function ControlBody({ focusNode, testBench }: { focusNode?: string; testBench: 
     // session is just a row
     return d && ((devSessions.get(d) ?? 0) > 1 || devSessions.size > 1) ? [[n.node_id, `dev:${d}`] as const] : [];
   }));
-  const unitOf = (id: string) => {
+  const unitOf = (id: string): string => {
+    const n = listed.get(id);
+    const up = n && parentOf(n);
+    if (up) return unitOf(up);
     const t = treeOf.get(id);
     return t ? `tree:${t.tree_run}` : devUnit.get(id) ?? id;
   };
@@ -661,6 +682,8 @@ function ControlBody({ focusNode, testBench }: { focusNode?: string; testBench: 
         <TopologyGraph
           payload={topoData}
           selected={sel}
+          members={memberOf}
+          names={new Map(list.filter((n) => n.profile?.title).map((n) => [n.node_id, n.profile!.title!]))}
           onSelect={(id) => { setSel(sel === id ? null : id); setMore(false); setCmdError(null); }}
         />
       )}
@@ -688,21 +711,39 @@ function ControlBody({ focusNode, testBench }: { focusNode?: string; testBench: 
           // per developer with more than one coding session, likewise
           const out: React.ReactNode[] = [];
           const done = new Set<string>();
-          const devOf = (m: NodeInfo) => (!treeOf.get(m.node_id) && isCodingSession(m.node_id)
-            && !m.example && m.profile?.developer) || null;
+          const devOf = devOfNode;
+          // a session's row, and under it each subagent it started
+          const withSubs = (m: NodeInfo, first: boolean) => [
+            <FleetRowView key={m.node_id} n={m} row={fleetRows.get(m.node_id)} locked={lockedOf(m.node_id)}
+              look={lookOf.get(m.node_id)}
+              st={statuses.get(m.node_id)!} first={first} selected={sel === m.node_id}
+              onPick={() => pick(m.node_id)} />,
+            ...(subsOf.get(m.node_id) ?? []).map((x) => (
+              <SubagentRowView key={x.node_id} n={x} row={fleetRows.get(x.node_id)} locked={lockedOf(x.node_id)}
+                st={statuses.get(x.node_id)!} selected={sel === x.node_id}
+                onPick={() => pick(x.node_id)} />
+            )),
+          ];
           const byDev = new Map<string, NodeInfo[]>();
           for (const m of shown) {
             const d = devOf(m);
             if (d) byDev.set(d, [...(byDev.get(d) ?? []), m]);
           }
-          shown.forEach((n) => {
+          // a tree at work comes first: it is what you are watching
+          const live = (n: NodeInfo) => {
+            const t = treeOf.get(n.node_id);
+            return t && (t.status === "running" || t.status === "paused") && !t.quiet ? 0 : 1;
+          };
+          [...shown].sort((a, b) => live(a) - live(b)).forEach((n) => {
+            if (parentOf(n)) return;       // drawn under its session
             const tree = treeOf.get(n.node_id);
             const dev = devOf(n);
             if (!tree && dev && ((byDev.get(dev)?.length ?? 0) > 1 || byDev.size > 1)) {
               if (done.has(`dev:${dev}`)) return;
               done.add(`dev:${dev}`);
               const sessions = byDev.get(dev)!;
-              const open = openDevs.has(dev) || sessions.some((m) => m.node_id === sel);
+              const open = openDevs.has(dev) || sessions.some((m) => m.node_id === sel
+                || (subsOf.get(m.node_id) ?? []).some((x) => x.node_id === sel));
               out.push(
                 <DeveloperRow key={`dev:${dev}`} developer={dev} first={out.length === 0} open={open}
                   locked={sessions.every((m) => lockedOf(m.node_id)) ? lockedOf(sessions[0].node_id) : undefined}
@@ -717,45 +758,39 @@ function ControlBody({ focusNode, testBench }: { focusNode?: string; testBench: 
                     if (next.has(dev)) next.delete(dev); else next.add(dev);
                     return next;
                   })}>
-                  {sessions.map((m) => (
-                    <FleetRowView key={m.node_id} n={m} row={fleetRows.get(m.node_id)} locked={lockedOf(m.node_id)}
-                      look={lookOf.get(m.node_id)}
-                      st={statuses.get(m.node_id)!} first={false} selected={sel === m.node_id}
-                      onPick={() => pick(m.node_id)} />
-                  ))}
+                  {sessions.flatMap((m) => withSubs(m, false))}
                 </DeveloperRow>,
               );
               return;
             }
             if (!tree) {
-              out.push(
-                <FleetRowView key={n.node_id} n={n} row={fleetRows.get(n.node_id)} locked={lockedOf(n.node_id)}
-                  look={lookOf.get(n.node_id)}
-                  st={statuses.get(n.node_id)!} first={out.length === 0} selected={sel === n.node_id}
-                  onPick={() => pick(n.node_id)} />,
-              );
+              out.push(...withSubs(n, out.length === 0));
               return;
             }
             if (done.has(tree.tree_run)) return;
             done.add(tree.tree_run);
             const members = shown.filter((m) => treeOf.get(m.node_id)?.tree_run === tree.tree_run
                                                 && m.node_id !== tree.tree_run);
-            const open = openTrees.has(tree.tree_run) || members.some((m) => m.node_id === sel);
+            const open = treeOpen(tree) || members.some((m) => m.node_id === sel);
+            const byId = new Map(members.map((m) => [m.node_id, m]));
+            const memberRow = (m: NodeInfo) => (
+              <FleetRowView key={m.node_id} n={m} row={fleetRows.get(m.node_id)} locked={lockedOf(m.node_id)}
+                look={lookOf.get(m.node_id)} member={memberOf.get(m.node_id)}
+                st={statuses.get(m.node_id)!} first={false} selected={sel === m.node_id}
+                onPick={() => pick(m.node_id)} />
+            );
             out.push(
               <TreeGroupRow key={`tree:${tree.tree_run}`} tree={tree} first={out.length === 0}
                 locked={lockedOf(tree.tree_run)}
                 open={open}
-                onToggle={() => setOpenTrees((cur) => {
-                  const next = new Set(cur);
-                  if (next.has(tree.tree_run)) next.delete(tree.tree_run); else next.add(tree.tree_run);
-                  return next;
-                })}>
-                {members.map((m) => (
-                  <FleetRowView key={m.node_id} n={m} row={fleetRows.get(m.node_id)} locked={lockedOf(m.node_id)}
-                    look={lookOf.get(m.node_id)}
-                    st={statuses.get(m.node_id)!} first={false} selected={sel === m.node_id}
-                    onPick={() => pick(m.node_id)} />
-                ))}
+                rows={(tree.members ?? []).map((id) => fleetRows.get(id))}
+                onToggle={() => setTreeFold((cur) => new Map(cur).set(tree.tree_run, !open))}>
+                {tree.stages?.length ? (
+                  <TreeStages tree={tree} render={(id) => {
+                    const m = byId.get(id);
+                    return m ? memberRow(m) : null;
+                  }} />
+                ) : members.map(memberRow)}
               </TreeGroupRow>,
             );
           });
@@ -781,10 +816,35 @@ function ControlBody({ focusNode, testBench }: { focusNode?: string; testBench: 
           ) : (<>
         <div className="p-4" style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 8 }}>
           <div className="flex items-center justify-between">
+            {memberOf.get(node.node_id) ? (() => {
+              const m = memberOf.get(node.node_id)!;
+              return (
+                <span style={{ fontFamily: MONO, fontSize: 13, color: C.text }} data-testid="agent-panel-member">
+                  <span style={{ display: "block", fontSize: 13.5 }}>{m.label} · {m.agent || "agent"}</span>
+                  <span style={{ fontSize: 11, color: C.dim }}>
+                    stage {m.stage + 1}{m.tree.stages?.length ? ` of ${m.tree.stages.length}` : ""} in{" "}
+                    <span style={{ color: C.steel, cursor: "pointer" }}
+                      onClick={() => navigate(`trees/${encodeURIComponent(m.tree.tree_run)}`)}>
+                      “{m.tree.task || m.tree.tree_run}” →
+                    </span>
+                    {" "}· {node.node_id}
+                  </span>
+                </span>
+              );
+            })() : (
             <span style={{ fontFamily: MONO, fontSize: 13, color: C.text }}>
+              {node.profile?.parent && (
+                <span data-testid="agent-panel-parent" style={{ display: "block", fontSize: 11, color: C.dim }}>
+                  a subagent of{" "}
+                  <span style={{ color: C.steel, cursor: "pointer" }} onClick={() => pick(node.profile!.parent!)}>
+                    “{listed.get(node.profile.parent)?.profile?.title || node.profile.parent}” →
+                  </span>
+                </span>
+              )}
               {node.profile?.title && <span style={{ fontFamily: "inherit", display: "block", fontSize: 13.5 }}>“{node.profile.title}”</span>}
               <span style={{ color: node.profile?.title ? C.dim : C.text, fontSize: node.profile?.title ? 11 : 13 }}>{node.node_id}</span>
             </span>
+            )}
             {applying ? (
               <span style={{ fontFamily: MONO, fontSize: 11, color: C.amber }}>
                 applying {Object.keys(desired?.state ?? {}).join(", ")}…
@@ -1636,12 +1696,24 @@ function DeveloperRow({ developer, sessions, rows, st, first, open, onToggle, lo
   );
 }
 
-function TreeGroupRow({ tree, first, open, onToggle, locked, children }: {
+function TreeGroupRow({ tree, first, open, onToggle, locked, rows, children }: {
   tree: TreeSummary; first: boolean; open: boolean; onToggle: () => void;
-  locked?: LockReason[];
+  locked?: LockReason[]; rows: (FleetRow | undefined)[];
   children: React.ReactNode;
 }) {
-  const color = tree.status === "running" ? C.green : tree.status === "failed" ? C.red : C.dim;
+  const quiet = !!tree.quiet;
+  const color = quiet ? C.amber : tree.status === "running" ? C.green
+    : tree.status === "failed" || tree.status === "stopped" ? C.red
+    : tree.status === "paused" ? C.amber : C.dim;
+  // counted from its runs: how many are at work, done, and did not finish
+  const runs = (tree.stages ?? []).flatMap((s) => s.flatMap((n) => n.runs));
+  const planned = (tree.stages ?? []).reduce((k, s) => k + s.reduce((j, n) => j + (n.count ?? n.runs.length), 0), 0);
+  const working = runs.filter((r) => r.status === "running").length;
+  const done = runs.filter((r) => r.status === "ok").length;
+  const bad = runs.filter((r) => r.status && r.status !== "ok" && r.status !== "running").length;
+  const calls = rows.reduce((k, r) => k + (r?.calls ?? 0), 0);
+  const refused = rows.reduce((k, r) => k + (r?.denied ?? 0), 0);
+  const progress = treeProgress(tree);
   return (
     <div data-testid={`tree-row-${tree.tree_run}`}
       style={{ borderTop: first ? "none" : `1px solid ${C.line}` }}>
@@ -1653,15 +1725,23 @@ function TreeGroupRow({ tree, first, open, onToggle, locked, children }: {
           </span>
           {locked && <LockChip reasons={locked} />}
           <button onClick={(e) => { e.stopPropagation(); navigate(`trees/${encodeURIComponent(tree.tree_run)}`); }}
+            data-testid={`tree-open-${tree.tree_run}`}
             style={{ fontFamily: MONO, fontSize: 10.5, color: C.steel, background: "none",
                      border: "none", cursor: "pointer" }}>
             open tree →
           </button>
         </div>
-        <div className="flex gap-3 flex-wrap" style={{ fontFamily: MONO, fontSize: 10.5, color: C.mut, marginTop: 4, marginLeft: 22 }}>
-          <span style={{ color }}>{tree.status}</span>
-          <span>agent tree · {tree.agents} agent run{tree.agents === 1 ? "" : "s"}</span>
-          <span style={{ color: C.dim }}>{tree.tree_run}</span>
+        <div className="flex gap-3 flex-wrap" data-testid={`tree-counts-${tree.tree_run}`}
+          style={{ fontFamily: MONO, fontSize: 10.5, color: C.mut, marginTop: 4, marginLeft: 22 }}>
+          <span style={{ color }}>{quiet ? "stopped reporting" : tree.status}</span>
+          {progress && tree.status === "running" && !quiet && <span>{progress}</span>}
+          {runs.length > 0 ? (<>
+            {working > 0 && <span style={{ color: C.green }}>{working} working</span>}
+            <span>{done} of {Math.max(planned, runs.length)} done</span>
+            {bad > 0 && <span style={{ color: C.red }}>{bad} {tree.status === "stopped" ? "stopped" : "not finished"}</span>}
+          </>) : <span>agent tree · {tree.agents} agent run{tree.agents === 1 ? "" : "s"}</span>}
+          {calls > 0 && <span>{calls} call{calls === 1 ? "" : "s"}</span>}
+          {refused > 0 && <span style={{ color: C.red }}>{refused} refused</span>}
           <span style={{ color: C.steel }}>{open ? "▾ hide agents" : "▸ show agents"}</span>
         </div>
       </div>
@@ -1670,20 +1750,137 @@ function TreeGroupRow({ tree, first, open, onToggle, locked, children }: {
   );
 }
 
-function FleetRowView({ n, row, st, first, selected, onPick, locked, look }: {
+/** A tree's agents by stage, in the order they run: the stage, its node and
+ *  agent family, then a row per run — or a line for one not started yet. */
+function TreeStages({ tree, render }: { tree: TreeSummary; render: (nodeId: string) => React.ReactNode }) {
+  const ended = tree.status !== "running" && tree.status !== "paused";
+  return (
+    <div data-testid={`tree-stages-${tree.tree_run}`}>
+      {(tree.stages ?? []).map((stage, k) => (
+        <div key={k} style={{ borderTop: k === 0 ? "none" : `1px solid ${C.line}` }}>
+          {stage.map((n) => {
+            const count = n.count ?? n.runs.length;
+            const pending = Math.max(0, count - n.runs.length);
+            return (
+              <div key={n.node}>
+                <div className="px-4" data-testid={`tree-stage-${tree.tree_run}-${n.node}`}
+                  style={{ fontFamily: MONO, fontSize: 10, color: C.dim, paddingTop: 8,
+                           letterSpacing: "0.04em" }}>
+                  {k + 1} · {n.node.toUpperCase()} · {n.agent || "agent"}{count > 1 ? ` ×${count}` : ""}
+                  {n.access === "read" ? " · read only" : ""}
+                </div>
+                {n.runs.map((r, i) => {
+                  const row = r.node_id ? render(r.node_id) : null;
+                  if (row) return row;
+                  const word = r.status === "running" ? "starting…"
+                    : r.status === "ok" ? "done" : r.status || (ended ? "never ran" : "waiting");
+                  return <PendingRun key={`${n.node}-${i}`}
+                    label={count > 1 ? `${n.node} ${r.index + 1} of ${count}` : n.node} word={word} />;
+                })}
+                {Array.from({ length: pending }, (_, i) => (
+                  <PendingRun key={`${n.node}-p${i}`}
+                    label={count > 1 ? `${n.node} ${n.runs.length + i + 1} of ${count}` : n.node}
+                    word={ended ? "never ran" : "waiting for the stage before"} />
+                ))}
+              </div>
+            );
+          })}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function PendingRun({ label, word }: { label: string; word: string }) {
+  return (
+    <div className="px-4 py-2 flex items-center gap-2.5"
+      style={{ fontFamily: MONO, fontSize: 11.5, color: C.dim }}>
+      <Circle size={8} color={C.line} />
+      <span style={{ flex: 1 }}>{label}</span>
+      <span style={{ fontSize: 10.5, color: word === "stopped" ? C.red : C.dim }}>{word}</span>
+    </div>
+  );
+}
+
+/** A subagent under its session: one line — what it was asked, what it is
+ *  doing, its calls. */
+function SubagentRowView({ n, row, st, selected, onPick, locked }: {
+  n: NodeInfo; row?: FleetRow; st: Status[]; selected: boolean; onPick: () => void;
+  locked?: LockReason[];
+}) {
+  const p = primary(st);
+  // a stop or a pause is what it is now, whatever it was doing a moment ago
+  const held = p === "stopped" || p === "paused";
+  const word = !held && row?.active_run ? `● ${row.current_tool ?? "running"}` : STATUS_LABEL[p];
+  const color = !held && row?.active_run ? C.green : STATUS_COLOR[p];
+  return (
+    <div onClick={onPick} className="py-2 flex items-center gap-2.5" data-testid={`subagent-row-${n.node_id}`}
+      title={n.node_id}
+      style={{ cursor: "pointer", fontFamily: MONO, fontSize: 11.5, paddingLeft: 40, paddingRight: 16,
+               background: selected ? "rgba(127,168,204,0.05)" : "transparent" }}>
+      <span style={{ color: C.dim }}>↳</span>
+      <Circle size={7} fill={color} color={color} />
+      <span style={{ color: C.text, flex: 1, minWidth: 100, overflow: "hidden", textOverflow: "ellipsis",
+                     whiteSpace: "nowrap" }}>
+        {n.profile?.title || "subagent"}
+        <span style={{ color: C.dim, fontSize: 10.5 }}> · subagent</span>
+      </span>
+      {locked ? <LockChip reasons={locked} /> : (<>
+        <span style={{ color, fontSize: 10.5 }}>{word}</span>
+        <span style={{ color: C.mut, fontSize: 10.5, minWidth: 54, textAlign: "right" }}>
+          {row?.calls ?? 0} call{row?.calls === 1 ? "" : "s"}
+        </span>
+        {row && row.denied > 0 && <span style={{ color: C.red, fontSize: 10.5 }}>{row.denied} refused</span>}
+      </>)}
+    </div>
+  );
+}
+
+function FleetRowView({ n, row, st, first, selected, onPick, locked, look, member }: {
   n: NodeInfo; row?: FleetRow; st: Status[]; first: boolean; selected: boolean; onPick: () => void;
   locked?: LockReason[]; look?: { label: string; more: number };
+  member?: TreeMember;
 }) {
   const folded = useApp((s) => s.planNoticesFolded);
   const p = primary(st);
   const color = STATUS_COLOR[p];
+  if (member && !locked) {
+    // one line per run of a tree: what it is, what it is doing, its counts
+    const word = row?.active_run ? `● ${row.current_tool ?? "running"}`
+      : member.status === "ok" ? "done"
+      : member.status === "running" ? (row?.calls ? "running" : "starting…")
+      : member.status || STATUS_LABEL[p];
+    const wcolor = row?.active_run ? C.green : member.status === "ok" ? C.mut
+      : member.status === "running" ? C.mut : C.red;
+    return (
+      <div onClick={onPick} className="px-4 py-2 flex items-center gap-2.5" data-testid={`agent-row-${n.node_id}`}
+        title={n.node_id}
+        style={{ cursor: "pointer", fontFamily: MONO, fontSize: 11.5,
+                 background: selected ? "rgba(127,168,204,0.05)" : "transparent" }}>
+        <Circle size={8} fill={row?.active_run ? C.green : color} color={row?.active_run ? C.green : color} />
+        <span style={{ color: C.text, flex: 1, minWidth: 100 }}>{member.label}</span>
+        <span style={{ color: wcolor, fontSize: 10.5 }} data-testid={`member-state-${n.node_id}`}>{word}</span>
+        <span style={{ color: C.mut, fontSize: 10.5, minWidth: 54, textAlign: "right" }}>
+          {row?.calls ?? 0} call{row?.calls === 1 ? "" : "s"}
+        </span>
+        {row && row.denied > 0 && <span style={{ color: C.red, fontSize: 10.5 }}>{row.denied} refused</span>}
+        {look && <span style={{ color: C.red, fontSize: 10.5 }}>{look.label}</span>}
+      </div>
+    );
+  }
   return (
     <div onClick={onPick} className="px-4 py-3" data-testid={`agent-row-${n.node_id}`}
       style={{ cursor: "pointer", borderTop: first ? "none" : `1px solid ${C.line}`,
                background: selected ? "rgba(127,168,204,0.05)" : "transparent" }}>
       <div className="flex items-center gap-2.5 flex-wrap">
         <Circle size={8} fill={color} color={color} />
-        {n.profile?.title ? (
+        {member ? (
+          <span style={{ fontFamily: MONO, fontSize: 12.5, color: locked ? C.mut : C.text, flex: 1, minWidth: 120 }}
+            title={n.node_id}>
+            {member.label}
+            <span style={{ fontSize: 10.5, color: C.dim }}> · {member.agent || n.profile?.agent || "agent"}</span>
+          </span>
+        ) : n.profile?.title ? (
           <span style={{ fontSize: 13.5, color: locked ? C.mut : C.text, flex: 1, minWidth: 120 }}>
             {n.profile.title}
             <span style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim }}> · {n.node_id}</span>
@@ -1720,6 +1917,10 @@ function FleetRowView({ n, row, st, first, selected, onPick, locked, look }: {
           <span style={{ color: C.green, cursor: "pointer" }}
             onClick={(e) => { e.stopPropagation(); navigate(`govern/run/${encodeURIComponent(row.active_run!)}`); }}>
             ● running{row.current_tool ? ` · ${row.current_tool}` : ""} →
+          </span>
+        ) : member && member.status && member.status !== "running" ? (
+          <span style={{ color: member.status === "ok" ? C.mut : C.red }}>
+            {member.status === "ok" ? "done" : member.status} · {lastActive(row?.last_ts ?? n.reported?.updated_ts)}
           </span>
         ) : (
           <span>{STATUS_LABEL[p]} · last active {lastActive(row?.last_ts ?? n.reported?.updated_ts)}</span>
@@ -1765,23 +1966,70 @@ function FleetSidebar({ list, statuses, rows, sel, onPick }: {
   );
 }
 
-function feedLine(e: ActivityEvent): { text: string; color: string } {
+/** What a call was about, in a few words: its command, file, pattern or URL. */
+function argWords(args: unknown): string {
+  if (!args || typeof args !== "object") return "";
+  const a = args as Record<string, unknown>;
+  if (typeof a.pattern === "string" && a.pattern) {
+    return `“${a.pattern.slice(0, 40)}”${typeof a.path === "string" && a.path ? ` in ${a.path.slice(0, 30)}` : ""}`;
+  }
+  for (const k of ["command", "file_path", "path", "url", "query", "description", "prompt"]) {
+    const v = a[k];
+    if (typeof v === "string" && v.trim()) return v.replace(/\s+/g, " ").trim().slice(0, 70);
+  }
+  return "";
+}
+
+/** An agent's answer, said as what it is: a plan, findings, a tree's result —
+ *  not the JSON it was written in. */
+export function answerWords(text: string): string {
+  const raw = text.trim();
+  if (raw.startsWith("{")) {
+    try {
+      const d = JSON.parse(raw) as Record<string, unknown>;
+      if (d.nodes && typeof d.nodes === "object") {
+        const runs = Object.values(d.nodes as Record<string, { status?: string }[]>).flat();
+        const ok = runs.filter((r) => r?.status === "ok").length;
+        const stopped = runs.filter((r) => r?.status === "stopped").length;
+        return `the tree finished: ${ok} of ${runs.length} runs done${stopped ? ` · ${stopped} stopped` : ""}`;
+      }
+      if (Array.isArray(d.findings)) {
+        const first = d.findings[0] as { claim?: string } | undefined;
+        return `found ${d.findings.length} thing${d.findings.length === 1 ? "" : "s"}${first?.claim ? `: ${first.claim}` : ""}`;
+      }
+      if (Array.isArray(d.steps)) {
+        return `planned ${d.steps.length} step${d.steps.length === 1 ? "" : "s"}${d.steps[0] ? `: ${String(d.steps[0])}` : ""}`;
+      }
+      return "answered";
+    } catch { /* not JSON after all: said as text */ }
+  }
+  return raw.split("\n").find((l) => l.trim())?.trim().slice(0, 90) ?? "";
+}
+
+function feedLine(e: ActivityEvent, call?: Record<string, unknown>): { text: string; color: string } {
   const p = e.payload;
   const tool = typeof p.tool === "string" ? p.tool : "";
+  const what = (args: unknown) => {
+    const w = argWords(args);
+    return w ? `${tool} · ${w}` : tool;
+  };
   switch (e.kind) {
     case "tool_call":
-      return e.verdict === "deny"
-        ? { text: `${tool} — refused${typeof p.reason === "string" && p.reason ? `: ${shortReason(p.reason)}` : ""}`, color: C.red }
-        : p.would_deny ? { text: `called ${tool} — would have been refused`, color: C.amber }
-          : { text: `called ${tool}`, color: C.text };
+      return p.control ? { text: `${what(p.args)} — held (${String(p.control)})`, color: C.amber }
+        : e.verdict === "deny"
+        ? { text: `${what(p.args)} — refused${typeof p.reason === "string" && p.reason ? `: ${shortReason(p.reason)}` : ""}`, color: C.red }
+        : p.would_deny ? { text: `${what(p.args)} — would have been refused`, color: C.amber }
+          : { text: `${what(p.args)} …`, color: C.text };
     case "tool_result": {
       const src = ((p.root as { sources?: string[] } | undefined)?.sources ?? []).join(", ");
       const check = p.check as { kind?: string; passed?: boolean } | undefined;
-      if (check?.kind && check.passed === false) return { text: `${tool} — the ${check.kind} failed`, color: C.red };
-      return src ? { text: `${tool} answered · text from outside (${src.replace("unknown_external", "outside")})`, color: C.amber }
-        : { text: `${tool} answered`, color: C.text };
+      const head = what(call?.args);
+      if (check?.kind && check.passed === false) return { text: `${head} — the ${check.kind} failed`, color: C.red };
+      if (p.status && p.status !== "ok") return { text: `${head} — ${String(p.status)}`, color: C.amber };
+      return src ? { text: `${head} · text from outside (${src.replace("unknown_external", "outside")})`, color: C.amber }
+        : { text: head, color: C.text };
     }
-    case "claim": return { text: `said: ${String(p.text ?? "").slice(0, 80)}`, color: C.mut };
+    case "claim": return { text: answerWords(String(p.text ?? "")), color: C.mut };
     case "fault_injected": return { text: `${tool} broken on purpose (chaos test)`, color: C.steel };
     case "message_sent": {
       const to = String(p.to ?? "");
@@ -1792,7 +2040,7 @@ function feedLine(e: ActivityEvent): { text: string; color: string } {
         : { text: `sent a message to ${to}`, color: C.text };
     }
     case "message_received": return { text: `got a message from ${String(p.from ?? "")}`, color: C.text };
-    case "node_spawned": return { text: `started ${String(p.child_id ?? "an agent")}`, color: C.mut };
+    case "node_spawned": return { text: `started ${String(p.role || p.child_id || "an agent")}`, color: C.mut };
     case "denial": return { text: `${tool} — refused`, color: C.red };
     case "fact": return { text: `fact ${String(p.fact_type ?? "")}`, color: C.amber };
     default: {
@@ -1802,26 +2050,67 @@ function feedLine(e: ActivityEvent): { text: string; color: string } {
   }
 }
 
+interface FeedRow { e: ActivityEvent; text: string; color: string }
+
+/** The feed's rows: a call and its answer are one row (the answer's), a tree's
+ *  burst of "started" lines is one row naming its nodes. Newest first. */
+export function feedRows(events: ActivityEvent[]): FeedRow[] {
+  const key = (e: ActivityEvent, id: unknown) => `${e.run_id}\u0000${String(id ?? "")}`;
+  const calls = new Map<string, Record<string, unknown>>();
+  const answered = new Set<string>();
+  for (const e of events) {
+    if (e.kind === "tool_call" && e.payload.tool_call_id) calls.set(key(e, e.payload.tool_call_id), e.payload);
+    if (e.kind === "tool_result" && e.payload.value_ref) answered.add(key(e, e.payload.value_ref));
+  }
+  const out: FeedRow[] = [];
+  for (let i = 0; i < events.length; i++) {
+    const e = events[i];
+    if (e.kind === "tool_call" && e.verdict !== "deny" && !e.payload.control
+        && answered.has(key(e, e.payload.tool_call_id))) continue;
+    if (e.kind === "node_spawned") {
+      const burst = [e];
+      while (events[i + 1]?.kind === "node_spawned" && events[i + 1].run_id === e.run_id) burst.push(events[++i]);
+      if (burst.length > 1) {
+        const roles = new Map<string, number>();
+        for (const b of burst) {
+          const r = String(b.payload.role || "agent");
+          roles.set(r, (roles.get(r) ?? 0) + 1);
+        }
+        const names = [...roles].reverse().map(([r, k]) => (k > 1 ? `${r} ×${k}` : r)).join(", ");
+        out.push({ e, text: `started ${burst.length} agents: ${names}`, color: C.mut });
+        continue;
+      }
+    }
+    const call = e.kind === "tool_result" ? calls.get(key(e, e.payload.value_ref)) : undefined;
+    out.push({ e, ...feedLine(e, call) });
+  }
+  return out;
+}
+
 function ActivityFeed({ only }: { only?: Set<string> }) {
   const feed = useQuery({ queryKey: ["activity"], queryFn: api.activity, refetchInterval: 2000 });
   const nodesQ = useQuery({ queryKey: ["nodes"], queryFn: api.nodes });
+  const treesQ = useQuery({ queryKey: ["trees"], queryFn: api.trees });
   const examples = new Set((nodesQ.data ?? []).filter((n) => n.example_hidden).map((n) => n.node_id));
-  // a coding session reads as its task: the developer's first request in it
+  // a coding session reads as its task: the developer's first request in it;
+  // a tree's agent as its node ("read 3 of 6"); a tree as its task
   const titleOf = new Map((nodesQ.data ?? []).filter((n) => n.profile?.title)
     .map((n) => [n.node_id, n.profile!.title!]));
+  for (const [id, m] of treeMembers(treesQ.data?.trees)) titleOf.set(id, m.label);
+  for (const t of treesQ.data?.trees ?? []) if (t.task) titleOf.set(t.tree_run, `tree: ${t.task}`);
   // a session past the free plan is not shown, here either
   const ent = useQuery({ queryKey: ["entitlements"], queryFn: api.entitlements, retry: false });
   const [find, setFind] = useState("");
-  const events = (feed.data?.events ?? []).filter((e) => {
+  const kept = (feed.data?.events ?? []).filter((e) => {
     if (ent.data?.locked[e.node_id] || ent.data?.locked_trees[e.node_id]) return false;
     // a skill's dry run is shown on Try a skill, not among the agents' work
     if (e.node_id.startsWith("skill-try.")) return false;
     if (examples.has(e.node_id)) return false;
     if (only && !only.has(e.node_id)) return false;
-    if (!find) return true;
-    const t = `${e.node_id} ${titleOf.get(e.node_id) ?? ""} ${feedLine(e).text}`.toLowerCase();
-    return t.includes(find.toLowerCase());
+    return true;
   });
+  const rows = feedRows(kept).filter(({ e, text }) => !find
+    || `${e.node_id} ${titleOf.get(e.node_id) ?? ""} ${text}`.toLowerCase().includes(find.toLowerCase()));
   const work = new Set(["tool_call", "tool_result", "claim", "fault_injected", "denial"]);
   return (
     <div style={{ fontFamily: MONO, fontSize: 11 }}>
@@ -1833,26 +2122,26 @@ function ActivityFeed({ only }: { only?: Set<string> }) {
                    color: C.text, fontFamily: MONO, fontSize: 11, padding: "3px 7px", outline: "none" }} />
       </div>
       <div style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 8 }}>
-        {events.length === 0 && (
+        {rows.length === 0 && (
           <div className="p-3" style={{ color: C.dim }}>
             {feed.isLoading ? "loading…" : "nothing yet — agent steps and operator acks land here as they happen."}
           </div>
         )}
-        {events.map((e, i) => {
-          const { text, color } = feedLine(e);
+        {rows.map(({ e, text, color }, i) => {
           // agent work opens its run; an ack opens the agent it came from
           const go = () => work.has(e.kind)
             ? navigate(`govern/run/${encodeURIComponent(e.run_id)}`)
             : navigate(`control/${encodeURIComponent(e.node_id)}`);
+          const who = titleOf.get(e.node_id) ?? e.node_id;
           return (
-            <div key={i} onClick={go} className="px-3 py-1.5"
-              style={{ borderTop: i === 0 ? "none" : `1px solid ${C.line}`, cursor: "pointer" }}>
-              <div className="flex gap-2">
-                <span style={{ color: C.dim, whiteSpace: "nowrap" }}>{e.ts ? stamp(e.ts) : ""}</span>
-                <span style={{ color: C.steel, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis",
-                               whiteSpace: "nowrap" }} title={e.node_id}>{titleOf.get(e.node_id) ?? e.node_id}</span>
-              </div>
-              <div style={{ color, overflowWrap: "anywhere" }}>{text}</div>
+            <div key={i} onClick={go} className="px-3 py-1.5 flex gap-2" data-testid="feed-row"
+              title={`${who} (${e.node_id}) — ${text}`}
+              style={{ borderTop: i === 0 ? "none" : `1px solid ${C.line}`, cursor: "pointer",
+                       whiteSpace: "nowrap", minWidth: 0 }}>
+              <span style={{ color: C.dim }}>{e.ts ? stamp(e.ts) : ""}</span>
+              <span style={{ color: C.steel, maxWidth: "38%", overflow: "hidden", textOverflow: "ellipsis",
+                             flexShrink: 0 }}>{who}</span>
+              <span style={{ color, overflow: "hidden", textOverflow: "ellipsis", minWidth: 0 }}>{text}</span>
             </div>
           );
         })}

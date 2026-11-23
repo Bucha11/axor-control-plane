@@ -281,7 +281,11 @@ export interface NodeInfo {
   probe?: { verdict: string; created_ts: string; escape_count: number } | null;
   /** what the node said it is when it first reported; null = never said
    * (a governed production agent, or one from before profiles) */
-  profile?: { kind: "coding" | "agent" | "tree"; agent: string; developer: string; title?: string } | null;
+  profile?: {
+    kind: "coding" | "agent" | "tree"; agent: string; developer: string; title?: string;
+    // a subagent (Claude Code's Agent tool): the session that started it
+    parent?: string;
+  } | null;
 }
 
 // Behavioral health check (axor-probe, ui-spec 8.2). A family's state is
@@ -1059,11 +1063,19 @@ function signingArmed(): boolean {
 }
 
 // ── agent tree runs (axor-wrap `tree run`) ───────────────────────────────────
+export interface TreeStageNode {
+  node: string; agent: string; access: string; count?: number;
+  runs: { index: number; node_id: string | null; status: string }[];
+}
 export interface TreeSummary {
   tree_run: string; status: "running" | "paused" | "stopped" | "done" | "failed"; updated_ts: string;
   task: string; nodes: number; agents: number;
   members?: string[];
   agent_families?: string[];
+  // its stages, each node's runs in order (a plane from before has none)
+  stages?: TreeStageNode[][];
+  // running, but it has said nothing for a while (its process died)
+  quiet?: boolean;
 }
 // What the plan lets the plane show and operate for coding agents: the free
 // rung keeps one developer and one agent family; sessions and tree runs past
@@ -1092,6 +1104,7 @@ export interface TreeItem {
 }
 export interface TreeRun {
   tree_run: string; status: "running" | "paused" | "stopped" | "done" | "failed"; updated_ts: string; task: string;
+  quiet?: boolean;
   stages: string[][];
   nodes: Record<string, TreeNode>;
   items: TreeItem[];

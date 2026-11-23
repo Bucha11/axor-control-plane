@@ -64,8 +64,41 @@ test.describe("agent trees", () => {
     expect(self.desired.state.pending_excision.target_refs).toEqual(["read#0/f1"]);
 
     // a run links to its own agent on the plane
-    await read.getByText("#0 node_read0").click();
+    // named by its node ("read 1 of 2"), not the kernel's id
+    await expect(page.getByTestId("tree-run-read-0")).toHaveText("read 1 of 2 →");
+    await page.getByTestId("tree-run-read-0").click();
     await expect(page).toHaveURL(/#\/govern\/node_read0/);
+  });
+
+  test("among the agents a running tree is open by stage, its agents named by their node", async ({ page, request }) => {
+    const tree = uniqueNode("tree");
+    const tag = tree.slice(-8);
+    const ids = { plan: `node_plan_${tag}`, r0: `node_r0_${tag}`, r1: `node_r1_${tag}` };
+    for (const id of [tree, ...Object.values(ids)]) await seedNode(request, id);
+    const snap = snapshot("running");
+    snap.task = `Stages ${tag}`;
+    snap.nodes.plan.runs = [{ index: 0, node_id: ids.plan, status: "ok" }];
+    snap.nodes.read.runs = [{ index: 0, node_id: ids.r0, status: "ok", verified: 1, unverified: 1 },
+                            { index: 1, node_id: ids.r1, status: "running" }];
+    await request.post(`${BACKEND}/v1/trees/${tree}`, { data: snap });
+    await setConnection(page, { mode: "adapter" });
+    await goHash(page, "govern");
+
+    const counts = page.getByTestId(`tree-counts-${tree}`);
+    await expect(counts).toContainText("stage 2 of 3 · read");
+    await expect(counts).toContainText("2 of 4 done");
+    const stages = page.getByTestId(`tree-stages-${tree}`);
+    await expect(stages).toBeVisible();          // running: open without a click
+    await expect(page.getByTestId(`tree-stage-${tree}-read`)).toContainText("2 · READ · claude-code ×2 · read only");
+    await expect(page.getByTestId(`agent-row-${ids.r0}`)).toContainText("read 1 of 2");
+    await expect(page.getByTestId(`member-state-${ids.r0}`)).toHaveText("done");
+    // the stage not reached yet is said so, not left out
+    await expect(page.getByTestId(`tree-stage-${tree}-impl`)).toBeVisible();
+    await expect(stages).toContainText("waiting for the stage before");
+    // its panel says which tree and stage it is, and leads to the tree
+    await page.getByTestId(`agent-row-${ids.r0}`).click();
+    await expect(page.getByTestId("agent-panel-member")).toContainText("read 1 of 2");
+    await expect(page.getByTestId("agent-panel-member")).toContainText(`stage 2 of 3 in “Stages ${tag}”`);
   });
 
   test("a tree mixing agent families is on the paid plan", async ({ page, request }) => {

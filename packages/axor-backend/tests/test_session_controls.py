@@ -99,3 +99,20 @@ async def test_a_title_and_a_profile_sent_at_once_both_land(client: httpx.AsyncC
     for i in range(8):
         prof = profiles[f"codex-race-many-{i}"]
         assert (prof["kind"], prof["agent"], prof["title"]) == ("coding", "codex", f"task {i}")
+
+
+async def test_a_subagent_is_a_node_under_its_session(client: httpx.AsyncClient) -> None:
+    """Claude Code's Agent tool starts a subagent: the sidecar reports it as a
+    node of its own, naming the session that started it."""
+    parent, sub = "claude-code-host-ab12cd34", "claude-code-host-ab12cd34.Explore-9f8e7d6c"
+    for node, extra in ((parent, {}), (sub, {"parent": parent})):
+        r = await client.post(f"/v1/plane/{node}/profile", json={
+            "kind": "coding", "agent": "claude-code", "developer": "dev-ada", **extra})
+        assert r.status_code == 200
+        await _heartbeat(client, node)
+    nodes = {n["node_id"]: n for n in (await client.get("/v1/plane/nodes")).json()}
+    assert nodes[sub]["profile"]["parent"] == parent
+    assert "parent" not in nodes[parent]["profile"]
+    bad = await client.post("/v1/plane/x/profile", json={
+        "kind": "coding", "agent": "claude-code", "developer": "dev-ada", "parent": "a b/c"})
+    assert bad.status_code == 400

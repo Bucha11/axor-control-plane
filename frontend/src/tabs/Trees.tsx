@@ -118,8 +118,13 @@ function TreeView({ treeRun }: { treeRun: string }) {
       <div className="flex items-center gap-3 flex-wrap" style={{ marginBottom: 16 }}>
         <h1 style={{ fontSize: 22, fontWeight: 650, margin: 0 }}>{t.task}</h1>
         <span data-testid="tree-status" style={{ fontFamily: MONO, fontSize: 12, color: STATUS_COLOR[t.status] ?? C.dim }}>
-          ● {t.status}
+          ● {t.quiet ? "stopped reporting" : t.status}
         </span>
+        {t.quiet && (
+          <span style={{ fontFamily: MONO, fontSize: 11, color: C.dim }}>
+            nothing from it since {new Date(t.updated_ts).toLocaleTimeString()} — its process ended without a last word
+          </span>
+        )}
         {self && (t.status === "running" || t.status === "paused") && (
           <TreeControls treeRun={treeRun} version={self.desired?.version ?? 0}
             paused={self.desired?.state.paused === true} stopping={self.desired?.state.stopped === true} />
@@ -277,12 +282,13 @@ function NodeCard({ name, node, tree }: { name: string; node?: TreeNode; tree: T
             <div key={r.index} className="flex items-center gap-2 flex-wrap">
               <span style={{ color: STATUS_COLOR[r.status] ?? C.dim }}>●</span>
               {r.node_id ? (
-                <span style={{ color: C.steel, cursor: "pointer" }} title="this run as an agent on the plane"
+                <span style={{ color: C.steel, cursor: "pointer" }} title={`${r.node_id} — open it among your agents`}
+                  data-testid={`tree-run-${name}-${r.index}`}
                   onClick={() => navigate(`govern/${encodeURIComponent(r.node_id!)}`)}>
-                  #{r.index} {r.node_id}
+                  {node.count > 1 ? `${name} ${r.index + 1} of ${node.count}` : name} →
                 </span>
-              ) : <span style={{ color: C.mut }}>#{r.index}</span>}
-              <span style={{ color: C.dim }}>{r.status}</span>
+              ) : <span style={{ color: C.mut }}>{node.count > 1 ? `${name} ${r.index + 1} of ${node.count}` : name}</span>}
+              <span style={{ color: C.dim }}>{r.status === "ok" ? "done" : r.status}</span>
               {r.verified !== undefined && (
                 <span style={{ color: C.mut }}>{r.verified} verified · <span style={{ color: r.unverified ? C.amber : C.mut }}>{r.unverified} unverified</span></span>
               )}

@@ -42,10 +42,52 @@ async def test_a_tree_run_is_posted_replaced_and_listed(client: httpx.AsyncClien
     got = (await client.get("/v1/trees/tree-1a2b")).json()
     assert got["status"] == "done" and got["nodes"]["read"]["model"] == "luna"
     listed = (await client.get("/v1/trees")).json()["trees"]
-    assert listed == [{"tree_run": "tree-1a2b", "status": "done",
+    assert listed == [{"tree_run": "tree-1a2b", "status": "done", "quiet": False,
+                       "stages": [
+                           [{"node": "plan", "agent": "claude-code", "access": "", "count": 1,
+                             "runs": [{"index": 0, "node_id": "node_a", "status": "ok"}]}],
+                           [{"node": "read", "agent": "codex", "access": "read", "count": 5,
+                             "runs": []}],
+                           [{"node": "impl", "agent": "", "access": "", "count": 1, "runs": []}]],
                        "updated_ts": listed[0]["updated_ts"], "task": "Add rate limiting",
                        "nodes": 2, "agents": 1, "members": ["node_a"],
                        "agent_families": ["claude-code", "codex"]}]
+
+
+async def test_a_late_snapshot_does_not_undo_a_newer_one(client: httpx.AsyncClient) -> None:
+    """Snapshots can arrive out of order: an older one (by its seq) is dropped,
+    and a finished tree is never put back to running."""
+    readers = {**SNAP["nodes"], "read": {**SNAP["nodes"]["read"], "runs": [
+        {"index": 0, "node_id": "node_r0", "status": "running"}]}}
+    await client.post("/v1/trees/tree-9", json={**SNAP, "nodes": readers, "seq": 3})
+    await client.post("/v1/trees/tree-9", json={**SNAP, "seq": 2})
+    got = (await client.get("/v1/trees/tree-9")).json()
+    assert got["nodes"]["read"]["runs"][0]["node_id"] == "node_r0"
+    await client.post("/v1/trees/tree-9", json={**SNAP, "status": "done"})
+    await client.post("/v1/trees/tree-9", json={**SNAP, "status": "running"})
+    assert (await client.get("/v1/trees/tree-9")).json()["status"] == "done"
+
+
+async def test_a_tree_gone_quiet_is_said_so(client: httpx.AsyncClient) -> None:
+    from axor_backend import storage
+
+    await client.post("/v1/trees/tree-q", json=SNAP)
+    assert (await client.get("/v1/trees")).json()["trees"][0]["quiet"] is False
+    old = storage.TREE_QUIET_S
+    storage.TREE_QUIET_S = -1
+    try:
+        tree = (await client.get("/v1/trees")).json()["trees"][0]
+        assert tree["quiet"] is True and tree["status"] == "running"
+        # every run it planned finished: it ended, its last word was lost
+        ended = {**SNAP, "nodes": {
+            "plan": SNAP["nodes"]["plan"],
+            "read": {**SNAP["nodes"]["read"], "count": 1,
+                     "runs": [{"index": 0, "node_id": "node_r", "status": "ok"}]}}}
+        await client.post("/v1/trees/tree-q", json=ended)
+        tree = (await client.get("/v1/trees/tree-q")).json()
+        assert tree["quiet"] is False and tree["status"] == "done"
+    finally:
+        storage.TREE_QUIET_S = old
 
 
 async def test_bad_snapshots_are_refused(client: httpx.AsyncClient) -> None:

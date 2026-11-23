@@ -183,17 +183,19 @@ test("a tree's agents fold into one row on Agents", async ({ page }) => {
   await goHash(page, "govern");
   const row = page.getByTestId("tree-row-tree-example-coding");
   await expect(row).toContainText("Add rate limiting to the auth module");
-  await expect(page.getByTestId("agent-row-codex-example-r0")).toHaveCount(0);
+  // its agents are in its row, never loose beside it
+  await expect(page.locator('[data-tour="spawn"] > [data-testid="agent-row-codex-example-r0"]')).toHaveCount(0);
   // the two loose sessions are not part of the tree
   await expect(page.getByTestId("agent-row-codex-example-77b0e4d2")).toBeVisible();
   // the counters count rows: the tree is one, not one per agent in it
   await expect(page.getByTestId("fleet-count")).toContainText(/\d+ trees? · live/);
   await expect.poll(async () => {
     const chip = await page.getByTestId("status-chips").getByRole("button", { name: /^all/ }).innerText();
-    const rows = await page.locator('[data-tour="spawn"] [data-testid^="agent-row-"], [data-tour="spawn"] [data-testid^="tree-row-"], [data-tour="spawn"] [data-testid^="developer-row-"]').count();
+    const rows = await page.locator('[data-tour="spawn"] > [data-testid^="agent-row-"], [data-tour="spawn"] > [data-testid^="tree-row-"], [data-tour="spawn"] > [data-testid^="developer-row-"]').count();
     return Number(chip.replace(/\D+/g, "")) - rows;
   }).toBe(0);
-  await row.getByText("▸ show agents").click();
+  // a tree at work is open; a finished one opens on a click
+  if (await row.getByText("▸ show agents").isVisible()) await row.getByText("▸ show agents").click();
   await expect(page.getByTestId("agent-row-codex-example-r0")).toBeVisible();
   await row.getByRole("button", { name: "open tree →" }).click();
   await expect(page).toHaveURL(/#\/trees\/tree-example-coding/);
