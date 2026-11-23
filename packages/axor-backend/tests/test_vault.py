@@ -485,7 +485,7 @@ class TestConcurrentVaultWritesDoNotEraseEachOther:
 
 
 def test_the_subsystem_tokens_are_not_compared_byte_by_byte() -> None:
-    """`_gate` compared the vault tokens with `!=`, which returns at the first
+    """`vault_gate` compared the vault tokens with `!=`, which returns at the first
     differing byte, while `constant_time_eq` guarded the API token and every
     scoped key in security.py. These are the two tokens in front of credential
     dispense and delegated signing.
@@ -498,19 +498,19 @@ def test_the_subsystem_tokens_are_not_compared_byte_by_byte() -> None:
     tree = ast.parse((src / "routers" / "vault.py").read_text("utf-8"))
     gate = next(
         n for n in ast.walk(tree)
-        if isinstance(n, ast.FunctionDef) and n.name == "_gate"
+        if isinstance(n, ast.FunctionDef) and n.name == "vault_gate"
     )
     calls = {
         n.func.id for n in ast.walk(gate)
         if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
     }
-    assert "constant_time_eq" in calls, "_gate must compare in constant time"
+    assert "constant_time_eq" in calls, "vault_gate must compare in constant time"
     equality = [
         n for n in ast.walk(gate)
         if isinstance(n, ast.Compare)
         and any(isinstance(op, (ast.Eq, ast.NotEq)) for op in n.ops)
     ]
-    assert not equality, "_gate compares a secret with ==/!= again"
+    assert not equality, "vault_gate compares a secret with ==/!= again"
 
 
 class TestTheInjectionHeaderIsValidatedNotTrusted:

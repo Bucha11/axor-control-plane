@@ -228,9 +228,14 @@ async def prune_audit_trail(store: Any) -> int:  # noqa: ANN401
     """The workspace's own retention for its audit trail (Settings → audit):
     rows older than it go; unset keeps them for the deployment's window."""
     from axor_backend.audit import KEY_KIND, KIND, RETENTION_SETTING
+    from axor_backend.compliance import open_holds
 
     days = await store.get_setting(RETENTION_SETTING)
     if not isinstance(days, int) or days <= 0:
+        return 0
+    if await open_holds(store):
+        # a legal hold outranks retention: a policy that quietly deletes
+        # evidence during a dispute is worse than no policy
         return 0
     cutoff = (datetime.now(UTC) - timedelta(days=days)).isoformat()
     return await store.prune_audit_kinds_older_than((KIND, KEY_KIND), cutoff)

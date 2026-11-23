@@ -62,7 +62,19 @@ Two meters: production agents count as **governed nodes**, coding agents
 | **Business** | $0 | — | $40 / developer, $75 / node past 1 | Coding + SSO (OIDC, SAML), SCIM, who may, full audit trail + export, retention, monthly report |
 | **Team** | $299 / mo | 10 nodes | $75 / node, $40 / developer | the production side: runtime control, attestations, scheduled regression CI + history; includes Business |
 | **Security** | $1,500 / mo | 50 nodes | $50 / node, $40 / developer | Team + incident → regression, policy comparison |
-| **Enterprise** | contracted (from ~$30k / yr) | negotiated | negotiated | Security + SLA and support, private benchmark registry (the air-gapped bundle ships on every rung) |
+| **Enterprise** | contracted (from ~$30k / yr) | negotiated | negotiated | Security + the compliance pack (a signed period document for a reviewer), legal hold, SLA and support, private benchmark registry |
+
+**What Enterprise actually gates.** The air-gapped bundle ships on every
+rung — gating a deployment shape would be gating safety, and anyone can
+rebuild the images from the source anyway. What it gates instead is the
+evidence work a regulated company needs and nobody else asks for: the
+**compliance pack** (any period of the whole governed surface as one
+document, mapped to what each line answers, with a digest over the body and,
+on request, a signature from a key under the customer's own custody) and the
+**legal hold** (while one is on, the workspace's own retention stops pruning
+— a retention policy that quietly deletes evidence during a dispute is worse
+than none). Both are reporting and custody, never a gate, a taint decision or
+a fail-closed default: Line 1 holds.
 
 **No paid rung includes seats.** Seats are one product (developers running
 coding agents) and governed nodes are another (production agents); a rung says

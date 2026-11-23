@@ -6,6 +6,9 @@ artifacts Articles 12/14/26 ask operators to produce. Not legal advice.
 
 | AI Act obligation | What Axor produces |
 |---|---|
+
+The **compliance pack** (Enterprise) generates this mapping for a period from what the plane recorded — see `docs/compliance-pack.md`.
+
 | **Art. 12 — Record-keeping**: high-risk systems must automatically log events over their lifetime | Append-only kernel event log (every tool intent, verdict, value provenance); alembic-migrated store; retention window (`AXOR_RETENTION_DAYS`); export as HTML/PDF receipts |
 | **Art. 14 — Human oversight**: effective oversight incl. ability to intervene or interrupt | Live Control plane: pause / budget-cap / stop / cascade-stop per node & subtree; Ed25519-signed operator commands (attributable interventions); reason-required attestations, append-only |
 | **Art. 26 — Deployer obligations**: monitor operation, keep logs, suspend on risk | node-stale + degradation webhooks (with dead-letter honesty); EvidenceCase on caught deviations; kill-switch = cascade-stop |

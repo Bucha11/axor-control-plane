@@ -4,7 +4,7 @@
 // CSV or JSON lines for an archive. Admins only (the plane says so with 403).
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { api, type AuditItem } from "../api";
+import { api, type AuditItem, type Hold } from "../api";
 import { C, MONO, btn } from "../theme";
 import { errorWords } from "../refusal";
 
@@ -37,6 +37,7 @@ const WORDS: Record<string, string> = {
   scim_role: "changed the role of", scim_renamed: "changed the address of",
   sessions_limit: "set how long a sign-in lasts:", sessions_ended: "signed out",
   plan_activated: "activated the plan",
+  hold_placed: "put a legal hold on the trail", hold_released: "lifted the legal hold",
 };
 
 function detailWords(it: AuditItem): string {
@@ -126,6 +127,99 @@ function KeepAndReport({ field }: { field: React.CSSProperties }) {
   );
 }
 
+/** Enterprise: a period of the whole governed surface as one document a
+ *  reviewer can read and check, and a hold that stops this workspace's own
+ *  retention from deleting the evidence under it. */
+function ForTheReviewer({ field }: { field: React.CSSProperties }) {
+  const qc = useQueryClient();
+  const holds = useQuery({ queryKey: ["audit-holds"], queryFn: api.holds, retry: false });
+  const place = useMutation({
+    mutationFn: (reason: string) => api.placeHold(reason),
+    onSuccess: () => { void qc.invalidateQueries({ queryKey: ["audit-holds"] });
+                       void qc.invalidateQueries({ queryKey: ["audit"] }); },
+  });
+  const release = useMutation({
+    mutationFn: (id: string) => api.releaseHold(id),
+    onSuccess: () => { void qc.invalidateQueries({ queryKey: ["audit-holds"] });
+                       void qc.invalidateQueries({ queryKey: ["audit"] }); },
+  });
+  const quarter = (() => {
+    const now = new Date();
+    const q = Math.floor(now.getUTCMonth() / 3);
+    const start = q === 0 ? new Date(Date.UTC(now.getUTCFullYear() - 1, 9, 1))
+                          : new Date(Date.UTC(now.getUTCFullYear(), (q - 1) * 3, 1));
+    const end = new Date(Date.UTC(start.getUTCFullYear(), start.getUTCMonth() + 3, 1));
+    return { from: start.toISOString().slice(0, 10), to: end.toISOString().slice(0, 10) };
+  })();
+  const [from, setFrom] = useState(quarter.from);
+  const [to, setTo] = useState(quarter.to);
+  const [error, setError] = useState<string | null>(null);
+  // the pack is Enterprise's: below it the holds call says so, and this whole
+  // section stays out of the way
+  if (holds.isError) return null;
+  const get = async (format: "json" | "html") => {
+    setError(null);
+    try {
+      const { blob, name } = await api.compliancePack(from, to, format);
+      if (format === "html") window.open(URL.createObjectURL(blob), "_blank");
+      else save(blob, name);
+    } catch (e) { setError(errorWords((e as Error).message)); }
+  };
+  const open = (holds.data?.holds ?? []).filter((h: Hold) => !h.released_ts);
+  return (
+    <div data-testid="audit-reviewer" style={{ marginBottom: 10 }}>
+      <div className="flex gap-2 items-center flex-wrap">
+        <span>compliance pack</span>
+        <input type="date" value={from} onChange={(e) => setFrom(e.target.value)}
+          aria-label="period from" style={field} data-testid="pack-from" />
+        <input type="date" value={to} onChange={(e) => setTo(e.target.value)}
+          aria-label="period to" style={field} data-testid="pack-to" />
+        <button data-testid="pack-read" onClick={() => void get("html")}
+          style={btn({ color: C.text, borderColor: C.steel, fontSize: 11, padding: "3px 10px" })}>
+          read it
+        </button>
+        <button data-testid="pack-json" onClick={() => void get("json")}
+          style={btn({ color: C.mut, fontSize: 11, padding: "3px 10px" })}>
+          save the JSON
+        </button>
+      </div>
+      <div style={{ color: C.dim, fontSize: 10.5, lineHeight: 1.6, marginTop: 2 }}>
+        one document for a reviewer: who oversaw which agent and why, every attestation,
+        policy and access change, and what each answers — with a digest over the body.
+      </div>
+      <div className="flex gap-2 items-center flex-wrap mt-2" data-testid="audit-holds">
+        <span>legal hold</span>
+        {open.length === 0 ? (
+          <>
+            <span style={{ color: C.dim }}>none — retention prunes on its schedule</span>
+            <button data-testid="hold-place" disabled={place.isPending}
+              onClick={() => { const r = window.prompt("What is the hold for? (a case, an investigation)");
+                               if (r && r.trim().length > 2) place.mutate(r.trim()); }}
+              style={btn({ color: C.amber, fontSize: 11, padding: "2px 8px" })}>
+              put one on
+            </button>
+          </>
+        ) : open.map((h: Hold) => (
+          <span key={h.hold_id} className="flex gap-2 items-center">
+            <span style={{ color: C.amber }}>● {h.reason}</span>
+            <span style={{ color: C.dim }}>since {h.placed_ts.slice(0, 10)} · nothing is pruned</span>
+            <button data-testid={`hold-release-${h.hold_id}`} disabled={release.isPending}
+              onClick={() => { if (window.confirm("Lift the hold? Retention starts pruning again.")) release.mutate(h.hold_id); }}
+              style={btn({ color: C.mut, fontSize: 11, padding: "2px 8px" })}>
+              lift it
+            </button>
+          </span>
+        ))}
+      </div>
+      {(error || place.isError || release.isError) && (
+        <div style={{ color: C.red, fontSize: 11 }}>
+          {error ?? errorWords(((place.error ?? release.error) as Error).message)}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function AuditTrail() {
   const [action, setAction] = useState("");
   const [who, setWho] = useState("");
@@ -196,6 +290,7 @@ export default function AuditTrail() {
         </div>
       )}
       {q.data && !q.data.window_days && <KeepAndReport field={field} />}
+      {q.data && !q.data.window_days && <ForTheReviewer field={field} />}
       <div style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 8 }}>
         {(q.data?.items ?? []).length === 0 && (
           <div className="p-3" style={{ color: C.dim }}>

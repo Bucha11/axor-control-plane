@@ -2320,6 +2320,23 @@ class Store:
             )).all()
         return [r.fact_json for r in rows]
 
+    async def facts_between(self, start_ts: str, end_ts: str,
+                            fact_type: str = "") -> list[dict[str, Any]]:
+        """Facts appended in a window, oldest first, each with when it landed
+        — what a period report is drawn from. ``fact_type`` narrows it in the
+        database (the fact log is also every degradation and quarantine, so a
+        report that read them all would grow with fleet chatter rather than
+        with what it reports)."""
+        where = [facts.c.org_id == current_org_id(), facts.c.created_ts >= start_ts,
+                 facts.c.created_ts < end_ts]
+        if fact_type:
+            where.append(facts.c.fact_json["fact_type"].as_string() == fact_type)
+        async with self.engine.connect() as conn:
+            rows = (await conn.execute(
+                select(facts.c.fact_json, facts.c.created_ts).where(*where)
+                .order_by(facts.c.created_ts))).all()
+        return [{**r.fact_json, "recorded_ts": r.created_ts} for r in rows]
+
     async def all_facts(self) -> list[dict[str, Any]]:
         """Every fact across all nodes, oldest first — the graph rehydrator folds
         attestations from here (a fact can exist for a node with no plane state)."""

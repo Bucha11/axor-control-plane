@@ -46,7 +46,7 @@ def _page(limit: int) -> int:
     return min(limit, AUDIT_PAGE_MAX)
 
 
-def _gate(request: Request, which: str) -> None:
+def vault_gate(request: Request, which: str) -> None:
     """Per-subsystem bearer check. A configured token is required exactly for
     its own subsystem; in the open dev posture (no token configured) the
     subsystem follows the app's global posture — which startup logs loudly.
@@ -98,7 +98,7 @@ def _speaking_as(request: Request, node_id: str) -> None:
 
 @router.post("/creds/enroll")
 async def vault_enroll(body: dict, request: Request, store: StoreDep) -> dict:
-    _gate(request, "creds")
+    vault_gate(request, "creds")
     from axor_backend.vault_creds import EnrollmentInvalid, ToolCredentialVault
 
     try:
@@ -128,7 +128,7 @@ async def vault_dispense(body: dict, request: Request, store: StoreDep) -> dict:
 
     The scope check used to do the work of all four.
     """
-    _gate(request, "creds")
+    vault_gate(request, "creds")
     from axor_backend.vault_creds import DispenseDenied, ToolCredentialVault
 
     node_id = str(body.get("node_id", ""))
@@ -167,7 +167,7 @@ async def vault_dispense(body: dict, request: Request, store: StoreDep) -> dict:
 
 @router.post("/creds/rotate")
 async def vault_rotate(body: dict, request: Request, store: StoreDep) -> dict:
-    _gate(request, "creds")
+    vault_gate(request, "creds")
     from axor_backend.vault_creds import (
         DispenseDenied,
         EnrollmentInvalid,
@@ -195,7 +195,7 @@ async def vault_rotate(body: dict, request: Request, store: StoreDep) -> dict:
 async def vault_revoke(body: dict, request: Request, store: StoreDep) -> dict:
     """Narrowing only: revoke is available over the plane in an incident;
     granting is enrollment config, never a command."""
-    _gate(request, "creds")
+    vault_gate(request, "creds")
     from axor_backend.vault_creds import NotEnrolled, ToolCredentialVault
 
     try:
@@ -221,7 +221,7 @@ async def vault_register_sealing_key(
     Public by definition, so registering it is not handing us anything. What it
     buys is that we are no longer trusted to decline to look — we are unable to.
     """
-    _gate(request, "creds")
+    vault_gate(request, "creds")
     from axor_backend.vault_creds import SEALING_KEY_SETTING
 
     pubkey = str(body.get("public_key_hex", ""))
@@ -234,7 +234,7 @@ async def vault_register_sealing_key(
 @router.get("/creds/sealing-key")
 async def vault_sealing_key(request: Request, store: StoreDep) -> dict:
     """The key to seal against, and whether this deployment holds plaintext."""
-    _gate(request, "creds")
+    vault_gate(request, "creds")
     from axor_backend.vault_creds import SEALING_KEY_SETTING
 
     pubkey = await store.get_setting(SEALING_KEY_SETTING)
@@ -252,7 +252,7 @@ async def vault_register_node_key(
     node without a registered key still dispenses — its rows just read
     `signed: false`, which is the honest record of what happened.
     """
-    _gate(request, "creds")
+    vault_gate(request, "creds")
     node_id = str(body.get("node_id", ""))
     pubkey = str(body.get("public_key_hex", ""))
     if not node_id or len(pubkey) != 64 or not _is_hex(pubkey):
@@ -267,7 +267,7 @@ async def vault_register_node_key(
 
 @router.get("/creds/node-keys")
 async def vault_node_keys(request: Request, store: StoreDep) -> dict:
-    _gate(request, "creds")
+    vault_gate(request, "creds")
     return (await store.get_setting(NODE_KEYS_SETTING)) or {}
 
 
@@ -283,7 +283,7 @@ async def vault_creds_audit(
     thing something else was quietly making safe. Page with `before_id` from the
     `audit_id` of the last row you read.
     """
-    _gate(request, "creds")
+    vault_gate(request, "creds")
     return await store.vault_audit_entries(
         DISPENSE_KIND, limit=_page(limit), before_id=before_id,
     )
@@ -291,7 +291,7 @@ async def vault_creds_audit(
 
 @router.get("/creds/health")
 async def vault_health(request: Request, store: StoreDep) -> dict:
-    _gate(request, "creds")
+    vault_gate(request, "creds")
     from axor_backend.vault_creds import ToolCredentialVault
 
     return await ToolCredentialVault(store).health()
@@ -301,7 +301,7 @@ async def vault_health(request: Request, store: StoreDep) -> dict:
 
 @router.post("/signing/keys")
 async def vault_create_key(body: dict, request: Request, store: StoreDep) -> dict:
-    _gate(request, "signing")
+    vault_gate(request, "signing")
     from axor_backend.vault_signing import SigningCustody, SignRefused
 
     try:
@@ -314,7 +314,7 @@ async def vault_create_key(body: dict, request: Request, store: StoreDep) -> dic
 
 @router.get("/signing/keys")
 async def vault_list_keys(request: Request, store: StoreDep) -> list[dict]:
-    _gate(request, "signing")
+    vault_gate(request, "signing")
     from axor_backend.vault_signing import SigningCustody
 
     return await SigningCustody(store).keys_public()
@@ -322,7 +322,7 @@ async def vault_list_keys(request: Request, store: StoreDep) -> list[dict]:
 
 @router.post("/signing/sign")
 async def vault_sign(body: dict, request: Request, store: StoreDep) -> dict:
-    _gate(request, "signing")
+    vault_gate(request, "signing")
     from axor_backend.vault_signing import SigningCustody, SignRefused
 
     principal = getattr(request.state, "principal", None)
@@ -344,7 +344,7 @@ async def vault_audit(
 ) -> list[dict]:
     """Every signature request, granted or refused. Newest first, paged — see
     `/creds/audit` for why paging arrived with the table."""
-    _gate(request, "signing")
+    vault_gate(request, "signing")
     from axor_backend.vault_signing import SigningCustody
 
     return await SigningCustody(store).audit(

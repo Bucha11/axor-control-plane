@@ -603,6 +603,11 @@ export interface Permissions {
   editable?: boolean;      // changing them is the Business plan's
 }
 /** A month of the audit trail, as a reviewer reads it. */
+export interface Hold {
+  hold_id: string; reason: string; placed_by: string; placed_ts: string;
+  released_ts: string | null; released_by: string | null;
+}
+
 export interface SessionPolicy {
   hours: number | null; deployment_hours: number; access_minutes: number; plan_ok: boolean;
 }
@@ -1867,6 +1872,24 @@ export const api = {
     const name = /filename="([^"]+)"/.exec(r.headers.get("content-disposition") ?? "")?.[1] ?? `axor-audit.${format}`;
     return { blob: await r.blob(), name };
   },
+  // Enterprise: a period of the whole governed surface as one document, and
+  // the legal holds that keep its evidence alive
+  compliancePack: async (from: string, to: string, format: "json" | "html" = "json",
+                         sign?: string): Promise<{ blob: Blob; name: string }> => {
+    const q = new URLSearchParams({ from, to, format, ...(sign ? { sign } : {}) });
+    const r = await af(`/v1/audit/compliance?${q}`);
+    if (!r.ok) throw new Error(`${r.status} ${await r.text()}`);
+    const name = /filename="([^"]+)"/.exec(r.headers.get("content-disposition") ?? "")?.[1]
+      ?? `axor-compliance.${format}`;
+    return { blob: await r.blob(), name };
+  },
+  holds: () => af("/v1/audit/holds").then((r) => j<{ holds: Hold[] }>(r)),
+  placeHold: (reason: string) =>
+    af("/v1/audit/holds", { method: "POST", headers: { "content-type": "application/json" },
+                            body: JSON.stringify({ reason }) }).then((r) => j<Hold>(r)),
+  releaseHold: (holdId: string) =>
+    af(`/v1/audit/holds/${encodeURIComponent(holdId)}`, { method: "DELETE" })
+      .then((r) => j<Hold>(r)),
   // the workspace's limit on developer seats (admin); null for none
   setSeatCap: (cap: number | null) =>
     af("/v1/license/seat-cap", {

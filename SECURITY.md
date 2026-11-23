@@ -104,6 +104,16 @@ anything else.
 phone-home; expiry degrades EE features to read-only and **never disables
 safety features**.
 
+**Compliance pack and legal hold (Enterprise).** The pack is a read of what
+the plane already recorded over a period: it adds no new collection, and
+every section names its source so an empty one reads as "nothing was
+recorded", not "we did not look". It carries a sha256 over its own body
+(itself excluded) and, when asked, a signature — which goes through the
+vault's signing custody and its own token, so the pack is not a way around
+that wall. A legal hold suspends the workspace's audit retention entirely
+while it is open; placing and lifting one are themselves on the trail, and a
+lifted hold is kept on the record rather than deleted.
+
 **Air-gapped install.** `deploy/offline` builds one archive — images, stack,
 installer — for a host with no route out. Nothing in the product calls out on
 its own: no telemetry, no update check, no licence server, and the web app

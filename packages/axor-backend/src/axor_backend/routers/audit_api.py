@@ -11,11 +11,13 @@ import json
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import Response
 
-from axor_backend import audit, permissions
-from axor_backend.deps import PrincipalDep, StoreDep
+from axor_backend import audit, compliance, permissions
+from axor_backend.attestations import ATTESTATION_FACT_TYPE
+from axor_backend.deps import PrincipalDep, StateDep, StoreDep
+from axor_backend.tenancy import current_org_id
 
 router = APIRouter(prefix="/v1/audit", tags=["audit"])
 
@@ -195,6 +197,125 @@ async def from_identity(body: dict, request: Request, store: StoreDep,
               if k in audit.IDENTITY_DETAIL and isinstance(v, str | int | bool | list)}
     await audit.record(store, request, action, str(body.get("target") or "")[:300],
                        who=str(body.get("who") or "the login service")[:300], **detail)
+
+
+# ── Enterprise: the compliance pack, and the hold that keeps it alive ───────
+
+@router.get("/holds")
+async def list_holds(request: Request, store: StoreDep, principal: PrincipalDep) -> dict:
+    """Legal holds: while one is open nothing on the trail is pruned, whatever
+    the workspace's retention says."""
+    permissions.require_admin(principal)
+    permissions.require_enterprise(request, "a legal hold on the audit trail")
+    return {"holds": await compliance.holds(store)}
+
+
+@router.post("/holds", status_code=201)
+async def place_hold(body: dict, request: Request, store: StoreDep,
+                     principal: PrincipalDep) -> dict:
+    """``{"reason": "…"}`` — a reason is required: a hold nobody can explain
+    later is a trail nobody can prune."""
+    permissions.require_admin(principal)
+    permissions.require_enterprise(request, "a legal hold on the audit trail")
+    reason = str(body.get("reason") or "").strip()
+    if len(reason) < 3:
+        raise HTTPException(400, "a hold needs a reason — what it is for, in a few words")
+    return await compliance.place(store, request, reason, audit.actor(request)["who"])
+
+
+@router.delete("/holds/{hold_id}")
+async def release_hold(hold_id: str, request: Request, store: StoreDep,
+                       principal: PrincipalDep) -> dict:
+    permissions.require_admin(principal)
+    permissions.require_enterprise(request, "a legal hold on the audit trail")
+    released = await compliance.release(store, request, hold_id, audit.actor(request)["who"])
+    if released is None:
+        raise HTTPException(404, "no open hold by that id")
+    return released
+
+
+@router.get("/compliance")
+async def compliance_pack(request: Request, state: StateDep, store: StoreDep,
+                          principal: PrincipalDep, format: str = "json",  # noqa: A002
+                          from_: str = Query("", alias="from"), to: str = "",
+                          sign: str = "") -> Response:
+    """A period of the whole governed surface as one document — who oversaw
+    which agent and why, every attestation, policy and access change, and what
+    each answers — with a digest over the body.
+
+    ``sign=<key id>`` signs the digest through the deployment's signing custody
+    (the caller must be an operator for that key), so the copy an auditor holds
+    can be checked against a key they were given.
+    """
+    permissions.require_admin(principal)
+    permissions.require_enterprise(request, "the compliance pack")
+    frm, until = _period(from_, to)
+    rows = [r for r in await _all(store, KINDS, frm, until, EXPORT_MAX) if r["ts"] < until]
+    attestations = await store.facts_between(frm, until, ATTESTATION_FACT_TYPE)
+    usage = await store.developer_usage(frm[:10], until[:10])
+    lic = _license_of(state)
+    body = compliance.build(
+        organization=current_org_id(), frm=frm[:10], to=until[:10],
+        generated_by=audit.actor(request)["who"],
+        tier=lic[0], licensed_to=lic[1],
+        rows=rows, attestations=attestations,
+        fleet=await store.node_kinds(),
+        developers=[d["developer"] for d in usage.get("developers", [])],
+        held=await compliance.holds(store),
+        truncated_at=EXPORT_MAX if len(rows) >= EXPORT_MAX else 0,
+        retention_days=keep if isinstance(keep := await store.get_setting(
+            audit.RETENTION_SETTING), int) else None,
+    )
+    if sign:
+        # Signing is the vault's custody, and it keeps its own wall: a
+        # compliance pack must not be a way around the signing token.
+        from axor_backend.routers.vault import vault_gate
+        from axor_backend.vault_signing import SigningCustody, SignRefused
+
+        vault_gate(request, "signing")
+        try:
+            signed = await SigningCustody(store).sign(
+                operator=audit.actor(request)["who"], key_id=sign,
+                payload=compliance.signable(body),
+                principal=str(getattr(principal, "key_id", "") or ""))
+        except SignRefused as exc:
+            raise HTTPException(403, exc.reason) from exc
+        body["integrity"] |= {"signature": signed["signature_hex"],
+                              "signed_by": signed["key_id"]}
+    name = f"axor-compliance-{frm[:10]}_{until[:10]}"
+    if format == "html":
+        return Response(compliance.as_html(body), media_type="text/html; charset=utf-8",
+                        headers={"Content-Disposition": f'inline; filename="{name}.html"'})
+    return Response(json.dumps(body, indent=2), media_type="application/json",
+                    headers={"Content-Disposition": f'attachment; filename="{name}.json"'})
+
+
+def _period(frm: str, to: str) -> tuple[str, str]:
+    """The range asked for, as timestamps. Defaults to the quarter just ended,
+    because that is the period a reviewer asks about."""
+    import re
+
+    today = datetime.now(UTC).date()
+    if not frm:
+        q = (today.month - 1) // 3
+        year, start_q = (today.year - 1, 4) if q == 0 else (today.year, q)
+        frm = f"{year}-{(start_q - 1) * 3 + 1:02d}-01"
+        to = to or f"{year + (start_q == 4):04d}-{(start_q * 3) % 12 + 1:02d}-01"
+    for value in (frm, to):
+        if value and not re.fullmatch(r"\d{4}-\d{2}-\d{2}", value):
+            raise HTTPException(400, "from and to are YYYY-MM-DD")
+    if not to:
+        to = today.isoformat()
+    if to <= frm:
+        raise HTTPException(400, "the period ends after it starts")
+    return frm, to
+
+
+def _license_of(state: Any) -> tuple[str, str]:  # noqa: ANN401 - app.state is dynamic
+    from axor_backend.licensing import active_license, stored_license
+
+    lic = active_license(state, current_org_id()) or stored_license(state, current_org_id())
+    return (lic.workspace_tier, lic.organization) if lic else ("community", "")
 
 
 @router.get("/export")

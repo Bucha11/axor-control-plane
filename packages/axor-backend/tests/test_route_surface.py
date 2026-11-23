@@ -191,6 +191,12 @@ EXPECTED: dict[tuple[str, str], str] = {
     ("GET", "/v1/audit/export"): "operate",
     # the login service's own token (svc_identity) — checked in the handler
     ("POST", "/v1/audit/identity"): "operate",
+    # Enterprise: the compliance pack and the legal hold that keeps its
+    # evidence alive (admin and plan checked in the handler)
+    ("GET", "/v1/audit/compliance"): "operate",
+    ("GET", "/v1/audit/holds"): "operate",
+    ("POST", "/v1/audit/holds"): "operate",
+    ("DELETE", "/v1/audit/holds/{hold_id}"): "operate",
     ("DELETE", "/v1/keys/{key_id}"): "admin",
     ("PUT", "/v1/keys/{key_id}"): "admin",   # a key's role, changed in place
     # a member's own ingest-only key (routers/keys: create_my_key)

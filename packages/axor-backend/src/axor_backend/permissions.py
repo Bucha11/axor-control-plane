@@ -106,3 +106,23 @@ def require_business(request: Any, what: str) -> None:  # noqa: ANN401
         raise HTTPException(402, {"error": "plan_required", "plan": "business",
                                   "detail": f"{what} is on the Business plan "
                                             f"($40 per developer) — see Pricing"})
+
+
+def on_enterprise(request: Any) -> bool:  # noqa: ANN401
+    """Whether this workspace's plan is the contracted top rung — what the
+    compliance pack and a legal hold are on."""
+    from axor_backend.licensing import active_license
+    from axor_backend.tenancy import current_org_id
+
+    lic = active_license(request.app.state, current_org_id())
+    return lic is not None and lic.tier_at_least("enterprise")
+
+
+def require_enterprise(request: Any, what: str) -> None:  # noqa: ANN401
+    from fastapi import HTTPException
+
+    if not on_enterprise(request):
+        raise HTTPException(402, {"error": "plan_required", "plan": "enterprise",
+                                  "detail": f"{what} is on the Enterprise plan — "
+                                            f"it is contracted, so it starts with a "
+                                            f"conversation; see Pricing"})
