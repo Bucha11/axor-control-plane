@@ -60,14 +60,20 @@ Two meters: production agents count as **governed nodes**, coding agents
 | **Community** | $0 | 1 developer, 1 node | — (a 2nd developer locks until paid) | all safety, local enforcement, one agent family |
 | **Coding** | $0 | — | $25 / developer, $75 / node past 1 | the team: seats, both agent families, trees, team policy, memory, skills, pairs; seat cap + bill forecast |
 | **Business** | $0 | — | $40 / developer, $75 / node past 1 | Coding + SSO (OIDC, SAML), SCIM, who may, full audit trail + export, retention, monthly report |
-| **Team** | $299 / mo | 10 nodes, 5 developers | $75 / node, $40 / developer | production runtime control, attestations, scheduled regression CI + history; includes Business |
-| **Security** | $1,500 / mo | 50 nodes, 25 developers | $50 / node, $40 / developer | Team + incident → regression, policy comparison |
+| **Team** | $299 / mo | 10 nodes | $75 / node, $40 / developer | the production side: runtime control, attestations, scheduled regression CI + history; includes Business |
+| **Security** | $1,500 / mo | 50 nodes | $50 / node, $40 / developer | Team + incident → regression, policy comparison |
 | **Enterprise** | contracted (from ~$30k / yr) | negotiated | negotiated | Security + SLA and support, private benchmark registry (the air-gapped bundle ships on every rung) |
 
-Why Team and Security seats cost $40, not $25: a seat beyond their allowance
-is a Business seat, so Team is never the cheaper way to buy what Business
-sells. Past about four production nodes, Team's base beats Coding's per-node
-price, and the calculator says so.
+**No paid rung includes seats.** Seats are one product (developers running
+coding agents) and governed nodes are another (production agents); a rung says
+how many nodes it covers and at what price, and a developer is a Business seat
+at $40 on top. Team therefore costs exactly its base above Business, whatever
+the team's size — it is the production side and nothing else.
+
+Team used to include five seats, which made it $99 dearer than Business for
+any team of five or more while being strictly better: nobody would ever have
+bought Business. Past about four production nodes, Team's base beats Coding's
+per-node price, and the calculator says so.
 
 ### The original sketch (v0.1)
 

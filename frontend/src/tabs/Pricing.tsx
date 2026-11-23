@@ -158,7 +158,7 @@ const TIERS: Tier[] = [
   {
     name: "Team Workspace",
     price: "$299 / mo",
-    priceNote: "card · hosted or self-hosted · 10 governed nodes included",
+    priceNote: "card · hosted or self-hosted · the production side · 10 governed nodes",
     module: "Private Lab + Control Plane",
     who: "small teams · hosted private collaboration · production enforcement",
     features: [
@@ -176,9 +176,7 @@ const TIERS: Tier[] = [
       { text: "limited retention", roadmap: true },
       { text: "includes 10,000 hosted trials", roadmap: true },
       { text: "+$75 / governed node / mo beyond 10" },
-      { text: "5 developer seats included — everything in Coding" },
-      { text: "everything in Business: single sign-on (OIDC, SAML), SCIM, the audit trail, who may" },
-      { text: "+$40 / developer / mo beyond 5 (a Business seat)" },
+      { text: "developers who run coding agents are Business seats on top, $40 each — everything in Business: single sign-on (OIDC, SAML), SCIM, the whole audit trail, who may" },
     ],
     kind: "paid",
     note: "paid — the self-serve first step, workspace and runtime together",
@@ -188,7 +186,7 @@ const TIERS: Tier[] = [
   {
     name: "Security Workspace",
     price: "$1,500 / mo",
-    priceNote: "card · the security unit · 50 governed nodes included",
+    priceNote: "card · the security unit · 50 governed nodes",
     module: "Private Lab + Control Plane",
     who: "security teams · incident-to-regression workflow at fleet scale",
     features: [
@@ -203,8 +201,7 @@ const TIERS: Tier[] = [
       { text: "longer history + integration hooks", roadmap: true },
       { text: "includes 50,000 hosted trials", roadmap: true },
       { text: "+$50 / governed node / mo beyond 50" },
-      { text: "25 developer seats included — everything in Coding" },
-      { text: "+$40 / developer / mo beyond 25 (a Business seat)" },
+      { text: "developers who run coding agents are Business seats on top, $40 each" },
     ],
     kind: "paid",
     note: "paid — the primary commercial unit",

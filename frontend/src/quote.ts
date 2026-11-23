@@ -19,8 +19,8 @@ export const CARD: Record<Rung, Card> = {
   community: { base: 0, nodes: 1, perNode: 0, seats: 1, perSeat: 0 },
   coding: { base: 0, nodes: 1, perNode: 75, seats: 0, perSeat: 25 },
   business: { base: 0, nodes: 1, perNode: 75, seats: 0, perSeat: 40 },
-  team: { base: 299, nodes: 10, perNode: 75, seats: 5, perSeat: 40 },
-  security: { base: 1500, nodes: 50, perNode: 50, seats: 25, perSeat: 40 },
+  team: { base: 299, nodes: 10, perNode: 75, seats: 0, perSeat: 40 },
+  security: { base: 1500, nodes: 50, perNode: 50, seats: 0, perSeat: 40 },
 };
 
 export const RUNG_NAME: Record<Rung, string> = {
@@ -32,7 +32,7 @@ export const RUNG_NAME: Record<Rung, string> = {
 // pay more than the cheapest when it is not the cheapest.
 export const ADDS: Partial<Record<Rung, string>> = {
   business: "single sign-on, the whole audit trail and its export, who may, SCIM",
-  team: "regression CI on a schedule with its history, scheduled chaos tests, alert routing by channel",
+  team: "the production side: runtime control, attestations, regression CI on a schedule with its history, alert routing by channel",
   security: "incident → regression conversion, policy / kernel comparison",
 };
 
@@ -55,7 +55,7 @@ export function quote(rung: Rung, developers: number, nodes: number): Quote {
   const extraNodes = Math.max(0, n - c.nodes);
   const extraSeats = Math.max(0, d - c.seats);
   const lines: { text: string; amount: number }[] = [];
-  if (c.base) lines.push({ text: `${RUNG_NAME[rung]} — ${c.nodes} agents and ${c.seats} developers included`, amount: c.base });
+  if (c.base) lines.push({ text: `${RUNG_NAME[rung]} — ${c.nodes} production agents included`, amount: c.base });
   if (extraSeats && c.perSeat) {
     lines.push({ text: `${extraSeats} developer${extraSeats === 1 ? "" : "s"} × $${c.perSeat}`, amount: extraSeats * c.perSeat });
   }

@@ -18,8 +18,9 @@ test("both ways in: the calculator names the cheapest plan and what the next one
   await expect(calc.getByTestId("calc-next")).toContainText("Business is $300 more ($800) and adds single sign-on");
   // ten production agents: Team is cheaper now
   await set(20, 10);
-  await expect(calc.getByTestId("calc-best")).toContainText("Team Workspace — $899 / month");
-  await expect(calc.getByTestId("calc-lines")).toContainText("15 developers × $40");
+  await expect(calc.getByTestId("calc-best")).toContainText("Team Workspace — $1,099 / month");
+  await expect(calc.getByTestId("calc-lines")).toContainText("20 developers × $40");
+  await expect(calc.getByTestId("calc-lines")).toContainText("10 production agents included");
   await expect(calc.getByTestId("calc-all")).toContainText("Coding: $1,175");
   // one developer, one agent: free
   await set(1, 1);

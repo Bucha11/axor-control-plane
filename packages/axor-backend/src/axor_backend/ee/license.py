@@ -55,11 +55,17 @@ TIER_NODE_CEILING: dict[str, int] = {"community": 1, "coding": 1, "business": 1,
                                      "security": 50}
 
 # Developer seats each rung includes — the coding-agent meter (a developer is
-# someone whose coding agents reported in the month). Community covers one
-# developer free; the coding plan is all seats; the production rungs include
-# seats so one plan covers both journeys.
-TIER_DEVELOPER_SEATS: dict[str, int] = {"community": 1, "coding": 0, "business": 0, "team": 5,
-                                        "security": 25}
+# someone whose coding agents reported in the month). Only the free rung
+# includes one.
+#
+# No paid rung includes seats, the production ones included. Seats are one
+# product and governed nodes are another: a rung says how many nodes it covers
+# and at what price, and whoever runs coding agents is a seat on top at the
+# same Business price. Team used to include five, which made it $99 dearer
+# than Business for any team of five and strictly better — so nobody would
+# ever have bought Business.
+TIER_DEVELOPER_SEATS: dict[str, int] = {"community": 1, "coding": 0, "business": 0, "team": 0,
+                                        "security": 0}
 
 # What the free rung LOCKS on the plane, beyond which a coding session is kept
 # but not shown or operated until the workspace pays: one developer and one

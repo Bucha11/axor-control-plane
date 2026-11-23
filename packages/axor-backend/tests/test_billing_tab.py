@@ -38,7 +38,7 @@ async def test_free_plan_shows_what_this_month_would_cost(open_client: httpx.Asy
     coding = next(e for e in body["if_paid"] if e["tier"] == "coding")
     assert coding["active_developers"] == 3 and coding["total"] == "$75.00"
     team = next(e for e in body["if_paid"] if e["tier"] == "team")
-    assert team["total"] == "$299.00"       # five developers included
+    assert team["total"] == "$419.00"       # its base, and three Business seats
 
 
 async def test_licensed_shows_this_month_and_the_closed_ones(
@@ -103,9 +103,13 @@ def test_the_rate_card_gives_the_pricing_calculators_numbers() -> None:
     def rungs(devs: int, nodes: int) -> tuple[int, int, int]:
         return tuple(total(t, devs, nodes) for t in ("coding", "business", "team"))  # type: ignore[return-value]
 
-    assert rungs(20, 1) == (500, 800, 899)
-    assert rungs(20, 4) == (725, 1025, 899)
-    assert (total("coding", 20, 10), total("team", 20, 10)) == (1175, 899)
+    assert rungs(20, 1) == (500, 800, 1099)
+    assert rungs(20, 4) == (725, 1025, 1099)
+    assert (total("coding", 20, 10), total("team", 20, 10)) == (1175, 1099)
     assert (total("coding", 0, 12), total("team", 0, 12)) == (825, 449)
-    # Business is never dearer than Team for what both sell (coding seats)
-    assert all(total("business", d, 1) <= total("team", d, 1) for d in range(0, 200))
+    # Seats cost the same on every rung that sells them, so Team is the
+    # production side and nothing else: its base above Business, whatever the
+    # team's size. (It was five included seats, which made Team $99 dearer than
+    # Business and strictly better — nobody would have bought Business.)
+    assert all(total("team", d, 1) - total("business", d, 1) == 299 for d in range(0, 200))
+    assert all(total("security", d, 1) - total("business", d, 1) == 1500 for d in range(0, 200))
