@@ -1,6 +1,6 @@
 [project]
 name = "axor-backend"
-version = "0.4.1"
+version = "0.5.0"
 description = "FastAPI backend: trace ingest, control plane (SSE+POST), replay and provenance API."
 requires-python = ">=3.12"
 readme = "README.md"
@@ -84,7 +84,7 @@ dependencies = [
 # test_signed_snapshot.py SKIP (they probe the signature and refuse to pass
 # against an adapter that ignores the field), so the floor is what makes this
 # plane's half verifiable end to end rather than only on this side of the wire.
-wrap = ["axor-wrap>=0.3,<0.4"]
+wrap = ["axor-wrap>=0.4,<0.5"]
 # Accepting axor-identity login tokens. Absent, identity login is simply off
 # (operator master token + scoped API keys still work); the routes never 501
 # — resolve_principal only reaches the verifier when a JWKS is configured.

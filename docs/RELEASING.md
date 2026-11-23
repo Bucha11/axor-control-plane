@@ -19,9 +19,13 @@ works on a clean machine.**
   anywhere: not in CI, not in the Dockerfile, not in `.env.example`. Verified
   in the clean-room check below and enforced by
   `test_quickstart_is_credential_free.py`.
-- Versions are in lockstep: `packages/axor-proxy/pyproject.toml`,
-  `packages/axor-backend/pyproject.toml`, and the root are all `0.1.0`. The tag
-  you push must match (`v0.1.0`).
+- Versions are in lockstep: `packages/axor-proxy`, `packages/axor-backend`,
+  `packages/axor-identity` and the root all carry the same version, and the tag
+  you push must match it. The workflow checks the tag against `axor-proxy` and
+  `axor-backend` and fails the release rather than publishing nothing; it does
+  not check the other two, so keeping them in step is on you. (The root is a
+  uv workspace container and is never published; `axor-identity` ships inside
+  the `axor-platform` image, not to PyPI — see "What is published" below.)
 
 ## One-time setup
 
@@ -60,11 +64,55 @@ two pending configs are distinct and neither collides.
 
 Do the same on **test.pypi.org** first if you want a dry run (see below).
 
+## What is published
+
+| | Where | Checked against the tag |
+|---|---|---|
+| `axor-proxy` | PyPI | yes |
+| `axor-backend` | PyPI | yes |
+| `axor-identity` | the `axor-platform` image only | no — keep its version in step by hand |
+| `axor-platform`, `axor-frontend` | GHCR (`:X.Y.Z`, `:latest`; `:edge` on every push to main) | — |
+
+Whether `axor-identity` should also go to PyPI is open. It has no CLI anyone
+installs on their own; a self-hosted install gets it from the image, and the
+offline bundle carries the same image. Adding it is one matrix leg plus a
+PyPI environment — do it when somebody needs to `pip install` it, not before.
+
+## The order across repositories
+
+The packages depend on each other by version range, so a wave is released
+bottom-up. Each step is: merge its release PR, push the tag, wait for PyPI,
+then start the next.
+
+```
+1. axor-core        everything compiles against the kernel
+2. axor-eval · axor-probe · axor-sentinel      (independent of each other)
+3. axor-wrap        needs core; the plane and Lab need it
+4. axor-control-plane    needs core, eval, probe, sentinel, wrap
+5. axor-lab         needs all of the above, and pins the kernel line
+```
+
+Two traps this order exists to avoid:
+
+- **A widened pin released before what it points at.** The plane pins
+  `axor-wrap[plane]>=0.4,<0.5`; tagging the plane before wrap 0.4.0 is on PyPI
+  gives a release nobody can install.
+- **A frozen fixture that outlives its kernel.** Lab's replay fixtures record
+  the kernel build they were taken under, and the plane refuses to claim a
+  reproduction under a different build — which is the point, and also why
+  `packages/axor-backend/tests/test_lab_import_frozen.py` fails whenever core
+  moves ahead of the recording. Re-record it in the Lab step of the wave, or
+  the test stays deselected and stops being a check.
+
+A release that touches only one repository skips the rest: check what its
+dependents pin before deciding it is alone.
+
 ## Cut a release
 
 ```bash
-# 1. Bump the version in all three pyprojects if this isn't 0.1.0.
-#    (root, packages/axor-proxy, packages/axor-backend — keep them equal.)
+# 1. Bump the version in all four pyprojects (root, axor-proxy, axor-backend,
+#    axor-identity — keep them equal) and write the CHANGELOG entry. Both go
+#    through a `release/X.Y.Z` branch and its PR, like the sibling repos.
 
 # 2. Make sure main is green and the lockfile is current.
 uv sync --all-packages
