@@ -11,11 +11,11 @@ From a clone of this repository:
 
 ```sh
 cd deploy/offline
-./bundle.sh 0.4.0                 # a release tag
-./bundle.sh 0.4.0 --with-lab      # with Axor Lab (a bigger archive)
+./bundle.sh 0.5.0                 # a release tag
+./bundle.sh 0.5.0 --with-lab      # with Axor Lab (a bigger archive)
 ```
 
-It writes `axor-offline-0.4.0.tar.gz`: the images as one `docker save` stream,
+It writes `axor-offline-0.5.0.tar.gz`: the images as one `docker save` stream,
 the stack, `install.sh`, `MANIFEST.txt` with every image digest, and
 `SHA256SUMS`. It holds no secrets, so it travels as an ordinary file. Check
 `MANIFEST.txt` against the release notes before you carry it in.
@@ -26,8 +26,8 @@ The host needs docker with the compose v2 plugin — from your own mirror or the
 distribution's packages. The bundle does not carry the engine.
 
 ```sh
-tar xzf axor-offline-0.4.0.tar.gz
-cd axor-offline-0.4.0
+tar xzf axor-offline-0.5.0.tar.gz
+cd axor-offline-0.5.0
 sha256sum -c SHA256SUMS
 ./install.sh axor.internal --cert /etc/ssl/axor.crt --key /etc/ssl/axor.key
 ```
@@ -98,8 +98,8 @@ Build the next bundle where there is a network, carry it in, and run its
 installer in the same directory tree:
 
 ```sh
-tar xzf axor-offline-0.5.0.tar.gz
-cd axor-offline-0.5.0
+tar xzf axor-offline-0.6.0.tar.gz
+cd axor-offline-0.6.0
 sha256sum -c SHA256SUMS
 ./install.sh axor.internal          # keeps the existing .env and data
 ```

@@ -1,0 +1,101 @@
+# Changelog
+
+The Control Plane ships as three packages from one tag (`axor-backend`,
+`axor-proxy`, `axor-identity` — all carrying the tag's version) and as two
+images (`axor-platform`, `axor-frontend`). Self-hosted operators upgrade by
+tag; `deploy/offline` carries the same release to a machine with no network.
+
+## 0.5.0 — 2026-11-23
+
+The paid ladder becomes real: a workspace can be signed into by a company's
+identity provider, say who may do what, and hand a reviewer one document for a
+period. Nothing here touches enforcement — every gate, taint decision and
+fail-closed default is where it was.
+
+### Added — the Business plan
+
+- **Single sign-on per workspace**, over OpenID Connect or SAML 2.0. A
+  workspace claims only e-mail domains proved by an owner's or admin's own
+  verified address; public mailbox domains are refused. Enforcing it takes
+  passwords and GitHub/Google away from those domains while the owner keeps a
+  password, so a misconfigured provider never locks the workspace out. SAML
+  carries signed AuthnRequests, assertions encrypted to the workspace's own
+  key (RSA-OAEP only), sign-in started from the provider's dashboard, and two
+  certificates while one rotates.
+- **SCIM 2.0 provisioning.** The provider creates people, deactivates them,
+  renames them and changes their address; its groups map to roles. A person it
+  deactivates loses their membership, their sessions in that workspace, and the
+  keys their machines report with.
+- **Who may** — stop a teammate's session, pull the team's brake, grant
+  exceptions, change skills or memory, operate production: granted to members
+  as a whole or to named people.
+- **The whole audit trail**, with CSV and JSON-lines export, the workspace's
+  own retention, and a monthly report of who acted on whose agent. Acts on
+  people and sign-in reach it from the login service, which posts them with a
+  short-lived token only it can sign.
+- **Session limits** — how long a sign-in lasts, counted from the sign-in
+  across refreshes, and signing everyone else out at once (that one on every
+  plan).
+
+### Added — the Enterprise plan
+
+- **The compliance pack**: any period of the whole governed surface as one
+  document — what was governed, every intervention with who and why, the
+  attestations, policy and access changes, credentials — each section naming
+  its source, with a table of what each answers and a sha256 over the body.
+  Readable as a self-contained page or saved as JSON, and signable through the
+  vault's own signing custody.
+- **Legal hold**: while one is on, nothing on the audit trail is pruned,
+  whatever retention says. Placing and lifting one are on the trail.
+
+### Added — coding agents
+
+- **Agent trees by stage**, with a Claude Code subagent shown under its session
+  and an activity feed of one line per call.
+- **Session controls**: pause or stop a tree as a whole, say something to your
+  own agent, pull the team's brake. Held calls are counted as control, not as
+  refusals.
+- **Pair sessions by invitation** — a teammate does not operate someone else's
+  session uninvited.
+- **Developer seats**: a limit an admin sets, this month's bill as it stands,
+  and what each plan would cost from the workspace's own usage.
+- **Policy exceptions and trusted sources**, and incident triage.
+
+### Added — deployment
+
+- **`deploy/offline`**: one archive — images, stack, installer, a manifest of
+  every image digest and checksums — that installs on a machine with no route
+  out. TLS there is your own certificate or Caddy's local CA; ACME is off. A
+  compose override pins every image to what was loaded.
+- The login service's settings reach the self-hosted and production compose
+  files: its public address, the vendor key, the plane's address for SCIM key
+  revocation, GitHub/Google and mail.
+
+### Changed
+
+- **No paid rung includes developer seats.** Seats are one product and
+  governed nodes another: a rung says how many production agents it covers and
+  at what price, and a developer who runs coding agents is a Business seat on
+  top. Team used to include five, which made it Business plus $99 and strictly
+  better.
+- A member steers agents with their own key; a removed teammate loses theirs.
+- Onboarding connects a machine with one command instead of shell exports.
+- Examples step aside for good once the workspace's own agents report.
+
+### Fixed
+
+- A plain `docker compose up` no longer stops on Axor Lab's control token:
+  compose reads the variables of services behind an inactive profile too, so
+  both installers now always generate it.
+- A session's title and profile, sent at once, both land.
+- A pair opened on someone else's session before invitations let nobody in.
+- Only what a guest did moves into the account that claims it.
+
+### Requires
+
+- axor-core 0.13.1, axor-eval 0.3.1, axor-wrap 0.4.0 (the pin moves to
+  `>=0.4,<0.5`), axor-sentinel 0.4.3, axor-probe 0.2.1.
+
+## 0.4.0 and earlier
+
+Before this file. See the git history and the GitHub releases.
