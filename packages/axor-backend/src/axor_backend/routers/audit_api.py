@@ -8,9 +8,10 @@ from __future__ import annotations
 import csv
 import io
 import json
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import Response
 
 from axor_backend import audit, permissions
@@ -20,6 +21,7 @@ router = APIRouter(prefix="/v1/audit", tags=["audit"])
 
 KINDS = (audit.KIND, audit.KEY_KIND)
 PAGE = 500
+VIEW_DAYS = 30
 EXPORT_MAX = 100_000
 
 
@@ -58,12 +60,11 @@ async def _all(store: Any, kinds: tuple[str, ...], since: str, until: str,  # no
                 break
             for e in page:
                 ts = str(e.get("ts", ""))
-                if until and ts > until:
+                if (until and ts > until) or (since and ts < since):
                     continue
-                if since and ts < since:
-                    break
                 out.append(_row(kind, e))
-            if since and str(page[-1].get("ts", "")) < since:
+            # pages come newest id first: a page wholly before the range ends it
+            if since and all(str(e.get("ts", "")) < since for e in page):
                 break
             before = page[-1]["audit_id"]
     out.sort(key=lambda r: r["ts"], reverse=True)
@@ -84,26 +85,33 @@ def _kinds(raw: str) -> tuple[str, ...]:
 
 
 @router.get("")
-async def read_audit(store: StoreDep, principal: PrincipalDep, limit: int = 100,
+async def read_audit(request: Request, store: StoreDep, principal: PrincipalDep, limit: int = 100,
                      action: str = "", who: str = "", target: str = "",
                      since: str = "", until: str = "", kinds: str = "") -> dict:
     """The trail, newest first: ``action`` exact, ``who`` and ``target`` as a
     part of the name, ``since`` / ``until`` as ISO dates or instants."""
     permissions.require_admin(principal)
     limit = max(1, min(int(limit), 1000))
+    # below Business the trail is read for the last 30 days; all of it, and
+    # its export, is the Business plan's
+    window = None if permissions.on_business(request) else VIEW_DAYS
+    if window:
+        floor = (datetime.now(UTC) - timedelta(days=window)).isoformat()
+        since = max(since, floor) if since else floor
     rows = [r for r in await _all(store, _kinds(kinds), since, until, EXPORT_MAX)
             if _matches(r, action, who, target)]
     return {"items": rows[:limit], "total": len(rows),
-            "actions": sorted({r["action"] for r in rows})}
+            "actions": sorted({r["action"] for r in rows}), "window_days": window}
 
 
 @router.get("/export")
-async def export_audit(store: StoreDep, principal: PrincipalDep,
+async def export_audit(request: Request, store: StoreDep, principal: PrincipalDep,
                        format: str = "csv", since: str = "",  # noqa: A002
                        until: str = "", kinds: str = "") -> Response:
     """The whole trail in a range, as a file: CSV for a spreadsheet, JSON lines
     for an archive or a SIEM."""
     permissions.require_admin(principal)
+    permissions.require_business(request, "exporting the audit trail")
     if format not in ("csv", "jsonl"):
         raise HTTPException(400, "format is csv or jsonl")
     rows = await _all(store, _kinds(kinds), since, until, EXPORT_MAX)

@@ -118,6 +118,12 @@ export default function AuditTrail() {
         </button>
       </div>
       {exportError && <div style={{ color: C.red, fontSize: 11 }}>{exportError}</div>}
+      {q.data?.window_days && (
+        <div data-testid="audit-window" style={{ color: C.dim, fontSize: 10.5, marginBottom: 6 }}>
+          the last {q.data.window_days} days — the whole trail and its export are on the{" "}
+          <a href="#/pricing?for=coding" style={{ color: C.steel }}>Business plan</a>
+        </div>
+      )}
       <div style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 8 }}>
         {(q.data?.items ?? []).length === 0 && (
           <div className="p-3" style={{ color: C.dim }}>

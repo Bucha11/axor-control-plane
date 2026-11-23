@@ -12,6 +12,7 @@ import httpx
 import jwt
 import pytest
 from axor_backend.app import create_app
+from axor_backend.ee.license import License
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
@@ -39,6 +40,9 @@ async def c(tmp_path: pathlib.Path, priv: Ed25519PrivateKey) -> AsyncIterator[ht
                      identity_jwks=_jwks(priv))
     async with app.router.lifespan_context(app), httpx.AsyncClient(
             transport=httpx.ASGITransport(app=app), base_url="http://cp.test") as client:
+        # who-may is the Business plan's
+        app.state.licenses[ORG] = License(ORG, "business", 1, "2999-01-01")
+        client.app = app  # type: ignore[attr-defined]
         yield client
 
 
@@ -128,3 +132,13 @@ async def test_bad_permissions_are_refused(c: httpx.AsyncClient, who) -> None:  
     for body in ({}, {"fly": {"members": True}}, {"brake": {"members": "yes"}},
                  {"brake": {"people": ["not-an-email"]}}):
         assert (await c.put("/v1/permissions", json=body, headers=olga)).status_code == 400
+
+
+async def test_below_business_the_defaults_hold_and_cannot_be_changed(
+        c: httpx.AsyncClient, who) -> None:  # noqa: ANN001
+    del c.app.state.licenses[ORG]  # type: ignore[attr-defined]
+    olga = who("olga@team.dev", "admin")
+    r = await c.put("/v1/permissions", headers=olga, json={"brake": {"members": True}})
+    assert r.status_code == 402 and r.json()["detail"]["plan"] == "business"
+    got = (await c.get("/v1/permissions", headers=olga)).json()
+    assert got["editable"] is False and got["capabilities"]["skills"]["members"] is True

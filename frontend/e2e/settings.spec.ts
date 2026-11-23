@@ -247,7 +247,7 @@ test.describe("developer seats on a paid plan", () => {
   });
 });
 
-test("the audit trail: who did what to which agent, and the export of it", async ({ page, request }) => {
+test("the audit trail: who did what to which agent; its export is the Business plan's", async ({ page, request }) => {
   const node = uniqueNode("audited");
   await seedNode(request, node);
   await request.post(`${BACKEND}/v1/plane/${node}/command`, { data: { version: 1, state: { paused: true } } });
@@ -263,9 +263,8 @@ test("the audit trail: who did what to which agent, and the export of it", async
   await expect(rows.nth(0)).toContainText(node);
   await expect(rows.nth(0)).toContainText("25 calls");
   await expect(rows.nth(1)).toContainText("paused");
-  const [dl] = await Promise.all([page.waitForEvent("download"), trail.getByTestId("audit-export-csv").click()]);
-  expect(dl.suggestedFilename()).toBe("axor-audit.csv");
-  const csv = await (await import("node:fs/promises")).readFile(await dl.path(), "utf8");
-  expect(csv.split(/\r?\n/)[0]).toBe("ts,who,role,action,target,detail,kind,id");
-  expect(csv).toContain(`,pause,${node},`);
+  // without a Business license: the last 30 days, and no export
+  await expect(trail.getByTestId("audit-window")).toContainText("the last 30 days");
+  await trail.getByTestId("audit-export-csv").click();
+  await expect(trail).toContainText("exporting the audit trail is on the Business plan");
 });

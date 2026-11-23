@@ -12,6 +12,8 @@ from collections.abc import AsyncIterator
 import httpx
 import pytest
 from axor_backend.app import create_app
+from axor_backend.ee.license import License
+from axor_backend.tenancy import PUBLIC_ORG
 
 
 @pytest.fixture
@@ -21,6 +23,9 @@ async def client(tmp_path: pathlib.Path) -> AsyncIterator[httpx.AsyncClient]:
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app),
                                  base_url="http://cp.test") as c, \
             app.router.lifespan_context(app):
+        # the whole trail and its export are the Business plan's
+        app.state.licenses[PUBLIC_ORG] = License(PUBLIC_ORG, "business", 1, "2999-01-01")
+        c.app = app  # type: ignore[attr-defined]
         yield c
 
 
@@ -106,3 +111,17 @@ async def test_key_acts_are_on_the_same_trail(client: httpx.AsyncClient) -> None
     assert items[0]["detail"]["scopes"] == ["ingest"]
     # and without them, when asked for controls only
     assert (await client.get("/v1/audit", params={"kinds": "control"})).json()["total"] == 0
+
+
+async def test_below_business_the_trail_is_the_last_30_days_and_not_exported(
+        client: httpx.AsyncClient) -> None:
+    del client.app.state.licenses[PUBLIC_ORG]  # type: ignore[attr-defined]
+    await client.put("/v1/coding/brake", json={"on": True})
+    old = {"ts": "2020-01-01T00:00:00+00:00", "action": "pause", "target": "x",
+           "by": {"kind": "open", "who": "operator"}}
+    await client.app.state.store.add_vault_audit("control", old, old["ts"])  # type: ignore[attr-defined]
+    body = (await client.get("/v1/audit")).json()
+    assert body["window_days"] == 30
+    assert [r["action"] for r in body["items"]] == ["brake_on"]
+    r = await client.get("/v1/audit/export")
+    assert r.status_code == 402 and r.json()["detail"]["plan"] == "business"

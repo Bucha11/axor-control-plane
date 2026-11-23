@@ -13,15 +13,17 @@ router = APIRouter(prefix="/v1/permissions", tags=["permissions"])
 MAX_PEOPLE = 200
 
 
-def _view(grants: dict, principal: object) -> dict:
+def _view(grants: dict, principal: object, request: Request) -> dict:
     return {"capabilities": {cap: {"what": what, **grants[cap]}
                              for cap, (what, _) in permissions.CAPABILITIES.items()},
-            "you": permissions.mine(grants, principal)}
+            "you": permissions.mine(grants, principal),
+            # changing them is the Business plan's; they hold as set on any plan
+            "editable": permissions.on_business(request)}
 
 
 @router.get("")
-async def get_permissions(store: StoreDep, principal: PrincipalDep) -> dict:
-    return _view(await permissions.held(store), principal)
+async def get_permissions(request: Request, store: StoreDep, principal: PrincipalDep) -> dict:
+    return _view(await permissions.held(store), principal, request)
 
 
 @router.put("")
@@ -30,6 +32,8 @@ async def set_permissions(body: dict, request: Request, store: StoreDep,
     """``{capability: {"members": bool, "people": [emails]}}`` — the ones named
     change, the rest stay as they were. An owner or admin."""
     permissions.require_admin(principal)
+    permissions.require_business(request, "who may — letting members or named people act "
+                                          "on the team's agents")
     if not isinstance(body, dict) or not body:
         raise HTTPException(400, "name a capability: {capability: {members, people}}")
     held = await permissions.held(store)
@@ -59,4 +63,4 @@ async def set_permissions(body: dict, request: Request, store: StoreDep,
             await audit.record(store, request, "permission_granted", cap, to=p)
         for p in sorted(set(was["people"]) - set(now["people"])):
             await audit.record(store, request, "permission_withdrawn", cap, to=p)
-    return _view(after, principal)
+    return _view(after, principal, request)

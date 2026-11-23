@@ -87,3 +87,22 @@ def require_admin(principal: Any) -> None:  # noqa: ANN401
         raise HTTPException(403, "an owner or admin of the workspace decides this")
     if principal is not None and "admin" not in getattr(principal, "scopes", frozenset()):
         raise HTTPException(403, "this takes the admin scope")
+
+
+def on_business(request: Any) -> bool:  # noqa: ANN401
+    """Whether this workspace's plan is Business or above — single sign-on's,
+    the audit trail's export and who-may's rung (team and up include it)."""
+    from axor_backend.licensing import active_license
+    from axor_backend.tenancy import current_org_id
+
+    lic = active_license(request.app.state, current_org_id())
+    return lic is not None and lic.tier_at_least("business")
+
+
+def require_business(request: Any, what: str) -> None:  # noqa: ANN401
+    from fastapi import HTTPException
+
+    if not on_business(request):
+        raise HTTPException(402, {"error": "plan_required", "plan": "business",
+                                  "detail": f"{what} is on the Business plan "
+                                            f"($40 per developer) — see Pricing"})

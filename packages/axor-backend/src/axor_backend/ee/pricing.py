@@ -46,13 +46,17 @@ from datetime import UTC, date, datetime
 RATE_CARD: dict[str, tuple[int, int]] = {
     "community": (0, 0),
     "coding": (0, 75_00),
+    "business": (0, 75_00),
     "team": (299_00, 75_00),
     "security": (1_500_00, 50_00),
 }
 # per developer seat beyond the rung's included seats, in cents. Community has
 # none to sell: one developer is free, and a second is the coding plan.
-SEAT_PRICE: dict[str, int] = {"community": 0, "coding": 25_00, "team": 25_00,
-                              "security": 25_00}
+# Team and Security include Business (single sign-on, the audit trail's export,
+# who-may): a seat past theirs is a Business seat, so Team is never the cheaper
+# way to buy what Business sells.
+SEAT_PRICE: dict[str, int] = {"community": 0, "coding": 25_00, "business": 40_00,
+                              "team": 40_00, "security": 40_00}
 CURRENCY = "USD"
 
 

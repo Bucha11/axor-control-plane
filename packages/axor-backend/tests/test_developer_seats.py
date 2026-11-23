@@ -74,8 +74,9 @@ def test_seats_are_billed_past_the_rung_s_allowance() -> None:
     on = date(2026, 12, 15)
     team = statement("2026-10", "org", "team", 10, 4, "2026-10-03", on=on,
                      included_developers=TIER_DEVELOPER_SEATS["team"], active_developers=8)
-    assert team.billable_developers == 3 and team.seat_cents == 75_00
-    assert team.total_cents == 299_00 + 75_00
+    # a seat past Team's is a Business seat (Team includes Business)
+    assert team.billable_developers == 3 and team.seat_cents == 120_00
+    assert team.total_cents == 299_00 + 120_00
     coding = statement("2026-10", "org", "coding", 1, 1, None, on=on,
                        included_developers=TIER_DEVELOPER_SEATS["coding"], active_developers=4)
     assert coding.total_cents == 100_00 and coding.base_cents == 0

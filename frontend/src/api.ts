@@ -587,6 +587,7 @@ export interface BillingStatement {
 /** A workspace's single sign-on, as its admin sees it (never the secret). */
 export interface SSOConfig {
   configured: boolean; available: boolean; callback_url: string; provable_domains: string[];
+  plan_ok?: boolean;
   issuer?: string; client_id?: string; has_secret?: boolean; domains?: string[];
   enforce?: boolean; default_role?: string; updated_by?: string; updated_ts?: string;
 }
@@ -595,6 +596,7 @@ export type Capability = "stop_others" | "brake" | "exceptions" | "skills" | "me
 export interface Permissions {
   capabilities: Record<Capability, { what: string; members: boolean; people: string[] }>;
   you: Record<Capability, boolean>;
+  editable?: boolean;      // changing them is the Business plan's
 }
 /** One act on the workspace's audit trail. */
 export interface AuditItem {
@@ -1163,6 +1165,13 @@ export const api = {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ return_to: returnTo }),
     }).then((r) => j<{ sent_to: string }>(r)),
+  // the workspace's plan for the identity service (single sign-on): the
+  // license the plane activated, checked there against the same vendor key
+  identityLicense: (orgId: string, licenseJson: string) =>
+    af(`${IDENTITY_BASE}/v1/orgs/${encodeURIComponent(orgId)}/license`, {
+      method: "PUT", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ license_json: licenseJson }),
+    }).then((r) => j<{ tier: string; expires_at: string }>(r)),
   // a workspace's single sign-on (an owner or admin)
   sso: (orgId: string) =>
     af(`${IDENTITY_BASE}/v1/orgs/${encodeURIComponent(orgId)}/sso`).then((r) => j<SSOConfig>(r)),
@@ -1795,7 +1804,7 @@ export const api = {
   audit: (q: { action?: string; who?: string; target?: string; since?: string; limit?: number } = {}) => {
     const p = new URLSearchParams();
     for (const [k, v] of Object.entries(q)) if (v !== undefined && v !== "") p.set(k, String(v));
-    return af(`/v1/audit?${p}`).then((r) => j<{ items: AuditItem[]; total: number; actions: string[] }>(r));
+    return af(`/v1/audit?${p}`).then((r) => j<{ items: AuditItem[]; total: number; actions: string[]; window_days?: number | null }>(r));
   },
   // the whole trail as a file — fetched with the session's token, saved by the page
   auditExport: async (format: "csv" | "jsonl", since?: string): Promise<{ blob: Blob; name: string }> => {

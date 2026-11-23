@@ -36,6 +36,9 @@ orgs = Table(
     # it so downstream services gate features without a second lookup.
     Column("tier", String(32), nullable=False, default="community"),
     Column("created_ts", String(40), nullable=False),
+    # the date the license that set `tier` runs to (licensing.py); past it the
+    # workspace is on the free plan again
+    Column("tier_expires", String(40), nullable=True),
 )
 
 users = Table(
@@ -194,12 +197,13 @@ class Store:
         if row is None:
             return None
         return {"org_id": row.org_id, "name": row.name, "tier": row.tier,
-                "created_ts": row.created_ts}
+                "created_ts": row.created_ts, "tier_expires": row.tier_expires}
 
-    async def set_org_tier(self, org_id: str, tier: str) -> bool:
+    async def set_org_tier(self, org_id: str, tier: str, expires: str | None = None) -> bool:
         async with self.engine.begin() as conn:
             result = await conn.execute(
-                update(orgs).where(orgs.c.org_id == org_id).values(tier=tier))
+                update(orgs).where(orgs.c.org_id == org_id).values(tier=tier,
+                                                                   tier_expires=expires))
         return bool(result.rowcount)
 
     # ── users ─────────────────────────────────────────────────────────────────

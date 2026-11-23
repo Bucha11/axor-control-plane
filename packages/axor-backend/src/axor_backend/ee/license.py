@@ -39,21 +39,27 @@ from axor_backend.signing import jcs_canonical
 # `coding` is the coding-agent plan (Claude Code / Codex through their hooks):
 # it sits just above community — it pays for developer seats, not for the
 # production runtime, so it unlocks nothing a `team` gate guards.
-_TIER_ORDER = {"community": 0, "coding": 1, "team": 2, "security": 3, "enterprise": 4}
-TIERS = ("community", "coding", "team", "security", "enterprise")
+# `business` is the coding plan for a company: everything in `coding`, plus
+# single sign-on, the audit trail's export and who-may — still coding agents
+# only, so it unlocks nothing a `team` gate guards either.
+_TIER_ORDER = {"community": 0, "coding": 1, "business": 2, "team": 3, "security": 4,
+               "enterprise": 5}
+TIERS = ("community", "coding", "business", "team", "security", "enterprise")
 
 # The governed-node allowance each rung is SOLD with (Pricing.tsx). The ceiling
 # is still a number inside each license — a rung can be sold with the fleet it
 # was negotiated for — but the standard sale should not be retyped, and a Team
 # license accidentally issued with 500 nodes should be visibly off-standard
 # rather than merely unusual. `enterprise` is negotiated and has no standard.
-TIER_NODE_CEILING: dict[str, int] = {"community": 1, "coding": 1, "team": 10, "security": 50}
+TIER_NODE_CEILING: dict[str, int] = {"community": 1, "coding": 1, "business": 1, "team": 10,
+                                     "security": 50}
 
 # Developer seats each rung includes — the coding-agent meter (a developer is
 # someone whose coding agents reported in the month). Community covers one
 # developer free; the coding plan is all seats; the production rungs include
 # seats so one plan covers both journeys.
-TIER_DEVELOPER_SEATS: dict[str, int] = {"community": 1, "coding": 0, "team": 5, "security": 25}
+TIER_DEVELOPER_SEATS: dict[str, int] = {"community": 1, "coding": 0, "business": 0, "team": 5,
+                                        "security": 25}
 
 # What the free rung LOCKS on the plane, beyond which a coding session is kept
 # but not shown or operated until the workspace pays: one developer and one

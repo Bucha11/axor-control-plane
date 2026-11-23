@@ -100,6 +100,12 @@ def test_the_rate_card_gives_the_pricing_calculators_numbers() -> None:
                          peak_day=None, included_developers=TIER_DEVELOPER_SEATS[tier],
                          active_developers=devs).total_cents // 100
 
-    assert (total("coding", 20, 1), total("team", 20, 1)) == (500, 674)
-    assert (total("coding", 20, 4), total("team", 20, 4)) == (725, 674)
+    def rungs(devs: int, nodes: int) -> tuple[int, int, int]:
+        return tuple(total(t, devs, nodes) for t in ("coding", "business", "team"))  # type: ignore[return-value]
+
+    assert rungs(20, 1) == (500, 800, 899)
+    assert rungs(20, 4) == (725, 1025, 899)
+    assert (total("coding", 20, 10), total("team", 20, 10)) == (1175, 899)
     assert (total("coding", 0, 12), total("team", 0, 12)) == (825, 449)
+    # Business is never dearer than Team for what both sell (coding seats)
+    assert all(total("business", d, 1) <= total("team", d, 1) for d in range(0, 200))

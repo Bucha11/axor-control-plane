@@ -1101,7 +1101,7 @@ def test_the_rate_card_and_the_pricing_page_state_one_ladder() -> None:
             assert f"{seats} developer seats" in page, (tier, seats)
     assert "1 developer" in page  # community's free seat
     for tier, (base_cents, over_cents) in RATE_CARD.items():
-        if tier in ("community", "coding"):
+        if tier in ("community", "coding", "business"):
             continue  # no base, no node allowance to sell: priced by seat above
         base = money(base_cents).removesuffix(".00")
         over = money(over_cents).removesuffix(".00")

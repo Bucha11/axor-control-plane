@@ -172,6 +172,12 @@ function SingleSignOn({ orgId }: { orgId: string }) {
             </button>
           </div>
         </div>
+      ) : !open && d.plan_ok === false ? (
+        <div data-testid="sso-plan" style={{ color: C.dim }}>
+          off — single sign-on is on the{" "}
+          <a href="#/pricing?for=coding" style={{ color: C.steel }}>Business plan</a> ($40 per developer):
+          Okta, Entra ID, Google Workspace, any OpenID provider
+        </div>
       ) : !open ? (
         <div style={{ color: C.dim }}>
           off — people sign in with a password, GitHub or Google.{" "}
@@ -251,11 +257,17 @@ function WhoMay({ orgId, isAdmin }: { orgId: string; isAdmin: boolean }) {
   const caps = Object.entries(q.data.capabilities) as [Capability, Permissions["capabilities"][Capability]][];
   // people who may be named: members (owners and admins already may, viewers never)
   const named = (members.data?.members ?? []).filter((m) => m.role === "member").map((m) => m.email);
+  // changing who may is the Business plan's; what is set holds on any plan
+  const canChange = isAdmin && q.data.editable !== false;
   return (
     <div data-testid="who-may" className="mt-3">
       <div style={{ color: C.dim, letterSpacing: "0.08em", fontSize: 10.5, marginBottom: 4 }}>WHO MAY</div>
       <div style={{ color: C.dim, fontSize: 10.5, marginBottom: 6, lineHeight: 1.6 }}>
         beyond their own agents — owners and admins always, viewers never
+        {isAdmin && !canChange && (
+          <span data-testid="who-may-plan"> · changing these is on the{" "}
+            <a href="#/pricing?for=coding" style={{ color: C.steel }}>Business plan</a></span>
+        )}
       </div>
       {caps.map(([cap, c]) => {
         const left = named.filter((e) => !c.people.includes(e));
@@ -264,7 +276,7 @@ function WhoMay({ orgId, isAdmin }: { orgId: string; isAdmin: boolean }) {
             style={{ padding: "3px 0", borderTop: `1px solid ${C.line}` }}>
             <span style={{ color: C.text, flex: "1 1 260px" }}>{c.what}</span>
             <label className="flex items-center gap-1" style={{ cursor: isAdmin ? "pointer" : "default" }}>
-              <input type="checkbox" checked={c.members} disabled={!isAdmin || save.isPending}
+              <input type="checkbox" checked={c.members} disabled={!canChange || save.isPending}
                 aria-label={`members may ${c.what}`} data-testid={`may-${cap}-members`}
                 onChange={(e) => save.mutate({ [cap]: { members: e.target.checked } })} />
               members
@@ -272,7 +284,7 @@ function WhoMay({ orgId, isAdmin }: { orgId: string; isAdmin: boolean }) {
             {c.people.map((p) => (
               <span key={p} style={{ color: C.steel, border: `1px solid ${C.line}`, borderRadius: 20, padding: "0 7px" }}>
                 {p}
-                {isAdmin && (
+                {canChange && (
                   <button aria-label={`take ${cap} from ${p}`} disabled={save.isPending}
                     onClick={() => save.mutate({ [cap]: { people: c.people.filter((x) => x !== p) } })}
                     style={{ background: "none", border: "none", padding: "0 0 0 5px", cursor: "pointer", color: C.dim, fontFamily: MONO }}>
@@ -281,7 +293,7 @@ function WhoMay({ orgId, isAdmin }: { orgId: string; isAdmin: boolean }) {
                 )}
               </span>
             ))}
-            {isAdmin && !c.members && left.length > 0 && (
+            {canChange && !c.members && left.length > 0 && (
               <select value="" aria-label={`let someone ${c.what}`} data-testid={`may-${cap}-add`}
                 onChange={(e) => e.target.value && save.mutate({ [cap]: { people: [...c.people, e.target.value] } })}
                 style={{ ...INPUT_STYLE, width: 150, padding: "1px 4px" }}>
@@ -750,7 +762,14 @@ export default function Settings({ tab = "workspace" }: { tab?: string } = {}) {
   // an entitlement has to be refetched — otherwise the panel says "active" while
   // Regression still shows its EE controls locked.
   const license = useMutation({
-    mutationFn: () => api.verifyLicense(licenseJson),
+    mutationFn: async () => {
+      const r = await api.verifyLicense(licenseJson);
+      // the identity service learns the plan too (single sign-on is the
+      // Business plan's): the same signed file, checked there
+      const me = useApp.getState().identityEmail ? await api.identityMe().catch(() => null) : null;
+      if (me?.active_org) await api.identityLicense(me.active_org, licenseJson).catch(() => null);
+      return r;
+    },
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ["license-status"] });
       // the plan just changed: what it allows (seats, families, memory) with it
@@ -1197,7 +1216,8 @@ function TokenFold() {
 }
 
 const TIER_NAME: Record<string, string> = {
-  community: "Free", coding: "Coding", team: "Team", security: "Security Workspace", enterprise: "Enterprise",
+  community: "Free", coding: "Coding", business: "Business", team: "Team", security: "Security Workspace",
+  enterprise: "Enterprise",
 };
 
 /** One month's money, line by line: the plan, developers past what it

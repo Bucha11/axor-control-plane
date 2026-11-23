@@ -21,7 +21,7 @@ from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, EmailStr, Field
 
-from axor_identity import sso
+from axor_identity import licensing, sso
 from axor_identity.keys import SigningKey, load_signing_key
 from axor_identity.mail import Mailer, mailer_from_env
 from axor_identity.oauth import OAuthError, Provider, digest, pkce_pair, providers_from_env
@@ -142,6 +142,10 @@ class SSOBody(BaseModel):
     default_role: str = "member"
 
 
+class LicenseBody(BaseModel):
+    license_json: str = Field(min_length=10, max_length=20_000)
+
+
 class ExchangeBody(BaseModel):
     code: str = Field(min_length=16, max_length=128)
     org_id: str | None = None
@@ -176,6 +180,7 @@ def create_app(database_url: str | None = None, *,
                public_url: str | None = None,
                return_origins: list[str] | None = None,
                oauth_transport: httpx.AsyncBaseTransport | None = None,
+               vendor_pubkey: str | None = None,
                mailer: Mailer | None | bool = True) -> FastAPI:
     url = (database_url or os.environ.get("AXOR_IDENTITY_DATABASE_URL")
            or "sqlite+aiosqlite:///./identity.db")
@@ -214,6 +219,11 @@ def create_app(database_url: str | None = None, *,
                 and "\\" not in return_to:
             return _origin(public_url) + return_to
         return return_to if _origin(return_to) in allowed_origins else None
+
+    # the vendor's key licenses are signed with (the control plane pins the same)
+    vendor_pubkey = (vendor_pubkey if vendor_pubkey is not None
+                     else os.environ.get("AXOR_VENDOR_PUBKEY", "")).strip()
+    org_pin = (os.environ.get("AXOR_ORG") or "").strip()
 
     # True = from the environment (AXOR_IDENTITY_SMTP_URL); None/False = no mail
     mail: Mailer | None = mailer_from_env() if mailer is True else (mailer or None)
@@ -668,9 +678,37 @@ def create_app(database_url: str | None = None, *,
                 out.add(sso.domain_of(user["email"]))
         return out - sso.PUBLIC_DOMAINS
 
-    def _sso_view(org_id: str, held: dict | None, provable: set[str]) -> dict:
+    async def _on_business(org_id: str) -> bool:
+        org = await store.get_org(org_id)
+        return bool(org) and licensing.at_least(org["tier"], org.get("tier_expires"),
+                                                _now_iso()[:10], "business")
+
+    @app.put("/v1/orgs/{org_id}/license")
+    async def put_license(org_id: str, body: LicenseBody,
+                          caller: Claims = Depends(_caller)) -> dict:
+        """The workspace's plan, from the license its owner activated on the
+        control plane — the same vendor-signed file, checked here against the
+        same pinned key, for this workspace, in date."""
+        _sso_admin(org_id, caller)
+        if not vendor_pubkey:
+            raise HTTPException(409, "this identity service has no vendor key pinned "
+                                     "(AXOR_VENDOR_PUBKEY) to check a license with")
+        try:
+            lic = licensing.verify(body.license_json, vendor_pubkey)
+        except licensing.LicenseError as exc:
+            raise HTTPException(403, str(exc)) from exc
+        if lic.organization not in (org_id, org_pin or org_id):
+            raise HTTPException(403, f"this license is issued to {lic.organization!r}, "
+                                     f"not this workspace")
+        if _now_iso()[:10] > lic.expires_at:
+            raise HTTPException(403, f"this license expired on {lic.expires_at}")
+        await store.set_org_tier(org_id, lic.tier, lic.expires_at)
+        return {"org_id": org_id, "tier": lic.tier, "expires_at": lic.expires_at}
+
+    def _sso_view(org_id: str, held: dict | None, provable: set[str],
+                  plan_ok: bool = True) -> dict:
         base = {"available": bool(public_url), "callback_url": sso_callback,
-                "provable_domains": sorted(provable)}
+                "provable_domains": sorted(provable), "plan_ok": plan_ok}
         if held is None:
             return {"configured": False, **base}
         return {"configured": True, "issuer": held["issuer"], "client_id": held["client_id"],
@@ -681,7 +719,8 @@ def create_app(database_url: str | None = None, *,
     @app.get("/v1/orgs/{org_id}/sso")
     async def get_sso(org_id: str, caller: Claims = Depends(_caller)) -> dict:
         _sso_admin(org_id, caller)
-        return _sso_view(org_id, await store.get_sso(org_id), await _provable_domains(org_id))
+        return _sso_view(org_id, await store.get_sso(org_id), await _provable_domains(org_id),
+                         await _on_business(org_id))
 
     @app.put("/v1/orgs/{org_id}/sso")
     async def put_sso(org_id: str, body: SSOBody, caller: Claims = Depends(_caller)) -> dict:
@@ -690,6 +729,10 @@ def create_app(database_url: str | None = None, *,
             raise HTTPException(409, "single sign-on needs this service's public address "
                                      "(AXOR_IDENTITY_PUBLIC_URL) — the provider sends "
                                      "people back to it")
+        if not await _on_business(org_id):
+            raise HTTPException(402, {"code": "plan_required", "plan": "business",
+                                      "detail": "single sign-on is on the Business plan "
+                                                "($40 per developer) — see Pricing"})
         if body.default_role not in sso.DEFAULT_ROLES:
             raise HTTPException(422, f"default_role is one of {list(sso.DEFAULT_ROLES)}")
         held = await store.get_sso(org_id)

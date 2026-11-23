@@ -5,7 +5,7 @@
 // change one, change the other (tests/test_billing_tab.py and e2e/pricing.spec.ts
 // check the same cases).
 
-export type Rung = "community" | "coding" | "team" | "security";
+export type Rung = "community" | "coding" | "business" | "team" | "security";
 
 interface Card {
   base: number;          // dollars a month
@@ -18,17 +18,20 @@ interface Card {
 export const CARD: Record<Rung, Card> = {
   community: { base: 0, nodes: 1, perNode: 0, seats: 1, perSeat: 0 },
   coding: { base: 0, nodes: 1, perNode: 75, seats: 0, perSeat: 25 },
-  team: { base: 299, nodes: 10, perNode: 75, seats: 5, perSeat: 25 },
-  security: { base: 1500, nodes: 50, perNode: 50, seats: 25, perSeat: 25 },
+  business: { base: 0, nodes: 1, perNode: 75, seats: 0, perSeat: 40 },
+  team: { base: 299, nodes: 10, perNode: 75, seats: 5, perSeat: 40 },
+  security: { base: 1500, nodes: 50, perNode: 50, seats: 25, perSeat: 40 },
 };
 
 export const RUNG_NAME: Record<Rung, string> = {
-  community: "Community", coding: "Coding", team: "Team Workspace", security: "Security Workspace",
+  community: "Community", coding: "Coding", business: "Business", team: "Team Workspace",
+  security: "Security Workspace",
 };
 
 // What a rung adds over the one below it, in what ships today — the reason to
 // pay more than the cheapest when it is not the cheapest.
 export const ADDS: Partial<Record<Rung, string>> = {
+  business: "single sign-on, the whole audit trail and its export, who may, SCIM",
   team: "regression CI on a schedule with its history, scheduled chaos tests, alert routing by channel",
   security: "incident → regression conversion, policy / kernel comparison",
 };

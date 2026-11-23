@@ -86,6 +86,8 @@ async def _owner(c: httpx.AsyncClient, app, email: str = "olga@acme.dev",  # noq
     s = (await c.post("/v1/signup", json={"email": email, "password": PW, "org_name": org})).json()
     if verified:
         await app.state.store.mark_verified(s["user"]["user_id"])
+    # single sign-on is the Business plan's
+    await app.state.store.set_org_tier(s["org"]["org_id"], "business", "2999-01-01")
     return s
 
 
@@ -151,7 +153,7 @@ async def test_a_work_address_signs_in_through_the_provider(c, app, idp) -> None
     session = (await c.post("/v1/oauth/exchange",
                             json={"code": back["axor_login"][0], "org_id": org})).json()
     assert session["created"] is True
-    assert session["org"] == {"org_id": org, "role": "member", "tier": "community"}
+    assert session["org"] == {"org_id": org, "role": "member", "tier": "business"}
     assert session["user"]["email"] == "new@acme.dev"
     # the same person again: the same account, no second one
     again = await _sign_in(c, idp)
@@ -228,3 +230,53 @@ async def test_only_an_admin_sets_it(c, app) -> None:  # noqa: ANN001
     other = await _owner(c, app, email="ann@other.dev", org="Other")
     assert (await c.put(f"/v1/orgs/{org}/sso", json=SETUP,
                         headers=_h(other))).status_code == 403
+
+
+async def test_sso_is_the_business_plans(c, app) -> None:  # noqa: ANN001
+    olga = await _owner(c, app)
+    org = olga["org"]["org_id"]
+    await app.state.store.set_org_tier(org, "coding", "2999-01-01")
+    got = (await c.get(f"/v1/orgs/{org}/sso", headers=_h(olga))).json()
+    assert got["plan_ok"] is False
+    r = await c.put(f"/v1/orgs/{org}/sso", json=SETUP, headers=_h(olga))
+    assert r.status_code == 402 and r.json()["detail"]["plan"] == "business"
+    # a Business license past its date is the free plan again
+    await app.state.store.set_org_tier(org, "business", "2000-01-01")
+    assert (await c.put(f"/v1/orgs/{org}/sso", json=SETUP, headers=_h(olga))).status_code == 402
+
+
+async def test_the_plan_comes_from_the_vendor_signed_license(tmp_path, idp) -> None:  # noqa: ANN001
+    from axor_backend.ee.license import sign_license
+    from nacl.signing import SigningKey
+
+    vendor = SigningKey.generate()
+    application = create_app(f"sqlite+aiosqlite:///{tmp_path}/lic.db",
+                             signing_key=load_signing_key(generate_pem(), kid="k"),
+                             providers={}, public_url=PUBLIC, mailer=False,
+                             oauth_transport=httpx.MockTransport(idp),
+                             vendor_pubkey=vendor.verify_key.encode().hex())
+    async with application.router.lifespan_context(application), httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=application), base_url="http://identity") as c:
+        olga = (await c.post("/v1/signup", json={"email": "olga@acme.dev", "password": PW,
+                                                 "org_name": "Acme"})).json()
+        org = olga["org"]["org_id"]
+
+        def lic(**over: object) -> str:
+            return sign_license({"organization": org, "workspace_tier": "business",
+                                 "governed_node_ceiling": 1, "self_hosted_runner": False,
+                                 "expires_at": "2999-01-01", "features": [], **over},
+                                bytes(vendor).hex())
+
+        async def put(raw: str) -> int:
+            return (await c.put(f"/v1/orgs/{org}/license", json={"license_json": raw},
+                                headers=_h(olga))).status_code
+
+        assert await put(lic(organization="org_x")) == 403        # someone else's
+        assert await put(lic(expires_at="2001-01-01")) == 403     # past its date
+        forged = json.loads(lic())
+        forged["license"]["workspace_tier"] = "enterprise"
+        assert (await c.put(f"/v1/orgs/{org}/license", json={"license_json": json.dumps(forged)},
+                            headers=_h(olga))).status_code == 403
+        r = await c.put(f"/v1/orgs/{org}/license", json={"license_json": lic()}, headers=_h(olga))
+        assert r.status_code == 200 and r.json()["tier"] == "business"
+        assert (await c.get(f"/v1/orgs/{org}/sso", headers=_h(olga))).json()["plan_ok"] is True
