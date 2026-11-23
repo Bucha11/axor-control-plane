@@ -49,6 +49,7 @@ function detailWords(it: AuditItem): string {
   if (typeof d.asked_by === "string") parts.push(`asked by ${d.asked_by}`);
   if (typeof d.to === "string") parts.push(typeof d.from === "string" ? `${d.from} → ${d.to}` : `→ ${d.to}`);
   if (Array.isArray(d.invited) && d.invited.length) parts.push(`invited ${d.invited.join(", ")}`);
+  if (d.invited === true) parts.push("by invitation");
   if (typeof d.repo === "string") parts.push(`in ${d.repo}`);
   if (typeof d.role === "string") parts.push(`as ${d.role}`);
   if (typeof d.protocol === "string") parts.push(d.protocol === "saml" ? "SAML" : "OpenID Connect");
