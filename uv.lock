@@ -236,11 +236,11 @@ dev = [
 
 [[package]]
 name = "axor-core"
-version = "0.13.1"
+version = "0.13.0"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/4d/1f/6e28ffea8cd97b7369f947b27d7dd71971d308b00e790cf06cdb111e8c77/axor_core-0.13.1.tar.gz", hash = "sha256:044dcf0bce6f29cfa172e9f012cd5b286fee6f4016016884b3f34b84ef490676", size = 894083, upload-time = "2026-11-23T21:49:57.765Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/9e/22/cb52f5dc1c7ece11be13a2db19def55ca7cdd6655e6531b38cc7d249f8ef/axor_core-0.13.0.tar.gz", hash = "sha256:78228b0237d9d11d43ca463c91364f2d2b66d4d2db9844e76b943b4b8116d45f", size = 893625, upload-time = "2026-11-21T11:33:06.757Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/4f/03/10d6c778b44fcb173c9775318c90cdb96a3f35a4e522a136a42827d7e011/axor_core-0.13.1-py3-none-any.whl", hash = "sha256:d1cbf84d8417aa36804eccd38206d273b021c328d0069dde237c093b833ecafc", size = 409016, upload-time = "2026-11-23T21:49:56.104Z" },
+    { url = "https://files.pythonhosted.org/packages/ec/7d/a613af8d5157aa6d0f84e4d522dac970944a7ff51f113a6f28d669e5f02d/axor_core-0.13.0-py3-none-any.whl", hash = "sha256:eb8f262bf53698ff3718a8a13158c70d80d56d84e3338792dd45ae9ea6bf8f34", size = 408816, upload-time = "2026-11-21T11:33:04.917Z" },
 ]
 
 [[package]]
