@@ -191,3 +191,58 @@ test.describe("settings", () => {
     await expect(page.getByTestId("usage-billing")).toBeVisible();
   });
 });
+
+test.describe("developer seats on a paid plan", () => {
+  const st = (developers: object[], extra: object = {}) => ({
+    month: "2026-11", workspace_tier: "coding", base: "$0.00", base_cents: 0, included_nodes: 1,
+    peak_nodes: 0, peak_day: null, billable_nodes: 0, overage: "$0.00", overage_cents: 0,
+    included_developers: 0, active_developers: 2, billable_developers: 2, seats: "$50.00",
+    seat_cents: 5000, total: "$50.00", total_cents: 5000, provisional: true, priced: true,
+    note: "", computed_on: "2026-11-23", developers, ...extra,
+  });
+
+  test("this month's seats, where the bill is heading, and a limit an admin sets", async ({ page }) => {
+    await page.addInitScript(() => {
+      const raw = localStorage.getItem("axor-app");
+      const data = raw ? JSON.parse(raw) : { state: {}, version: 0 };
+      data.state.journey = "coding";
+      localStorage.setItem("axor-app", JSON.stringify(data));
+    });
+    let cap: number | null = null;
+    const put: unknown[] = [];
+    await page.route("**/v1/license/seat-cap", async (route) => {
+      const body = route.request().postDataJSON() as { cap: number | null };
+      put.push(body);
+      cap = body.cap;
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ seat_cap: cap }) });
+    });
+    await page.route("**/v1/license/billing", (route) => route.fulfill({
+      status: 200, contentType: "application/json", body: JSON.stringify({
+        plan: { tier: "coding", licensed: true, organization: "Acme", expires_at: null, base: "$0.00",
+                base_cents: 0, per_node_cents: 0, seat: "$25.00", seat_cents: 2500, included_nodes: 1,
+                included_developers: 0, priced: true },
+        current: st([
+          { developer: "ada@acme.io", sessions: 4, agents: ["claude-code"], first_day: "2026-11-02", seated: true },
+          { developer: "bo@acme.io", sessions: 1, agents: ["codex"], first_day: "2026-11-09", seated: true },
+        ], { seat_cap: cap, over_cap: 0 }),
+        history: [], if_paid: [],
+        forecast: { developers_so_far: 2, likely: [{ developer: "cy@acme.io", last_day: "2026-10-30" }],
+                    projected_developers: cap ? Math.min(cap, 3) : 3,
+                    projected_total_cents: 7500, projected_total: cap === 2 ? "$50.00" : "$75.00",
+                    seat_cap: cap, seats_left: cap === null ? null : cap - 2, next_seat_cents: 2500 },
+      }) }));
+    await goHash(page, "settings?tab=billing");
+    const seats = page.getByTestId("billing-seats");
+    await expect(seats.getByTestId("seats-so-far")).toContainText("2 developers so far · $50.00");
+    await expect(seats.getByTestId("seats-forecast")).toContainText("3 developers → $75.00");
+    await expect(seats.getByTestId("seats-forecast")).toContainText("cy@acme.io ran agents in the last 30 days");
+    await expect(seats.getByTestId("seats-list")).toContainText("ada@acme.io");
+    await seats.getByTestId("seat-cap-edit").click();
+    await seats.getByTestId("seat-cap-input").fill("2");
+    await expect(seats.getByTestId("seat-cap")).toContainText("at most $25.00 × 2 = $50.00 a month");
+    await seats.getByTestId("seat-cap-save").click();
+    await expect(seats.getByTestId("seat-cap")).toContainText("2 · 0 left");
+    await expect(seats.getByTestId("seats-forecast")).toContainText("2 developers → $50.00");
+    expect(put).toEqual([{ cap: 2 }]);
+  });
+});

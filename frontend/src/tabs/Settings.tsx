@@ -6,7 +6,8 @@ import { useEffect, useState } from "react";
 import { track } from "../funnel";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Check, Copy, Loader2, Trash2 } from "lucide-react";
-import { api, BillingStatement } from "../api";
+import { api, BillingReport, BillingStatement } from "../api";
+import { useCanAdmin } from "../team";
 import {
   IdentityError, emailAvailable, forgotPassword, here, login, logout, oauthProviders,
   oauthStartUrl, signup, signupAvailable, type OAuthProvider,
@@ -134,6 +135,21 @@ function Team({ orgId, isAdmin }: { orgId: string; isAdmin: boolean }) {
   const needsSeat = ent.data?.free === true && ent.data.developers !== null
     && developers >= ent.data.developers && role !== "viewer";
   const [offer, setOffer] = useState(false);
+  // on a paid plan: what a developer joining now would take — the next seat,
+  // its price, or nothing past the workspace's seat limit
+  const billing = useQuery({ queryKey: ["billing"], queryFn: api.billing, retry: false });
+  const forecast = billing.data?.forecast ?? null;
+  const seatNote = (() => {
+    if (!forecast || role === "viewer" || ent.data?.free !== false) return null;
+    const next = forecast.developers_so_far + 1;
+    if (forecast.seat_cap !== null && (forecast.seats_left ?? 0) <= 0) {
+      return { warn: true, text: `The seat limit (${forecast.seat_cap}) is used up this month: if they run coding agents, their sessions stay protected but are not shown — and not billed — until you raise it.` };
+    }
+    const included = billing.data?.plan.included_developers ?? 0;
+    return { warn: false, text: next <= included
+      ? `If they run coding agents this month, they take seat ${next} — within the ${included} your plan includes.`
+      : `If they run coding agents this month, they take seat ${next}: +${billing.data?.plan.seat ?? "$25.00"} this month. Viewers are free.` };
+  })();
   // the plans, beside this page: an invite or a role change half made stays here
   const openPricing = () => window.open(`${window.location.pathname}#/pricing?for=coding`, "_blank", "noopener");
   // a viewer made a member or an admin is a developer too: the same moment
@@ -249,6 +265,18 @@ function Team({ orgId, isAdmin }: { orgId: string; isAdmin: boolean }) {
               {invite.isPending ? "…" : "invite"}
             </button>
           </form>
+          {seatNote && (
+            <div data-testid="invite-seat-note" className="mt-1"
+              style={{ fontSize: 10.5, color: seatNote.warn ? C.amber : C.dim, lineHeight: 1.6 }}>
+              {seatNote.text}
+              {seatNote.warn && (
+                <button type="button" onClick={() => navigate("settings", { tab: "billing" })}
+                  style={{ background: "none", border: "none", padding: "0 0 0 6px", cursor: "pointer", color: C.steel, fontFamily: MONO, fontSize: 10.5 }}>
+                  seat limit →
+                </button>
+              )}
+            </div>
+          )}
           {offer && needsSeat && (
             <div data-testid="invite-upgrade" className="mt-2 p-3" style={{ background: C.panel2, border: `1px solid ${C.amber}`, borderRadius: 6 }}>
               <div style={{ color: C.text, marginBottom: 4 }}>A second developer is on the Coding plan.</div>
@@ -1034,6 +1062,12 @@ function Billing({ coding, prod }: { coding: boolean; prod: boolean }) {
         </Section>
       )}
 
+      {coding && current && q.data.forecast && (plan.seat_cents ?? 0) > 0 && (
+        <Section title="DEVELOPER SEATS · this month">
+          <Seats report={q.data} />
+        </Section>
+      )}
+
       {rungs.length > 0 && (
         <Section title={`ON A PAID PLAN, THIS MONTH WOULD BE · from your own usage`}>
           <div data-testid="billing-if-paid" className="flex flex-col" style={{ gap: 14 }}>
@@ -1082,6 +1116,118 @@ function Billing({ coding, prod }: { coding: boolean; prod: boolean }) {
         </Section>
       )}
     </>
+  );
+}
+
+/** Who holds a seat this month, where the bill is heading, and the
+ *  workspace's limit on seats (an admin sets it; past it a developer's
+ *  sessions are protected, not shown, not billed). */
+function Seats({ report }: { report: BillingReport }) {
+  const qc = useQueryClient();
+  const admin = useCanAdmin();
+  const f = report.forecast!;
+  const cur = report.current!;
+  const seat = report.plan.seat;
+  const [edit, setEdit] = useState<string | null>(null);
+  const save = useMutation({
+    mutationFn: (cap: number | null) => api.setSeatCap(cap),
+    onSuccess: () => {
+      setEdit(null);
+      for (const k of ["billing", "entitlements", "nodes"]) void qc.invalidateQueries({ queryKey: [k] });
+    },
+  });
+  const seated = cur.developers.filter((d) => d.seated !== false);
+  const over = cur.developers.filter((d) => d.seated === false);
+  const who = (d: string) => (d.length > 28 ? `${d.slice(0, 27)}…` : d);
+  return (
+    <div data-testid="billing-seats" style={{ fontFamily: MONO, fontSize: 11.5, color: C.mut, lineHeight: 1.8 }}>
+      <div style={{ color: C.text }} data-testid="seats-so-far">
+        {f.developers_so_far} developer{f.developers_so_far === 1 ? "" : "s"} so far · {cur.total}
+        {cur.included_developers > 0 && <span style={{ color: C.dim }}> · {cur.included_developers} included</span>}
+      </div>
+      <div data-testid="seats-forecast">
+        forecast for the month:{" "}
+        <span style={{ color: C.text }}>
+          {f.projected_developers} developer{f.projected_developers === 1 ? "" : "s"} → {f.projected_total}
+        </span>
+        {f.likely.length > 0 ? (
+          <span style={{ color: C.dim }}>
+            {" "}— {f.likely.slice(0, 4).map((l) => who(l.developer)).join(", ")}
+            {f.likely.length > 4 ? ` and ${f.likely.length - 4} more` : ""} ran agents in the last 30 days, not yet this month
+          </span>
+        ) : <span style={{ color: C.dim }}> — nobody else ran agents in the last 30 days</span>}
+        {f.seat_cap !== null && f.projected_developers < f.developers_so_far + f.likely.length && (
+          <span style={{ color: C.dim }}> · held to the limit</span>
+        )}
+      </div>
+      <div className="flex items-center gap-2 flex-wrap" data-testid="seat-cap">
+        <span>seat limit:</span>
+        {edit === null ? (
+          <>
+            <span style={{ color: C.text }}>
+              {f.seat_cap === null ? "none — every developer who runs agents takes a seat"
+                : `${f.seat_cap} · ${f.seats_left} left`}
+            </span>
+            {admin && (
+              <button onClick={() => setEdit(f.seat_cap === null ? String(Math.max(f.developers_so_far, 1)) : String(f.seat_cap))}
+                data-testid="seat-cap-edit"
+                style={{ background: "none", border: "none", padding: 0, cursor: "pointer", color: C.steel, fontFamily: MONO, fontSize: 11 }}>
+                {f.seat_cap === null ? "set a limit" : "change"}
+              </button>
+            )}
+            {admin && f.seat_cap !== null && (
+              <button onClick={() => save.mutate(null)} data-testid="seat-cap-remove"
+                style={{ background: "none", border: "none", padding: 0, cursor: "pointer", color: C.dim, fontFamily: MONO, fontSize: 11 }}>
+                remove
+              </button>
+            )}
+          </>
+        ) : (
+          <form className="flex items-center gap-2" onSubmit={(e) => {
+            e.preventDefault();
+            const n = Number(edit);
+            if (Number.isInteger(n) && n >= 1) save.mutate(n);
+          }}>
+            <input type="number" min={Math.max(1, f.developers_so_far)} value={edit} aria-label="seat limit"
+              onChange={(e) => setEdit(e.target.value)} data-testid="seat-cap-input"
+              style={{ ...INPUT_STYLE, width: 70 }} />
+            <span style={{ color: C.dim }}>
+              at most {seat} × {Number(edit) || 0} = ${((Number(edit) || 0) * (report.plan.seat_cents ?? 0) / 100).toFixed(2)} a month for seats
+            </span>
+            <button type="submit" disabled={save.isPending} data-testid="seat-cap-save"
+              style={btn({ color: C.text, borderColor: C.steel, fontSize: 11, padding: "3px 10px" })}>
+              {save.isPending ? "…" : "save"}
+            </button>
+            <button type="button" onClick={() => setEdit(null)}
+              style={{ background: "none", border: "none", padding: 0, cursor: "pointer", color: C.dim, fontFamily: MONO, fontSize: 11 }}>
+              cancel
+            </button>
+          </form>
+        )}
+      </div>
+      {save.isError && <div style={{ color: C.red, fontSize: 11 }} data-testid="seat-cap-error">{errorWords((save.error as Error).message)}</div>}
+      <div style={{ color: C.dim, fontSize: 10.5 }}>
+        the first developers to run agents in a month hold the seats; past the limit a developer's
+        sessions are still protected by their hooks, but not shown, operated or billed — and they are
+        told so in their agent. It cannot go below the seats already used this month.
+      </div>
+      {seated.length > 0 && (
+        <div className="mt-2" data-testid="seats-list">
+          {seated.map((d, i) => (
+            <div key={d.developer} className="flex gap-3" style={{ fontSize: 11 }}>
+              <span style={{ color: C.dim, width: 22, textAlign: "right" }}>{i + 1}.</span>
+              <span style={{ color: C.text, flex: 1 }}>{who(d.developer)}</span>
+              <span style={{ color: C.dim }}>since {d.first_day?.slice(5) ?? "—"} · {d.sessions} session{d.sessions === 1 ? "" : "s"}</span>
+            </div>
+          ))}
+        </div>
+      )}
+      {over.length > 0 && (
+        <div className="mt-1" data-testid="seats-over" style={{ color: C.amber, fontSize: 11 }}>
+          past the limit, not billed: {over.map((d) => who(d.developer)).join(", ")}
+        </div>
+      )}
+    </div>
   );
 }
 

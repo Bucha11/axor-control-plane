@@ -1543,6 +1543,7 @@ function FleetTotals({ totals }: { totals: { runs: number; calls: number; tainte
 const LOCK_LABEL: Record<LockReason, string> = {
   developer: "second developer",
   agent_family: "second agent family",
+  seat_cap: "past the seat limit",
 };
 
 function LockChip({ reasons }: { reasons: LockReason[] }) {
@@ -1550,7 +1551,7 @@ function LockChip({ reasons }: { reasons: LockReason[] }) {
     <span data-testid="plan-lock" style={{ fontFamily: MONO, fontSize: 10, color: C.amber,
       border: `1px solid ${C.amber}`, borderRadius: 20, padding: "1px 8px",
       display: "inline-flex", alignItems: "center", gap: 4 }}>
-      <Lock size={9} /> paid plan · {reasons.map((r) => LOCK_LABEL[r]).join(", ")}
+      <Lock size={9} /> {reasons.includes("seat_cap") ? "seat limit" : "paid plan"} · {reasons.map((r) => LOCK_LABEL[r]).join(", ")}
     </span>
   );
 }
@@ -1573,7 +1574,10 @@ function PlanLock({ nodeId, reasons }: { nodeId: string; reasons: LockReason[] }
     mutationFn: (agent: string) => api.chooseAgentFamily(agent),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["entitlements"] }),
   });
-  const why = reasons.includes("agent_family")
+  const seatCap = reasons.includes("seat_cap");
+  const why = seatCap
+    ? `Past your workspace's seat limit${ent.data?.seat_cap ? ` (${ent.data.seat_cap})` : ""} — the first developers to run agents this month hold the seats.`
+    : reasons.includes("agent_family")
     ? "A second agent family — the free plan keeps one (Claude Code or Codex)."
     : "A second developer — the free plan keeps one.";
   return (
@@ -1592,7 +1596,7 @@ function PlanLock({ nodeId, reasons }: { nodeId: string; reasons: LockReason[] }
       {folded ? (
         <div style={{ color: C.amber, fontSize: 10.5 }}>
           <Lock size={9} style={{ display: "inline", marginRight: 5 }} />
-          paid plan · {reasons.map((r) => LOCK_LABEL[r]).join(", ")}
+          {seatCap ? "seat limit" : "paid plan"} · {reasons.map((r) => LOCK_LABEL[r]).join(", ")}
         </div>
       ) : (
         <>
@@ -1601,14 +1605,24 @@ function PlanLock({ nodeId, reasons }: { nodeId: string; reasons: LockReason[] }
           </div>
           <div>
             The session is still protected: its hooks deny what they must, whatever the plan.
-            It is recorded too — on the Coding plan it shows here with its history, and you
-            can pause, stop and cap it.
+            {seatCap
+              ? <>It is recorded too, and not billed — raise the limit and it shows here with its
+                history, and you can pause, stop and cap it.</>
+              : <>It is recorded too — on the Coding plan it shows here with its history, and you
+                can pause, stop and cap it.</>}
           </div>
           <div className="flex gap-2 flex-wrap" style={{ marginTop: 10 }}>
+            {seatCap ? (
+              <button onClick={() => navigate("settings", { tab: "billing" })} data-testid="plan-lock-seats"
+                style={btn({ color: C.text, borderColor: C.steel, fontSize: 11.5, padding: "5px 12px" })}>
+                raise the seat limit →
+              </button>
+            ) : (
             <button onClick={() => navigate("pricing?for=coding")} data-testid="plan-lock-pricing"
               style={btn({ color: C.text, borderColor: C.steel, fontSize: 11.5, padding: "5px 12px" })}>
               Coding plan · $25 / developer / month →
             </button>
+            )}
             {reasons.includes("agent_family") && mine && kept && mine !== kept && (
               <button onClick={() => swap.mutate(mine)} disabled={swap.isPending}
                 data-testid="plan-lock-keep"

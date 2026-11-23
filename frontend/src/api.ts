@@ -579,7 +579,17 @@ export interface BillingStatement {
   overage: string; overage_cents: number; included_developers: number; active_developers: number;
   billable_developers: number; seats: string; seat_cents: number; total: string; total_cents: number;
   provisional: boolean; priced: boolean; note: string; computed_on: string;
-  developers: { developer: string; sessions: number; agents: string[] }[];
+  developers: { developer: string; sessions: number; agents: string[];
+                first_day?: string; last_day?: string; seated?: boolean }[];
+  // an admin's seat limit, and the developers past it (not shown, not billed)
+  seat_cap?: number | null; over_cap?: number;
+}
+/** Where this month's bill is heading (a paid plan). */
+export interface BillingForecast {
+  developers_so_far: number;
+  likely: { developer: string; last_day: string | null }[];
+  projected_developers: number; projected_total_cents: number; projected_total: string;
+  seat_cap: number | null; seats_left: number | null; next_seat_cents: number;
 }
 export interface BillingReport {
   plan: { tier: string; licensed: boolean; organization: string; expires_at: string | null;
@@ -587,6 +597,7 @@ export interface BillingReport {
           seat: string; seat_cents: number | null; included_nodes: number; included_developers: number;
           priced: boolean };
   current: BillingStatement | null; history: BillingStatement[]; if_paid: BillingStatement[];
+  forecast?: BillingForecast | null;
 }
 
 /** The team's memory: what coding agents verifiably learned in a repo. */
@@ -1080,11 +1091,13 @@ export interface TreeSummary {
 // What the plan lets the plane show and operate for coding agents: the free
 // rung keeps one developer and one agent family; sessions and tree runs past
 // that are kept but locked, with the reason.
-export type LockReason = "developer" | "agent_family";
+export type LockReason = "developer" | "agent_family" | "seat_cap";
 export interface Entitlements {
   tier: string; free: boolean;
   developers: number | null; agent_families: number | null; agent_family: string | null;
   agent_family_chosen?: boolean;
+  // a paid plan's seat limit (an admin's), and the seats this month used
+  seat_cap?: number | null; seats_used?: number;
   locked: Record<string, LockReason[]>;
   locked_trees: Record<string, LockReason[]>;
   reasons: Record<LockReason, string>;
@@ -1736,6 +1749,12 @@ export const api = {
       body: JSON.stringify({ agent }),
     }).then((r) => j<{ agent_family: string }>(r)),
   billing: () => af("/v1/license/billing").then((r) => j<BillingReport>(r)),
+  // the workspace's limit on developer seats (admin); null for none
+  setSeatCap: (cap: number | null) =>
+    af("/v1/license/seat-cap", {
+      method: "PUT", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ cap }),
+    }).then((r) => j<{ seat_cap: number | null; used?: number }>(r)),
   licenseUsage: (months = 3) =>
     af(`/v1/license/usage?months=${months}`).then((r) => j<UsageReport>(r)),
   licenseInvoice: (month?: string) =>

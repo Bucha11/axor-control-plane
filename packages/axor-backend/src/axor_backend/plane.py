@@ -71,8 +71,6 @@ async def _require_plan(ctx: Any, node_id: str) -> None:  # noqa: ANN401
     from axor_backend.licensing import active_license
 
     tier = workspace_tier(active_license(ctx, current_org_id()))
-    if tier != "community":
-        return
     ent = await coding_entitlements(ctx.store, tier)
     reasons = ent["locked"].get(node_id) or ent["locked_trees"].get(node_id)
     if reasons:
@@ -1225,12 +1223,19 @@ async def post_profile(node_id: str, body: dict, request: Request) -> dict:
                                      parent=parent)
     # past the free plan, the session is kept but not shown or operated: the
     # answer says so, and the sidecar tells the developer in their own agent
-    from axor_backend.ee.entitlements import REASONS, coding_entitlements, workspace_tier
+    from axor_backend.ee.entitlements import (
+        REASONS,
+        coding_entitlements,
+        joins_past_cap,
+        workspace_tier,
+    )
     from axor_backend.licensing import active_license
 
     tier = workspace_tier(active_license(ctx, current_org_id()))
-    if kind == "coding" and tier == "community":
+    if kind == "coding":
         reasons = (await coding_entitlements(ctx.store, tier))["locked"].get(node_id) or []
+        if not reasons and await joins_past_cap(ctx.store, tier, developer):
+            reasons = ["seat_cap"]
         if reasons:
             return {"locked": reasons, "detail": REASONS[reasons[0]]}
     return {"locked": []}

@@ -223,6 +223,7 @@ _WRITE_POLICY: tuple[tuple[str, str], ...] = (
     ("/v1/license/verify", "admin"),
     # which agent family the free plan keeps: a workspace decision
     ("/v1/license/agent-family", "admin"),
+    ("/v1/license/seat-cap", "admin"),   # the workspace's limit on developer seats
 )
 
 # Served without auth even when it is enabled — as (method, prefix) pairs, not

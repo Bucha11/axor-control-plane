@@ -2170,7 +2170,8 @@ class Store:
         async with self.engine.connect() as conn:
             rows = (await conn.execute(
                 select(node_profiles.c.developer, node_profiles.c.agent,
-                       node_activity.c.node_id)
+                       node_activity.c.node_id, node_activity.c.day,
+                       node_profiles.c.first_ts)
                 .select_from(node_activity.join(node_profiles, (
                     (node_profiles.c.org_id == node_activity.c.org_id)
                     & (node_profiles.c.node_id == node_activity.c.node_id))))
@@ -2182,14 +2183,22 @@ class Store:
                        ~node_profiles.c.developer.startswith(EXAMPLE_DEVELOPER_PREFIX)))).all()
         sessions: dict[str, set[str]] = {}
         agents: dict[str, set[str]] = {}
+        # when each first counted in the range (the day, then the earliest of
+        # its sessions that day) — the order seats are taken in under a limit
+        first: dict[str, tuple[str, str]] = {}
+        last: dict[str, str] = {}
         for r in rows:
             sessions.setdefault(r.developer, set()).add(r.node_id)
             agents.setdefault(r.developer, set()).add(r.agent)
+            mark = (str(r.day), str(r.first_ts or ""))
+            first[r.developer] = min(first.get(r.developer, mark), mark)
+            last[r.developer] = max(last.get(r.developer, str(r.day)), str(r.day))
         return {
             "start_day": start_day, "end_day": end_day,
             "active_developers": len(sessions),
             "developers": [{"developer": d, "sessions": len(n),
-                            "agents": sorted(agents[d])}
+                            "agents": sorted(agents[d]),
+                            "first_day": first[d][0], "last_day": last[d]}
                            for d, n in sorted(sessions.items())],
         }
 

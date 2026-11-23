@@ -287,15 +287,80 @@ BILLING_HISTORY = 6
 
 async def _month_statement(store: StoreDep, month: str, org_name: str, tier: str,
                            included_nodes: int) -> dict:
+    from axor_backend.ee.seats import month_seats
+
     start, end = billing_month(f"{month}-01")
     usage = await store.node_usage(start, end)
-    devs = await store.developer_usage(start, end)
+    # a developer past the workspace's seat limit is not shown, not operated
+    # — and not billed
+    seats = await month_seats(store, month, tier)
     line = statement(month=month, organization=org_name, workspace_tier=tier,
                      included_nodes=included_nodes, peak_nodes=int(usage["peak_nodes"]),
                      peak_day=usage["peak_day"],
                      included_developers=TIER_DEVELOPER_SEATS.get(tier, 0),
-                     active_developers=int(devs["active_developers"]))
-    return {**line.as_dict(), "developers": devs["developers"]}
+                     active_developers=len(seats["seated"]))
+    return {**line.as_dict(), "developers": seats["developers"],
+            "seat_cap": seats["cap"], "over_cap": len(seats["over"])}
+
+
+FORECAST_LOOKBACK_DAYS = 30
+
+
+async def _forecast(store: StoreDep, current: dict, tier: str, included_nodes: int) -> dict:
+    """Where this month's bill is heading: the developers counted so far, and
+    those who ran agents in the last 30 days but not yet this month — they
+    usually do again. Capped by the seat limit. An estimate, said so."""
+    on = date.fromisoformat(today())
+    recent = await store.developer_usage(
+        (on - timedelta(days=FORECAST_LOOKBACK_DAYS)).isoformat(), on.isoformat())
+    counted = {d["developer"] for d in current["developers"]}
+    likely = [{"developer": d["developer"], "last_day": d.get("last_day")}
+              for d in recent["developers"] if d["developer"] not in counted]
+    so_far = current["active_developers"]
+    cap = current.get("seat_cap")
+    projected = so_far + len(likely)
+    if cap is not None:
+        projected = min(projected, max(cap, so_far))
+    line = statement(month=current["month"], organization=current.get("organization", ""),
+                     workspace_tier=tier, included_nodes=included_nodes,
+                     peak_nodes=int(current["peak_nodes"]), peak_day=current.get("peak_day"),
+                     included_developers=TIER_DEVELOPER_SEATS.get(tier, 0),
+                     active_developers=projected).as_dict()
+    return {"developers_so_far": so_far, "likely": likely,
+            "projected_developers": projected,
+            "projected_total_cents": line["total_cents"], "projected_total": line["total"],
+            "seat_cap": cap, "seats_left": None if cap is None else max(0, cap - so_far),
+            "next_seat_cents": SEAT_PRICE.get(tier, 0)
+            if so_far >= TIER_DEVELOPER_SEATS.get(tier, 0) else 0}
+
+
+@router.put("/seat-cap")
+async def set_seat_cap(body: dict, state: StateDep, store: StoreDep) -> dict:
+    """An admin's limit on developer seats (``{"cap": n}``, or ``null`` for
+    none). Past it a developer's sessions are protected but not shown,
+    operated or billed. It cannot go below the seats this month already used:
+    that work was done, and is billed."""
+    from axor_backend.ee.seats import MAX_CAP, SEAT_CAP_SETTING, month_seats
+
+    lic = active_license(state, current_org_id())
+    tier = lic.workspace_tier if lic else "community"
+    if tier == "community":
+        raise HTTPException(400, "the free plan is one developer; a seat limit is for a paid plan")
+    cap = body.get("cap")
+    if cap is None:
+        await store.set_setting(SEAT_CAP_SETTING, None)
+        return {"seat_cap": None}
+    if not isinstance(cap, int) or isinstance(cap, bool) or not 1 <= cap <= MAX_CAP:
+        raise HTTPException(400, f"cap is a whole number of seats, 1 to {MAX_CAP}, or null")
+    month = today()[:7]
+    used = len((await month_seats(store, month, tier))["seated"])
+    if cap < used:
+        raise HTTPException(409, {"error": "below_used", "used": used,
+                                  "detail": f"{used} developers already ran agents this month — "
+                                            f"the limit can be {used} or more now, and lower "
+                                            "from next month"})
+    await store.set_setting(SEAT_CAP_SETTING, {"cap": cap, "since": month})
+    return {"seat_cap": cap, "used": used}
 
 
 @router.get("/billing")
@@ -321,11 +386,12 @@ async def license_billing(state: StateDep, store: StoreDep) -> dict:
         "included_developers": TIER_DEVELOPER_SEATS.get(tier, 0),
         "priced": rate is not None,
     }
-    out: dict = {"plan": plan, "current": None, "history": [], "if_paid": []}
+    out: dict = {"plan": plan, "current": None, "history": [], "if_paid": [], "forecast": None}
     if lic is not None:
         name = lic.organization
         out["current"] = await _month_statement(store, this_month, name, tier,
                                                 lic.governed_node_ceiling)
+        out["forecast"] = await _forecast(store, out["current"], tier, lic.governed_node_ceiling)
         on = date.fromisoformat(f"{this_month}-01")
         for _ in range(BILLING_HISTORY):
             on = (on - timedelta(days=1)).replace(day=1)
@@ -377,8 +443,11 @@ async def license_invoice(
         start, end = billing_month(f"{month}-01")
     except ValueError as exc:
         raise HTTPException(400, f"month must be YYYY-MM: {exc}") from exc
+    from axor_backend.ee.seats import month_seats
+
     usage = await store.node_usage(start, end)
-    devs = await store.developer_usage(start, end)
+    seats = await month_seats(store, month, lic.workspace_tier)
+    devs = {"developers": seats["developers"]}
     line = statement(
         month=month,
         organization=lic.organization,
@@ -387,7 +456,7 @@ async def license_invoice(
         peak_nodes=int(usage["peak_nodes"]),
         peak_day=usage["peak_day"],
         included_developers=TIER_DEVELOPER_SEATS.get(lic.workspace_tier, 0),
-        active_developers=int(devs["active_developers"]),
+        active_developers=len(seats["seated"]),
     )
     return {
         **line.as_dict(),

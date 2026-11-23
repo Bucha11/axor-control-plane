@@ -24,6 +24,7 @@ EXAMPLE_DEVELOPER_PREFIX = "dev-example-"
 REASONS = {
     "developer": "a second developer in this workspace — each needs a seat",
     "agent_family": "a second agent family — mixing Claude Code and Codex is on the paid plan",
+    "seat_cap": "past the workspace's seat limit this month",
 }
 
 
@@ -37,6 +38,8 @@ KNOWN_FAMILIES = ("claude-code", "codex")
 
 async def coding_entitlements(store: Any, tier: str) -> dict[str, Any]:  # noqa: ANN401
     free = tier == "community"
+    if not free:
+        return await _paid_entitlements(store, tier)
     allowed_devs: list[str] = []
     # the family the workspace picked, if it did; else the first to report
     chosen = await store.get_setting(FAMILY_SETTING) if free else None
@@ -85,3 +88,38 @@ async def coding_entitlements(store: Any, tier: str) -> dict[str, Any]:  # noqa:
 
 def mixes_families(agents: list[str]) -> bool:
     return len({a for a in agents if a}) > FREE_AGENT_FAMILIES
+
+
+async def _paid_entitlements(store: Any, tier: str) -> dict[str, Any]:  # noqa: ANN401
+    """A paid plan locks nothing — unless an admin capped the seats: then the
+    sessions of a developer past the cap this month are kept but locked."""
+    from axor_backend.clock import today
+    from axor_backend.ee.seats import month_seats
+
+    seats = await month_seats(store, today()[:7], tier)
+    over = {d["developer"] for d in seats["over"]}
+    locked = {row["node_id"]: ["seat_cap"] for row in await store.coding_profiles()
+              if row["developer"] in over} if over else {}
+    return {
+        "tier": tier, "free": False, "developers": None, "agent_families": None,
+        "agent_family": None, "agent_family_chosen": False,
+        "seat_cap": seats["cap"], "seats_used": len(seats["seated"]),
+        "locked": locked, "locked_trees": {}, "reasons": REASONS,
+    }
+
+
+async def joins_past_cap(store: Any, tier: str, developer: str) -> bool:  # noqa: ANN401
+    """Whether a developer reporting now takes no seat: the cap is reached by
+    others this month. Asked when a session first says who it is — before it
+    has reported anything that would count it."""
+    if tier == "community" or not developer:
+        return False
+    from axor_backend.clock import today
+    from axor_backend.ee.seats import month_seats
+
+    seats = await month_seats(store, today()[:7], tier)
+    if seats["cap"] is None:
+        return False
+    if any(d["developer"] == developer for d in seats["seated"]):
+        return False
+    return len(seats["seated"]) >= seats["cap"]
