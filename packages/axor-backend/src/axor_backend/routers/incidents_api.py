@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 
 from axor_backend import incidents
 from axor_backend.clock import now
@@ -45,13 +45,16 @@ async def list_incidents(store: StoreDep, kind: str = "", status: str = "", agen
 
 
 @router.put("/status")
-async def set_status(body: dict, store: StoreDep) -> dict:
+async def set_status(body: dict, request: Request, store: StoreDep) -> dict:
     item, status = body.get("id"), body.get("status")
     if not isinstance(item, str) or not item or len(item) > 240:
         raise HTTPException(400, "id names an item of the feed")
     if status not in incidents.STATUSES:
         raise HTTPException(400, f"status is one of {', '.join(incidents.STATUSES)}")
     await store.set_incident_status(item, status, now())
+    from axor_backend import audit
+
+    await audit.record(store, request, f"incident_{status}", item)
     return {"id": item, "status": status}
 
 
@@ -65,7 +68,7 @@ async def list_mutes(store: StoreDep) -> dict:
 
 
 @router.put("/mute")
-async def set_mute(body: dict, store: StoreDep) -> dict:
+async def set_mute(body: dict, request: Request, store: StoreDep) -> dict:
     """"Not a problem — don't flag this again": a let-through call of this kind,
     what and detail (``*`` as a wildcard in the detail) stops being an item.
     ``{"on": false}`` lifts it."""
@@ -83,4 +86,8 @@ async def set_mute(body: dict, store: StoreDep) -> dict:
             raise HTTPException(400, f"at most {MAX_MUTES} muted calls")
         mutes.append({"kind": kind, "what": what, "detail": detail, "ts": now()})
     await store.set_setting(incidents.MUTED, mutes)
+    from axor_backend import audit
+
+    await audit.record(store, request, "muted" if body.get("on", True) else "unmuted",
+                       f"{what}: {detail}", kind=kind)
     return {"muted": mutes}

@@ -2,7 +2,7 @@
 // The notification subscribe hits the real backend; the license verify rejects
 // a bad payload offline.
 import { expect, test } from "@playwright/test";
-import { goHash, setConnection } from "./helpers";
+import { BACKEND, goHash, seedNode, setConnection, uniqueNode } from "./helpers";
 
 test.describe("settings", () => {
   test.beforeEach(async ({ page }) => {
@@ -245,4 +245,27 @@ test.describe("developer seats on a paid plan", () => {
     await expect(seats.getByTestId("seats-forecast")).toContainText("2 developers → $50.00");
     expect(put).toEqual([{ cap: 2 }]);
   });
+});
+
+test("the audit trail: who did what to which agent, and the export of it", async ({ page, request }) => {
+  const node = uniqueNode("audited");
+  await seedNode(request, node);
+  await request.post(`${BACKEND}/v1/plane/${node}/command`, { data: { version: 1, state: { paused: true } } });
+  await request.post(`${BACKEND}/v1/plane/${node}/command`,
+    { data: { version: 2, state: { budget_cap_calls: 25 } } });
+  await goHash(page, "settings?tab=audit");
+  const trail = page.getByTestId("audit-trail");
+  await trail.getByPlaceholder("agent, rule, key…").fill(node);
+  const rows = trail.getByTestId("audit-row");
+  await expect(rows).toHaveCount(2);
+  // the act in words, then whom it was done to
+  await expect(rows.nth(0)).toContainText("capped the calls of");
+  await expect(rows.nth(0)).toContainText(node);
+  await expect(rows.nth(0)).toContainText("25 calls");
+  await expect(rows.nth(1)).toContainText("paused");
+  const [dl] = await Promise.all([page.waitForEvent("download"), trail.getByTestId("audit-export-csv").click()]);
+  expect(dl.suggestedFilename()).toBe("axor-audit.csv");
+  const csv = await (await import("node:fs/promises")).readFile(await dl.path(), "utf8");
+  expect(csv.split(/\r?\n/)[0]).toBe("ts,who,role,action,target,detail,kind,id");
+  expect(csv).toContain(`,pause,${node},`);
 });

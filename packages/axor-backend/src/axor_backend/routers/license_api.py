@@ -45,7 +45,7 @@ from __future__ import annotations
 
 from datetime import date, timedelta
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 
 from axor_backend.deps import ConfigDep, PrincipalDep, StateDep, StoreDep
 from axor_backend.ee.license import TIER_DEVELOPER_SEATS, TIER_NODE_CEILING
@@ -216,7 +216,7 @@ async def license_entitlements(state: StateDep, store: StoreDep) -> dict:
 
 
 @router.put("/agent-family")
-async def choose_agent_family(body: dict, store: StoreDep) -> dict:
+async def choose_agent_family(body: dict, request: Request, store: StoreDep) -> dict:
     """Which agent family the free plan keeps — Claude Code or Codex. Without
     a choice it is the first to report; this lets a workspace that started on
     one switch to the other. Sessions of the other family stay recorded and
@@ -227,6 +227,9 @@ async def choose_agent_family(body: dict, store: StoreDep) -> dict:
     if agent not in KNOWN_FAMILIES:
         raise HTTPException(400, f"agent must be one of {list(KNOWN_FAMILIES)}")
     await store.set_setting(FAMILY_SETTING, agent)
+    from axor_backend import audit
+
+    await audit.record(store, request, "agent_family", agent)
     return {"agent_family": agent}
 
 
@@ -335,7 +338,7 @@ async def _forecast(store: StoreDep, current: dict, tier: str, included_nodes: i
 
 
 @router.put("/seat-cap")
-async def set_seat_cap(body: dict, state: StateDep, store: StoreDep) -> dict:
+async def set_seat_cap(body: dict, request: Request, state: StateDep, store: StoreDep) -> dict:
     """An admin's limit on developer seats (``{"cap": n}``, or ``null`` for
     none). Past it a developer's sessions are protected but not shown,
     operated or billed. It cannot go below the seats this month already used:
@@ -347,8 +350,11 @@ async def set_seat_cap(body: dict, state: StateDep, store: StoreDep) -> dict:
     if tier == "community":
         raise HTTPException(400, "the free plan is one developer; a seat limit is for a paid plan")
     cap = body.get("cap")
+    from axor_backend import audit
+
     if cap is None:
         await store.set_setting(SEAT_CAP_SETTING, None)
+        await audit.record(store, request, "seat_limit_removed", "")
         return {"seat_cap": None}
     if not isinstance(cap, int) or isinstance(cap, bool) or not 1 <= cap <= MAX_CAP:
         raise HTTPException(400, f"cap is a whole number of seats, 1 to {MAX_CAP}, or null")
@@ -360,6 +366,7 @@ async def set_seat_cap(body: dict, state: StateDep, store: StoreDep) -> dict:
                                             f"the limit can be {used} or more now, and lower "
                                             "from next month"})
     await store.set_setting(SEAT_CAP_SETTING, {"cap": cap, "since": month})
+    await audit.record(store, request, "seat_limit", str(cap))
     return {"seat_cap": cap, "used": used}
 
 

@@ -125,11 +125,14 @@ async def team_memory(request: Request, store: StoreDep) -> dict:
 
 
 @router.put("/v1/memory/settings")
-async def memory_settings(body: dict, store: StoreDep) -> dict:
+async def memory_settings(body: dict, request: Request, store: StoreDep) -> dict:
     days = body.get("fresh_days")
     if not isinstance(days, int) or not 1 <= days <= 365:
         raise HTTPException(400, "fresh_days is a whole number of days, 1 to 365")
     await store.set_setting(memory.FRESH_SETTING, days)
+    from axor_backend import audit
+
+    await audit.record(store, request, "memory_fresh_days", str(days))
     return {"fresh_days": days}
 
 
@@ -172,6 +175,10 @@ async def set_status(item_id: int, body: dict, request: Request, store: StoreDep
     await store.update_memory_item(item_id, status, doc, now)
     await memory.refresh(store, item["repo"],
                          given=memory.given_on_plan(request.app.state, item["repo"]))
+    from axor_backend import audit
+
+    await audit.record(store, request, f"memory_{status}",
+                       audit.first_words(item["doc"].get("text", "")), repo=item["repo"])
     return {"id": item_id, "status": status}
 
 
@@ -192,4 +199,7 @@ async def add_note(body: dict, request: Request, store: StoreDep,
            "last_ok_ts": ts, "given": 0, "auto": False, "reason": ""}
     item_id = await store.add_memory_item(repo, f"note:{ts}:{text[:200]}", "note", "on", doc, ts)
     await memory.refresh(store, repo, given=memory.given_on_plan(request.app.state, repo))
+    from axor_backend import audit
+
+    await audit.record(store, request, "memory_note", audit.first_words(text), repo=repo)
     return {"id": item_id}

@@ -215,6 +215,8 @@ async def _audit(store: object, action: str, request: Request, **fields: object,
         "by": {
             "kind": caller.kind if caller else "unauthenticated",
             "id": caller.key_id if caller else None,
+            # a person by their email, so the audit trail names them
+            **({"email": caller.email} if caller and caller.email else {}),
         },
         **fields,
     }

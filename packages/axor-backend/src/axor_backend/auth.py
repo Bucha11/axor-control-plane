@@ -105,6 +105,8 @@ _READ_POLICY: tuple[tuple[str, str], ...] = (
     ("/v1/keys/mine", "ingest"),
     # Listing keys is credential enumeration: ids, scopes, labels, dates.
     ("/v1/keys", "admin"),
+    # Who did what to whose agent — and the export of it.
+    ("/v1/audit", "admin"),
     # Every enrolment with the nodes allowed to dispense it — the map of which
     # node can reach which tool credential.
     ("/v1/vault/creds/health", "admin"),

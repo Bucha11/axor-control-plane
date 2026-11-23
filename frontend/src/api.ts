@@ -584,6 +584,11 @@ export interface BillingStatement {
   // an admin's seat limit, and the developers past it (not shown, not billed)
   seat_cap?: number | null; over_cap?: number;
 }
+/** One act on the workspace's audit trail. */
+export interface AuditItem {
+  id: string; ts: string; kind: "control" | "api_key"; action: string;
+  who: string; role: string; target: string; detail: Record<string, unknown>;
+}
 /** Where this month's bill is heading (a paid plan). */
 export interface BillingForecast {
   developers_so_far: number;
@@ -1749,6 +1754,19 @@ export const api = {
       body: JSON.stringify({ agent }),
     }).then((r) => j<{ agent_family: string }>(r)),
   billing: () => af("/v1/license/billing").then((r) => j<BillingReport>(r)),
+  // the workspace's audit trail (admin): who did what to whose agent
+  audit: (q: { action?: string; who?: string; target?: string; since?: string; limit?: number } = {}) => {
+    const p = new URLSearchParams();
+    for (const [k, v] of Object.entries(q)) if (v !== undefined && v !== "") p.set(k, String(v));
+    return af(`/v1/audit?${p}`).then((r) => j<{ items: AuditItem[]; total: number; actions: string[] }>(r));
+  },
+  // the whole trail as a file — fetched with the session's token, saved by the page
+  auditExport: async (format: "csv" | "jsonl", since?: string): Promise<{ blob: Blob; name: string }> => {
+    const r = await af(`/v1/audit/export?format=${format}${since ? `&since=${encodeURIComponent(since)}` : ""}`);
+    if (!r.ok) throw new Error(`${r.status} ${await r.text()}`);
+    const name = /filename="([^"]+)"/.exec(r.headers.get("content-disposition") ?? "")?.[1] ?? `axor-audit.${format}`;
+    return { blob: await r.blob(), name };
+  },
   // the workspace's limit on developer seats (admin); null for none
   setSeatCap: (cap: number | null) =>
     af("/v1/license/seat-cap", {

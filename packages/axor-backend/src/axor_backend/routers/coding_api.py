@@ -161,7 +161,8 @@ async def rules_for_screen(store: StoreDep) -> dict:
 
 
 @router.put("/rules")
-async def set_rules(body: dict, store: StoreDep, principal: PrincipalDep) -> dict:
+async def set_rules(body: dict, request: Request, store: StoreDep,
+                    principal: PrincipalDep) -> dict:
     """The team's rules: ``{"allow": [rule ids], "mode": "enforce"|"observe"}``.
     Admin: it decides what every developer's agent may do."""
     known = {r["id"] for r in _catalog()}
@@ -186,7 +187,40 @@ async def set_rules(body: dict, store: StoreDep, principal: PrincipalDep) -> dic
     await store.set_setting(RULES, {"allow": sorted(set(allow)), "mode": mode,
                                     "exceptions": exceptions, "trusted_sources": sources,
                                     "by": _by(principal), "ts": now_ts})
+    await _audit_rules(store, request, held, sorted(set(allow)), mode, exceptions, sources)
     return await _rules(store)
+
+
+def _exception_words(e: dict) -> str:
+    return f"{e['rule']}: {e.get('path') or e.get('command')}"
+
+
+async def _audit_rules(store: Any, request: Request, held: dict, allow: list[str],  # noqa: ANN401
+                       mode: str, exceptions: list[dict], sources: list[str]) -> None:
+    """What the save changed, act by act: a rule allowed or refused again, the
+    mode, an exception granted or withdrawn, a source trusted or not."""
+    from axor_backend import audit
+
+    was_allow = set(held.get("allow") or [])
+    for rule in sorted(set(allow) - was_allow):
+        await audit.record(store, request, "rule_allowed", rule)
+    for rule in sorted(was_allow - set(allow)):
+        await audit.record(store, request, "rule_refused", rule)
+    if mode != held.get("mode", "enforce"):
+        await audit.record(store, request, "rules_mode", mode)
+    old = {_exception_words(e) for e in held.get("exceptions") or []}
+    new = {_exception_words(e): e for e in exceptions}
+    for words in sorted(set(new) - old):
+        note = new[words].get("note") or ""
+        await audit.record(store, request, "exception_granted", words,
+                           **({"note": audit.first_words(note)} if note else {}))
+    for words in sorted(old - set(new)):
+        await audit.record(store, request, "exception_withdrawn", words)
+    was = set(held.get("trusted_sources") or [])
+    for host in sorted(set(sources) - was):
+        await audit.record(store, request, "source_trusted", host)
+    for host in sorted(was - set(sources)):
+        await audit.record(store, request, "source_untrusted", host)
 
 
 @router.get("/skills")
@@ -237,6 +271,9 @@ async def set_skill(name: str, body: dict, request: Request, principal: Principa
     else:
         off.pop(name, None)
     await request.app.state.store.set_setting(SKILLS_OFF, off)
+    from axor_backend import audit
+
+    await audit.record(store, request, "skill_off" if body["off"] else "skill_on", name)
     return {"skills_off": sorted(off)}
 
 
@@ -255,6 +292,10 @@ async def _set_team(name: str, on: bool, request: Request, principal: object,
         live = {"version": latest["version"], "files": latest["files"],
                 "by": _by(principal), "ts": datetime.now(UTC).isoformat()}
     await store.put_team_skill(name, shared["latest"], live)
+    from axor_backend import audit
+
+    await audit.record(store, request, "skill_shared_on" if on else "skill_shared_off", name,
+                       **({"version": live["version"]} if live else {}))
     return {"name": name, "team": on, "version": live["version"] if live else None}
 
 
@@ -352,4 +393,8 @@ async def set_brake(body: dict, request: Request, principal: PrincipalDep) -> di
     from axor_backend.funnel import used
 
     await used(store, "brake_on" if on else "brake_off")
+    from axor_backend import audit
+
+    await audit.record(store, request, "brake_on" if on else "brake_off", "every coding agent",
+                       **({"reason": value["reason"]} if value["reason"] else {}))
     return value

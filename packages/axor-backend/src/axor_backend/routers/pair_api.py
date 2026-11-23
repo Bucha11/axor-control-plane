@@ -123,7 +123,13 @@ async def open_pair(body: dict, request: Request, store: StoreDep,
     from axor_backend.funnel import used
 
     await used(store, "pair_open")
-    return await _open(store, node_id, _who(principal), outside, invited)
+    opened = await _open(store, node_id, _who(principal), outside, invited)
+    from axor_backend import audit
+
+    await audit.record(store, request, "pair_open", node_id,
+                       **({"invited": invited} if invited else {}),
+                       **({"outside": True} if outside else {}))
+    return opened
 
 
 def _opened_by_developer(pair: dict, profile: dict) -> bool:
@@ -158,13 +164,17 @@ async def list_pairs(store: StoreDep, principal: PrincipalDep) -> dict:
 
 
 @router.delete("/v1/pair/{token}")
-async def close_pair(token: str, store: StoreDep, principal: PrincipalDep) -> dict:
+async def close_pair(token: str, request: Request, store: StoreDep,
+                     principal: PrincipalDep) -> dict:
     pair = await store.pair_by_token(token)
     if pair is None or pair["org_id"] != current_org_id():
         raise HTTPException(404, "no such pair session in this workspace")
     if _person(principal) and str(pair["created_by"]).lower() != str(principal.email).lower():
         raise HTTPException(403, "only whoever opened the pair session ends it")
     await store.update_pair(token, closed_ts=_now().isoformat())
+    from axor_backend import audit
+
+    await audit.record(store, request, "pair_end", pair["node_id"])
     return {"closed": True}
 
 
@@ -206,7 +216,7 @@ async def pair_requests(store: StoreDep, principal: PrincipalDep) -> dict:
 
 
 @router.post("/v1/pair/requests/{request_id}")
-async def decide_request(request_id: int, body: dict, store: StoreDep,
+async def decide_request(request_id: int, body: dict, request: Request, store: StoreDep,
                          principal: PrincipalDep) -> dict:
     found = [r for r in await store.pair_requests_of() if r["id"] == request_id]
     if not found:
@@ -217,14 +227,18 @@ async def decide_request(request_id: int, body: dict, store: StoreDep,
         raise not_yours(profile)
     if req["status"] != "pending":
         return {"id": request_id, "status": req["status"]}
+    from axor_backend import audit
+
     if not body.get("accept"):
         await store.decide_pair_request(request_id, "declined", _now().isoformat())
+        await audit.record(store, request, "pair_declined", req["node_id"], asked_by=req["by"])
         return {"id": request_id, "status": "declined"}
     pair = await _open(store, req["node_id"], _who(principal), False, [req["by"]])
     from axor_backend.funnel import used
 
     await used(store, "pair_let_in")
     await store.decide_pair_request(request_id, "accepted", _now().isoformat(), pair["token"])
+    await audit.record(store, request, "pair_let_in", req["node_id"], asked_by=req["by"])
     return {"id": request_id, "status": "accepted", "token": pair["token"]}
 
 
@@ -345,6 +359,10 @@ async def send_note(token: str, body: dict, request: Request, store: StoreDep,
     from axor_backend.funnel import used
 
     await used(store, "pair_note")
+    from axor_backend import audit
+
+    await audit.record(store, request, "pair_note", pair["node_id"], who=by,
+                       text=audit.first_words(text), **({"guest": True} if you == "guest" else {}))
     return {"id": note_id}
 
 
@@ -378,7 +396,7 @@ async def notes_for_agent(node_id: str, store: StoreDep, principal: PrincipalDep
 # ── the developer, to their own agent ────────────────────────────────────────
 
 @router.post("/v1/coding/say/{node_id}", status_code=201)
-async def say_to_agent(node_id: str, body: dict, store: StoreDep,
+async def say_to_agent(node_id: str, body: dict, request: Request, store: StoreDep,
                        principal: PrincipalDep) -> dict:
     """A note from the session's developer to their own agent — from the
     plane's session panel, or a phone while a long run goes on. It reaches the
@@ -401,6 +419,9 @@ async def say_to_agent(node_id: str, body: dict, store: StoreDep,
     from axor_backend.funnel import used
 
     await used(store, "say")
+    from axor_backend import audit
+
+    await audit.record(store, request, "say", node_id, text=audit.first_words(text))
     return {"id": note_id}
 
 

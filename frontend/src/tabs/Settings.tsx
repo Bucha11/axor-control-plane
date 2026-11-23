@@ -18,6 +18,7 @@ import { C, MONO, btn } from "../theme";
 import Coach from "../components/Coach";
 import ToolCredentials from "../components/ToolCredentials";
 import UsageAndBilling from "../components/UsageAndBilling";
+import AuditTrail from "../components/AuditTrail";
 import { useStartTour } from "../components/Tour";
 import { errorWords } from "../refusal";
 
@@ -552,11 +553,13 @@ export default function Settings({ tab = "workspace" }: { tab?: string } = {}) {
   const startTour = useStartTour();
 
   const funnel = useQuery({ queryKey: ["funnel", 30], queryFn: () => api.funnelReport(30), retry: false });
+  const canAdmin = useCanAdmin();
   const prod = !journey || menuAll || journey !== "coding";
   const coding = !journey || menuAll || journey !== "production";
   const tabs: [SettingsTab, string][] = [
     ["workspace", "workspace"], ["billing", "billing"], ["connect", "connect agents"], ["alerts", "alerts"],
     ...(prod ? [["security", "security"]] as [SettingsTab, string][] : []),
+    ...(canAdmin ? [["audit", "audit"]] as [SettingsTab, string][] : []),
     ["learn", "learn"],
     ...(funnel.data ? [["operator", "operator"]] as [SettingsTab, string][] : []),
   ];
@@ -931,11 +934,12 @@ export default function Settings({ tab = "workspace" }: { tab?: string } = {}) {
       )}
 
       {active === "operator" && <FunnelPanel />}
+      {active === "audit" && <AuditTrail />}
     </div>
   );
 }
 
-type SettingsTab = "workspace" | "billing" | "connect" | "alerts" | "security" | "learn" | "operator";
+type SettingsTab = "workspace" | "billing" | "connect" | "alerts" | "security" | "audit" | "learn" | "operator";
 
 const PLANE_URL = typeof window === "undefined" ? "" : window.location.origin;
 

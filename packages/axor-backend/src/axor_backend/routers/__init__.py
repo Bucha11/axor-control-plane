@@ -18,6 +18,7 @@ from fastapi import APIRouter
 from axor_backend import plane, wrap_api
 from axor_backend.routers import (
     analysis,
+    audit_api,
     chaos_api,
     coding_api,
     corpus_api,
@@ -66,6 +67,7 @@ ALL_ROUTERS: tuple[APIRouter, ...] = (
     share_api.router,
     license_api.router,
     keys.router,
+    audit_api.router,
     health.router,
     version.router,
 )

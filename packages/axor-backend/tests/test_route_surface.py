@@ -181,6 +181,8 @@ EXPECTED: dict[tuple[str, str], str] = {
     # The listing shows what exists; a revoke erases it from there and not from
     # here. Same scope: reading who was ever issued what is enumeration too.
     ("GET", "/v1/keys/audit"): "admin",
+    ("GET", "/v1/audit"): "admin",
+    ("GET", "/v1/audit/export"): "admin",
     ("DELETE", "/v1/keys/{key_id}"): "admin",
     ("PUT", "/v1/keys/{key_id}"): "admin",   # a key's role, changed in place
     # a member's own ingest-only key (routers/keys: create_my_key)

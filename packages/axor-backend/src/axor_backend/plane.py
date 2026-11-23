@@ -164,6 +164,10 @@ async def command(node_id: str, body: dict, request: Request) -> dict:
         "timestamp": timestamp, "sig": sig,
     }
     ctx.broadcast.publish(topic("plane", node_id), message)
+    from axor_backend import audit
+
+    for act, detail in audit.command_acts(delta):
+        await audit.record(ctx.store, request, act, node_id, **detail)
     return {"node_id": node_id, "version": new_version, "state": state}
 
 
@@ -258,6 +262,9 @@ async def cascade_stop(node_id: str, request: Request, body: dict | None = None)
             "operator": body.get("operator", ""),
             "timestamp": body.get("timestamp", ""), "sig": body.get("sig", ""),
         })
+        from axor_backend import audit
+
+        await audit.record(ctx.store, request, "cascade_stop", node_id)
         return {"stopped": [node_id], "count": 1, "mode": "root_command"}
     # Build the parent map from every node's stored desired state, then BFS down.
     parents: dict[str, str] = {}
@@ -281,6 +288,9 @@ async def cascade_stop(node_id: str, request: Request, body: dict | None = None)
             "operator": "op_ui", "timestamp": "", "sig": "",
         })
         stopped.append(nid)
+    from axor_backend import audit
+
+    await audit.record(ctx.store, request, "cascade_stop", node_id, nodes=len(stopped))
     return {"stopped": stopped, "count": len(stopped), "mode": "bfs_fallback"}
 
 
