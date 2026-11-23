@@ -165,7 +165,7 @@ wheels = [
 
 [[package]]
 name = "axor-backend"
-version = "0.4.1"
+version = "0.5.0"
 source = { editable = "packages/axor-backend" }
 dependencies = [
     { name = "aiosqlite" },
@@ -200,7 +200,7 @@ requires-dist = [
     { name = "axor-eval", specifier = ">=0.3,<0.4" },
     { name = "axor-probe", specifier = ">=0.2.1,<0.3" },
     { name = "axor-sentinel", specifier = ">=0.4,<0.5" },
-    { name = "axor-wrap", marker = "extra == 'wrap'", specifier = ">=0.3,<0.4" },
+    { name = "axor-wrap", marker = "extra == 'wrap'", specifier = ">=0.4,<0.5" },
     { name = "cryptography", marker = "extra == 'identity'", specifier = ">=50.0.0" },
     { name = "fastapi", specifier = ">=0.111" },
     { name = "pyjwt", extras = ["crypto"], marker = "extra == 'identity'", specifier = ">=2.8" },
@@ -213,7 +213,7 @@ provides-extras = ["wrap", "identity"]
 
 [[package]]
 name = "axor-control-plane"
-version = "0.1.0"
+version = "0.5.0"
 source = { virtual = "." }
 
 [package.dev-dependencies]
@@ -245,20 +245,20 @@ wheels = [
 
 [[package]]
 name = "axor-eval"
-version = "0.3.0"
+version = "0.3.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "axor-core" },
     { name = "axor-wrap" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/94/a4/1e020ede6503e299bae2e35f74954d88a1534e9d0e826af46344553bb16f/axor_eval-0.3.0.tar.gz", hash = "sha256:1b744e229f2bc3d49c93e514ca5a7c9d99a14de84c107f3fe231f0bf62393aa0", size = 168388, upload-time = "2026-11-21T13:37:18.974Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/b5/89/38d8514d6775e02e779bf1505d3f0eb6dd2a1e1c48f35b2b0d4ef828a53f/axor_eval-0.3.2.tar.gz", hash = "sha256:d7a6e1e1e957e08dc31736d69e6151cff62f08233127e8a3742f820186372883", size = 170376, upload-time = "2026-11-23T22:23:19.798Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/49/75/45b8408994baa94bfe102f59165b8359a59e34d5a03b96c4f8e0a2d6d163/axor_eval-0.3.0-py3-none-any.whl", hash = "sha256:38bf46f29c51e73137ef0175152dc55b7eb912334d415afad41143b1702285c4", size = 82546, upload-time = "2026-11-21T13:37:17.492Z" },
+    { url = "https://files.pythonhosted.org/packages/d4/3d/60dd708ce591f7ae990872fc11e9697a05f8c166d3001a6b488c0cd1fe64/axor_eval-0.3.2-py3-none-any.whl", hash = "sha256:c91be0d5257a248743fc16157b6a79f12512ff522e5e224dc6b79bc50b072e7b", size = 83332, upload-time = "2026-11-23T22:23:18.619Z" },
 ]
 
 [[package]]
 name = "axor-identity"
-version = "0.2.0"
+version = "0.5.0"
 source = { editable = "packages/axor-identity" }
 dependencies = [
     { name = "aiosqlite" },
@@ -302,7 +302,7 @@ wheels = [
 
 [[package]]
 name = "axor-proxy"
-version = "0.4.1"
+version = "0.5.0"
 source = { editable = "packages/axor-proxy" }
 dependencies = [
     { name = "anyio" },
@@ -325,7 +325,7 @@ requires-dist = [
     { name = "anyio", specifier = ">=4.14.2" },
     { name = "axor-core", specifier = ">=0.10,<0.14" },
     { name = "axor-eval", specifier = ">=0.2,<0.4" },
-    { name = "axor-wrap", extras = ["plane"], specifier = ">=0.2,<0.4" },
+    { name = "axor-wrap", extras = ["plane"], specifier = ">=0.4,<0.5" },
     { name = "httpx", specifier = ">=0.27" },
     { name = "pynacl", specifier = ">=1.5" },
     { name = "starlette", specifier = ">=0.37" },
@@ -346,14 +346,14 @@ wheels = [
 
 [[package]]
 name = "axor-wrap"
-version = "0.3.0"
+version = "0.4.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "axor-core" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/44/a1/6d6f2dfce71a81d2c0fd99a18facd28771683b73b9630bacc63f5f9f1790/axor_wrap-0.3.0.tar.gz", hash = "sha256:eddad36511f8eee9ee87eb41b0da90627b1965628f66d5468b620d898a89b202", size = 214133, upload-time = "2026-11-21T12:53:31.648Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/a3/74/8f43a0d06e2f903e485c5b1914a4bd9b047ddcb78222e2e4370f051608ab/axor_wrap-0.4.0.tar.gz", hash = "sha256:8332a0fc3ceb8415e6ab82ed859cca5a65b6780547fb408ad689350fa5254813", size = 240332, upload-time = "2026-11-23T22:04:02.275Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/63/73/c2a79f1be573911c3d1755e4221f219a76653294ae5a2c53d14daca0794f/axor_wrap-0.3.0-py3-none-any.whl", hash = "sha256:17dbe929cfffb06394f932eb2f35ef7ab3f2ed18023ae5b783934859f32e10f5", size = 146035, upload-time = "2026-11-21T12:53:30.279Z" },
+    { url = "https://files.pythonhosted.org/packages/54/e3/4df952fdb0dcfc0f1c102c557c33900534cb2d339548a0c15b5d2046c81a/axor_wrap-0.4.0-py3-none-any.whl", hash = "sha256:1de0c810b4d326a4dc90264b43f71c259177ccce9bd05424dbe269eb7d1abc22", size = 159080, upload-time = "2026-11-23T22:04:00.916Z" },
 ]
 
 [package.optional-dependencies]
