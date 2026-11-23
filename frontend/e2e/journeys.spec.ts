@@ -111,8 +111,11 @@ test.describe("three ways in", () => {
     await expect(page.getByText("Axor Security Platform")).toBeVisible();
     await expect(page.getByTestId("tier-team")).toContainText("$299 / mo");
     await page.getByTestId("journey-both").click();
-    await expect(page.getByTestId("tier-team")).toContainText("5 developer seats included");
-    await expect(page.getByTestId("tier-security")).toContainText("25 developer seats included");
+    // no rung includes seats: a developer is a Business seat on top of the
+    // production rung, so Team reads as the production side and nothing else
+    await expect(page.getByTestId("tier-team")).toContainText("Business seats on top, $40 each");
+    await expect(page.getByTestId("tier-security")).toContainText("Business seats on top, $40 each");
+    await expect(page.getByTestId("tier-team")).not.toContainText("seats included");
   });
 
   test("a coding session is not a governed node, and is counted as a developer", async ({ request }) => {

@@ -1096,9 +1096,11 @@ def test_the_rate_card_and_the_pricing_page_state_one_ladder() -> None:
     for tier, seat_cents in SEAT_PRICE.items():
         if seat_cents:
             assert f"{money(seat_cents).removesuffix('.00')} / developer / mo" in page, tier
-        seats = TIER_DEVELOPER_SEATS[tier]
-        if seats > 1:
-            assert f"{seats} developer seats" in page, (tier, seats)
+        assert TIER_DEVELOPER_SEATS[tier] == (1 if tier == "community" else 0), tier
+    # No paid rung includes seats, so none may advertise any: Team included
+    # five, which made it Business plus $99 and strictly better — the page
+    # said so, and nobody would ever have bought Business.
+    assert "seats included" not in page
     assert "1 developer" in page  # community's free seat
     for tier, (base_cents, over_cents) in RATE_CARD.items():
         if tier in ("community", "coding", "business"):
