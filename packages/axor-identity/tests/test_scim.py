@@ -162,8 +162,8 @@ async def test_a_deprovisioned_person_s_keys_are_revoked_on_the_plane(
         made_anna = await c.post("/scim/v2/Users", headers=h, json={"userName": "anna@acme.dev"})
         anna = made_anna.json()
         await c.delete(f"/scim/v2/Users/{anna['id']}", headers=h)
-    assert seen == [("DELETE", f"https://plane.acme.dev/v1/keys/of/{anna['id']}",
-                     "Bearer plane-master")]
+    assert [x for x in seen if x[0] == "DELETE"] == [
+        ("DELETE", f"https://plane.acme.dev/v1/keys/of/{anna['id']}", "Bearer plane-master")]
 
 
 
@@ -191,7 +191,7 @@ async def test_without_an_operator_token_the_plane_gets_a_signed_one(
         h = _idp(made["token"])
         made_anna = await c.post("/scim/v2/Users", headers=h, json={"userName": "anna@acme.dev"})
         await c.delete(f"/scim/v2/Users/{made_anna.json()['id']}", headers=h)
-    claims = pyjwt.decode(seen[0], key.private_key.public_key(), algorithms=["EdDSA"])
+    claims = pyjwt.decode(seen[-1], key.private_key.public_key(), algorithms=["EdDSA"])
     assert claims["org"] == olga["org"]["org_id"] and claims["role"] == "admin"
     assert claims["exp"] - claims["iat"] == 120
 
@@ -248,3 +248,100 @@ async def test_groups_give_roles_once_an_admin_maps_them(c, app) -> None:  # noq
     assert (await roles())["vera"] == "member"
     dup = await c.post("/scim/v2/Groups", headers=h, json={"displayName": "ENG-LEADS"})
     assert dup.status_code == 409
+
+
+async def test_acts_on_people_land_on_the_plane_s_audit_trail(
+        tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Who joined, left, changed role, and what changed in sign-in — told to
+    the control plane's audit trail with a token this service signs."""
+    import json as _json
+
+    monkeypatch.setenv("AXOR_IDENTITY_PLANE_URL", "https://plane.acme.dev")
+    monkeypatch.delenv("AXOR_IDENTITY_PLANE_TOKEN", raising=False)
+    told: list[dict] = []
+
+    def plane(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/v1/audit/identity":
+            told.append(_json.loads(request.content))
+            return httpx.Response(204)
+        return httpx.Response(200, json={"revoked": []})
+
+    application = create_app(f"sqlite+aiosqlite:///{tmp_path}/t.db",
+                             signing_key=load_signing_key(generate_pem(), kid="k"),
+                             providers={}, public_url=PUBLIC, mailer=False,
+                             oauth_transport=httpx.MockTransport(plane))
+    async with application.router.lifespan_context(application), httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=application), base_url="http://identity") as c:
+        olga, made = await _workspace(c, application)
+        org = olga["org"]["org_id"]
+        admin = {"Authorization": f"Bearer {olga['access_token']}"}
+        h = _idp(made["token"])
+        anna = (await c.post("/scim/v2/Users", headers=h,
+                             json={"userName": "anna@acme.dev"})).json()
+        group = (await c.post("/scim/v2/Groups", headers=h, json={
+            "displayName": "Leads", "members": [{"value": anna["id"]}]})).json()
+        await c.put(f"/v1/orgs/{org}/scim/groups/{group['id']}", headers=admin,
+                    json={"role": "admin"})
+        await c.delete(f"/scim/v2/Users/{anna['id']}", headers=h)
+        await c.put(f"/v1/orgs/{org}/sessions", headers=admin, json={"hours": 12})
+        await c.post(f"/v1/orgs/{org}/sessions/end", headers=admin)
+    acts = [(t["action"], t["target"], t["who"]) for t in told]
+    scim = "your identity provider (SCIM)"
+    assert acts == [
+        ("scim_token_made", "", "olga@acme.dev"),
+        ("scim_added", "anna@acme.dev", scim),
+        ("scim_group_role", "Leads", "olga@acme.dev"),
+        ("scim_role", "anna@acme.dev", scim),
+        ("scim_removed", "anna@acme.dev", scim),
+        ("sessions_limit", "12 h", "olga@acme.dev"),
+        ("sessions_ended", "0 people", "olga@acme.dev"),
+    ]
+    assert told[3]["detail"] == {"from": "member", "to": "admin", "by_group": True}
+
+
+async def test_the_provider_renames_someone_and_gives_a_new_address(c, app) -> None:  # noqa: ANN001
+    olga, made = await _workspace(c, app)
+    org = olga["org"]["org_id"]
+    h = _idp(made["token"])
+    anna = (await c.post("/scim/v2/Users", headers=h, json={
+        "userName": "anna@acme.dev", "name": {"givenName": "Anna", "familyName": "Berg"}})).json()
+    assert anna["displayName"] == "Anna Berg"
+    # Entra ID: the attributes as paths
+    r = await c.patch(f"/scim/v2/Users/{anna['id']}", headers=h, json={"Operations": [
+        {"op": "Replace", "path": "displayName", "value": "Anna Lind"},
+        {"op": "Replace", "path": "userName", "value": "anna.lind@acme.dev"}]})
+    assert r.status_code == 200
+    assert r.json()["userName"] == "anna.lind@acme.dev" and r.json()["displayName"] == "Anna Lind"
+    members = (await c.get(f"/v1/orgs/{org}/members",
+                           headers={"Authorization": f"Bearer {olga['access_token']}"})).json()
+    assert "anna.lind@acme.dev" in {m["email"] for m in members["members"]}
+    # Okta: a PUT with the new address in emails
+    r = await c.put(f"/scim/v2/Users/{anna['id']}", headers=h, json={
+        "userName": "anna.lind@acme.dev", "active": True,
+        "emails": [{"value": "anna.lind@acme.dev", "primary": True}]})
+    assert r.status_code == 200
+    # another domain, or someone else's address, is refused
+    r = await c.patch(f"/scim/v2/Users/{anna['id']}", headers=h, json={"Operations": [
+        {"op": "replace", "value": {"userName": "anna@gmail.com"}}]})
+    assert r.status_code == 400
+    r = await c.patch(f"/scim/v2/Users/{anna['id']}", headers=h, json={"Operations": [
+        {"op": "replace", "path": "userName", "value": "olga@acme.dev"}]})
+    assert r.status_code == 409 and r.json()["scimType"] == "uniqueness"
+    # someone in a second workspace keeps their address: it is their sign-in there
+    ts = "2026-01-01T00:00:00Z"
+    await app.state.store.create_org("org_other", "Other", "community", ts)
+    await app.state.store.add_membership(anna["id"], "org_other", "member", ts)
+    r = await c.patch(f"/scim/v2/Users/{anna['id']}", headers=h, json={"Operations": [
+        {"op": "replace", "path": "userName", "value": "a.lind@acme.dev"}]})
+    assert r.status_code == 400 and r.json()["scimType"] == "mutability"
+
+
+async def test_groups_come_in_pages(c, app) -> None:  # noqa: ANN001
+    _, made = await _workspace(c, app)
+    h = _idp(made["token"])
+    for name in ("A", "B", "C"):
+        await c.post("/scim/v2/Groups", headers=h, json={"displayName": name})
+    page = (await c.get("/scim/v2/Groups", headers=h,
+                        params={"startIndex": 2, "count": 1})).json()
+    assert page["totalResults"] == 3 and page["startIndex"] == 2 and page["itemsPerPage"] == 1
+    assert [g["displayName"] for g in page["Resources"]] == ["B"]

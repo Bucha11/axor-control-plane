@@ -73,6 +73,22 @@ async def record(store: Any, request: Request | None, action: str, target: str =
     await store.add_vault_audit(KIND, entry, entry["ts"])
 
 
+# Acts on the workspace's people, sign-in and sessions. The login service
+# (axor-identity) keeps the people; it tells this trail what changed, with a
+# short-lived token only it can sign (user ``svc_identity``).
+IDENTITY_SERVICE = "svc_identity"
+IDENTITY_ACTS = frozenset({
+    "member_added", "member_role", "member_removed", "invite_sent", "invite_withdrawn",
+    "sso_set", "sso_removed", "scim_token_made", "scim_token_revoked", "scim_group_role",
+    "scim_added", "scim_removed", "scim_role", "scim_renamed", "sessions_limit",
+    "sessions_ended",
+    "plan_activated",
+})
+IDENTITY_DETAIL = frozenset({"role", "to", "from", "protocol", "domains", "enforce",
+                             "default_role", "hours", "ended", "group", "tier", "until",
+                             "invited", "by_group", "via"})
+
+
 def first_words(text: str, n: int = 60) -> str:
     text = " ".join(str(text).split())
     return text if len(text) <= n else text[: n - 1] + "…"

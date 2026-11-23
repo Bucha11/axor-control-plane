@@ -10,6 +10,7 @@ an admin.
 - [OpenID Connect](#openid-connect) — [Okta](#okta-oidc) · [Entra ID](#entra-id-oidc) · [Google Workspace](#google-workspace-oidc)
 - [SAML 2.0](#saml-20) — [Okta](#okta-saml) · [Entra ID](#entra-id-saml) · [Google Workspace](#google-workspace-saml)
 - [Turning passwords off](#turning-passwords-off)
+- [How long a sign-in lasts](#how-long-a-sign-in-lasts)
 - [SCIM provisioning](#scim-provisioning) — [Okta](#okta-scim) · [Entra ID](#entra-id-scim)
 - [What happens when](#what-happens-when)
 - [When something does not work](#when-something-does-not-work)
@@ -158,6 +159,19 @@ change it; `viewer` is the cautious choice. If someone was invited first, the
 account they sign in with through SSO is the same account (matched by
 address).
 
+## How long a sign-in lasts
+
+Under **Sign-ins**, choose how long a sign-in lasts: 8 hours to 2 weeks. After
+that, everyone signs in again, through SSO if it is on. The time counts from
+the sign-in, however often the session refreshed in between. Without a
+setting, the deployment's own limit applies (14 days by default). This is on
+the Business plan.
+
+**Sign everyone else out** ends every sign-in to the workspace except yours.
+Use it when a laptop goes missing or someone leaves in a hurry. A page that is
+already open stops working within the access token's lifetime (15 minutes).
+This is on every plan.
+
 ## SCIM provisioning
 
 With SCIM, the provider creates people in the workspace when they are
@@ -212,11 +226,16 @@ them in Settings → workspace.
 | creates (assigns) a person | they become a member with the default role, or their group's role |
 | deactivates, unassigns or deletes them | their membership goes; their sign-ins to this workspace end at once; the keys their machines report with are revoked |
 | moves them between mapped groups | their role follows |
+| renames them | the name shows in Axor |
+| changes their address (`userName`) | their sign-in address changes, if the new one is at your domains, nobody else's, and they are in no other workspace |
 | tries to deactivate the owner | refused (409): ownership moves in Axor, by hand |
 
-Key revocations land in the workspace's **audit trail** (Settings → audit).
-Membership changes made by SCIM, and changes to the SSO settings, are kept
-by the login service and are not on that trail yet.
+Every change lands in the workspace's **audit trail** (Settings → audit),
+credited to *your identity provider (SCIM)*: who was added, removed or
+renamed, whose role a group changed. The monthly report counts them under
+changes to people and sign-in. Changes an admin makes by hand (members,
+invitations, the SSO settings, SCIM tokens, group mappings) are there too,
+under the admin's name.
 
 ## When something does not work
 

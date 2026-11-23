@@ -147,3 +147,31 @@ async def test_below_business_the_defaults_hold_and_cannot_be_changed(
     assert r.status_code == 402 and r.json()["detail"]["plan"] == "business"
     got = (await c.get("/v1/permissions", headers=olga)).json()
     assert got["editable"] is False and got["capabilities"]["skills"]["members"] is True
+
+
+async def test_the_login_service_tells_the_trail_who_joined_and_left(
+        c: httpx.AsyncClient, who, priv: Ed25519PrivateKey) -> None:  # noqa: ANN001
+    """Acts on people are recorded by the login service — with its own token,
+    signed with the key this plane trusts. A workspace admin cannot write
+    them: the trail would no longer say what happened."""
+    now = int(time.time())
+    svc = {"Authorization": "Bearer " + jwt.encode(
+        {"iss": "axor-identity", "sub": "svc_identity", "eml": "identity@axor", "org": ORG,
+         "role": "admin", "tier": "community", "iat": now, "exp": now + 120},
+        priv, algorithm="EdDSA", headers={"kid": KID})}
+    act = {"action": "scim_removed", "target": "anna@acme.dev",
+           "who": "your identity provider (SCIM)", "detail": {"role": "member", "secret": "x"}}
+    assert (await c.post("/v1/audit/identity", headers=who("olga@acme.dev", "owner"),
+                         json=act)).status_code == 403
+    assert (await c.post("/v1/audit/identity", headers=svc,
+                         json={**act, "action": "drop_table"})).status_code == 400
+    assert (await c.post("/v1/audit/identity", headers=svc, json=act)).status_code == 204
+    trail = (await c.get("/v1/audit", headers=who("olga@acme.dev", "owner"))).json()
+    row = trail["items"][0]
+    assert (row["action"], row["target"], row["who"]) == (
+        "scim_removed", "anna@acme.dev", "your identity provider (SCIM)")
+    assert row["detail"] == {"role": "member"}            # only what an act on people says
+    month = row["ts"][:7]
+    report = (await c.get("/v1/audit/report", headers=who("olga@acme.dev", "owner"),
+                          params={"month": month})).json()
+    assert [r["action"] for r in report["access_changes"]] == ["scim_removed"]

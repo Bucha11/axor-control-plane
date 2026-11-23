@@ -29,6 +29,14 @@ const WORDS: Record<string, string> = {
   key_change: "changed what this key may do:",
   permission_granted: "let", permission_withdrawn: "no longer lets",
   audit_retention: "set how long the audit trail is kept:",
+  member_added: "added to the workspace", member_role: "changed the role of", member_removed: "removed from the workspace",
+  invite_sent: "invited", invite_withdrawn: "withdrew the invitation",
+  sso_set: "set up single sign-on with", sso_removed: "turned single sign-on off",
+  scim_token_made: "made a SCIM token", scim_token_revoked: "turned SCIM provisioning off",
+  scim_group_role: "mapped the provider's group", scim_added: "added", scim_removed: "removed",
+  scim_role: "changed the role of", scim_renamed: "changed the address of",
+  sessions_limit: "set how long a sign-in lasts:", sessions_ended: "signed out",
+  plan_activated: "activated the plan",
 };
 
 function detailWords(it: AuditItem): string {
@@ -39,9 +47,16 @@ function detailWords(it: AuditItem): string {
   if (typeof d.note === "string") parts.push(`“${d.note}”`);
   if (typeof d.text === "string") parts.push(`“${d.text}”`);
   if (typeof d.asked_by === "string") parts.push(`asked by ${d.asked_by}`);
-  if (typeof d.to === "string") parts.push(`→ ${d.to}`);
+  if (typeof d.to === "string") parts.push(typeof d.from === "string" ? `${d.from} → ${d.to}` : `→ ${d.to}`);
   if (Array.isArray(d.invited) && d.invited.length) parts.push(`invited ${d.invited.join(", ")}`);
   if (typeof d.repo === "string") parts.push(`in ${d.repo}`);
+  if (typeof d.role === "string") parts.push(`as ${d.role}`);
+  if (typeof d.protocol === "string") parts.push(d.protocol === "saml" ? "SAML" : "OpenID Connect");
+  if (Array.isArray(d.domains) && d.domains.length) parts.push(d.domains.join(", "));
+  if (d.enforce === true) parts.push("the only way in");
+  if (typeof d.via === "string") parts.push(`through ${d.via}`);
+  if (typeof d.until === "string") parts.push(`until ${d.until}`);
+  if (d.by_group === true) parts.push("by the provider's groups");
   if (Array.isArray(d.scopes)) parts.push(d.scopes.join(", "));
   if (d.guest) parts.push("a guest");
   return parts.join(" · ");
@@ -97,6 +112,7 @@ function KeepAndReport({ field }: { field: React.CSSProperties }) {
               · {r.on_others_sessions.length} on someone else&apos;s agent
             </span>
             <span>· {r.policy_changes.length} policy, {r.permission_changes.length} permission change{r.permission_changes.length === 1 ? "" : "s"}, {r.brakes.length} brake{r.brakes.length === 1 ? "" : "s"}</span>
+            <span data-testid="audit-report-access">· {(r.access_changes ?? []).length} change{(r.access_changes ?? []).length === 1 ? "" : "s"} to people and sign-in</span>
             <button data-testid="audit-report-save"
               onClick={() => save(new Blob([JSON.stringify(r, null, 2)], { type: "application/json" }), `axor-audit-report-${r.month}.json`)}
               style={btn({ color: C.mut, fontSize: 11, padding: "2px 8px" })}>

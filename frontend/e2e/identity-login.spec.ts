@@ -167,6 +167,39 @@ test.describe("identity login (Settings)", () => {
     await expect(scim).toContainText("not used yet");
   });
 
+  test("sign-ins: an admin sets how long they last and signs everyone else out", async ({ page }) => {
+    await page.route("**/identity/v1/login", jsonRoute(200, SESSION));
+    await page.route("**/identity/v1/me", jsonRoute(200, {
+      user: SESSION.user, active_org: "org_1", role: "owner",
+      memberships: [{ org_id: "org_1", role: "owner", name: "Acme", tier: "business" }],
+    }));
+    await page.route("**/identity/v1/orgs/org_1/members", jsonRoute(200, { members: [
+      { user_id: "usr_1", email: "ada@acme.io", role: "owner", since: "2026-01-01" }] }));
+    await page.route("**/identity/v1/orgs/org_1/invites", jsonRoute(200, { invites: [] }));
+    let hours: number | null = null;
+    const policy = () => ({ hours, deployment_hours: 336, access_minutes: 15, plan_ok: true });
+    await page.route("**/identity/v1/orgs/org_1/sessions", async (route) => {
+      if (route.request().method() === "PUT") hours = JSON.parse(route.request().postData() ?? "{}").hours;
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(policy()) });
+    });
+    await page.route("**/identity/v1/orgs/org_1/sessions/end",
+      jsonRoute(200, { ended: 3, access_minutes: 15 }));
+    await goHash(page, "settings");
+    await page.getByLabel("email", { exact: true }).fill("ada@acme.io");
+    await page.getByLabel("password").fill("correct horse");
+    await page.getByRole("button", { name: "log in", exact: true }).click();
+    const box = page.getByTestId("sessions");
+    await expect(box.getByTestId("session-hours")).toHaveValue("");
+    await expect(box).toContainText("14 days (this deployment's)");
+    await box.getByTestId("session-hours").selectOption("12");
+    await expect(box.getByTestId("session-hours")).toHaveValue("12");
+    expect(hours).toBe(12);
+    page.once("dialog", (d) => void d.accept());
+    await box.getByTestId("sessions-end").click();
+    await expect(box.getByTestId("sessions-ended")).toContainText("3 people signed out");
+    await expect(box.getByTestId("sessions-ended")).toContainText("within 15 minutes");
+  });
+
   test("SAML: the admin sees what to give the provider and pastes its metadata", async ({ page }) => {
     await page.route("**/identity/v1/login", jsonRoute(200, SESSION));
     await page.route("**/identity/v1/me", jsonRoute(200, {

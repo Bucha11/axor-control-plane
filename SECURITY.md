@@ -83,9 +83,15 @@ anything else.
   refresh tokens in that workspace, and the plane revokes their API keys
   (service token signed with the identity key, valid 2 minutes). The owner
   cannot be deprovisioned.
+- *On the record.* Every change to people and sign-in reaches the plane's
+  audit trail. That covers SCIM, an admin's own changes, SSO settings and
+  session policy. The login service posts it with its own short-lived token;
+  no workspace admin can write those rows.
+- *Sessions.* A workspace can cap how long a sign-in lasts, counted from the
+  sign-in across refreshes. An admin can end every other sign-in at once. A
+  removed member's refresh tokens are revoked at once.
 - *Not yet.* Signed AuthnRequests, encrypted assertions and IdP-initiated
-  sign-in are not supported. Membership changes made by SCIM are not yet on
-  the plane's audit trail.
+  sign-in are not supported.
 
 **EE license.** Verified offline with a pinned vendor Ed25519 key. No
 phone-home; expiry degrades EE features to read-only and **never disables

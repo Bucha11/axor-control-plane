@@ -280,3 +280,40 @@ async def test_the_plan_comes_from_the_vendor_signed_license(tmp_path, idp) -> N
         r = await c.put(f"/v1/orgs/{org}/license", json={"license_json": lic()}, headers=_h(olga))
         assert r.status_code == 200 and r.json()["tier"] == "business"
         assert (await c.get(f"/v1/orgs/{org}/sso", headers=_h(olga))).json()["plan_ok"] is True
+
+
+async def test_a_license_the_deployment_was_given_counts(tmp_path, idp, monkeypatch) -> None:  # noqa: ANN001
+    """AXOR_LICENSE in the environment, pinned with AXOR_ORG, puts every
+    workspace on a single-company install on its plan — nobody pastes it."""
+    from axor_backend.ee.license import sign_license
+    from nacl.signing import SigningKey
+
+    vendor = SigningKey.generate()
+    monkeypatch.setenv("AXOR_ORG", "Acme Inc")
+    monkeypatch.setenv("AXOR_LICENSE", sign_license(
+        {"organization": "Acme Inc", "workspace_tier": "business", "governed_node_ceiling": 1,
+         "self_hosted_runner": True, "expires_at": "2999-01-01", "features": []},
+        bytes(vendor).hex()))
+    application = create_app(f"sqlite+aiosqlite:///{tmp_path}/env.db",
+                             signing_key=load_signing_key(generate_pem(), kid="k"),
+                             providers={}, public_url=PUBLIC, mailer=False,
+                             oauth_transport=httpx.MockTransport(idp),
+                             vendor_pubkey=vendor.verify_key.encode().hex())
+    async with application.router.lifespan_context(application), httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=application), base_url="http://identity") as c:
+        olga = (await c.post("/v1/signup", json={"email": "olga@acme.dev", "password": PW,
+                                                 "org_name": "Acme"})).json()
+        org = olga["org"]["org_id"]
+        assert (await c.get(f"/v1/orgs/{org}/sso", headers=_h(olga))).json()["plan_ok"] is True
+    # a forged one counts for nothing
+    monkeypatch.setenv("AXOR_LICENSE", '{"license": {}, "sig": "00"}')
+    application = create_app(f"sqlite+aiosqlite:///{tmp_path}/env2.db",
+                             signing_key=load_signing_key(generate_pem(), kid="k"),
+                             providers={}, public_url=PUBLIC, mailer=False,
+                             vendor_pubkey=vendor.verify_key.encode().hex())
+    async with application.router.lifespan_context(application), httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=application), base_url="http://identity") as c:
+        olga = (await c.post("/v1/signup", json={"email": "olga@acme.dev", "password": PW,
+                                                 "org_name": "Acme"})).json()
+        org = olga["org"]["org_id"]
+        assert (await c.get(f"/v1/orgs/{org}/sso", headers=_h(olga))).json()["plan_ok"] is False

@@ -39,6 +39,9 @@ orgs = Table(
     # the date the license that set `tier` runs to (licensing.py); past it the
     # workspace is on the free plan again
     Column("tier_expires", String(40), nullable=True),
+    # sign in again after this many hours, whatever the refresh token says
+    # (the workspace's session policy; NULL: the deployment's refresh TTL)
+    Column("session_hours", Integer, nullable=True),
 )
 
 users = Table(
@@ -52,6 +55,8 @@ users = Table(
     Column("created_ts", String(40), nullable=False),
     # a provider vouched for the address (or, later, the verification link)
     Column("email_verified", Boolean, nullable=False, default=False),
+    # the name the company's identity provider gives (SCIM); shown, never a key
+    Column("display_name", String(300), nullable=True),
 )
 
 oauth_identities = Table(
@@ -100,6 +105,9 @@ refresh_tokens = Table(
     Column("expires_ts", String(40), nullable=False),
     Column("revoked", Boolean, nullable=False, default=False),
     Column("created_ts", String(40), nullable=False),
+    # when the person actually signed in: carried through every rotation, so a
+    # session policy counts from the sign-in, not from the last refresh
+    Column("session_ts", String(40), nullable=True),
 )
 
 email_tokens = Table(
@@ -226,7 +234,13 @@ class Store:
         if row is None:
             return None
         return {"org_id": row.org_id, "name": row.name, "tier": row.tier,
-                "created_ts": row.created_ts, "tier_expires": row.tier_expires}
+                "created_ts": row.created_ts, "tier_expires": row.tier_expires,
+                "session_hours": row.session_hours}
+
+    async def set_session_hours(self, org_id: str, hours: int | None) -> None:
+        async with self.engine.begin() as conn:
+            await conn.execute(update(orgs).where(orgs.c.org_id == org_id)
+                               .values(session_hours=hours))
 
     async def set_org_tier(self, org_id: str, tier: str, expires: str | None = None) -> bool:
         async with self.engine.begin() as conn:
@@ -290,7 +304,19 @@ class Store:
             return None
         return {"user_id": row.user_id, "email": row.email,
                 "password_hash": row.password_hash, "created_ts": row.created_ts,
-                "email_verified": bool(row.email_verified)}
+                "email_verified": bool(row.email_verified),
+                "display_name": row.display_name}
+
+    async def set_user_email(self, user_id: str, email: str) -> None:
+        """A new address the company's provider vouches for (SCIM)."""
+        async with self.engine.begin() as conn:
+            await conn.execute(update(users).where(users.c.user_id == user_id)
+                               .values(email=email, email_verified=True))
+
+    async def set_display_name(self, user_id: str, name: str | None) -> None:
+        async with self.engine.begin() as conn:
+            await conn.execute(update(users).where(users.c.user_id == user_id)
+                               .values(display_name=name))
 
     # ── memberships ───────────────────────────────────────────────────────────
     async def add_membership(self, user_id: str, org_id: str, role: str,
@@ -385,11 +411,12 @@ class Store:
 
     # ── refresh tokens ────────────────────────────────────────────────────────
     async def store_refresh(self, token_hash: str, user_id: str, org_id: str,
-                           expires_ts: str, ts: str) -> None:
+                           expires_ts: str, ts: str, session_ts: str | None = None) -> None:
         async with self.engine.begin() as conn:
             await conn.execute(insert(refresh_tokens).values(
                 token_hash=token_hash, user_id=user_id, org_id=org_id,
-                expires_ts=expires_ts, revoked=False, created_ts=ts))
+                expires_ts=expires_ts, revoked=False, created_ts=ts,
+                session_ts=session_ts or ts))
 
     async def get_refresh(self, token_hash: str) -> dict[str, Any] | None:
         async with self.engine.connect() as conn:
@@ -400,13 +427,25 @@ class Store:
             return None
         return {"token_hash": row.token_hash, "user_id": row.user_id,
                 "org_id": row.org_id, "expires_ts": row.expires_ts,
-                "revoked": bool(row.revoked), "created_ts": row.created_ts}
+                "revoked": bool(row.revoked), "created_ts": row.created_ts,
+                "session_ts": row.session_ts or row.created_ts}
 
     async def revoke_all_refresh(self, user_id: str) -> None:
         async with self.engine.begin() as conn:
             await conn.execute(update(refresh_tokens)
                                .where(refresh_tokens.c.user_id == user_id)
                                .values(revoked=True))
+
+    async def end_sessions_in_org(self, org_id: str, *, keep_user: str | None = None) -> int:
+        """Every live sign-in to one workspace ends (but ``keep_user``'s)."""
+        where = [refresh_tokens.c.org_id == org_id, refresh_tokens.c.revoked.is_(False)]
+        if keep_user:
+            where.append(refresh_tokens.c.user_id != keep_user)
+        async with self.engine.begin() as conn:
+            users_out = (await conn.execute(
+                select(refresh_tokens.c.user_id).where(*where).distinct())).all()
+            await conn.execute(update(refresh_tokens).where(*where).values(revoked=True))
+        return len(users_out)
 
     async def revoke_refresh_in_org(self, user_id: str, org_id: str) -> None:
         """Their sessions in one workspace end; those in others go on."""

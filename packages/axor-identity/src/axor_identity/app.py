@@ -62,6 +62,11 @@ def _now_iso() -> str:
     return datetime.datetime.now(datetime.UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+def _hours_after(ts: str, hours: int) -> str:
+    start = datetime.datetime.fromisoformat(ts.replace("Z", "+00:00"))
+    return (start + datetime.timedelta(hours=hours)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
 def _norm_email(email: str) -> str:
     return email.strip().lower()
 
@@ -151,6 +156,12 @@ class SSOBody(BaseModel):
 
 class LicenseBody(BaseModel):
     license_json: str = Field(min_length=10, max_length=20_000)
+
+
+class SessionPolicyBody(BaseModel):
+    # sign in again after this many hours (1 hour to 90 days); null: no limit
+    # beyond the deployment's own
+    hours: int | None = Field(default=None, ge=1, le=24 * 90)
 
 
 class ExchangeBody(BaseModel):
@@ -247,13 +258,14 @@ def create_app(database_url: str | None = None, *,
     app.state.signing_key = signing_key
     jwks = signing_key.jwks()
 
-    async def _issue_session(user: dict, org_id: str, role: str, tier: str) -> dict:
+    async def _issue_session(user: dict, org_id: str, role: str, tier: str,
+                             session_ts: str | None = None) -> dict:
         raw_refresh, token_hash = new_refresh()
         now = datetime.datetime.now(datetime.UTC)
         expires = (now + datetime.timedelta(seconds=refresh_ttl)).strftime(
             "%Y-%m-%dT%H:%M:%SZ")
         await store.store_refresh(token_hash, user["user_id"], org_id, expires,
-                                  _now_iso())
+                                  _now_iso(), session_ts=session_ts)
         access = issue_access(
             signing_key, user_id=user["user_id"], email=user["email"],
             org=org_id, role=role, tier=tier, ttl=access_ttl,
@@ -338,7 +350,13 @@ def create_app(database_url: str | None = None, *,
             raise HTTPException(401, "refresh subject no longer valid")
         # rotate: the presented token is single-use
         await store.revoke_refresh(record["token_hash"])
-        return await _issue_session(user, org["org_id"], role, org["tier"])
+        hours = org.get("session_hours")
+        if hours and _now_iso() >= _hours_after(record["session_ts"], hours):
+            # the workspace's policy: a sign-in lasts so long, refreshed or not
+            raise HTTPException(401, f"{org['name']} asks everyone to sign in again "
+                                     f"every {hours} hour{'s' if hours != 1 else ''}")
+        return await _issue_session(user, org["org_id"], role, org["tier"],
+                                    session_ts=record["session_ts"])
 
     @app.post("/v1/logout", status_code=204)
     async def logout(body: RefreshBody) -> None:
@@ -373,6 +391,8 @@ def create_app(database_url: str | None = None, *,
         if await store.role_in_org(target["user_id"], org_id):
             raise HTTPException(409, "already a member")
         await store.add_membership(target["user_id"], org_id, body.role, _now_iso())
+        await _on_trail(org_id, "member_added", target["email"], who=_who(caller),
+                        role=body.role)
         return {"user_id": target["user_id"], "org_id": org_id, "role": body.role}
 
     @app.get("/v1/orgs/{org_id}/members")
@@ -404,7 +424,11 @@ def create_app(database_url: str | None = None, *,
         if body.role not in _ASSIGNABLE:
             raise HTTPException(422, f"role must be one of {sorted(_ASSIGNABLE)}")
         await _changeable(org_id, user_id, caller)
+        before = await store.role_in_org(user_id, org_id)
         await store.set_member_role(user_id, org_id, body.role)
+        if before != body.role:
+            await _on_trail(org_id, "member_role", await _email_of(user_id), who=_who(caller),
+                            **{"from": before or "", "to": body.role})
         return {"user_id": user_id, "org_id": org_id, "role": body.role}
 
     @app.delete("/v1/orgs/{org_id}/members/{user_id}")
@@ -412,6 +436,8 @@ def create_app(database_url: str | None = None, *,
                             caller: Claims = Depends(_caller)) -> dict:
         await _changeable(org_id, user_id, caller)
         await store.remove_member(user_id, org_id)
+        await store.revoke_refresh_in_org(user_id, org_id)
+        await _on_trail(org_id, "member_removed", await _email_of(user_id), who=_who(caller))
         return {"removed": user_id}
 
     # ── invites ───────────────────────────────────────────────────────────────
@@ -459,6 +485,8 @@ def create_app(database_url: str | None = None, *,
                 mailed = True
             except Exception as exc:  # noqa: BLE001 - the link still works
                 logging.getLogger("axor_identity.mail").warning("invite mail failed: %s", exc)
+        await _on_trail(org_id, "invite_sent", email or "an open link", who=_who(caller),
+                        role=body.role)
         return {"invite_id": invite_id, "token": raw, "link": link, "role": body.role,
                 "email": email, "expires_ts": expires, "mailed": mailed}
 
@@ -475,6 +503,7 @@ def create_app(database_url: str | None = None, *,
             raise HTTPException(403, "admin of this organization required")
         if not await store.revoke_invite(org_id, invite_id):
             raise HTTPException(404, "no open invitation by that id")
+        await _on_trail(org_id, "invite_withdrawn", invite_id, who=_who(caller))
 
     @app.get("/v1/invites/{token}")
     async def invite_info(token: str) -> dict:
@@ -494,6 +523,8 @@ def create_app(database_url: str | None = None, *,
         if role is None:
             role = record["role"]
             await store.add_membership(user["user_id"], record["org_id"], role, _now_iso())
+            await _on_trail(record["org_id"], "member_added", user["email"], who=user["email"],
+                            role=role, invited=True)
         org = await store.get_org(record["org_id"])
         return await _issue_session(user, record["org_id"], role,
                                     org["tier"] if org else "community")
@@ -654,6 +685,76 @@ def create_app(database_url: str | None = None, *,
     def _http() -> httpx.AsyncClient:
         return httpx.AsyncClient(transport=oauth_transport, timeout=15)
 
+    def _who(caller: Claims) -> str:
+        return caller.email or caller.user_id
+
+    async def _email_of(user_id: str) -> str:
+        user = await store.get_user(user_id)
+        return user["email"] if user else user_id
+
+    def _plane_bearer(org_id: str) -> str:
+        """This service to the control plane, for one workspace: a two-minute
+        token signed with the key the plane already trusts, as its admin."""
+        return issue_access(signing_key, user_id="svc_identity", email="identity@axor",
+                            org=org_id, role="admin", tier="community", ttl=120)
+
+    async def _on_trail(org_id: str, action: str, target: str = "", *, who: str,
+                        **detail: object) -> None:
+        """Tell the workspace's audit trail (on the control plane) what changed
+        among its people, its sign-in or its sessions. This service keeps the
+        people; the plane keeps the record. Never blocks the act: a plane that
+        is down costs the line, logged."""
+        if not plane_url:
+            return
+        try:
+            async with _http() as http:
+                r = await http.post(f"{plane_url}/v1/audit/identity",
+                                    json={"action": action, "target": target, "who": who,
+                                          "detail": detail},
+                                    headers={"Authorization": f"Bearer {_plane_bearer(org_id)}"})
+            if r.status_code >= 400:
+                logging.getLogger("axor_identity.audit").warning(
+                    "the control plane did not record %s: %s %s", action, r.status_code,
+                    r.text[:200])
+        except httpx.HTTPError as exc:
+            logging.getLogger("axor_identity.audit").warning(
+                "could not tell the control plane about %s: %s", action, exc)
+
+    # ── sessions: how long a sign-in lasts, and ending them all ──────────────
+    @app.get("/v1/orgs/{org_id}/sessions")
+    async def get_session_policy(org_id: str, caller: Claims = Depends(_caller)) -> dict:
+        _sso_admin(org_id, caller)
+        org = await store.get_org(org_id)
+        return {"hours": (org or {}).get("session_hours"),
+                "deployment_hours": refresh_ttl // 3600, "access_minutes": access_ttl // 60,
+                "plan_ok": await _on_business(org_id)}
+
+    @app.put("/v1/orgs/{org_id}/sessions")
+    async def put_session_policy(org_id: str, body: SessionPolicyBody,
+                                 caller: Claims = Depends(_caller)) -> dict:
+        """Everyone signs in again after ``hours`` — counted from the sign-in,
+        however often the session refreshed. Business: a company's policy."""
+        _sso_admin(org_id, caller)
+        if not await _on_business(org_id):
+            raise HTTPException(402, {"code": "plan_required", "plan": "business",
+                                      "detail": "a session limit for the workspace is on the "
+                                                "Business plan"})
+        await store.set_session_hours(org_id, body.hours)
+        await _on_trail(org_id, "sessions_limit", f"{body.hours} h" if body.hours else "none",
+                        who=_who(caller), hours=body.hours or 0)
+        return await get_session_policy(org_id, caller)
+
+    @app.post("/v1/orgs/{org_id}/sessions/end")
+    async def end_all_sessions(org_id: str, caller: Claims = Depends(_caller)) -> dict:
+        """Everyone signs in again — but the admin who asked. On every plan: a
+        stolen laptop is not a premium problem. A token already handed out runs
+        out within its few minutes; nothing renews it."""
+        _sso_admin(org_id, caller)
+        ended = await store.end_sessions_in_org(org_id, keep_user=caller.user_id)
+        await _on_trail(org_id, "sessions_ended", f"{ended} people", who=_who(caller),
+                        ended=ended)
+        return {"ended": ended, "access_minutes": access_ttl // 60}
+
     async def _sso_enforced(email: str, user: dict | None) -> None:
         """A domain whose workspace signs in only with SSO: no password, no
         GitHub / Google for its people. The workspace's owner keeps their
@@ -685,10 +786,26 @@ def create_app(database_url: str | None = None, *,
                 out.add(sso.domain_of(user["email"]))
         return out - sso.PUBLIC_DOMAINS
 
+    # A licence the operator gave the deployment (AXOR_LICENSE), as the plane
+    # takes it: it covers the workspace it is issued to — every workspace on a
+    # single-company install pinned with AXOR_ORG to the licence's organization.
+    env_license: licensing.License | None = None
+    raw_env_license = (os.environ.get("AXOR_LICENSE") or "").strip()
+    if raw_env_license and vendor_pubkey:
+        try:
+            env_license = licensing.verify(raw_env_license, vendor_pubkey)
+        except licensing.LicenseError as exc:
+            logging.getLogger("axor_identity").warning("AXOR_LICENSE ignored: %s", exc)
+
     async def _on_business(org_id: str) -> bool:
+        today = _now_iso()[:10]
+        if env_license and env_license.organization in (org_id, org_pin or org_id) \
+                and licensing.at_least(env_license.tier, env_license.expires_at, today,
+                                       "business"):
+            return True
         org = await store.get_org(org_id)
         return bool(org) and licensing.at_least(org["tier"], org.get("tier_expires"),
-                                                _now_iso()[:10], "business")
+                                                today, "business")
 
     @app.put("/v1/orgs/{org_id}/license")
     async def put_license(org_id: str, body: LicenseBody,
@@ -710,6 +827,8 @@ def create_app(database_url: str | None = None, *,
         if _now_iso()[:10] > lic.expires_at:
             raise HTTPException(403, f"this license expired on {lic.expires_at}")
         await store.set_org_tier(org_id, lic.tier, lic.expires_at)
+        await _on_trail(org_id, "plan_activated", lic.tier, who=_who(caller),
+                        tier=lic.tier, until=lic.expires_at)
         return {"org_id": org_id, "tier": lic.tier, "expires_at": lic.expires_at}
 
     def _sso_view(org_id: str, held: dict | None, provable: set[str],
@@ -789,6 +908,9 @@ def create_app(database_url: str | None = None, *,
                                          "client_secret": "", "saml_sso_url": idp.sso_url,
                                          "saml_entity_id": idp.entity_id,
                                          "saml_cert": idp.cert_pem})
+            await _on_trail(org_id, "sso_set", idp.entity_id or idp.sso_url, who=_who(caller),
+                            protocol="saml", domains=domains, enforce=body.enforce,
+                            default_role=body.default_role)
             return _sso_view(org_id, await store.get_sso(org_id), provable)
         issuer = body.issuer.strip().rstrip("/")
         if len(issuer) < 8 or not body.client_id.strip():
@@ -802,12 +924,16 @@ def create_app(database_url: str | None = None, *,
                                      "client_id": body.client_id.strip(),
                                      "client_secret": secret, "saml_sso_url": "",
                                      "saml_entity_id": "", "saml_cert": ""})
+        await _on_trail(org_id, "sso_set", issuer, who=_who(caller), protocol="oidc",
+                        domains=domains, enforce=body.enforce, default_role=body.default_role)
         return _sso_view(org_id, await store.get_sso(org_id), provable)
 
     @app.delete("/v1/orgs/{org_id}/sso", status_code=204)
     async def delete_sso(org_id: str, caller: Claims = Depends(_caller)) -> None:
         _sso_admin(org_id, caller)
-        await store.delete_sso(org_id)
+        if await store.get_sso(org_id) is not None:
+            await store.delete_sso(org_id)
+            await _on_trail(org_id, "sso_removed", who=_who(caller))
 
     @app.get("/v1/sso/discover")
     async def sso_discover(email: str = "") -> dict:
@@ -968,6 +1094,8 @@ def create_app(database_url: str | None = None, *,
             await store.link_identity(provider, subject, user_id, email, ts)
         if await store.role_in_org(user_id, cfg.org_id) is None:
             await store.add_membership(user_id, cfg.org_id, cfg.default_role, ts)
+            await _on_trail(cfg.org_id, "member_added", email, who=email,
+                            role=cfg.default_role, via="single sign-on")
         return user_id, created
 
     # ── SCIM 2.0: people come and go with the workspace's identity provider ───
@@ -1011,9 +1139,15 @@ def create_app(database_url: str | None = None, *,
             raise _ScimRefused(403, "provisioning is on the Business plan")
         return org_id
 
+    _SCIM_WHO = "your identity provider (SCIM)"
+
     def _user_resource(user: dict, active: bool) -> dict:
+        named = {"displayName": user["display_name"],
+                 "name": {"formatted": user["display_name"]}} if user.get("display_name") else {}
         return {"schemas": [_USER], "id": user["user_id"], "userName": user["email"],
-                "active": active, "emails": [{"value": user["email"], "primary": True}],
+                **named,
+                "active": active, "emails": [{"value": user["email"], "primary": True,
+                                              "type": "work"}],
                 "meta": {"resourceType": "User", "created": user.get("created_ts", ""),
                          "location": f"{scim_base}/Users/{user['user_id']}"}}
 
@@ -1030,13 +1164,12 @@ def create_app(database_url: str | None = None, *,
                                     "identity provider — they are its way back in", "mutability")
         await store.remove_member(user_id, org_id)
         await store.revoke_refresh_in_org(user_id, org_id)
+        await _on_trail(org_id, "scim_removed", await _email_of(user_id), who=_SCIM_WHO)
         if plane_url:
             # the plane trusts this service's signature: a two-minute token for
             # this workspace, as its admin — no shared secret, any tenancy. An
             # operator token, if one is set, is used instead (an older plane).
-            bearer = plane_token or issue_access(
-                signing_key, user_id="svc_identity", email="scim@identity-provider",
-                org=org_id, role="admin", tier="community", ttl=120)
+            bearer = plane_token or _plane_bearer(org_id)
             try:
                 async with _http() as http:
                     await http.delete(f"{plane_url}/v1/keys/of/{user_id}",
@@ -1048,8 +1181,71 @@ def create_app(database_url: str | None = None, *,
     async def _provision(org_id: str, user_id: str) -> None:
         if await store.role_in_org(user_id, org_id) is None:
             held = await store.get_sso(org_id)
-            await store.add_membership(user_id, org_id,
-                                       held["default_role"] if held else "member", _now_iso())
+            role = held["default_role"] if held else "member"
+            await store.add_membership(user_id, org_id, role, _now_iso())
+            await _on_trail(org_id, "scim_added", await _email_of(user_id), who=_SCIM_WHO,
+                            role=role)
+
+    def _profile_of(body: dict) -> dict:
+        """What a SCIM body (a POST or PUT User, or a PATCH's operations,
+        flattened) says about the person: ``email`` and ``name``."""
+        flat: dict = {}
+        if "Operations" in body:
+            for op in body.get("Operations") or []:
+                if not isinstance(op, dict) or str(op.get("op", "")).lower() not in (
+                        "replace", "add"):
+                    continue
+                path, value = str(op.get("path") or ""), op.get("value")
+                if path:
+                    flat[path] = value
+                elif isinstance(value, dict):
+                    flat.update(value)
+        else:
+            flat = body
+        out: dict = {}
+        email = flat.get("userName")
+        if not email:
+            emails = flat.get("emails")
+            if isinstance(emails, list):
+                primary = [e for e in emails if isinstance(e, dict) and e.get("primary")] \
+                    or [e for e in emails if isinstance(e, dict)]
+                email = (primary[0].get("value") if primary else None)
+        if not email:
+            email = next((v for k, v in flat.items() if k.lower().startswith("emails[")
+                          and k.lower().endswith(".value")), None)
+        if isinstance(email, str) and "@" in email:
+            out["email"] = _norm_email(email)
+        name = flat.get("name") if isinstance(flat.get("name"), dict) else {}
+        given = flat.get("name.givenName") or name.get("givenName")
+        family = flat.get("name.familyName") or name.get("familyName")
+        display = flat.get("displayName") or flat.get("name.formatted") or name.get("formatted") \
+            or " ".join(str(x) for x in (given, family) if x)
+        if isinstance(display, str) and display.strip():
+            out["name"] = display.strip()[:300]
+        return out
+
+    async def _apply_profile(org_id: str, user: dict, profile: dict) -> dict:
+        """The provider renamed someone, or gave them a new address. A new
+        address must be at the workspace's domains, nobody else's, and the
+        person in no other workspace (it is their sign-in everywhere)."""
+        if profile.get("name") and profile["name"] != user.get("display_name"):
+            await store.set_display_name(user["user_id"], profile["name"])
+        new = profile.get("email")
+        if new and new != user["email"]:
+            if sso.domain_of(new) not in await _scim_domains(org_id):
+                raise _ScimRefused(400, f"{new} is not at one of this workspace's domains",
+                                   "invalidValue")
+            if await store.get_user_by_email(new) is not None:
+                raise _ScimRefused(409, f"{new} is another account's address", "uniqueness")
+            others = [m for m in await store.memberships_for_user(user["user_id"])
+                      if m["org_id"] != org_id]
+            if others:
+                raise _ScimRefused(400, "this person is in another workspace too — their "
+                                        "address changes from their own account", "mutability")
+            await store.set_user_email(user["user_id"], new)
+            await _on_trail(org_id, "scim_renamed", new, who=_SCIM_WHO,
+                            **{"from": user["email"], "to": new})
+        return await store.get_user(user["user_id"]) or user
 
     async def _scim_body(request: Request) -> dict:
         try:
@@ -1089,12 +1285,14 @@ def create_app(database_url: str | None = None, *,
         raw = "scim_" + secrets.token_urlsafe(32)
         await store.put_scim_token(org_id, digest(raw), caller.email or caller.user_id,
                                    _now_iso())
+        await _on_trail(org_id, "scim_token_made", who=_who(caller))
         return {"token": raw, "base_url": scim_base}
 
     @app.delete("/v1/orgs/{org_id}/scim/token", status_code=204)
     async def scim_token_revoke(org_id: str, caller: Claims = Depends(_caller)) -> None:
         _sso_admin(org_id, caller)
         await store.delete_scim(org_id)
+        await _on_trail(org_id, "scim_token_revoked", who=_who(caller))
 
     @app.get("/scim/v2/ServiceProviderConfig")
     async def scim_config() -> JSONResponse:
@@ -1155,6 +1353,10 @@ def create_app(database_url: str | None = None, *,
             user_id = "usr_" + secrets.token_hex(8)
             await store.create_user(user_id, email, None, _now_iso(), email_verified=True)
             user = await store.get_user(user_id)
+        name = _profile_of(body).get("name")
+        if name and name != user.get("display_name"):
+            await store.set_display_name(user["user_id"], name)
+            user = await store.get_user(user["user_id"])
         active = _active(body.get("active", True))
         if active:
             await _provision(org_id, user["user_id"])
@@ -1167,6 +1369,7 @@ def create_app(database_url: str | None = None, *,
         user = await store.get_user(user_id)
         if user is None:
             raise _ScimRefused(404, f"no user {user_id}")
+        user = await _apply_profile(org_id, user, _profile_of(body))
         active = _active(body.get("active", True))
         if active:
             await _provision(org_id, user_id)
@@ -1192,6 +1395,7 @@ def create_app(database_url: str | None = None, *,
                 active = _active(value)
             elif not path and isinstance(value, dict) and "active" in value:
                 active = _active(value["active"])
+        user = await _apply_profile(org_id, user, _profile_of(body))
         if active:
             await _provision(org_id, user_id)
         else:
@@ -1234,6 +1438,8 @@ def create_app(database_url: str | None = None, *,
             role = max(mapped, key=_rank) if mapped else default
             if role != current:
                 await store.set_member_role(uid, org_id, role)
+                await _on_trail(org_id, "scim_role", await _email_of(uid), who=_SCIM_WHO,
+                                **{"from": current, "to": role, "by_group": bool(mapped)})
 
     def _member_ids(raw: object) -> set[str]:
         return {str(m.get("value")) for m in raw or [] if isinstance(m, dict) and m.get("value")} \
@@ -1246,7 +1452,8 @@ def create_app(database_url: str | None = None, *,
         return g
 
     @app.get("/scim/v2/Groups")
-    async def scim_groups(filter: str = "", org_id: str = Depends(_scim_org)) -> JSONResponse:  # noqa: A002
+    async def scim_groups(filter: str = "", startIndex: int = 1, count: int = 100,  # noqa: A002, N803
+                          org_id: str = Depends(_scim_org)) -> JSONResponse:
         groups = await store.scim_groups_of(org_id)
         if filter:
             import re
@@ -1255,9 +1462,11 @@ def create_app(database_url: str | None = None, *,
             if not m:
                 raise _ScimRefused(400, 'only displayName eq "…" is filtered on', "invalidFilter")
             groups = [g for g in groups if g["display_name"].lower() == m.group(1).lower()]
-        return _scim({"schemas": [_LIST], "totalResults": len(groups), "startIndex": 1,
-                      "itemsPerPage": len(groups),
-                      "Resources": [_group_resource(g) for g in groups]})
+        start = max(1, startIndex)
+        page = groups[start - 1:start - 1 + max(0, min(count, 200))]
+        return _scim({"schemas": [_LIST], "totalResults": len(groups), "startIndex": start,
+                      "itemsPerPage": len(page),
+                      "Resources": [_group_resource(g) for g in page]})
 
     @app.get("/scim/v2/Groups/{group_id}")
     async def scim_group(group_id: str, org_id: str = Depends(_scim_org)) -> JSONResponse:
@@ -1349,8 +1558,12 @@ def create_app(database_url: str | None = None, *,
             raise HTTPException(404, "no such group")
         if body.role not in (*_MAPPABLE, "none"):
             raise HTTPException(422, f"role is one of {[*_MAPPABLE, 'none']}")
+        before = g["role"]
         g["role"] = None if body.role == "none" else body.role
         await store.put_scim_group(g)
+        if before != g["role"]:
+            await _on_trail(org_id, "scim_group_role", g["display_name"], who=_who(caller),
+                            group=g["display_name"], to=body.role)
         everyone = {m["user_id"] for m in await store.org_members(org_id)}
         await _apply_group_roles(org_id, everyone)
         return {"group_id": group_id, "role": g["role"]}

@@ -169,8 +169,32 @@ async def compliance_report(request: Request, store: StoreDep, principal: Princi
         "policy_changes": [r for r in rows if r["action"] in pick],
         "permission_changes": [r for r in rows if r["action"].startswith("permission_")],
         "brakes": [r for r in rows if r["action"] in ("brake_on", "brake_off")],
+        # who joined, left or changed role; sign-in and session settings
+        "access_changes": [r for r in rows if r["action"] in audit.IDENTITY_ACTS],
         "keys": [r for r in rows if r["kind"] == audit.KEY_KIND],
     }
+
+
+@router.post("/identity", status_code=204)
+async def from_identity(body: dict, request: Request, store: StoreDep,
+                        principal: PrincipalDep) -> None:
+    """An act on the workspace's people, sign-in or sessions — told by the
+    login service, which keeps the people while this trail keeps the record.
+    Only that service writes here: its own token (signed with the key this
+    plane already trusts, for this workspace, two minutes) or the operator's."""
+    from axor_backend.auth import MASTER
+
+    if principal is not None and principal.kind != MASTER and not (
+            principal.kind == "user" and principal.user_id == audit.IDENTITY_SERVICE):
+        raise HTTPException(403, "only the login service records acts on people here")
+    action = str(body.get("action") or "")
+    if action not in audit.IDENTITY_ACTS:
+        raise HTTPException(400, f"not an act on people: {action!r}")
+    raw = body.get("detail") if isinstance(body.get("detail"), dict) else {}
+    detail = {k: (v[:20] if isinstance(v, list) else v) for k, v in raw.items()
+              if k in audit.IDENTITY_DETAIL and isinstance(v, str | int | bool | list)}
+    await audit.record(store, request, action, str(body.get("target") or "")[:300],
+                       who=str(body.get("who") or "the login service")[:300], **detail)
 
 
 @router.get("/export")

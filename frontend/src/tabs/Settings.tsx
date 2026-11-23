@@ -112,12 +112,70 @@ function OrgMembers() {
       <WhoMay orgId={d.active_org} isAdmin={isAdmin} />
       {isAdmin && <SingleSignOn orgId={d.active_org} />}
       {isAdmin && <Provisioning orgId={d.active_org} />}
+      {isAdmin && <Sessions orgId={d.active_org} />}
     </div>
   );
 }
 
 /** Provisioning (SCIM 2.0): the workspace's identity provider creates people
  *  here and takes them away — out of the workspace, their sessions ended. */
+/** How long a sign-in lasts (Business), and ending everyone's at once (any
+ *  plan: a lost laptop is not a premium problem). */
+function Sessions({ orgId }: { orgId: string }) {
+  const qc = useQueryClient();
+  const q = useQuery({ queryKey: ["session-policy", orgId], queryFn: () => api.sessionPolicy(orgId), retry: false });
+  const set = useMutation({
+    mutationFn: (hours: number | null) => api.setSessionPolicy(orgId, hours),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ["session-policy", orgId] }),
+  });
+  const end = useMutation({ mutationFn: () => api.endSessions(orgId) });
+  const d = q.data;
+  if (!d) return null;
+  const field = { background: C.bg, border: `1px solid ${C.line}`, borderRadius: 4, color: C.text,
+                  fontFamily: MONO, fontSize: 11, padding: "2px 6px" } as const;
+  const days = (h: number) => (h % 24 === 0 ? `${h / 24} day${h === 24 ? "" : "s"}` : `${h} hours`);
+  return (
+    <div data-testid="sessions" className="mt-3" style={{ lineHeight: 1.7 }}>
+      <div style={{ color: C.dim, letterSpacing: "0.08em", fontSize: 10.5, marginBottom: 4 }}>SIGN-INS</div>
+      <div className="flex gap-2 items-center flex-wrap">
+        <span>everyone signs in again after</span>
+        {d.plan_ok ? (
+          <select value={d.hours ?? ""} aria-label="sign in again after" style={field} data-testid="session-hours"
+            disabled={set.isPending}
+            onChange={(e) => set.mutate(e.target.value ? Number(e.target.value) : null)}>
+            <option value="">{days(d.deployment_hours)} (this deployment&apos;s)</option>
+            {[8, 12, 24, 72, 168, 336].filter((h) => h < d.deployment_hours)
+              .map((h) => <option key={h} value={h}>{days(h)}</option>)}
+          </select>
+        ) : (
+          <span>
+            <span style={{ color: C.text }}>{days(d.deployment_hours)}</span>
+            <span style={{ color: C.dim }}> · a shorter limit for the workspace is on the{" "}
+              <a href="#/pricing?for=coding" style={{ color: C.steel }}>Business plan</a></span>
+          </span>
+        )}
+      </div>
+      <div className="flex gap-3 items-center flex-wrap">
+        <button data-testid="sessions-end" disabled={end.isPending}
+          onClick={() => { if (window.confirm("Sign everyone out of this workspace? You stay signed in.")) end.mutate(); }}
+          style={{ background: "none", border: "none", padding: 0, cursor: "pointer", color: C.amber, fontFamily: MONO, fontSize: 11 }}>
+          sign everyone else out
+        </button>
+        {end.data && (
+          <span data-testid="sessions-ended" style={{ color: C.dim }}>
+            {end.data.ended === 0 ? "nobody else was signed in"
+              : `${end.data.ended} ${end.data.ended === 1 ? "person" : "people"} signed out`}
+            {" "}— a page already open stops within {end.data.access_minutes} minutes
+          </span>
+        )}
+        {(set.isError || end.isError) && (
+          <span style={{ color: C.red }}>{errorWords(((set.error ?? end.error) as Error).message)}</span>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function Provisioning({ orgId }: { orgId: string }) {
   const qc = useQueryClient();
   const q = useQuery({ queryKey: ["scim", orgId], queryFn: () => api.scim(orgId), retry: false });

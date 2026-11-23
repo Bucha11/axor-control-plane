@@ -602,11 +602,16 @@ export interface Permissions {
   editable?: boolean;      // changing them is the Business plan's
 }
 /** A month of the audit trail, as a reviewer reads it. */
+export interface SessionPolicy {
+  hours: number | null; deployment_hours: number; access_minutes: number; plan_ok: boolean;
+}
+
 export interface AuditReport {
   month: string; acts: number; by_action: Record<string, number>;
   by_person: Record<string, Record<string, number>>;
   on_others_sessions: { ts: string; who: string; action: string; session: string; developer: string }[];
   policy_changes: AuditItem[]; permission_changes: AuditItem[]; brakes: AuditItem[]; keys: AuditItem[];
+  access_changes?: AuditItem[];
 }
 /** One act on the workspace's audit trail. */
 export interface AuditItem {
@@ -1200,6 +1205,16 @@ export const api = {
   revokeScim: (orgId: string) =>
     af(`${IDENTITY_BASE}/v1/orgs/${encodeURIComponent(orgId)}/scim/token`, { method: "DELETE" })
       .then((r) => { if (!r.ok) throw new Error(`${r.status}`); }),
+  // how long a sign-in to the workspace lasts, and ending them all (an admin)
+  sessionPolicy: (orgId: string) =>
+    af(`${IDENTITY_BASE}/v1/orgs/${encodeURIComponent(orgId)}/sessions`).then((r) => j<SessionPolicy>(r)),
+  setSessionPolicy: (orgId: string, hours: number | null) =>
+    af(`${IDENTITY_BASE}/v1/orgs/${encodeURIComponent(orgId)}/sessions`, {
+      method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ hours }),
+    }).then((r) => j<SessionPolicy>(r)),
+  endSessions: (orgId: string) =>
+    af(`${IDENTITY_BASE}/v1/orgs/${encodeURIComponent(orgId)}/sessions/end`, { method: "POST" })
+      .then((r) => j<{ ended: number; access_minutes: number }>(r)),
   // a workspace's single sign-on (an owner or admin)
   sso: (orgId: string) =>
     af(`${IDENTITY_BASE}/v1/orgs/${encodeURIComponent(orgId)}/sso`).then((r) => j<SSOConfig>(r)),
