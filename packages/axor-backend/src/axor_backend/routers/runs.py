@@ -71,6 +71,16 @@ async def ingest(
         derived = len(cases)
         if cases:
             await store_evidence(store, notifier, run_id, node_id, scenario, cases)
+    # A refused call pages the same whichever way the run came in: only the
+    # telemetry route (the proxy's) did, so a wrapped agent posting its finished
+    # run here refused an exfiltration and nobody was told.
+    if not result.replayed:
+        from types import SimpleNamespace
+
+        from axor_backend.plane import _alert_steps
+
+        await _alert_steps(SimpleNamespace(store=store, notifier=notifier), node_id, run_id,
+                           events)
     return {"stored": len(result.rows), "evidence": derived}
 
 

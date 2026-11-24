@@ -134,6 +134,19 @@ async def test_a_refused_attack_pages_and_an_operators_hold_does_not(client: htt
     assert sent[0][2]["permalink"].startswith("/#/explain/r2")
 
 
+async def test_a_wrapped_agents_finished_run_pages_its_refusal(client: httpx.AsyncClient) -> None:
+    """A wrapped agent posts its run when it is done (/v1/ingest), not as it
+    goes: the refusal it recorded paged nobody, while the proxy's did."""
+    r = await client.post("/v1/ingest/w1", json={"node_id": "copilot", "scenario": "live", "events": [
+        _line("copilot", 0, "tool_call", "pass", tool="read_ticket", args={"ticket_id": "T-2"}),
+        _line("copilot", 1, "tool_call", "deny", tool="send_email",
+              args={"to": "records@archive.example"}, reason="taint enforcement: outside text"),
+    ]})
+    assert r.status_code == 202, r.text
+    sent = client.spy.sent  # type: ignore[attr-defined]
+    assert [(t, n, p["tool"]) for t, n, p in sent] == [("refused", "copilot", "send_email")]
+
+
 def test_a_chat_webhook_gets_text_it_shows() -> None:
     """Slack refuses a body without `text` (Discord reads `content`); the alert
     was bare fields, while the page promised Slack takes one."""
