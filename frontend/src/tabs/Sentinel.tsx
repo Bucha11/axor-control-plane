@@ -11,10 +11,11 @@
 // no edges — it is drawn, unconnected, rather than left out.
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { behindProxy } from "../agentName";
 import { Radar } from "lucide-react";
 import { api, type ReputationSnapshot } from "../api";
 import { C, MONO, btn } from "../theme";
-import { useRoute } from "../router";
+import { navigate, useRoute } from "../router";
 
 type Level = "CLEAN" | "WATCH" | "FLAGGED";
 type EdgeKind = "export_denied" | "staging" | "read" | "export" | "touched";
@@ -139,6 +140,13 @@ export default function Sentinel() {
   const qc = useQueryClient();
   const topo = useQuery({ queryKey: ["topology"], queryFn: api.topology });
   const watched = (topo.data?.nodes ?? []).filter((n) => n.reputation);
+  // every agent of the workspace is pickable, reporting or not: one that does
+  // not report gets said why, instead of being left off the list
+  const nodesQ = useQuery({ queryKey: ["nodes"], queryFn: api.nodes });
+  const pickable = [...new Map([...watched, ...(topo.data?.nodes ?? []).filter((n) => n.kind === "self")]
+    .map((n) => [n.node_id, n])).values()];
+  const exampleIds = new Set((topo.data?.nodes ?? []).filter((n) => n.example).map((n) => n.node_id));
+  const shownNode = (nodesQ.data ?? []).find((n) => n.node_id === node);
   const route = useRoute();
   // `#/sentinel?node=X` (the Agents list links here) opens on that node.
   const [node, setNode] = useState<string | null>(route.query.node || null);
@@ -151,8 +159,11 @@ export default function Sentinel() {
       const best = [...watched].sort((a, b) => (b.reputation!.flagged - a.reputation!.flagged)
         || (b.reputation!.watch - a.reputation!.watch))[0];
       setNode(best.node_id);
+    } else if (node === null && pickable.length > 0) {
+      // nobody reports: open on the workspace's own agent and say why
+      setNode((pickable.find((n) => !n.example) ?? pickable[0]).node_id);
     }
-  }, [node, watched]);
+  }, [node, watched.length, pickable.length]); // eslint-disable-line react-hooks/exhaustive-deps
   const rep = useQuery({
     queryKey: ["reputation", node],
     queryFn: () => api.reputation(node!),
@@ -186,7 +197,7 @@ export default function Sentinel() {
         session shows. each piece of data an agent touched is marked clean, watch or flagged.
       </div>
 
-      {topo.isSuccess && watched.length === 0 && (
+      {topo.isSuccess && pickable.length === 0 && (
         <div style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 10, padding: 18 }}
           data-testid="sentinel-empty">
           <div style={{ fontFamily: MONO, fontSize: 12.5, color: C.text, marginBottom: 6 }}>
@@ -204,18 +215,53 @@ export default function Sentinel() {
         </div>
       )}
 
-      {watched.length > 0 && (
+      {pickable.length > 0 && (watched.length > 0 || node) && (
         <div className="flex items-center gap-2 flex-wrap mb-3" style={{ fontFamily: MONO, fontSize: 11, color: C.mut }}>
           agent
           <select value={node ?? ""} onChange={(e) => { setNode(e.target.value); setSelected(null); }}
             aria-label="sentinel node"
             style={{ background: C.bg, border: `1px solid ${C.line}`, borderRadius: 4, color: C.text, fontFamily: MONO, fontSize: 11, padding: "4px 8px" }}>
-            {watched.map((n) => <option key={n.node_id} value={n.node_id}>{n.node_id}</option>)}
+            {pickable.map((n) => (
+              <option key={n.node_id} value={n.node_id}>
+                {n.node_id}{n.example ? " (example)" : !n.reputation ? " — not reporting" : ""}
+              </option>
+            ))}
           </select>
           {snap && (
             <span style={{ color: C.dim }}>
               as of {new Date(snap.generated_at * 1000).toLocaleString()}
             </span>
+          )}
+          {node && exampleIds.has(node) && (
+            <span data-testid="sentinel-example" style={{ color: C.amber, border: `1px solid ${C.amber}`,
+              borderRadius: 10, padding: "0 8px" }}>example data — not your workspace&apos;s</span>
+          )}
+        </div>
+      )}
+
+      {node && !snap && rep.isSuccess && (
+        <div data-testid="sentinel-not-reporting" style={{ background: C.panel, border: `1px solid ${C.line}`,
+          borderRadius: 10, padding: 18, fontFamily: MONO, fontSize: 11.5, color: C.mut, lineHeight: 1.6 }}>
+          {behindProxy(shownNode) ? (
+            <>
+              <div style={{ color: C.text, marginBottom: 6 }}>Not available behind the proxy.</div>
+              {node} is guarded by the proxy, which sees its tool calls one by one — Sentinel keeps a
+              reputation from the agent&apos;s own loop, across its sessions. Wrap the agent in code and
+              it reports here; the guard keeps working the same way.
+              <div className="mt-3">
+                <button onClick={() => navigate("connect?for=production&how=code")}
+                  style={btn({ color: C.text, borderColor: C.steel, fontSize: 11, padding: "4px 10px" })}>
+                  wrap it in code →
+                </button>
+              </div>
+            </>
+          ) : (
+            <>
+              <div style={{ color: C.text, marginBottom: 6 }}>{node} is not reporting this.</div>
+              axor-sentinel runs beside a wrapped agent and its plane link sends the snapshot here
+              (axor-sentinel README, “Reporting to the Control Plane”). Data is tracked by what a call
+              names — a path or a URL; a call that names none records no access.
+            </>
           )}
         </div>
       )}

@@ -53,6 +53,8 @@ from typing import Any
 _log = logging.getLogger("axor.proxy.guard")
 
 DEFAULT_SESSION = "default"
+# how a guarded agent names itself on the plane (node profile `agent`)
+PROXY_AGENT = "axor-proxy"
 
 
 def load_manifests(path: Path) -> list[dict[str, Any]]:
@@ -197,6 +199,19 @@ class Guard:
             except Exception as exc:  # noqa: BLE001 - enforcement is local
                 _log.warning("axor guard: no Control-Plane link (%s) — still "
                              "enforcing the manifests, without pause / stop", exc)
+        if self.link is not None:
+            self._say_what_it_is()
+
+    def _say_what_it_is(self) -> None:
+        """Tell the plane this production agent is behind the guard proxy. The
+        proxy sees the agent's tool calls, not its model: a drift check and
+        Sentinel's reputation need the agent wrapped in code, and the plane
+        says so for this node instead of showing an empty "not probed"."""
+        link = self.link
+        try:
+            link.submit(lambda: link.connector.post_profile("agent", agent=PROXY_AGENT))
+        except Exception:  # noqa: BLE001 - a plane hiccup must not fail the guard
+            _log.debug("axor guard: profile not sent", exc_info=True)
 
     # ── sessions ──────────────────────────────────────────────────────────────
 

@@ -289,6 +289,10 @@ export default function ControlTab({ focusNode }: { focusNode?: string }) {
   // nothing behind it; now the page is open, says so up front, and has an
   // example fleet to operate.
   const hasAgents = (fleet.data ?? []).length > 0;
+  // the workspace's own agents have reported: the screens hide the examples
+  const apiTokenNow = useApp((st) => st.apiToken);
+  const wsQ = useQuery({ queryKey: ["workspace", apiTokenNow], queryFn: api.workspace, retry: false });
+  const workStarted = Boolean(wsQ.data?.work_started);
   // a coding team's agents come through their hooks: wrapping code or a proxy
   // is not their question, and an admin with no machine of their own is not
   // "unconnected"
@@ -315,7 +319,9 @@ export default function ControlTab({ focusNode }: { focusNode?: string }) {
         // agents are already on screen: one line, the example tools folded away
         <div data-testid="adapter-note" style={{ fontFamily: MONO, fontSize: 11, color: C.mut,
                                                   lineHeight: 1.6, marginBottom: 14 }}>
-          {note}.{" "}
+          {/* once the workspace's own agents report, "needs them wrapped or behind
+              the proxy" read as if they did not — only this browser skipped Connect */}
+          {!workStarted && <>{note}.{" "}</>}
           <button onClick={() => setExamples((v) => !v)}
             style={{ background: "none", border: "none", padding: 0, cursor: "pointer",
                      fontFamily: MONO, fontSize: 11, color: C.steel }}>
@@ -323,7 +329,9 @@ export default function ControlTab({ focusNode }: { focusNode?: string }) {
           </button>
           {examples && (
             <div style={{ border: `1px solid ${C.line}`, borderRadius: 8, padding: "10px 12px", marginTop: 8 }}>
-              {!fleetLoaded && <ExampleFleet />}
+              {/* once the workspace's own agents report the screens hide the
+                  examples: loading the fleet then did nothing visible */}
+              {!fleetLoaded && !workStarted && <ExampleFleet />}
               <SpawnGoverned switchToAdapter />
             </div>
           )}

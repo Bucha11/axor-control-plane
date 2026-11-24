@@ -12,3 +12,14 @@ export function agentLabel(id: string): string {
 export function liveAgents(ids: string[]): string[] {
   return ids.filter((id) => id !== PLANE_PROXY);
 }
+
+// A production agent behind the guard proxy says so on the plane (axor-proxy
+// guard: node profile `agent`). The proxy sees the agent's tool calls, never
+// its model: a health check (axor-probe asks the agent test questions) and
+// Sentinel's reputation (fed from the agent's own loop) need the agent wrapped
+// in code — screens say that instead of an empty "not probed".
+export const PROXY_AGENT = "axor-proxy";
+
+export function behindProxy(node: { profile?: { agent?: string } | null } | undefined): boolean {
+  return node?.profile?.agent === PROXY_AGENT;
+}

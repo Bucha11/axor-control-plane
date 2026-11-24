@@ -23,15 +23,17 @@
 //     task content, so cutting them has collateral) need a second, explicit
 //     confirmation, and axor-probe refuses the request without one.
 import { useEffect, useState } from "react";
-import { useRoute } from "../router";
+import { navigate, useRoute } from "../router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { RefreshCw, HeartPulse, Check, Circle, MinusCircle } from "lucide-react";
 import { api, type HealAttempt, type ProbeFamily, type ProbeHealth } from "../api";
 import { C, MONO, btn } from "../theme";
 import Coach from "../components/Coach";
 import Tooltip from "../components/Tooltip";
+import { behindProxy } from "../agentName";
 
-// The node shown until one is picked (the demo battery posts for it).
+// The demo battery's node: shown only when it is actually listed — it used to
+// be the default and was mixed into every workspace's agents as if it were one.
 const HEALTH_NODE = "banking-assistant";
 /** The example fleet's scraper (backend demo.FLEET_PROBE_NODE): it has no
  * runtime of its own, so its re-probe is played on request. */
@@ -67,10 +69,11 @@ export default function Health() {
   const qc = useQueryClient();
   const route = useRoute();
   // `#/health?node=X` (the Agents list links here) opens on that node.
-  const [node, setNode] = useState(route.query.node || HEALTH_NODE);
+  const [node, setNode] = useState(route.query.node || "");
   const [chosen, setChosen] = useState(Boolean(route.query.node));
   const nodes = useQuery({ queryKey: ["nodes"], queryFn: api.nodes });
-  const nodeIds = Array.from(new Set([node, ...(nodes.data ?? []).map((n) => n.node_id)]));
+  const nodeIds = Array.from(new Set([node, ...(nodes.data ?? []).map((n) => n.node_id)])).filter(Boolean);
+  const shownNode = (nodes.data ?? []).find((n) => n.node_id === node);
   const [phase, setPhase] = useState<Phase>("idle");
   const [reason, setReason] = useState("");
   const [healError, setHealError] = useState<string | null>(null);
@@ -82,6 +85,7 @@ export default function Health() {
   const report = useQuery({
     queryKey: ["probe-report", node],
     queryFn: () => api.probeReport(node),
+    enabled: Boolean(node),
   });
   // Opened on the default node with nothing to show while the example fleet IS
   // loaded: show the node that has a check, not an empty panel.
@@ -99,7 +103,8 @@ export default function Health() {
     if (chosen || !nodes.data?.length) return;
     const drifting = nodes.data.find((n) => n.probe?.verdict === "DRIFT_DETECTED");
     const checked = nodes.data.find((n) => n.probe);
-    const pick = drifting ?? checked;
+    // ...else the workspace's first agent, never a made-up default
+    const pick = drifting ?? checked ?? (node ? undefined : nodes.data[0]);
     if (pick && pick.node_id !== node) setNode(pick.node_id);
   }, [chosen, nodes.data]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
@@ -197,6 +202,13 @@ export default function Health() {
     </div>
   );
 
+  if (!node) {
+    return (
+      <div style={{ fontFamily: MONO, fontSize: 11.5, color: C.mut }}>
+        No agent has reported yet — a health check is about an agent that runs.
+      </div>
+    );
+  }
   if (report.isLoading) {
     return <div style={{ fontFamily: MONO, fontSize: 11, color: C.dim }}>loading…</div>;
   }
@@ -218,14 +230,32 @@ export default function Health() {
         </div>
       ) : latest === null ? (
         <div style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 8, padding: 20 }}>
-          <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 8 }}>No health check yet.</div>
-          <div style={{ fontFamily: MONO, fontSize: 11, color: C.mut, lineHeight: 1.7 }}>
-            This agent has not sent a check, so nothing here is green either.
-            <br /><br />
-            Checks run beside the agent (axor-probe) and are sent to{" "}
-            <span style={{ color: C.text }}>POST /v1/plane/{node}/probe-report</span>.
-            The plane never starts your agent itself.
-          </div>
+          {behindProxy(shownNode) ? (
+            <div data-testid="health-proxy">
+              <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 8 }}>Not available behind the proxy.</div>
+              <div style={{ fontFamily: MONO, fontSize: 11, color: C.mut, lineHeight: 1.7 }}>
+                {node} is guarded by the proxy, which sees its tool calls and never its model — and a
+                health check asks the agent itself test questions. Wrap the agent in code and the
+                check runs beside it; the proxy's guard keeps working the same way.
+                <br /><br />
+                <button onClick={() => navigate("connect?for=production&how=code")} data-testid="health-to-wrap"
+                  style={btn({ color: C.text, borderColor: C.steel, fontSize: 11, padding: "4px 10px" })}>
+                  wrap it in code →
+                </button>
+              </div>
+            </div>
+          ) : (
+            <>
+              <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 8 }}>No health check yet.</div>
+              <div style={{ fontFamily: MONO, fontSize: 11, color: C.mut, lineHeight: 1.7 }}>
+                This agent has not sent a check, so nothing here is green either.
+                <br /><br />
+                A check runs beside a wrapped agent: axor-probe asks it test questions and the
+                agent&apos;s plane link sends the result here (axor-probe README, “Reporting to the
+                Control Plane”). The plane never starts your agent itself.
+              </div>
+            </>
+          )}
         </div>
       ) : (
         <>

@@ -52,6 +52,9 @@ class FakeLink:
     def post_trace(self, lines: list[dict], run_id: str) -> None:
         self.shipped.append(lines)
 
+    def post_profile(self, kind: str, agent: str = "", **_: str) -> None:
+        self.profile = (kind, agent)
+
 
 @pytest.fixture
 def sent() -> list[dict]:
@@ -297,3 +300,10 @@ async def test_batches_reach_the_plane_in_the_order_the_calls_happened(tmp_path:
     await proxy.post("/t/send_email/", json={"to": "boss@corp.example"})
     await asyncio.gather(*pending)
     assert arrived == ["search", "send_email"]
+
+
+def test_the_guard_tells_the_plane_it_is_the_proxy(link: FakeLink) -> None:
+    """A drift check and Sentinel's reputation need the agent wrapped in code;
+    the plane can say so for this node only if it knows the node is guarded."""
+    Guard(MANIFESTS, "support-agent", link=link)
+    assert link.profile == ("agent", "axor-proxy")

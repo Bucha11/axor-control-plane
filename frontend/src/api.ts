@@ -420,6 +420,8 @@ export interface TopologyNode {
   desired?: { version: number; state: Record<string, unknown> } | null;
   reported?: NodeInfo["reported"];
   reputation?: ReputationSummary | null;
+  // the product's own example data (demo seeds), not the workspace's work
+  example?: boolean;
 }
 
 export interface TopologyEdge {

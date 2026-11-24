@@ -17,6 +17,7 @@ import { C, MONO, btn } from "../theme";
 import { isCodingSession } from "../components/CodingOnboarding";
 import CutResult from "../components/CutResult";
 import Tooltip from "../components/Tooltip";
+import { behindProxy } from "../agentName";
 
 const LIVE_MS = 1500;
 const IDLE_MS = 5000;
@@ -68,6 +69,7 @@ export default function RunControl({ runId }: { runId: string }) {
     refetchInterval: live ? LIVE_MS : IDLE_MS,
   });
   const nodes = useQuery({ queryKey: ["nodes"], queryFn: api.nodes, refetchInterval: LIVE_MS });
+  const proxied = behindProxy((nodes.data ?? []).find((n) => n.node_id === nodeId));
   const node = (nodes.data ?? []).find((n) => n.node_id === nodeId);
   const probe = useQuery({ queryKey: ["probe-report", nodeId], queryFn: () => api.probeReport(nodeId!), enabled: !!nodeId });
   const repair = useQuery({ queryKey: ["repair", nodeId], queryFn: () => api.repair(nodeId!), enabled: !!nodeId, refetchInterval: IDLE_MS });
@@ -230,7 +232,13 @@ export default function RunControl({ runId }: { runId: string }) {
         <div style={{ flex: "1 1 40%", minWidth: 0, display: "flex", flexDirection: "column", gap: 10 }}>
           {(!coding || run?.probe) && <Side title="health check">
             {!run?.probe ? (
-              <span style={{ color: C.dim }}>not probed — the node runs checks when started with probe=</span>
+              <span style={{ color: C.dim }}>
+                {proxied
+                  ? <>not available behind the proxy — the check asks the agent itself, which the proxy
+                      never reaches. <span style={{ color: C.steel, cursor: "pointer" }}
+                      onClick={() => navigate("connect?for=production&how=code")}>wrap it in code →</span></>
+                  : <>not checked yet — a check runs beside a wrapped agent (axor-probe) and arrives here</>}
+              </span>
             ) : (
               <span style={{ color: run.probe.verdict === "DRIFT_DETECTED" ? C.amber : C.green }}>
                 {run.probe.verdict.toLowerCase().replace(/_/g, " ")}
@@ -279,7 +287,15 @@ export default function RunControl({ runId }: { runId: string }) {
             {(() => {
               const snap = reputation.data?.reputation;
               const hot = snap ? Object.entries(snap.resource_level).filter(([, l]) => l !== "CLEAN") : [];
-              if (!snap) return <span style={{ color: C.dim }}>no sentinel reporting for this node</span>;
+              if (!snap) {
+                return <span style={{ color: C.dim }}>
+                  {proxied
+                    ? <>not available behind the proxy — Sentinel reads the agent&apos;s own loop across sessions.{" "}
+                        <span style={{ color: C.steel, cursor: "pointer" }}
+                          onClick={() => navigate("connect?for=production&how=code")}>wrap it in code →</span></>
+                    : <>not reporting — axor-sentinel runs beside a wrapped agent and reports here</>}
+                </span>;
+              }
               if (!hot.length) return <span style={{ color: C.green }}>nothing it touched is under watch</span>;
               return hot.map(([rid, level]) => (
                 <div key={rid} className="flex gap-2">

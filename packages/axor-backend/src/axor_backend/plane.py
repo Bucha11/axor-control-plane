@@ -1442,6 +1442,9 @@ async def topology(request: Request) -> dict:
         # look; `GET /{node}/reputation` is where the resources and the facts
         # behind each verdict are.
         n["reputation"] = _reputation_summary(reputation_by_node.get(n["node_id"]))
+        # the product's own example data says so: shown beside a workspace's
+        # agents it read as theirs ("crm:customers · flagged")
+        n["example"] = is_example_node(n["node_id"])
     return {
         "nodes": sorted(nodes.values(), key=lambda n: n["node_id"]),
         "edges": sorted(edges.values(), key=lambda e: (e["from"], e["to"], e["kind"])),
