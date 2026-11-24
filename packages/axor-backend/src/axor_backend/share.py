@@ -173,7 +173,9 @@ def evidence_receipt_html(
         + html.escape(", ".join(removed)) + "</p>"
     ) if removed else ""
     when = html.escape(ts[:16].replace("T", " ")) if ts else ""
-    meta = " · ".join(x for x in (html.escape(node_id), when) if x)
+    # the plane's own test-run proxy is not an agent: say what it is
+    who = "a test run (through the proxy)" if node_id == "proxy" else node_id
+    meta = " · ".join(x for x in (html.escape(who), when) if x)
     example = ('<span class="tag">example data</span>'
                if scenario in _EXAMPLE_SCENARIOS else "")
     return _TEMPLATE.format(

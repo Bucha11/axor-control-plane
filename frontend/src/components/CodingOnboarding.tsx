@@ -132,7 +132,7 @@ export default function CodingOnboarding({ then }: { then?: () => void }) {
         {then ? (
           <>
             <span style={{ color: C.green }}>free: 1 developer, 1 agent family and 1 production agent</span>.
-            <br />Team, $299 / month: 10 production agents and 5 developers — more developers $25 each.{" "}
+            <br />Team Workspace, $299 / month: 10 production agents and 5 developers — more developers $25 each.{" "}
           </>
         ) : (
           <>

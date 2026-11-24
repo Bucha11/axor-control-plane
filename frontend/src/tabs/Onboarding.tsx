@@ -246,7 +246,7 @@ function ProductionOnboarding({ initial, proxyMode }: { initial?: ProdWay; proxy
         </tbody>
       </table>
       <div style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim, marginTop: 12 }}>
-        1 production agent free · Team $299 / month: 10 agents ·{" "}
+        1 production agent free · Team Workspace $299 / month: 10 agents ·{" "}
         <span style={{ color: C.steel, cursor: "pointer" }} onClick={() => navigate("pricing?for=production")}>pricing →</span>
       </div>
     </div>

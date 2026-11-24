@@ -21,6 +21,7 @@ import { isConnected, useApp } from "../store";
 import { C, MONO } from "../theme";
 import { useCanAdmin } from "../team";
 import { errorWords } from "../refusal";
+import { agentLabel } from "../agentName";
 
 
 /** One line of whatever the agent claimed or the tool returned. */
@@ -143,7 +144,7 @@ export default function Evidence({ agent: agentParam }: { agent?: string } = {})
   const nodesQ = useQuery({ queryKey: ["nodes"], queryFn: api.nodes });
   const labelOf = (id: string) => {
     const pr = (nodesQ.data ?? []).find((n) => n.node_id === id)?.profile;
-    if (!pr?.title && !pr?.developer) return id;
+    if (!pr?.title && !pr?.developer) return agentLabel(id);
     return [pr.developer, pr.title ? `“${pr.title}”` : ""].filter(Boolean).join(" · ");
   };
   const [cause, setCause] = useState("");
@@ -342,11 +343,14 @@ function RefusalSummary({ items, developerOf, cause, setCause }: {
 }) {
   const refused = items.filter((i) => i.kind === "refused" && i.cause);
   if (refused.length < 2) return null;
-  const by = new Map<string, { words: string; n: number; devs: Set<string> }>();
+  const by = new Map<string, { words: string; n: number; devs: Set<string>; people: boolean }>();
   for (const i of refused) {
-    const g = by.get(i.cause!) ?? { words: i.cause_words || i.cause!, n: 0, devs: new Set<string>() };
+    const g = by.get(i.cause!) ?? { words: i.cause_words || i.cause!, n: 0, devs: new Set<string>(), people: true };
     g.n += i.count;
-    g.devs.add(developerOf(i.node_id));
+    const who = developerOf(i.node_id);
+    g.devs.add(who);
+    // a production agent has no developer: it counts as an agent, not a person
+    if (who === i.node_id) g.people = false;
     by.set(i.cause!, g);
   }
   const rows = [...by.entries()].sort((a, b) => b[1].n - a[1].n);
@@ -356,7 +360,9 @@ function RefusalSummary({ items, developerOf, cause, setCause }: {
       <span>refused, by cause:</span>
       {rows.map(([k, g]) => (
         <button key={k} data-testid={`refusal-cause-${k}`} onClick={() => setCause(cause === k ? "" : k)} style={chip(cause === k)}>
-          {g.words} · {g.n} · {g.devs.size} {g.devs.size === 1 ? "developer" : "developers"}
+          {g.words} · {g.n} · {g.devs.size} {g.people
+            ? (g.devs.size === 1 ? "developer" : "developers")
+            : (g.devs.size === 1 ? "agent" : "agents")}
         </button>
       ))}
     </div>

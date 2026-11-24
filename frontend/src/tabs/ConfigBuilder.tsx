@@ -18,6 +18,7 @@ import { C, MONO, btn } from "../theme";
 import Coach from "../components/Coach";
 import Tooltip from "../components/Tooltip";
 import ConfigText from "../components/ConfigText";
+import { agentLabel } from "../agentName";
 
 const TYPES = ["READ", "WRITE", "EXPORT", "EXEC"] as const;
 type ToolType = (typeof TYPES)[number];
@@ -379,7 +380,7 @@ function FromAgent({ onTools }: { onTools: (t: ReturnType<typeof toolsFromSteps>
       <select aria-label="agent" value={pick} onChange={(e) => setAgent(e.target.value)}
         style={{ background: C.panel2, border: `1px solid ${C.line}`, borderRadius: 5, color: C.text,
                  fontFamily: MONO, fontSize: 11.5, padding: "3px 6px" }}>
-        {agents.map((a) => <option key={a} value={a}>{a}</option>)}
+        {agents.map((a) => <option key={a} value={a}>{agentLabel(a)}</option>)}
       </select>
       used
       <button onClick={() => load.mutate()} disabled={load.isPending}

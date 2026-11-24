@@ -140,7 +140,7 @@ function FirstVisit() {
             </button>
           </div>
           <div style={{ fontFamily: MONO, fontSize: 11, color: C.dim, marginBottom: 24 }}>
-            1 production agent free · Team from $299 / month ·{" "}
+            1 production agent free · Team Workspace from $299 / month ·{" "}
             <button onClick={() => navigate("pricing?for=production")} style={{ ...link, fontFamily: MONO, fontSize: 11 }}>pricing →</button>
           </div>
         </>

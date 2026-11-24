@@ -10,6 +10,7 @@ import { navigate } from "../router";
 import { C, MONO, btn } from "../theme";
 import { useApp } from "../store";
 import Coach from "../components/Coach";
+import { agentLabel, liveAgents } from "../agentName";
 
 export const MODE_WORDS: Record<string, string> = {
   silent_fail: "returning an error",
@@ -54,7 +55,7 @@ export default function ChaosTests() {
   const example = () => { connect("demo"); navigate("catch", { auto: "1" }); };
   const data = useQuery({ queryKey: ["chaos"], queryFn: api.chaos });
   const runs = useQuery({ queryKey: ["runs"], queryFn: api.listRuns });
-  const agents = useMemo(() => [...new Set((runs.data ?? []).map((r) => r.node_id))].sort(), [runs.data]);
+  const agents = useMemo(() => liveAgents([...new Set((runs.data ?? []).map((r) => r.node_id))].sort()), [runs.data]);
   const list = data.data?.runs ?? [];
   const counts = list.reduce<Record<string, number>>((m, r) => ({ ...m, [r.verdict]: (m[r.verdict] ?? 0) + 1 }), {});
 
@@ -131,7 +132,7 @@ function Row({ r, odd }: { r: ChaosRun; odd: boolean }) {
       padding: "10px 12px", background: odd ? C.panel : C.panel2, borderLeft: `3px solid ${v.color}` }}>
       <div style={{ fontFamily: MONO, fontSize: 11, color: C.mut }}>
         {new Date(r.created_ts).toLocaleString(undefined, { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", hourCycle: "h23" })}
-        <div style={{ color: C.text, marginTop: 2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={r.node_id}>{r.node_id}</div>
+        <div style={{ color: C.text, marginTop: 2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={r.node_id}>{agentLabel(r.node_id)}</div>
       </div>
       <div style={{ minWidth: 0 }}>
         <div style={{ fontSize: 13 }}>broke <span style={{ fontFamily: MONO }}>{broke}</span></div>
@@ -233,7 +234,12 @@ function Schedule({ agents, modes, current, onSaved }: {
         </label>
         <input type="number" min={1} value={hours} disabled={locked} aria-label="every how many hours"
           onChange={(e) => setHours(Math.max(1, Number(e.target.value) || 1))} style={{ ...field, width: 60 }} />
-        hours, break a tool each agent has used —
+        hours
+        {/* "every week" used to mean typing 168 */}
+        {([["daily", 24], ["weekly", 168]] as const).map(([w, h]) => (
+          <button key={w} disabled={locked} onClick={() => setHours(h)} style={chip(hours === h)}>{w}</button>
+        ))}
+        , break a tool each agent has used —
         <span style={{ color: C.mut }}>{nodes.length ? `${nodes.length} chosen` : "every agent"}</span>
       </div>
       <div className="flex gap-1.5 flex-wrap mt-1">

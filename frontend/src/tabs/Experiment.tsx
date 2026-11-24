@@ -113,8 +113,9 @@ export default function Experiment({ runId, autostart }: { runId?: string; autos
   const focusRun: RunSummary | undefined = activeRun
     ? runs.data?.find((r) => r.run_id === activeRun)
     : runs.data?.find((r) => r.run_id === wanted) ??
-      runs.data?.find((r) => r.evidence.some((c) => c.deviation)) ??
-      runs.data?.[0];
+      // a receipt, or nothing: the newest run of any kind put a live
+      // production run ("Run in progress.") under the test form
+      runs.data?.find((r) => r.evidence.some((c) => c.deviation));
 
   // The run landed: the live stream has nothing more to say.
   useEffect(() => {
