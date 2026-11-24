@@ -68,7 +68,8 @@ async def policy(request: Request, store: StoreDep) -> dict:
                if signed else {}),
             # browser keys machines may add (endorsed by one they trust) and
             # the ones revoked (dropping a key only narrows)
-            "operators": await _operators_for_machines(store),
+            **({"operators": ops} if (ops := await _operators_for_machines(store))["endorsed"]
+               or ops["revoked"] else {}),
             **({"rules": {k: rules[k] for k in ("allow", "mode", "exceptions", "trusted_sources")}}
                if rules["set"] else {}),
             # an admin's brake: every coding agent of the team held at once
