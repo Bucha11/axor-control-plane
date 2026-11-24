@@ -70,9 +70,10 @@ const toolDid = (mode: string) => TOOL_DID[mode] ?? mode.replace(/_/g, " ");
 // where an incident came from: the plane's own examples, a test run, or work
 const EXAMPLES = new Set(["adapter-demo", "multi-agent-demo", "coding-demo", "skill-demo", "ops-demo"]);
 const TESTS = new Set(["tool-deprivation", "exfil", "injection"]);
-function source(scenario?: string): string {
+function source(scenario?: string, brokenOnPurpose = false): string {
   if (scenario && EXAMPLES.has(scenario)) return "example data";
-  if (scenario && TESTS.has(scenario)) return "a chaos test";
+  // a wrapped agent's test bench breaks a tool inside its live run
+  if ((scenario && TESTS.has(scenario)) || brokenOnPurpose) return "a chaos test";
   return "live work";
 }
 
@@ -323,7 +324,7 @@ function Item({ item, who }: { item: IncidentItem; who?: string }) {
       )}
       <div className="flex items-center justify-between flex-wrap" style={{ gap: 8 }}>
         <span style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim }}>
-          {who && who !== item.node_id ? who : <>agent {item.node_id}</>} · {source(item.scenario)}
+          {who && who !== item.node_id ? who : <>agent {item.node_id}</>} · {source(item.scenario, (item.case?.fault_attribution ?? []).some((a) => a.fault_mode))}
           {item.origin && <span data-testid="incident-origin"> · {ORIGIN_WORDS[item.origin] ?? item.origin}</span>}
         </span>
         <span className="flex gap-2 items-center">
