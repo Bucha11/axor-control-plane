@@ -16,19 +16,14 @@ head was rewritten.
 from __future__ import annotations
 
 import hashlib
+import json
 from typing import Any
 
 
 def _canonical(entry: Any) -> bytes:  # noqa: ANN401
-    try:
-        from axor_core.kernel.jcs import canonicalize
-
-        return canonicalize(entry)
-    except Exception:  # noqa: BLE001 - JCS refuses floats; an entry may carry one
-        import json
-
-        return json.dumps(entry, sort_keys=True, separators=(",", ":"),
-                          ensure_ascii=False).encode()
+    """One encoding: sorted keys, compact, UTF-8. Only this module hashes it."""
+    return json.dumps(entry, sort_keys=True, separators=(",", ":"), ensure_ascii=False,
+                      default=str).encode()
 
 
 def row_hash(prev: str, org: str, kind: str, ts: str, entry: Any) -> str:  # noqa: ANN401

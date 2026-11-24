@@ -1128,13 +1128,14 @@ async function vaultSign(payloadObj: unknown): Promise<string> {
 // unsigned and a sidecar with operator keys treats it as outside text.
 async function signedStatement(payload: Record<string, unknown>):
     Promise<{ payload: Record<string, unknown>; operator: string; sig: string } | undefined> {
-  const s = await operatorSign(payload);
+  const s = await opKey.sign(payload);
   return s ? { payload, ...s } : undefined;
 }
 
-// Who signs, from this browser: its own operator key (WebCrypto, private half
-// never leaves it) first, else the deployment's signing custody when a vault
-// key is chosen; null when neither.
+// A plane command, from this browser: its own operator key first, else the
+// deployment's signing custody (the vault) as before; null when neither.
+// Everything newer — notes, the coding policy, vouches — is signed by this
+// browser's key alone (opKey.sign).
 async function operatorSign(payload: unknown): Promise<{ operator: string; sig: string } | null> {
   const own = await opKey.sign(payload);
   if (own) return own;
@@ -1712,7 +1713,7 @@ export const api = {
   // what widens for sidecars with operator keys: sign the policy as it stands
   signCodingPolicy: async () => {
     const doc = await j<{ payload: Record<string, unknown> }>(await af("/v1/coding/policy/document"));
-    const signed = await operatorSign(doc.payload);
+    const signed = await opKey.sign(doc.payload);
     if (!signed) throw new Error("this browser has no operator key — make one in Settings");
     const r = await af("/v1/coding/policy/signature", {
       method: "PUT", headers: { "content-type": "application/json" },
@@ -1720,7 +1721,7 @@ export const api = {
     });
     return j<{ seq: number; current: boolean }>(r);
   },
-  canSign: () => signingArmed(),
+  canSign: () => opKey.ready(),
   saidToAgent: (nodeId: string) =>
     af(`/v1/coding/say/${encodeURIComponent(nodeId)}`).then((r) =>
       j<{ notes: (PairNote & { pair: boolean })[] }>(r)),

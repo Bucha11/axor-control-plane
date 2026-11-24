@@ -36,6 +36,7 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
 
+from axor_backend import operators
 from axor_backend.deps import PrincipalDep, StoreDep
 from axor_backend.tenancy import current_org_id
 
@@ -68,18 +69,12 @@ async def policy(request: Request, store: StoreDep) -> dict:
                if signed else {}),
             # browser keys machines may add (endorsed by one they trust) and
             # the ones revoked (dropping a key only narrows)
-            **({"operators": ops} if (ops := await _operators_for_machines(store))["endorsed"]
+            **({"operators": ops} if (ops := await operators.for_machines(store))["endorsed"]
                or ops["revoked"] else {}),
             **({"rules": {k: rules[k] for k in ("allow", "mode", "exceptions", "trusted_sources")}}
                if rules["set"] else {}),
             # an admin's brake: every coding agent of the team held at once
             **({"brake": brake} if (brake := await _brake(store)) else {})}
-
-
-async def _operators_for_machines(store: Any) -> dict:  # noqa: ANN401
-    from axor_backend import operators
-
-    return await operators.for_machines(store)
 
 
 # ── the team's rules for coding agents ───────────────────────────────────────
@@ -541,8 +536,6 @@ async def sign_policy(body: dict, request: Request, store: StoreDep,
             or payload.get("org") != current_org_id():
         raise HTTPException(409, "the policy changed since this document was fetched — "
                                  "fetch it again and sign that")
-    from axor_backend import operators
-
     if await operators.signing_required(request.app.state, store):
         from axor_core.kernel.jcs import canonicalize
 
@@ -566,7 +559,6 @@ async def operator_keys(request: Request) -> dict:
     the signed posture with no extra step. Trust on first use: a person can
     compare the fingerprint ``axor-wrap connect`` prints with one their admin
     shared out of band."""
-    from axor_backend import operators
     from axor_backend.signing import fingerprint
 
     keys = {**request.app.state.keyring.public_keys(),

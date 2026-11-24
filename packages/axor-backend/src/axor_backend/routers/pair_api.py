@@ -497,14 +497,10 @@ async def agent_msg_mode(store: Any, developer: str) -> str:  # noqa: ANN401
 
 
 def _is_developer(developer: str, email: str) -> bool:
-    """Whether a session's developer id names this person: their address, or
-    the opaque id the sidecar derives from it (``dev-`` + sha256[:16])."""
-    import hashlib
-
-    dev, email = developer.strip().lower(), email.strip().lower()
-    if not dev or not email:
-        return False
-    return dev == email or dev == "dev-" + hashlib.sha256(email.encode()).hexdigest()[:16]
+    """Whether a session's developer is this person. ``node_kinds`` already
+    reads a machine's opaque id as the person it is bound to
+    (``developer_identities``), so this is the one comparison."""
+    return bool(developer) and developer.strip().lower() == email.strip().lower()
 
 
 async def peers_of(store: Any, node_id: str) -> list[dict]:  # noqa: ANN401

@@ -164,7 +164,7 @@ async def command(node_id: str, body: dict, request: Request) -> dict:
     # when two commands arrive together.
     new_version, state = await _apply(
         ctx, node_id, delta, expect_version=version - 1,
-        signature=_signature(ctx, operator, timestamp, sig, verified=signing),
+        signature=_signature(operator, timestamp, sig, verified=signing),
     )
     # A commanded cut opens the heal half of the heal->verify pair. The hook is
     # HERE, at the write that actually reaches the node's desired state, not on
@@ -268,7 +268,7 @@ async def cascade_stop(node_id: str, request: Request, body: dict | None = None)
         new_version, state = await _apply(
             ctx, node_id, delta, expect_version=version - 1,
             signature=_signature(
-                ctx, body.get("operator", ""), body.get("timestamp", ""),
+                body.get("operator", ""), body.get("timestamp", ""),
                 body.get("sig", ""), verified=True,
             ),
         )
@@ -1502,17 +1502,16 @@ async def nodes(request: Request) -> list[dict]:
 
 
 def _signature(
-    ctx: Any, operator: str, timestamp: str, sig: str,  # noqa: ANN401
-    *, verified: bool | None = None,
+    operator: str, timestamp: str, sig: str, *, verified: bool,
 ) -> dict[str, str] | None:
     """The triple to record with a delta, or None when nothing was verified.
 
-    An open deployment (no keyring) checks no signature, so it has none to
+    A deployment that asks for no signature checks none, so it has none to
     record — and recording the caller's unverified claim would be worse than
     recording nothing: the adapter would be handed a `sig` that fails
     verification, when the truth is that this field was never signed at all.
     """
-    if not (ctx.keyring.empty is False if verified is None else verified):
+    if not verified:
         return None
     return {"operator": operator, "timestamp": timestamp, "sig": sig}
 
