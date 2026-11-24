@@ -72,7 +72,10 @@ export default function Health() {
   const [node, setNode] = useState(route.query.node || "");
   const [chosen, setChosen] = useState(Boolean(route.query.node));
   const nodes = useQuery({ queryKey: ["nodes"], queryFn: api.nodes });
-  const nodeIds = Array.from(new Set([node, ...(nodes.data ?? []).map((n) => n.node_id)])).filter(Boolean);
+  // the examples hide once the workspace's own agents report, as on every
+  // screen — unless one was opened on purpose ("see an example")
+  const own = (nodes.data ?? []).filter((n) => !n.example_hidden);
+  const nodeIds = Array.from(new Set([node, ...own.map((n) => n.node_id)])).filter(Boolean);
   const shownNode = (nodes.data ?? []).find((n) => n.node_id === node);
   const [phase, setPhase] = useState<Phase>("idle");
   const [reason, setReason] = useState("");
@@ -100,11 +103,11 @@ export default function Health() {
   // first, then any node that has posted one. Never an empty default panel
   // beside a node with a proposed cut waiting.
   useEffect(() => {
-    if (chosen || !nodes.data?.length) return;
-    const drifting = nodes.data.find((n) => n.probe?.verdict === "DRIFT_DETECTED");
-    const checked = nodes.data.find((n) => n.probe);
+    if (chosen || !own.length) return;
+    const drifting = own.find((n) => n.probe?.verdict === "DRIFT_DETECTED");
+    const checked = own.find((n) => n.probe);
     // ...else the workspace's first agent, never a made-up default
-    const pick = drifting ?? checked ?? (node ? undefined : nodes.data[0]);
+    const pick = drifting ?? checked ?? (node ? undefined : own[0]);
     if (pick && pick.node_id !== node) setNode(pick.node_id);
   }, [chosen, nodes.data]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {

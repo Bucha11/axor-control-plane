@@ -143,27 +143,38 @@ export default function Sentinel() {
   // every agent of the workspace is pickable, reporting or not: one that does
   // not report gets said why, instead of being left off the list
   const nodesQ = useQuery({ queryKey: ["nodes"], queryFn: api.nodes });
+  // examples hide once the workspace's own agents report, as on every screen
+  const hidden = new Set((nodesQ.data ?? []).filter((n) => n.example_hidden).map((n) => n.node_id));
   const pickable = [...new Map([...watched, ...(topo.data?.nodes ?? []).filter((n) => n.kind === "self")]
+    .filter((n) => !hidden.has(n.node_id))
     .map((n) => [n.node_id, n])).values()];
   const exampleIds = new Set((topo.data?.nodes ?? []).filter((n) => n.example).map((n) => n.node_id));
-  const shownNode = (nodesQ.data ?? []).find((n) => n.node_id === node);
   const route = useRoute();
   // `#/sentinel?node=X` (the Agents list links here) opens on that node.
   const [node, setNode] = useState<string | null>(route.query.node || null);
+  const shownNode = (nodesQ.data ?? []).find((n) => n.node_id === node);
   useEffect(() => {
     if (route.query.node) setNode(route.query.node);
   }, [route.query.node]);
   useEffect(() => {
-    if (node === null && watched.length > 0) {
+    // which nodes are hidden examples is known only once the node list is in
+    if (!nodesQ.isSuccess) return;
+    // a pick that turned out to be a hidden example (not asked for by link)
+    if (node !== null && hidden.has(node) && route.query.node !== node) {
+      setNode(null);
+      return;
+    }
+    const shownWatched = watched.filter((n) => !hidden.has(n.node_id));
+    if (node === null && shownWatched.length > 0) {
       // the node with the most to say first
-      const best = [...watched].sort((a, b) => (b.reputation!.flagged - a.reputation!.flagged)
+      const best = [...shownWatched].sort((a, b) => (b.reputation!.flagged - a.reputation!.flagged)
         || (b.reputation!.watch - a.reputation!.watch))[0];
       setNode(best.node_id);
     } else if (node === null && pickable.length > 0) {
       // nobody reports: open on the workspace's own agent and say why
       setNode((pickable.find((n) => !n.example) ?? pickable[0]).node_id);
     }
-  }, [node, watched.length, pickable.length]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [node, watched.length, pickable.length, nodesQ.isSuccess]); // eslint-disable-line react-hooks/exhaustive-deps
   const rep = useQuery({
     queryKey: ["reputation", node],
     queryFn: () => api.reputation(node!),
@@ -215,7 +226,7 @@ export default function Sentinel() {
         </div>
       )}
 
-      {pickable.length > 0 && (watched.length > 0 || node) && (
+      {pickable.length > 0 && (
         <div className="flex items-center gap-2 flex-wrap mb-3" style={{ fontFamily: MONO, fontSize: 11, color: C.mut }}>
           agent
           <select value={node ?? ""} onChange={(e) => { setNode(e.target.value); setSelected(null); }}
@@ -239,7 +250,7 @@ export default function Sentinel() {
         </div>
       )}
 
-      {node && !snap && rep.isSuccess && (
+      {node && !snap && (rep.isSuccess || rep.isError) && (
         <div data-testid="sentinel-not-reporting" style={{ background: C.panel, border: `1px solid ${C.line}`,
           borderRadius: 10, padding: 18, fontFamily: MONO, fontSize: 11.5, color: C.mut, lineHeight: 1.6 }}>
           {behindProxy(shownNode) ? (
