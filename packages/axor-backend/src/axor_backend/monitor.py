@@ -88,7 +88,8 @@ async def stale_sweep(
             "node_stale", node_id,
             {"silent_seconds": round(silent, 1),
              "last_level": row["level"],
-             "permalink": f"/v1/plane/nodes#{node_id}"},
+             # the agent in the app (the API row stays under `api`)
+             "permalink": f"/#/govern/{node_id}", "api": f"/v1/plane/nodes#{node_id}"},
         )
         emitted += 1
     return emitted

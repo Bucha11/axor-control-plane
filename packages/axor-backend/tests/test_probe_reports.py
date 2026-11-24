@@ -146,6 +146,10 @@ async def test_drift_notifies_with_the_escaped_families(
     assert sent[0]["trigger"] == "behavioral_drift"
     assert sent[0]["node_id"] == "node-g"
     assert sent[0]["families"] == ["data_disclosure"]
+    # a page a person opens from the chat, not the API row, and what changed
+    assert sent[0]["permalink"] == "/#/health?node=node-g"
+    assert sent[0]["what"] == "data disclosure"
+    assert "data disclosure" in sent[0]["text"]
 
     # A clean check is not news.
     await client.post("/v1/plane/node-g/probe-report", json=_payload())

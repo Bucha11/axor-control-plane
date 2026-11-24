@@ -543,7 +543,8 @@ async def _fold_reported(
         await notifier.emit(
             "level_transition_up", node_id,
             {"from": from_level, "to": to_level,
-             "permalink": f"/v1/plane/nodes#{node_id}"},
+             # the agent in the app (the API row stays under `api`)
+             "permalink": f"/#/govern/{node_id}", "api": f"/v1/plane/nodes#{node_id}"},
         )
 
 
@@ -693,7 +694,8 @@ async def append_fact(node_id: str, body: dict, request: Request) -> dict:
             {"score": float(fact["score"]),
              "threshold": float(fact.get("threshold", 1.0)),
              "resource_id": fact.get("resource_id", ""),
-             "permalink": f"/v1/plane/nodes#{node_id}"},
+             # the agent in the app (the API row stays under `api`)
+             "permalink": f"/#/govern/{node_id}", "api": f"/v1/plane/nodes#{node_id}"},
         )
     return {"appended": True}
 
@@ -844,7 +846,11 @@ async def post_probe_report(node_id: str, body: dict, request: Request) -> dict:
                           if f.get("state") == "escaped"],
              "verdict_source": graded.get("verdict_source"),
              "confidence": graded.get("confidence"),
-             "permalink": f"/v1/plane/nodes#{node_id}"},
+             # what changed, for the line a chat shows
+             "what": ", ".join(f["family"].replace("_", " ") for f in families
+                               if f.get("state") == "escaped"),
+             # its health check in the app, where the cause can be removed
+             "permalink": f"/#/health?node={node_id}", "api": f"/v1/plane/nodes#{node_id}"},
         )
     return {"stored": True, "id": report_id, "heals_verified": outcomes}
 
@@ -1337,7 +1343,8 @@ async def post_reputation(node_id: str, body: dict, request: Request) -> dict:
             "heat_threshold", node_id,
             {"flagged": flagged, "version": snapshot.version,
              "facts": {rid: snapshot.verdict_facts.get(rid, []) for rid in flagged},
-             "permalink": f"/v1/plane/nodes#{node_id}"},
+             # the agent in the app (the API row stays under `api`)
+             "permalink": f"/#/govern/{node_id}", "api": f"/v1/plane/nodes#{node_id}"},
         )
     return {"stored": True, "version": snapshot.version, "flagged": len(flagged)}
 
