@@ -5,6 +5,28 @@ The Control Plane ships as three packages from one tag (`axor-backend`,
 images (`axor-platform`, `axor-frontend`). Self-hosted operators upgrade by
 tag; `deploy/offline` carries the same release to a machine with no network.
 
+## Unreleased
+
+### Added — agents of a pair, to each other
+
+- **Agent-to-agent messages.** A coding session's agent writes to a peer
+  session's agent through the sidecar (`axor-wrap`'s `axor_pair`): another
+  session of the same developer, or one joined by an open pair either way
+  round. Provider-blind — Claude Code to Codex and back.
+  `GET /v1/coding/peers/{node}`, `POST /v1/coding/notes/{node}/send`,
+  `GET /v1/coding/notes/{node}/with/{peer}`.
+- **Manual or auto, per developer.** Between one developer's own sessions a
+  message is given at once. From a teammate's agent it waits for the
+  receiving developer's OK (`manual`, the default) — they are told in their
+  agent and send it on or dismiss it on the session panel — or goes straight
+  through (`auto`). `POST /v1/coding/say/{node}/held/{id}`,
+  `GET|PUT /v1/coding/say/{node}/mode`.
+- **The sender's taint rides with the text** (`pair_notes.taint`), shown on
+  the session panel and in the pair feed; every message, OK, dismissal and
+  mode change is on the audit trail.
+- Migration `0034`: `pair_notes.from_node`, `taint`, `held`, `dismissed_ts`,
+  `told`.
+
 ## 0.5.0 — 2026-11-23
 
 The paid ladder becomes real: a workspace can be signed into by a company's

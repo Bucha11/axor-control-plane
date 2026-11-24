@@ -561,6 +561,41 @@ test.describe("session controls for coding agents", () => {
     await expect(page.getByRole("button", { name: /Inject next turn/ })).toHaveCount(0);
   });
 
+  test("agents write to each other: another session's message lands, marked with what it carries", async ({ page, request }) => {
+    const claude = "claude-code-example-3f9a21c0";
+    const other = "codex-example-ada-second";
+    await request.post(`${B}/v1/demo/seed-coding`);
+    // a second session of the same developer, on Codex
+    await request.post(`${B}/v1/plane/${other}/profile`,
+      { data: { kind: "coding", agent: "codex", developer: "dev-example-ada" } });
+    const peers = await (await request.get(`${B}/v1/coding/peers/${other}`)).json();
+    expect(peers.peers.map((p: { node_id: string; relation: string }) => `${p.node_id}:${p.relation}`))
+      .toContain(`${claude}:own`);
+    const sent = await request.post(`${B}/v1/coding/notes/${other}/send`,
+      { data: { to: claude, text: "I moved the rate limiter into middleware/", taint: ["web"] } });
+    expect((await sent.json()).status).toBe("queued");
+    await setConnection(page, { mode: "demo" });
+    await journey(page, "coding");
+    await goHash(page, `govern/${claude}`);
+    const box = page.getByTestId("agent-messages");
+    await expect(box.getByTestId("agent-message").last()).toContainText("I moved the rate limiter");
+    await expect(box.getByTestId("agent-message-taint").last()).toContainText("carries web");
+    await expect(box.getByTestId("agent-message").last()).toContainText("waiting for its next step");
+    // it is not shown as the developer's own words
+    await expect(page.getByTestId("say-to-agent").getByTestId("said")
+      .filter({ hasText: "rate limiter" })).toHaveCount(0);
+    const id = (await sent.json()).id;
+    await request.post(`${B}/v1/coding/notes/${claude}/delivered`, { data: { ids: [id], at: "stop" } });
+    await expect(box.getByTestId("agent-message").last()).toContainText("as it was about to stop");
+    // teammates' agents: wait for my OK, or let them through
+    await box.getByTestId("agent-msg-mode-auto").click();
+    await expect.poll(async () => (await (await request.get(`${B}/v1/coding/say/${claude}/mode`)).json()).mode)
+      .toBe("auto");
+    await box.getByTestId("agent-msg-mode-manual").click();
+    await expect.poll(async () => (await (await request.get(`${B}/v1/coding/say/${claude}/mode`)).json()).mode)
+      .toBe("manual");
+  });
+
   test("the team's brake holds every agent, and lets them go", async ({ page, request }) => {
     await request.post(`${B}/v1/demo/seed-coding`);
     await setConnection(page, { mode: "demo" });

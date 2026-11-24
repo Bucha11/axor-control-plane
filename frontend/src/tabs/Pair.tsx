@@ -483,11 +483,18 @@ function PairPane({ token }: { token: string }) {
           <div key={`n${it.note!.id}`} data-testid="pair-note" className="my-2 px-3 py-2"
             style={{ borderLeft: `2px solid ${C.amber}`, background: "rgba(242,163,60,0.06)", borderRadius: "0 6px 6px 0" }}>
             <div style={{ fontFamily: MONO, fontSize: 10.5, color: C.amber, marginBottom: 2 }}>
-              note from {it.note!.by}{it.note!.outside ? " (outside the team)" : ""} · {clock(it.ts)}
+              {it.note!.from_node
+                ? <>agent → agent · {short(it.note!.from_node)} → {short(it.note!.node_id ?? "")}</>
+                : <>note from {it.note!.by}{it.note!.outside ? " (outside the team)" : ""}</>} · {clock(it.ts)}
+              {it.note!.taint && it.note!.taint.length > 0 && (
+                <span data-testid="pair-note-taint"> · carries {it.note!.taint.join(", ")}</span>
+              )}
             </div>
             <div style={{ color: C.text }}>{it.note!.text}</div>
             <div data-testid="pair-note-state" style={{ fontFamily: MONO, fontSize: 10.5, color: it.note!.delivered_ts ? C.green : C.dim, marginTop: 3 }}>
-              {it.note!.delivered_ts
+              {it.note!.held ? "waiting for its developer's OK"
+                : it.note!.dismissed_ts ? "dismissed by its developer"
+                : it.note!.delivered_ts
                 ? `given to the agent ${it.note!.delivered_at === "prompt" ? "with the next prompt" : `after ${it.note!.delivered_at}`}, ${clock(it.note!.delivered_ts)}`
                 : "waiting for the agent's next step"}
             </div>

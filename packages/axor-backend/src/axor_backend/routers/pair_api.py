@@ -385,6 +385,11 @@ async def notes_for_agent(node_id: str, store: StoreDep, principal: PrincipalDep
     news += [f"{r['by']} asks to pair on this session (watch it live, send your agent "
              f"notes). Let them in or not on the Control Plane, Pair sessions."
              for r in await store.untold_pair_requests(node_id)]
+    news += [f"the agent of another session ({h['from_node']}) wants to tell your agent: "
+             f"\"{str(h['text'])[:200]}\" — send it on or dismiss it on the Control Plane "
+             f"(your session's notes). Messages from teammates' agents wait for your OK; "
+             f"switch to auto there to let them through."
+             for h in await store.untold_held(node_id)]
     developer = str(((await store.node_kinds()).get(node_id) or {}).get("developer") or "").lower()
     notes = await store.pending_notes(node_id, since)
     for n in notes:
@@ -443,3 +448,195 @@ async def notes_delivered(node_id: str, body: dict, store: StoreDep,
     n = await store.mark_notes_delivered(node_id, ids, _now().isoformat(),
                                          str(body.get("at") or ""))
     return {"delivered": n}
+
+
+# ── agents of a pair, to each other ──────────────────────────────────────────
+#
+# A session's agent may write to a PEER session's agent: another session of the
+# same developer, or a session joined by a pair (the developer of one let the
+# developer of the other in, either way round). Provider-blind: a Claude Code
+# agent writes to a Codex one. The sender's sidecar says what its taint ledger
+# found in the text (TaintSource values), and the receiver's sidecar registers
+# the text with that origin — a message built from a web page arrives as web
+# content, wherever the receiving agent runs.
+#
+# Between two sessions of one developer a message is given at once. To someone
+# else's agent it goes by that developer's MODE: "manual" (the default) holds
+# it until they send or dismiss it, "auto" gives it at once.
+
+AGENT_MSG_MODES = ("manual", "auto")
+_TAINT_MAX = 8
+_LIVE = timedelta(minutes=10)
+
+
+def _mode_key(developer: str) -> str:
+    return f"agent_msg_mode:{developer.lower()}"
+
+
+async def agent_msg_mode(store: Any, developer: str) -> str:  # noqa: ANN401
+    value = await store.get_setting(_mode_key(developer)) if developer else None
+    return value if value in AGENT_MSG_MODES else "manual"
+
+
+def _is_developer(developer: str, email: str) -> bool:
+    """Whether a session's developer id names this person: their address, or
+    the opaque id the sidecar derives from it (``dev-`` + sha256[:16])."""
+    import hashlib
+
+    dev, email = developer.strip().lower(), email.strip().lower()
+    if not dev or not email:
+        return False
+    return dev == email or dev == "dev-" + hashlib.sha256(email.encode()).hexdigest()[:16]
+
+
+async def peers_of(store: Any, node_id: str) -> list[dict]:  # noqa: ANN401
+    """The sessions this session's agent may write to, each with why."""
+    kinds = await store.node_kinds()
+    me = kinds.get(node_id)
+    if me is None or me.get("kind") != "coding":
+        return []
+    dev = str(me.get("developer") or "").lower()
+    found: dict[str, dict] = {}
+    for other, prof in kinds.items():
+        if other != node_id and prof.get("kind") == "coding" and not prof.get("parent") \
+                and dev and str(prof.get("developer") or "").lower() == dev:
+            found[other] = {"relation": "own", "token": ""}
+    now = _now()
+    for pair in await store.list_pairs(now.isoformat()):
+        host = kinds.get(pair["node_id"]) or {}
+        if not _opened_by_developer(pair, host):
+            continue
+        people = {str(pair["created_by"]).lower(), *[str(i).lower() for i in pair["invited"]],
+                  *[str(g.get("who", "")).lower() for g in pair["guests"] if g.get("team")]}
+        if pair["node_id"] == node_id:
+            # whoever is in a pair on THIS session: their own sessions
+            for other, prof in kinds.items():
+                if other != node_id and prof.get("kind") == "coding" and not prof.get("parent") \
+                        and other not in found and any(
+                        _is_developer(str(prof.get("developer") or ""), p) for p in people):
+                    found[other] = {"relation": "pair", "token": pair["token"]}
+        elif pair["node_id"] not in found and any(_is_developer(dev, p) for p in people):
+            # this session's developer is in a pair on that session
+            found[pair["node_id"]] = {"relation": "pair", "token": pair["token"]}
+    reported = await store.all_reported()
+    live_after = (now - _LIVE).isoformat()
+    out = []
+    for other, why in found.items():
+        prof = kinds.get(other) or {}
+        seen = str((reported.get(other) or {}).get("updated_ts") or "")
+        out.append({"node_id": other, "agent": prof.get("agent", ""),
+                    "title": prof.get("title", ""), "repo": prof.get("repo_label")
+                    or prof.get("repo", ""), "relation": why["relation"],
+                    "token": why["token"], "live": bool(seen) and seen > live_after,
+                    **({"developer": prof["developer"]}
+                       if "@" in str(prof.get("developer") or "") else {})})
+    out.sort(key=lambda p: (not p["live"], p["relation"] != "own", p["node_id"]))
+    return out[:20]
+
+
+@router.get("/v1/coding/peers/{node_id}")
+async def peers(node_id: str, store: StoreDep, principal: PrincipalDep) -> dict:
+    """For the sidecar: whom this session's agent may write to."""
+    _speaks_for(principal, node_id)
+    return {"peers": [{k: v for k, v in p.items() if k != "token"}
+                      for p in await peers_of(store, node_id)]}
+
+
+@router.post("/v1/coding/notes/{node_id}/send", status_code=201)
+async def agent_send(node_id: str, body: dict, request: Request, store: StoreDep,
+                     principal: PrincipalDep) -> dict:
+    """The sidecar of ``node_id`` sends its agent's message to a peer's agent."""
+    _speaks_for(principal, node_id)
+    to = str(body.get("to", ""))
+    text = str(body.get("text", "")).strip()
+    if not text:
+        raise HTTPException(400, "a message has text")
+    if len(text) > NOTE_MAX:
+        raise HTTPException(413, f"a message is at most {NOTE_MAX} characters")
+    peer = next((p for p in await peers_of(store, node_id) if p["node_id"] == to), None)
+    if peer is None:
+        raise HTTPException(403, {"code": "not_a_peer",
+                                  "detail": "that session is not one this agent may write to: "
+                                            "another session of the same developer, or one "
+                                            "joined by an open pair session"})
+    taint = sorted({str(t)[:32] for t in body.get("taint") or [] if str(t).strip()})[:_TAINT_MAX]
+    kinds = await store.node_kinds()
+    receiver = str((kinds.get(to) or {}).get("developer") or "")
+    held = peer["relation"] != "own" and await agent_msg_mode(store, receiver) == "manual"
+    title = str((kinds.get(node_id) or {}).get("title") or "")
+    by = f"agent:{node_id}" + (f" ({title[:60]})" if title else "")
+    note_id = await store.add_pair_note(peer["token"], to, by, text, _now().isoformat(),
+                                        from_node=node_id, taint=taint, held=held)
+    from axor_backend.funnel import used
+
+    await used(store, "agent_message")
+    from axor_backend import audit
+
+    await audit.record(store, request, "agent_message", to, who=f"agent:{node_id}",
+                       text=audit.first_words(text), relation=peer["relation"],
+                       **({"taint": taint} if taint else {}), **({"held": True} if held else {}))
+    return {"id": note_id, "to": to, "relation": peer["relation"],
+            "status": "held" if held else "queued"}
+
+
+@router.get("/v1/coding/notes/{node_id}/with/{peer}")
+async def agent_thread(node_id: str, peer: str, store: StoreDep,
+                       principal: PrincipalDep) -> dict:
+    """For the sidecar: the latest messages either way between two sessions."""
+    _speaks_for(principal, node_id)
+    if not any(p["node_id"] == peer for p in await peers_of(store, node_id)):
+        raise HTTPException(403, {"code": "not_a_peer", "detail": "not a peer of this session"})
+    return {"messages": [
+        {k: m[k] for k in ("id", "from_node", "node_id", "text", "ts", "held", "dismissed_ts",
+                           "delivered_ts", "taint")}
+        for m in await store.agent_messages_between(node_id, peer)]}
+
+
+@router.post("/v1/coding/say/{node_id}/held/{note_id}")
+async def decide_held(node_id: str, note_id: int, body: dict, request: Request,
+                      store: StoreDep, principal: PrincipalDep) -> dict:
+    """The receiving developer sends a held agent message on to their agent, or
+    dismisses it."""
+    profile = (await store.node_kinds()).get(node_id) or {}
+    if not _mine(principal, profile):
+        raise not_yours(profile)
+    note = await store.pair_note(note_id)
+    if note is None or note["node_id"] != node_id:
+        raise HTTPException(404, "no such message to this session")
+    send = bool(body.get("send"))
+    if not await store.decide_held_note(note_id, send, _now().isoformat()):
+        raise HTTPException(409, "this message is not waiting any more")
+    from axor_backend import audit
+
+    await audit.record(store, request, "agent_message_sent" if send else
+                       "agent_message_dismissed", node_id, from_node=note["from_node"])
+    return {"id": note_id, "status": "queued" if send else "dismissed"}
+
+
+@router.get("/v1/coding/say/{node_id}/mode")
+async def get_mode(node_id: str, store: StoreDep, principal: PrincipalDep) -> dict:
+    profile = (await store.node_kinds()).get(node_id) or {}
+    if not _mine(principal, profile):
+        raise not_yours(profile)
+    return {"mode": await agent_msg_mode(store, str(profile.get("developer") or ""))}
+
+
+@router.put("/v1/coding/say/{node_id}/mode")
+async def put_mode(node_id: str, body: dict, request: Request, store: StoreDep,
+                   principal: PrincipalDep) -> dict:
+    """How messages from other developers' agents reach this developer's
+    agents: held for their OK ("manual") or given at once ("auto")."""
+    profile = (await store.node_kinds()).get(node_id) or {}
+    if not _mine(principal, profile):
+        raise not_yours(profile)
+    mode = str(body.get("mode", ""))
+    if mode not in AGENT_MSG_MODES:
+        raise HTTPException(400, f"mode is one of {', '.join(AGENT_MSG_MODES)}")
+    developer = str(profile.get("developer") or "")
+    if not developer:
+        raise HTTPException(409, "this session names no developer")
+    await store.set_setting(_mode_key(developer), mode)
+    from axor_backend import audit
+
+    await audit.record(store, request, "agent_message_mode", node_id, mode=mode)
+    return {"mode": mode}

@@ -532,6 +532,15 @@ pair_notes = Table(
     Column("ts", String(40), nullable=False),
     Column("delivered_ts", String(40), nullable=True),
     Column("delivered_at", String(128), nullable=True),
+    # from another agent session (agent-to-agent, migration 0034): the
+    # sender's node, what its taint ledger said of the text (TaintSource
+    # values), and whether it waits for the receiving developer's OK
+    Column("from_node", String(128), nullable=True),
+    Column("taint", Text, nullable=False, server_default="[]"),
+    Column("held", Boolean, nullable=False, default=False),
+    Column("dismissed_ts", String(40), nullable=True),
+    # a held message the developer was told of in their agent, once
+    Column("told", Boolean, nullable=False, default=False),
 )
 
 # A skill shared for the team: the latest upload, and the version turned on
@@ -1152,20 +1161,70 @@ class Store:
                 pair_sessions.c.token == token).values(**values))
 
     async def add_pair_note(self, token: str, node_id: str, by: str, text: str,
-                            ts: str, outside: bool = False) -> int:
+                            ts: str, outside: bool = False, *, from_node: str | None = None,
+                            taint: list[str] | None = None, held: bool = False) -> int:
         async with self.engine.begin() as conn:
             res = await conn.execute(insert(pair_notes).values(
                 org_id=current_org_id(), node_id=node_id, token=token, by=by,
-                text=text, ts=ts, outside=outside))
+                text=text, ts=ts, outside=outside, from_node=from_node,
+                taint=json.dumps(list(taint or [])), held=held))
         return int(res.inserted_primary_key[0])
+
+    @staticmethod
+    def _note_row(r: Any) -> dict[str, Any]:  # noqa: ANN401 - a Row
+        return {"id": r.id, "node_id": r.node_id, "by": r.by, "text": r.text, "ts": r.ts,
+                "outside": bool(r.outside), "delivered_ts": r.delivered_ts,
+                "delivered_at": r.delivered_at, "pair": bool(r.token),
+                "from_node": r.from_node, "taint": json.loads(r.taint or "[]"),
+                "held": bool(r.held), "dismissed_ts": r.dismissed_ts}
+
+    async def pair_note(self, note_id: int) -> dict[str, Any] | None:
+        async with self.engine.connect() as conn:
+            r = (await conn.execute(select(pair_notes).where(
+                pair_notes.c.org_id == current_org_id(), pair_notes.c.id == note_id))).first()
+        return self._note_row(r) if r else None
+
+    async def decide_held_note(self, note_id: int, send: bool, ts: str) -> bool:
+        """A held agent message let through (it is given from now, as if sent
+        now) or dismissed. False when it is not held any more."""
+        values: dict[str, Any] = ({"held": False, "ts": ts} if send
+                                  else {"held": False, "dismissed_ts": ts})
+        async with self.engine.begin() as conn:
+            res = await conn.execute(update(pair_notes).where(
+                pair_notes.c.org_id == current_org_id(), pair_notes.c.id == note_id,
+                pair_notes.c.held.is_(True)).values(**values))
+        return bool(res.rowcount)
+
+    async def untold_held(self, node_id: str) -> list[dict[str, Any]]:
+        """Held agent messages to this session the developer has not been told
+        of — marked told as they are read (the sidecar says each once)."""
+        org = current_org_id()
+        async with self.engine.begin() as conn:
+            rows = (await conn.execute(select(pair_notes).where(
+                pair_notes.c.org_id == org, pair_notes.c.node_id == node_id,
+                pair_notes.c.held.is_(True), pair_notes.c.told.is_(False)))).all()
+            if rows:
+                await conn.execute(update(pair_notes).where(
+                    pair_notes.c.id.in_([r.id for r in rows])).values(told=True))
+        return [self._note_row(r) for r in rows]
+
+    async def agent_messages_between(self, a: str, b: str,
+                                     limit: int = 20) -> list[dict[str, Any]]:
+        """The latest agent messages either way between two sessions."""
+        both = ((pair_notes.c.node_id == a) & (pair_notes.c.from_node == b)) | (
+            (pair_notes.c.node_id == b) & (pair_notes.c.from_node == a))
+        async with self.engine.connect() as conn:
+            rows = (await conn.execute(select(pair_notes).where(
+                pair_notes.c.org_id == current_org_id(), both,
+            ).order_by(pair_notes.c.id.desc()).limit(limit))).all()
+        return [self._note_row(r) for r in reversed(rows)]
 
     async def pair_notes_of(self, token: str) -> list[dict[str, Any]]:
         async with self.engine.connect() as conn:
             rows = (await conn.execute(select(pair_notes).where(
                 pair_notes.c.org_id == current_org_id(), pair_notes.c.token == token,
             ).order_by(pair_notes.c.id))).all()
-        return [{"id": r.id, "by": r.by, "text": r.text, "ts": r.ts, "outside": bool(r.outside),
-                 "delivered_ts": r.delivered_ts, "delivered_at": r.delivered_at} for r in rows]
+        return [self._note_row(r) for r in rows]
 
     async def notes_of_node(self, node_id: str, limit: int = 20) -> list[dict[str, Any]]:
         """The latest notes to one session, from anyone, with where they landed."""
@@ -1173,9 +1232,7 @@ class Store:
             rows = (await conn.execute(select(pair_notes).where(
                 pair_notes.c.org_id == current_org_id(), pair_notes.c.node_id == node_id,
             ).order_by(pair_notes.c.id.desc()).limit(limit))).all()
-        return [{"id": r.id, "by": r.by, "text": r.text, "ts": r.ts, "outside": bool(r.outside),
-                 "delivered_ts": r.delivered_ts, "delivered_at": r.delivered_at,
-                 "pair": bool(r.token)} for r in reversed(rows)]
+        return [self._note_row(r) for r in reversed(rows)]
 
     async def pending_notes(self, node_id: str, since_ts: str) -> list[dict[str, Any]]:
         """Notes for one agent session not yet given to it (newer than since)."""
@@ -1183,9 +1240,13 @@ class Store:
             rows = (await conn.execute(select(pair_notes).where(
                 pair_notes.c.org_id == current_org_id(), pair_notes.c.node_id == node_id,
                 pair_notes.c.delivered_ts.is_(None), pair_notes.c.ts > since_ts,
+                # an agent message waiting for the developer's OK, or dismissed
+                pair_notes.c.held.is_(False), pair_notes.c.dismissed_ts.is_(None),
             ).order_by(pair_notes.c.id))).all()
         return [{"id": r.id, "by": r.by, "text": r.text, "ts": r.ts,
-                 "outside": bool(r.outside)} for r in rows]
+                 "outside": bool(r.outside),
+                 **({"from_node": r.from_node, "taint": json.loads(r.taint or "[]"),
+                     "pair": bool(r.token)} if r.from_node else {})} for r in rows]
 
     async def mark_notes_delivered(self, node_id: str, ids: list[int], ts: str,
                                    at: str) -> int:

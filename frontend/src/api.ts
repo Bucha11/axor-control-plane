@@ -687,7 +687,12 @@ export interface PairStep {
 export interface PairNote {
   id: number; by: string; text: string; ts: string; outside: boolean;
   delivered_ts: string | null; delivered_at: string | null;
+  // from another session's agent (agent-to-agent): the sender's node, what its
+  // taint ledger found in the text, and whether it waits for the developer's OK
+  from_node?: string | null; node_id?: string; taint?: string[];
+  held?: boolean; dismissed_ts?: string | null;
 }
+export type AgentMsgMode = "manual" | "auto";
 export interface PairFeed {
   pair: { node_id: string; agent: string; title?: string; created_by: string; created_ts: string; expires_ts: string;
           outside: boolean; guests: string[]; you: "teammate" | "guest"; paused: boolean;
@@ -1645,6 +1650,18 @@ export const api = {
   saidToAgent: (nodeId: string) =>
     af(`/v1/coding/say/${encodeURIComponent(nodeId)}`).then((r) =>
       j<{ notes: (PairNote & { pair: boolean })[] }>(r)),
+  // messages from other sessions' agents: send a held one on, or dismiss it;
+  // and whether teammates' agents wait for your OK ("manual") or not ("auto")
+  decideAgentMessage: (nodeId: string, id: number, send: boolean) =>
+    af(`/v1/coding/say/${encodeURIComponent(nodeId)}/held/${id}`, {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ send }),
+    }).then((r) => j<{ id: number; status: string }>(r)),
+  agentMsgMode: (nodeId: string) =>
+    af(`/v1/coding/say/${encodeURIComponent(nodeId)}/mode`).then((r) => j<{ mode: AgentMsgMode }>(r)),
+  setAgentMsgMode: (nodeId: string, mode: AgentMsgMode) =>
+    af(`/v1/coding/say/${encodeURIComponent(nodeId)}/mode`, {
+      method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ mode }),
+    }).then((r) => j<{ mode: AgentMsgMode }>(r)),
   // the team's brake: every coding agent held at once (admin)
   brake: () => af("/v1/coding/brake").then((r) => j<{ on: boolean; by?: string; ts?: string; reason?: string }>(r)),
   setBrake: (on: boolean, reason = "") =>

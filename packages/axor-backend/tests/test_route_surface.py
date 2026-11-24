@@ -77,6 +77,10 @@ EXPECTED: dict[tuple[str, str], str] = {
     ("POST", "/v1/pair/requests/{request_id}"): "read",
     ("GET", "/v1/coding/notes/{node_id}"): "ingest",
     ("POST", "/v1/coding/notes/{node_id}/delivered"): "ingest",
+    # agents of a pair, to each other: the sidecar finds peers, sends, reads a thread
+    ("GET", "/v1/coding/peers/{node_id}"): "read",
+    ("POST", "/v1/coding/notes/{node_id}/send"): "ingest",
+    ("GET", "/v1/coding/notes/{node_id}/with/{peer}"): "ingest",
     ("POST", "/v1/demo/seed-pair"): "operate",
     ("GET", "/v1/coding/skill-bundles/{name}"): "ingest",
     ("POST", "/v1/demo/seed-team-skill"): "operate",
@@ -112,6 +116,10 @@ EXPECTED: dict[tuple[str, str], str] = {
     ("PUT", "/v1/permissions"): "operate",
     ("GET", "/v1/coding/say/{node_id}"): "read",
     ("POST", "/v1/coding/say/{node_id}"): "operate",
+    # the receiving developer: a held agent message on or away; manual or auto
+    ("POST", "/v1/coding/say/{node_id}/held/{note_id}"): "operate",
+    ("GET", "/v1/coding/say/{node_id}/mode"): "read",
+    ("PUT", "/v1/coding/say/{node_id}/mode"): "operate",
     ("GET", "/v1/skill-evals"): "read",
     ("GET", "/v1/skill-evals/{eval_id}"): "read",
     ("POST", "/v1/demo/fleet-reprobe"): "operate",

@@ -181,7 +181,9 @@ _WRITE_POLICY: tuple[tuple[str, str], ...] = (
     ("/v1/setup-health", "ingest"),   # posted by the check, on an ingest key
     # sharing a skill reaches nobody by itself: a developer's key may upload
     ("/v1/coding/skill-bundles", "ingest"),
-    ("/v1/coding/notes/", "ingest"),   # the sidecar says a note was given
+    # the sidecar says a note was given, and sends its agent's message to a
+    # peer session (routers/pair_api: agent-to-agent)
+    ("/v1/coding/notes/", "ingest"),
     ("/v1/coding/memory/", "ingest"),  # ...and which memory it gave a session
     # what reaches every agent of the team is an operator's decision
     ("/v1/memory", "operate"),
