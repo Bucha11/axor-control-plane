@@ -103,7 +103,10 @@ test.describe("onboarding", () => {
     // Plain Python: a toolset and the gate, with the same tools.
     await page.getByRole("button", { name: "Plain Python" }).click();
     await expect(snippet).toContainText("WrappedToolset(");
-    await expect(snippet).toContainText("node.gate(toolset)");
+    await expect(snippet).toContainText("node.gate(WrappedToolset(");
+    // each run reaches the plane with its answer, so a claimed success that failed is caught
+    await expect(snippet).toContainText("task=request");
+    await expect(snippet).toContainText("node.post_ingest(toolset.run_lines(answer)");
     // Claude: its own tools run on axor-core — no scan step.
     await page.getByRole("button", { name: /Claude Agent/ }).click();
     await expect(snippet).toContainText("session = axor_claude.make_session()");

@@ -42,6 +42,7 @@ const FRAMEWORKS: { id: Framework; label: string; points: string[] }[] = [
     points: [
       "your tool functions are checked before every call — one fed by outside text cannot send it out",
       "pause and stop from the plane hold its tool calls",
+      "each run posted with its answer: a claimed refund that failed shows as a caught lie",
       "cutting context needs the agent loop in axor-core — use LangChain or the Claude adapter for that",
     ],
   },
@@ -104,23 +105,33 @@ checked = wrap_callables(${dict}, manifests)
 agent = create_agent(model, [tool(f) for f in checked.values()],
                      middleware=[AxorMiddleware()])   # pause / stop / budget from the plane`;
   }
+  const last = names[names.length - 1];
   return `pip install 'axor-wrap[plane]'
 
 ${env}
 
-${imports}, asyncio, os
+${imports}, asyncio, os, uuid
 from axor_wrap.runtime import WrappedToolset
 from axor_wrap.connect import PlaneConnector
 
 ${load}
-toolset = WrappedToolset(${dict}, manifests)
-
 node = PlaneConnector(os.environ["AXOR_PLANE_URL"], os.environ["AXOR_NODE_ID"],
                       ingest_key=os.environ.get("AXOR_INGEST_KEY")).connect()
-node.gate(toolset)                  # pause / stop from the plane hold its tool calls
 asyncio.create_task(node.run())     # keeps it live on the plane (inside your event loop)
 
-toolset.call("${names[names.length - 1]}", {...})   # or hand toolset.callables() to your loop`;
+async def handle(request: str) -> str:
+    # one toolset per request: the task is what the user asked, so values from it are trusted
+    toolset = node.gate(WrappedToolset(${dict}, manifests,
+                                       node_id=node.session.node_id, task=request))
+    out = toolset.call("${last}", {...})   # or hand toolset.callables() to your loop
+    answer = ...                           # what your agent tells the user
+    # the run on the plane: every call, its verdict, and the answer it is audited against
+    await node.post_ingest(toolset.run_lines(answer), f"{node.session.node_id}-{uuid.uuid4().hex[:10]}")
+    return answer
+
+# optional: reputation across runs (pip install axor-sentinel) and a health check
+# after a run (pip install axor-probe; costs model calls) — ReputationBook and
+# HealthCheck in axor_wrap.observe, posted with node.post_reputation / post_health_check`;
 }
 
 const step = (n: number, text: string) => (
