@@ -66,6 +66,8 @@ services:
       # Alert mail: a notification subscription to mailto:<address> is sent
       # through this. Same forms as AXOR_IDENTITY_SMTP_URL. Unset = webhooks only.
       AXOR_SMTP_URL: ${AXOR_SMTP_URL:-}
+      # where people open this plane: links in alerts point into the app here
+      AXOR_PUBLIC_URL: ${AXOR_PUBLIC_URL:-}
       AXOR_MAIL_FROM: ${AXOR_MAIL_FROM:-}
     ports: ["8400:8400"]
     depends_on:

@@ -1819,6 +1819,10 @@ export const api = {
   // A registered webhook used to fire forever: there was no way to remove one
   // short of editing the database, while the body it receives carries node
   // ids, levels, a permalink, and for license_expiring the licensed org.
+  // one test alert to a subscribed channel, now
+  testNotification: (url: string) =>
+    af("/v1/notifications/test", { method: "POST", headers: { "content-type": "application/json" },
+                                   body: JSON.stringify({ url }) }).then((r) => j<{ sent: string }>(r)),
   unsubscribeNotifications: (url: string) =>
     af("/v1/notifications/unsubscribe", {
       method: "POST",

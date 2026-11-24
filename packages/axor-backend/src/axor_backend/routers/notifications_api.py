@@ -147,6 +147,9 @@ async def notif_subscribe(
         url, triggers, debounce, label=label, node_pattern=node_pattern,
         org=current_org_id(),
     )
+    from axor_backend import audit
+
+    await audit.record(store, request, "alert_subscribed", url[:200], triggers=triggers)
     return {
         "subscribed": url, "triggers": triggers,
         "label": label, "node_pattern": node_pattern,
@@ -155,7 +158,7 @@ async def notif_subscribe(
 
 @router.post("/unsubscribe")
 async def notif_unsubscribe(
-    body: dict, store: StoreDep, notifier: NotifierDep
+    body: dict, request: Request, store: StoreDep, notifier: NotifierDep
 ) -> dict:
     """Stop delivering to a webhook. There was no way to do this at all.
 
@@ -173,7 +176,27 @@ async def notif_unsubscribe(
     notifier.unsubscribe(url, org=current_org_id())
     if not removed:
         raise HTTPException(404, f"no subscription for {url!r} in this tenant")
+    from axor_backend import audit
+
+    await audit.record(store, request, "alert_unsubscribed", url[:200])
     return {"unsubscribed": url, "removed": removed}
+
+
+@router.post("/test")
+async def notif_test(body: dict, request: Request, notifier: NotifierDep) -> dict:
+    """Send one test alert to a subscribed channel, now. Without it the only way
+    to learn a webhook works was a real incident — and to learn it did not,
+    an incident nobody heard about."""
+    from axor_backend.notifications import WebhookRefused
+
+    url = _text(body, "url", required=True)
+    _mail_allowed(request, url)
+    try:
+        notifier.validate(url, ["evidence_run"])
+    except (WebhookRefused, ValueError) as exc:
+        raise HTTPException(400, str(exc)) from exc
+    notifier.send_test(url, org=current_org_id())
+    return {"sent": url}
 
 
 @router.get("/subscriptions")

@@ -110,7 +110,12 @@ async def store_evidence(
             {
                 "run_id": run_id,
                 "cases": len(deviations),
-                "permalink": f"/v1/runs/{run_id}",
+                # the receipt in the app, not the API path it is built from
+                "permalink": f"/#/catch/{run_id}",
+                "api": f"/v1/runs/{run_id}",
+                "what": str(deviations[0].get("deviation", "")).replace("_", " "),
+                "tool": next((str(a.get("tool_name")) for a in deviations[0].get("fault_attribution") or []
+                              if isinstance(a, dict) and a.get("tool_name")), ""),
             },
         )
     return {"ok": True, "notified": bool(deviations), "pinned": pinned}

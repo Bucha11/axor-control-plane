@@ -439,6 +439,10 @@ async def _alert_steps(ctx: Any, node_id: str, run_id: str,  # noqa: ANN401
             await notifier.emit("would_refuse", node_id, {
                 "run_id": run_id, "seq": step["seq"], "tool": step["tool"],
                 "what": step["what"], "reason": step["reason"], "permalink": link})
+        elif step["outcome"] == "refused":
+            await notifier.emit("refused", node_id, {
+                "run_id": run_id, "seq": step["seq"], "tool": step["tool"],
+                "what": step["what"], "reason": step["reason"], "permalink": link})
         elif step["outcome"] == "let_through" and (why := incidents.dangerous(step)):
             await notifier.emit("dangerous_let_through", node_id, {
                 "run_id": run_id, "seq": step["seq"], "tool": step["tool"],

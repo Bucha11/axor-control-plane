@@ -33,6 +33,8 @@ const TRIGGERS: { id: string; label: string; for: Journey[] }[] = [
     for: ["coding", "production", "both"] },
   { id: "would_refuse", label: "a call the rules would refuse went through, because enforcement is off (observe mode)",
     for: ["coding", "production", "both"] },
+  { id: "refused", label: "the rules refused a call — an attack stopped, or normal work a rule blocks",
+    for: ["coding", "production", "both"] },
   { id: "memory_worse", label: "agents did worse after the team memory changed", for: ["coding", "both"] },
   { id: "setup_health_worse", label: "a context health check came out worse than the last one", for: ["coding", "both"] },
   { id: "level_transition_up", label: "an agent was restricted further (its level went up)", for: ["production", "both"] },
@@ -973,6 +975,7 @@ export default function Settings({ tab = "workspace" }: { tab?: string } = {}) {
       }),
     onSuccess: () => void qc.invalidateQueries({ queryKey: ["subscriptions"] }),
   });
+  const testAlert = useMutation({ mutationFn: (target: string) => api.testNotification(target) });
   const unsubscribe = useMutation({
     mutationFn: (target: string) => api.unsubscribeNotifications(target),
     onSuccess: () => void qc.invalidateQueries({ queryKey: ["subscriptions"] }),
@@ -1311,6 +1314,11 @@ export default function Settings({ tab = "workspace" }: { tab?: string } = {}) {
                     .map((id) => TRIGGERS.find((t) => t.id === id)?.label.split(" — ")[0] ?? id).join("; ")}
                   {s.node_pattern !== "*" ? ` · nodes: ${s.node_pattern}` : ""}
                 </span>
+                <button aria-label={`send a test alert to ${s.url}`} onClick={() => testAlert.mutate(s.url)}
+                  disabled={testAlert.isPending}
+                  style={btn({ color: C.steel, fontSize: 10, padding: "1px 7px" })}>
+                  {testAlert.isSuccess && testAlert.variables === s.url ? "test sent ✓" : "send a test alert"}
+                </button>
                 <button
                   aria-label={`unsubscribe ${s.url}`}
                   onClick={() => unsubscribe.mutate(s.url)}
@@ -1321,6 +1329,16 @@ export default function Settings({ tab = "workspace" }: { tab?: string } = {}) {
                 </button>
               </div>
             ))}
+            {testAlert.isError && (
+              <div className="mt-2" style={{ fontFamily: MONO, fontSize: 11, color: C.red }}>
+                test alert refused: {(testAlert.error as Error).message}
+              </div>
+            )}
+            {testAlert.isSuccess && (
+              <div className="mt-2" style={{ fontFamily: MONO, fontSize: 11, color: C.dim }}>
+                sent — if it does not arrive, it lands under "could not be delivered" below after its retries
+              </div>
+            )}
             {unsubscribe.isError && (
               <div className="mt-2" style={{ fontFamily: MONO, fontSize: 11, color: C.red }}>
                 unsubscribe failed: {(unsubscribe.error as Error).message}

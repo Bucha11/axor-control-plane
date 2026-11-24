@@ -117,3 +117,52 @@ async def test_agents_worse_after_a_memory_change_pages_once(
     worse = [p for t, _, p in client.spy.sent if t == "memory_worse"]  # type: ignore[attr-defined]
     assert len(worse) == 1 and worse[0]["added"] == ["Run tests with -x --lf."]
     assert worse[0]["repo"] == "acme/api"
+
+
+async def test_a_refused_attack_pages_and_an_operators_hold_does_not(client: httpx.AsyncClient) -> None:
+    """A security lead asks to hear about the attack the rules stopped; there
+    was no such trigger. A pause / stop / spent budget is the operator's own
+    hold, not a refusal, and must not page."""
+    await _post(client, "support", "r2",
+                _line("support", 0, "tool_call", "deny", tool="send_email",
+                      args={"to": "<31 chars sha256:x>"}, reason="taint enforcement: outside text"),
+                _line("support", 1, "tool_call", "deny", tool="send_email",
+                      args={"to": "<9 chars sha256:y>"}, control="agent_paused",
+                      reason="this agent is paused from the Control Plane"))
+    sent = client.spy.sent  # type: ignore[attr-defined]
+    assert [(t, p["tool"], p["seq"]) for t, _, p in sent] == [("refused", "send_email", 0)]
+    assert sent[0][2]["permalink"].startswith("/#/explain/r2")
+
+
+def test_a_chat_webhook_gets_text_it_shows(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Slack refuses a body without `text` (Discord reads `content`); the alert
+    was bare fields, while the page promised Slack takes one."""
+    from axor_backend.notifications import with_chat_text
+
+    monkeypatch.setenv("AXOR_PUBLIC_URL", "https://axor.acme.example/")
+    body = with_chat_text({"trigger": "evidence_run", "node_id": "refund-copilot",
+                           "tool": "issue_refund", "what": "fabricated tool result",
+                           "permalink": "/#/catch/run_1"})
+    assert body["text"] == body["content"]
+    assert "refund-copilot: made something up — issue_refund · fabricated tool result" in body["text"]
+    assert body["permalink"] == "https://axor.acme.example/#/catch/run_1"
+    assert body["text"].endswith("https://axor.acme.example/#/catch/run_1")
+    # the plane's own test-run proxy is said as what it is
+    assert "a test run (through the proxy)" in with_chat_text(
+        {"trigger": "evidence_run", "node_id": "proxy"})["text"]
+
+
+async def test_a_test_alert_goes_through_the_same_delivery(tmp_path: pathlib.Path) -> None:
+    from axor_backend.notifications import Notifier
+
+    posted: list[tuple[str, dict]] = []
+
+    async def post(url: str, body: dict) -> int:
+        posted.append((url, body))
+        return 200
+
+    n = Notifier(post=post, block_private=False)
+    n.send_test("https://hooks.example/x")
+    await n.drain()
+    [(url, body)] = posted
+    assert url == "https://hooks.example/x" and "this channel works" in body["text"]
