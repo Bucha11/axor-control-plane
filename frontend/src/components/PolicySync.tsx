@@ -19,13 +19,19 @@ export default function PolicySync() {
   const applying = useRef(false);
   useEffect(() => {
     let cancelled = false;
+    const atMount = useApp.getState().toolPolicy;
     void api.getPolicy().then((saved) => {
       if (cancelled) return;
       const local = useApp.getState().toolPolicy;
+      // edited while the workspace's policy was on its way (a tool added in
+      // the first moment): those edits are kept on top of it, not overwritten
+      const editedMeanwhile = local !== atMount;
+      const merged = editedMeanwhile ? { ...saved.tools, ...local } : saved.tools;
       if (Object.keys(saved.tools).length) {
         applying.current = true;
-        useApp.setState({ toolPolicy: saved.tools });
+        useApp.setState({ toolPolicy: merged });
         applying.current = false;
+        if (editedMeanwhile) void api.putPolicy(merged).catch(() => undefined);
       } else if (Object.keys(local).length) {
         void api.putPolicy(local).catch(() => undefined);
       }

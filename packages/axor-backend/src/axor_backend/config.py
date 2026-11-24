@@ -86,6 +86,8 @@ class AppConfig:
     # None = webhooks only, and a mail subscription is refused at subscribe.
     smtp_url: str | None = None
     mail_from: str | None = None
+    # Where people open this plane: links in alerts point into the app here.
+    public_url: str | None = None
     # Hosted visitors may work as a guest before signing up (guests.py). Only
     # meaningful with auth on; off by default — a self-hosted plane has no
     # anonymous public to welcome.
@@ -195,6 +197,7 @@ class AppConfig:
             ),
             smtp_url=env.text("AXOR_SMTP_URL") or None,
             mail_from=env.text("AXOR_MAIL_FROM") or None,
+            public_url=env.text("AXOR_PUBLIC_URL") or None,
         )
 
 

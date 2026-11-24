@@ -134,15 +134,14 @@ async def test_a_refused_attack_pages_and_an_operators_hold_does_not(client: htt
     assert sent[0][2]["permalink"].startswith("/#/explain/r2")
 
 
-def test_a_chat_webhook_gets_text_it_shows(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_a_chat_webhook_gets_text_it_shows() -> None:
     """Slack refuses a body without `text` (Discord reads `content`); the alert
     was bare fields, while the page promised Slack takes one."""
     from axor_backend.notifications import with_chat_text
 
-    monkeypatch.setenv("AXOR_PUBLIC_URL", "https://axor.acme.example/")
     body = with_chat_text({"trigger": "evidence_run", "node_id": "refund-copilot",
                            "tool": "issue_refund", "what": "fabricated tool result",
-                           "permalink": "/#/catch/run_1"})
+                           "permalink": "/#/catch/run_1"}, "https://axor.acme.example/")
     assert body["text"] == body["content"]
     assert "refund-copilot: made something up — issue_refund · fabricated tool result" in body["text"]
     assert body["permalink"] == "https://axor.acme.example/#/catch/run_1"

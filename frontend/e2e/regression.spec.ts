@@ -3,7 +3,7 @@
 // keep passing. Deterministic replay, no model calls. The corpus is shared by
 // every spec in the run, so these assert on the example's own rows.
 import { expect, test } from "@playwright/test";
-import { goHash, seedAdapterRuns, setConnection } from "./helpers";
+import { BACKEND, goHash, seedAdapterRuns, setConnection } from "./helpers";
 
 test.describe("safe to ship", () => {
   test.beforeEach(async ({ page, request }) => {
@@ -83,13 +83,10 @@ test.describe("safe to ship", () => {
     await expect(page.getByText(/Safe to ship:/)).toHaveCount(0);
   });
 
-  test("the rules from Policy are checked by default once there are cases of your own", async ({ page }) => {
-    await page.addInitScript(() => {
-      const raw = localStorage.getItem("axor-app");
-      const data = raw ? JSON.parse(raw) : { state: {}, version: 0 };
-      data.state.toolPolicy = { web_search: { klass: "READ", outside: true }, send_email: { klass: "EXPORT", outside: false } };
-      localStorage.setItem("axor-app", JSON.stringify(data));
-    });
+  test("the rules from Policy are checked by default once there are cases of your own", async ({ page, request }) => {
+    // the policy is the workspace's: put it there, as Policy saves it
+    await request.put(`${BACKEND}/v1/policy`, { data: { tools: {
+      web_search: { klass: "READ", outside: true }, send_email: { klass: "EXPORT", outside: false } } } });
     await goHash(page, "regression");
     await expect(page.getByTestId("rules-policy")).toContainText("2 tools");
     await page.getByTestId("rules-policy").click();

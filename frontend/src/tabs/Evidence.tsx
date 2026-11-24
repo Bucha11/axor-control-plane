@@ -151,6 +151,12 @@ export default function Evidence({ agent: agentParam }: { agent?: string } = {})
   const listed = feed.data?.items ?? [];
   const items = cause ? listed.filter((i) => i.kind !== "refused" || i.cause === cause) : listed;
   const developerOf = (id: string) => (nodesQ.data ?? []).find((n) => n.node_id === id)?.profile?.developer || id;
+  // a coding session (or a tree run) is a developer's; anything else is a production agent
+  // (a node that never said what it is counts by the side of the menu in use)
+  const isSession = (id: string) => {
+    const kind = (nodesQ.data ?? []).find((n) => n.node_id === id)?.profile?.kind;
+    return kind ? ["coding", "tree"].includes(String(kind)) : journey === "coding";
+  };
   const nothingAtAll = all.isSuccess && all.data.items.length === 0;
 
   return (
@@ -221,7 +227,8 @@ export default function Evidence({ agent: agentParam }: { agent?: string } = {})
             </div>
           ) : (
             <div className="flex flex-col gap-2" data-testid="evidence-list">
-              <RefusalSummary items={listed} developerOf={developerOf} cause={cause} setCause={setCause} />
+              <RefusalSummary items={listed} developerOf={developerOf} isSession={isSession}
+                cause={cause} setCause={setCause} />
               {items.map((i) => <Item key={i.id} item={i} who={labelOf(i.node_id)} />)}
             </div>
           )}
@@ -338,8 +345,9 @@ function Item({ item, who }: { item: IncidentItem; who?: string }) {
 
 /** The refusals, counted by cause: how many, and how many developers hit it —
  *  a rule too strict shows as many refusals across the team. */
-function RefusalSummary({ items, developerOf, cause, setCause }: {
-  items: IncidentItem[]; developerOf: (id: string) => string; cause: string; setCause: (c: string) => void;
+function RefusalSummary({ items, developerOf, isSession, cause, setCause }: {
+  items: IncidentItem[]; developerOf: (id: string) => string; isSession: (id: string) => boolean;
+  cause: string; setCause: (c: string) => void;
 }) {
   const refused = items.filter((i) => i.kind === "refused" && i.cause);
   if (refused.length < 2) return null;
@@ -347,10 +355,9 @@ function RefusalSummary({ items, developerOf, cause, setCause }: {
   for (const i of refused) {
     const g = by.get(i.cause!) ?? { words: i.cause_words || i.cause!, n: 0, devs: new Set<string>(), people: true };
     g.n += i.count;
-    const who = developerOf(i.node_id);
-    g.devs.add(who);
-    // a production agent has no developer: it counts as an agent, not a person
-    if (who === i.node_id) g.people = false;
+    g.devs.add(developerOf(i.node_id));
+    // a production agent is not a developer's session: it counts as an agent
+    if (!isSession(i.node_id)) g.people = false;
     by.set(i.cause!, g);
   }
   const rows = [...by.entries()].sort((a, b) => b[1].n - a[1].n);

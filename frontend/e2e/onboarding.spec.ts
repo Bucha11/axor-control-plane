@@ -2,7 +2,7 @@
 // agent at the proxied URLs → prove the plumbing. The depth toggle sells the
 // adapter's extra surfaces honestly.
 import { expect, test } from "@playwright/test";
-import { goHash } from "./helpers";
+import { goHash, resetPolicy } from "./helpers";
 
 test.describe("onboarding", () => {
   test("pasting an MCP config discovers and registers the server's tools", async ({ page }) => {
@@ -51,7 +51,8 @@ test.describe("onboarding", () => {
     await expect(page.getByTestId("adapter-onboarding")).toBeVisible();
   });
 
-  test("the proxy as a guard: two files, the command, the addresses", async ({ page }) => {
+  test("the proxy as a guard: two files, the command, the addresses", async ({ page, request }) => {
+    await resetPolicy(request);
     await goHash(page, "connect?for=production");
     await page.getByTestId("prod-way-proxy").click();
     await page.getByTestId("guard-example").click();

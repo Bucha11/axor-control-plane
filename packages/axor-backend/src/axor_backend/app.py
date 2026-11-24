@@ -153,4 +153,5 @@ def _notifier(app: FastAPI) -> Notifier:
         dead_sink=persist_dead_letter,
         block_private=app.state.config.webhook_block_private,
         mailer=mailer_from_url(app.state.config.smtp_url, app.state.config.mail_from),
+        public_url=app.state.config.public_url,
     )
