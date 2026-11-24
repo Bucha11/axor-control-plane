@@ -218,10 +218,24 @@ export default function Health() {
     </div>
   );
 
+  // what the page is for, in Learn mode — on the empty page too, which is
+  // where someone new to it lands
+  const coach = (
+    <Coach id="health" title="Health — does the agent still answer the way it used to?">
+      A set of test questions — about giving out data, going beyond the task, following
+      instructions — is asked again and compared with how the agent answered before. When it
+      answers differently, the check traces which piece of its context changed it, and you can
+      remove that piece. Nothing is removed without you.
+    </Coach>
+  );
+
   if (!node) {
     return (
-      <div style={{ fontFamily: MONO, fontSize: 11.5, color: C.mut }}>
-        No agent has reported yet — a health check is about an agent that runs.
+      <div style={{ maxWidth: 560, margin: "0 auto" }}>
+        {coach}
+        <div style={{ fontFamily: MONO, fontSize: 11.5, color: C.mut }}>
+          No agent has reported yet — a health check is about an agent that runs.
+        </div>
       </div>
     );
   }
@@ -231,12 +245,7 @@ export default function Health() {
 
   return (
     <div style={{ maxWidth: 560, margin: "0 auto" }}>
-      <Coach id="health" title="Health — does the agent still answer the way it used to?">
-        A set of test questions — about giving out data, going beyond the task, following
-        instructions — is asked again and compared with how the agent answered before. When it
-        answers differently, the check traces which piece of its context changed it, and you can
-        remove that piece. Nothing is removed without you.
-      </Coach>
+      {coach}
 
       {picker}
 
