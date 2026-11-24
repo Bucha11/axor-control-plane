@@ -85,7 +85,7 @@ def test_a_receipt_of_a_stop_says_the_agent_was_stopped() -> None:
 
     case = {"deviation": "fabricated_tool_result", "verdict_source": "heuristic", "confidence": 0.8,
             "observed_reality": {"tool": "issue_refund", "observed": "held",
-                                 "actual_result": "the agent was stopped — the call never ran",
+                                 "actual_result": "the agent was stopped",
                                  "also_never_ran": ["send_email"]},
             "agent_claim": "agent answered as if issue_refund, send_email had run",
             "fault_attribution": [{"fault_mode": "observed_held", "tool_name": "issue_refund",
