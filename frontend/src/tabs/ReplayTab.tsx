@@ -106,13 +106,18 @@ function lineage(steps: ScrubberStep[], ref: string): { label: string; outside: 
 }
 
 function origin(steps: ScrubberStep[], s: ScrubberStep): string | null {
+  // which argument carried it, and from which step's answer: "its to came from
+  // read_ticket's answer (step 2)" is something an operator can act on
   const refs = s.payload.arg_refs && typeof s.payload.arg_refs === "object"
-    ? Object.values(s.payload.arg_refs as Record<string, unknown>).filter((v): v is string => typeof v === "string")
+    ? Object.entries(s.payload.arg_refs as Record<string, unknown>)
+      .filter((e): e is [string, string] => typeof e[1] === "string")
     : [];
-  for (const r of refs) {
+  for (const [arg, r] of refs) {
     const chain = lineage(steps, r);
     const first = chain.find((c) => c.outside) ?? chain[0];
-    if (first) return first.label;
+    if (!first) continue;
+    const at = steps.findIndex((x) => x.kind === "tool_result" && x.payload.value_ref === r);
+    return `its ${arg} — from ${first.label}${at >= 0 ? ` (step ${at + 1})` : ""}`;
   }
   return null;
 }
@@ -124,7 +129,9 @@ function plainReason(steps: ScrubberStep[], s: ScrubberStep): string {
   const words = refusalWords(raw, gate);
   if (words === "what it was going to use came from text from outside") {
     const from = origin(steps, s);
-    return `what it was going to use came from ${from ?? "text"} — text that came from outside`;
+    return from
+      ? `what it was going to use came from outside text: ${from}`
+      : "what it was going to use came from text that came from outside";
   }
   return words;
 }

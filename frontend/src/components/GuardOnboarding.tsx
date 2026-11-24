@@ -10,6 +10,7 @@ import { Check, Copy, Download, Plug } from "lucide-react";
 import { api } from "../api";
 import { navigate } from "../router";
 import { isGuestToken, useApp, type ToolKlass } from "../store";
+import { untrustedFields } from "../policyConfig";
 import ScanTools from "./ScanTools";
 import { C, MONO, btn } from "../theme";
 import { IdentityLogin } from "../tabs/Settings";
@@ -96,7 +97,7 @@ export default function GuardOnboarding() {
       // with no named driving argument every argument can drive — the safe
       // reading at an HTTP boundary; a scanned tool keeps the ones it found
       effect: { default_class: t.klass, driving_args: policy[t.name]?.driving ?? [],
-                untrusted_fields: t.klass === "READ" && t.outside ? ["result.*"] : [] },
+                untrusted_fields: untrustedFields(policy[t.name] ?? t) },
     }))),
     onSuccess: (bundle) => { save("axor.manifests.json", bundle); setSavedManifests(true); },
   });
@@ -162,12 +163,10 @@ export default function GuardOnboarding() {
               aria-label={`what ${t.name} does`} style={{ ...input, fontSize: 11, padding: "3px 6px" }}>
               {CLASSES.map((c) => <option key={c.id} value={c.id}>{c.label}</option>)}
             </select>
-            {t.klass === "READ" && (
-              <label title="its answers come from outside (web, email, files): they cannot drive a send, write or run" style={{ color: C.mut, display: "flex", alignItems: "center", gap: 5, cursor: "pointer" }}>
-                <input type="checkbox" checked={t.outside} onChange={(e) => patch(i, { outside: e.target.checked })} />
-                brings in outside text
-              </label>
-            )}
+            <label title="its answers come from outside (web, email, files): they cannot drive a send, write or run" style={{ color: C.mut, display: "flex", alignItems: "center", gap: 5, cursor: "pointer" }}>
+              <input type="checkbox" checked={t.outside} onChange={(e) => patch(i, { outside: e.target.checked })} />
+              brings in outside text
+            </label>
           </div>
         ))}
         <div className="px-3 py-2 flex items-center gap-2" style={{ borderTop: tools.length ? `1px solid ${C.line}` : "none" }}>

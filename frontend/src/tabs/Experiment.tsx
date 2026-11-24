@@ -21,6 +21,7 @@ import {
 import { navigate } from "../router";
 import { track } from "../funnel";
 import { isConnected, useApp } from "../store";
+import { untrustedFields } from "../policyConfig";
 import { C, MONO, btn, sevColor } from "../theme";
 import EvidenceCase, { deviationHeadline } from "../components/EvidenceCase";
 import TwoTreeContainment from "../components/TwoTreeContainment";
@@ -156,7 +157,7 @@ export default function Experiment({ runId, autostart }: { runId?: string; autos
               id: t.name, source: c.source ?? t.url, description: "",
               args_schema: c.args_schema ?? { type: "object" },
               effect: { default_class: c.klass, driving_args: c.driving ?? [],
-                        untrusted_fields: c.klass === "READ" && c.outside ? ["result.*"] : [] },
+                        untrusted_fields: untrustedFields(c) },
             };
           }));
           manifests = bundle.manifests;

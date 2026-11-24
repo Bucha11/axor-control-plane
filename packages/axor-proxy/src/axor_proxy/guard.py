@@ -38,7 +38,9 @@ previews.
 """
 from __future__ import annotations
 
+import asyncio
 import hashlib
+import inspect
 import json
 import logging
 import threading
@@ -90,6 +92,52 @@ def answer_text(value: Any) -> str:  # noqa: ANN401 - arbitrary tool JSON
     return "\n".join(leaves)
 
 
+def _field_values(node: Any, path: str) -> list[Any] | None:  # noqa: ANN401
+    """The values at `path` (``text``, ``messages[].body``, ``a.*``) in an
+    answer, or None when the answer has no such field at all."""
+    if path in ("", "*"):
+        return [node]
+    head, _, rest = path.partition(".")
+    if head.endswith("[]"):
+        items = node.get(head[:-2]) if isinstance(node, dict) else None
+        if not isinstance(items, list):
+            return None
+        found = [f for f in (_field_values(item, rest) for item in items) if f is not None]
+        if items and not found:
+            return None          # the items do not carry the field
+        return [v for f in found for v in f]
+    if not isinstance(node, dict) or head not in node:
+        return None
+    return _field_values(node[head], rest)
+
+
+def outside_text(manifest: dict[str, Any] | None, answer: Any) -> str:  # noqa: ANN401
+    """The part of an answer that is outside text, for the ledger.
+
+    ``untrusted_fields`` says which fields of a tool's answer a stranger could
+    have written — the ``text`` of a support ticket, not the ``from`` the mail
+    system stamped on it. Registering the whole answer made every value in it
+    outside text: the customer's own address, which the agent must reply to,
+    was refused like the address the ticket asked it to send data to.
+
+    ``result.*`` (or ``result``) is the whole answer, as before. A field the
+    answer does not carry falls back to the whole answer: a changed shape must
+    not quietly turn outside text clean.
+    """
+    patterns = [str(p) for p in (manifest or {}).get("untrusted_fields", []) or []]
+    stripped = [p[len("result."):] if p.startswith("result.") else ("" if p == "result" else p)
+                for p in patterns]
+    if not stripped or any(p in ("", "*") for p in stripped) or not isinstance(answer, (dict, list)):
+        return answer_text(answer)
+    parts: list[Any] = []
+    for path in stripped:
+        values = _field_values(answer, path)
+        if values is None:
+            return answer_text(answer)
+        parts.extend(values)
+    return "\n".join(t for t in (answer_text(v) for v in parts) if t)
+
+
 def _redacted(args: dict[str, Any]) -> dict[str, str]:
     out = {}
     for k, v in args.items():
@@ -136,6 +184,8 @@ class Guard:
         self.node_id = node_id
         self.idle_s = idle_s
         self.tools = sorted(str(m.get("id")) for m in manifests)
+        self._by_tool = {str(m.get("id")): m for m in manifests}
+        self._post_lock: asyncio.Lock | None = None
         self._lock = threading.Lock()
         self._sessions: dict[str, _Session] = {}
         self.link = link
@@ -209,7 +259,7 @@ class Guard:
         """Fold an executed call's answer into the session's ledger."""
         ok = status is not None and status < 400
         if ok and decision is not None:
-            s.governor.register_output(decision, answer_text(answer))
+            s.governor.register_output(decision, outside_text(self._by_tool.get(tool), answer))
         # The governor records an answer only when it taints (that is the source
         # replay folds); a clean or failed answer still closes the call on the
         # timeline, under the ref the next call's lines can name.
@@ -272,9 +322,28 @@ class Guard:
                 payload.setdefault("tool_call_id", f"g{s.seq}")
         run_id = s.run_id
         try:
-            link.submit(lambda: link.connector.post_trace(lines, run_id))
+            link.submit(lambda: self._in_order(link.connector.post_trace(lines, run_id)))
         except Exception:  # noqa: BLE001 - a plane hiccup must not fail a call
             _log.debug("axor guard: trace not shipped", exc_info=True)
+
+    def _in_order(self, posted: Any) -> Any:  # noqa: ANN401 - a coroutine, or a test's None
+        """Post batches one after another, in the order the calls happened.
+
+        Each batch was its own request on the link's loop, and concurrent
+        requests reach the plane in whatever order they finish: the plane keeps
+        arrival order, so a run read back with the refund before the ticket it
+        was for. A lock on the link's loop queues them FIFO.
+        """
+        if not inspect.isawaitable(posted):
+            return posted
+
+        async def ordered() -> None:
+            if self._post_lock is None:
+                self._post_lock = asyncio.Lock()
+            async with self._post_lock:
+                await posted
+
+        return ordered()
 
     def describe(self) -> dict[str, Any]:
         return {"node_id": self.node_id, "tools": self.tools,

@@ -373,3 +373,19 @@ class TestTheTwoConfigShapesCarryTheSameKeys:
         with pytest.raises(ConfigInvalid) as exc:
             kernel_config_from_json({"sinks": {"s": {"consequence_class": "export"}}})
         assert "READ|WRITE|EXPORT|EXEC" in str(exc.value)
+
+
+def test_a_nodes_events_read_back_in_its_own_seq_order() -> None:
+    """Batches posted concurrently arrive out of order; a run read back in
+    arrival order had a refund before the ticket it was for. Within a node the
+    seq it stamped decides; across nodes, the arrival positions stay."""
+    from axor_backend.storage import node_seq_order
+
+    arrived = [
+        {"node_id": "a", "seq": 2, "kind": "tool_call"},      # a's refund, early
+        {"node_id": "b", "seq": 0, "kind": "message_received"},
+        {"node_id": "a", "seq": 0, "kind": "tool_call"},      # a's ticket read
+        {"node_id": "a", "seq": 1, "kind": "tool_result"},
+    ]
+    out = node_seq_order(arrived)
+    assert [(e["node_id"], e["seq"]) for e in out] == [("a", 0), ("b", 0), ("a", 1), ("a", 2)]

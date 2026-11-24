@@ -107,6 +107,9 @@ export type ToolKlass = "READ" | "WRITE" | "EXPORT" | "EXEC";
 export interface ToolClass {
   klass: ToolKlass;
   outside: boolean;            // brings in outside text (web, email, documents)
+  // which fields of its answer are that outside text (`text`, `messages[].body`);
+  // unset / empty = the whole answer
+  outsideFields?: string[];
   url?: string;                // where it lives, for the proxy
   source?: string;             // where the scanner found it (file:line)
   args_schema?: Record<string, unknown>;

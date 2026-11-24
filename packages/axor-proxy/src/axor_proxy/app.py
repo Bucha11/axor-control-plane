@@ -161,11 +161,14 @@ def _register(run: Run, decision: object | None, output: object) -> dict[str, An
         return {}
     if decision is None:
         return {"registered": False, "reason": "call was not governed"}
-    from axor_proxy.guard import answer_text
+    from axor_proxy.guard import outside_text
 
     # as text: the ledger matches fragments inside a string and takes any
-    # other object whole (axor_proxy.guard explains the case)
-    run.governor.register_output(decision, answer_text(output))  # type: ignore[attr-defined]
+    # other object whole — and only the fields the manifest names as outside
+    # text (axor_proxy.guard explains both)
+    tool = getattr(getattr(decision, "_normalized", None), "tool", None)
+    manifest = next((m for m in run.manifests if m.get("id") == tool), None)
+    run.governor.register_output(decision, outside_text(manifest, output))  # type: ignore[attr-defined]
     for event in run.governor.drain_trace_events():  # type: ignore[attr-defined]
         ref = (getattr(event, "payload", None) or {}).get("value_ref")
         if ref:

@@ -677,6 +677,30 @@ async def init_db(engine: AsyncEngine) -> None:
         await conn.run_sync(_run_migrations)
 
 
+
+def node_seq_order(lines: list[Any]) -> list[Any]:
+    """Arrival order across nodes, each node's own ``seq`` order within it.
+
+    The positions a node's events arrived in are kept (so cross-node causality
+    — a message received after the one that sent it — is untouched); the
+    events in those positions are that node's, sorted by the seq it stamped.
+    A line without an integer seq stays where it arrived.
+    """
+    def parsed(line: Any) -> dict[str, Any]:  # noqa: ANN401
+        return line if isinstance(line, dict) else json.loads(line)
+
+    slots: dict[str, list[int]] = {}
+    for i, line in enumerate(lines):
+        d = parsed(line)
+        if isinstance(d.get("seq"), int):
+            slots.setdefault(str(d.get("node_id", "")), []).append(i)
+    out = list(lines)
+    for positions in slots.values():
+        ordered = sorted((lines[i] for i in positions), key=lambda ln: parsed(ln)["seq"])
+        for pos, line in zip(positions, ordered, strict=True):
+            out[pos] = line
+    return out
+
 class Store:
     def __init__(self, engine: AsyncEngine) -> None:
         self.engine = engine
@@ -849,7 +873,12 @@ class Store:
         reproduces what was recorded.
 
         ``events.id`` is the order the events arrived in, which is the order
-        they happened in.
+        they happened in — across nodes. Within one node it need not be: a
+        producer that posts batches concurrently (the guard proxy did) lands
+        them in whatever order the requests finished, and the run read back
+        "refund issued" before "ticket read". ``node_seq_order`` keeps each
+        node's slots where they arrived and fills them in that node's ``seq``
+        order, which the node itself assigned.
         """
         async with self.engine.connect() as conn:
             rows = (await conn.execute(
@@ -868,7 +897,7 @@ class Store:
         # string on (`traces._kernel_trace`, because `event_from_json_line` takes
         # one and Rule 0 says we do not rebuild its reader) serialises there,
         # inside the thread, rather than here on the event loop.
-        return [r.line for r in rows]
+        return node_seq_order([r.line for r in rows])
 
     # ── sign-up funnel ────────────────────────────────────────────────────
 

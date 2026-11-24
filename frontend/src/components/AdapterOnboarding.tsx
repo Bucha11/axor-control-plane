@@ -11,6 +11,7 @@ import { Check, Copy, Download, Upload } from "lucide-react";
 import { api, type WrapTool } from "../api";
 import { navigate } from "../router";
 import { isGuestToken, useApp } from "../store";
+import { untrustedFields } from "../policyConfig";
 import { C, MONO, btn } from "../theme";
 import { IdentityLogin } from "../tabs/Settings";
 import { filesFromList, plainGuess } from "../tabs/ConfigBuilder";
@@ -141,7 +142,7 @@ export default function AdapterOnboarding() {
           id, source: c.source ?? "", description: "", args_schema: c.args_schema ?? { type: "object" },
           framework: "", schema_confidence: "",
           guess: { default_class: c.klass, driving_args: c.driving ?? [],
-                   untrusted_fields: c.outside ? ["result.*"] : [], confidence: "high", reason: "" },
+                   untrusted_fields: untrustedFields(c), confidence: "high", reason: "" },
         },
         klass: c.klass,
         outside: c.outside,
@@ -177,7 +178,7 @@ export default function AdapterOnboarding() {
       effect: {
         default_class: r.klass,
         driving_args: r.tool.guess.driving_args,
-        untrusted_fields: r.klass === "READ" && r.outside ? ["result.*"] : [],
+        untrusted_fields: untrustedFields({ outside: r.outside, outsideFields: policy[r.tool.id]?.outsideFields }),
       },
     }))),
     onSuccess: (bundle) => {
@@ -282,12 +283,10 @@ export default function AdapterOnboarding() {
                                fontFamily: MONO, fontSize: 11, padding: "3px 6px" }}>
                       {CLASSES.map((c) => <option key={c.id} value={c.id}>{c.label}</option>)}
                     </select>
-                    {r.klass === "READ" && (
-                      <label title="its answers come from outside (web, email, files): they cannot drive a send, write or run" style={{ color: C.mut, display: "flex", alignItems: "center", gap: 5, cursor: "pointer" }}>
-                        <input type="checkbox" checked={r.outside} onChange={(e) => patch(i, { outside: e.target.checked })} />
-                        brings in outside text
-                      </label>
-                    )}
+                    <label title="its answers come from outside (web, email, files): they cannot drive a send, write or run" style={{ color: C.mut, display: "flex", alignItems: "center", gap: 5, cursor: "pointer" }}>
+                      <input type="checkbox" checked={r.outside} onChange={(e) => patch(i, { outside: e.target.checked })} />
+                      brings in outside text
+                    </label>
                   </div>
                   <div style={{ ...hint, marginTop: 2 }}>{r.tool.guess.reason ? plainGuess(r.tool.guess.reason, r.tool.guess.confidence) : "from Policy"} · {r.tool.source}</div>
                 </div>
