@@ -358,7 +358,7 @@ export default function Experiment({ runId, autostart }: { runId?: string; autos
           </div>
           <h1 style={{ fontSize: 22, fontWeight: 650, lineHeight: 1.3, margin: "0 0 20px" }}>
             {caught
-              ? <>Your agent <span style={{ color: C.red }}>{deviationHeadline(caught)}</span>
+              ? <>{mode === "demo" ? "The example agent" : "Your agent"} <span style={{ color: C.red }}>{deviationHeadline(caught)}</span>
                   {caught.fault_attribution[0] ? ` when ${caught.fault_attribution[0].tool_name} was broken on purpose.` : "."}</>
               : focusRun.completed
                 ? <>No discrepancies caught in this run.</>

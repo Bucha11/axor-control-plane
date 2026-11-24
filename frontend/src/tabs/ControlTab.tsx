@@ -620,6 +620,9 @@ function ControlBody({ focusNode, testBench }: { focusNode?: string; testBench: 
   const looseCount = units.length - treeCount - devCount;
   // the heading counts what the "needs you" chip counts — one definition
   const needYou = units.filter((st) => st.includes("needs_you")).length;
+  // "healthy" said of a fleet whose agent was just stopped read as all clear
+  const heldStopped = units.filter((st) => st.includes("stopped")).length;
+  const heldPaused = units.filter((st) => st.includes("paused")).length;
   const shown = list.filter((n) => filter === "all" || unitStatuses.get(unitOf(n.node_id))!.includes(filter));
   const pick = (id: string) => {
     setSel(sel === id ? null : id);
@@ -644,7 +647,10 @@ function ControlBody({ focusNode, testBench }: { focusNode?: string; testBench: 
         <FleetExampleStory onPick={pick} onGraph={() => setLens("graph")} />
       )}
       <h1 style={{ fontSize: 22, fontWeight: 650, margin: "0 0 4px" }}>
-        {needYou === 0 ? <>All agents healthy.</>
+        {needYou === 0 && (heldStopped + heldPaused) > 0
+          ? <>Nothing needs you — {[heldStopped ? `${heldStopped} stopped` : "", heldPaused ? `${heldPaused} paused` : ""]
+              .filter(Boolean).join(", ")} by an operator.</>
+          : needYou === 0 ? <>All agents healthy.</>
           : needYou === 1 ? <>One agent needs attention.</>
           : <>{needYou} agents need attention.</>}
       </h1>
@@ -848,7 +854,7 @@ function ControlBody({ focusNode, testBench }: { focusNode?: string; testBench: 
             )}
             {applying ? (
               <span style={{ fontFamily: MONO, fontSize: 11, color: C.amber }}>
-                applying {Object.keys(desired?.state ?? {}).join(", ")}…
+                applying {Object.entries(desired?.state ?? {}).map(([k, v]) => stateWords(k, v)).join(", ")}…
               </span>
             ) : stopped ? (
               <span style={{ fontFamily: MONO, fontSize: 11, color: C.red }}>stopped</span>
@@ -871,6 +877,19 @@ function ControlBody({ focusNode, testBench }: { focusNode?: string; testBench: 
           <NeedsALook nodeId={node.node_id}
             items={(incidentsQ.data?.items ?? []).filter((i) => i.node_id === node.node_id
               && i.status === "new" && i.kind !== "refused")} />
+
+          {stopped && (
+            <div data-testid="stopped-note" className="mb-3 p-3"
+              style={{ border: `1px solid ${C.red}`, borderRadius: 8, fontFamily: MONO, fontSize: 11.5, color: C.mut, lineHeight: 1.6 }}>
+              <span style={{ color: C.red }}>Stopped.</span> The agent's running process stays stopped — a stop cannot be
+              undone from here while it runs, by design. To bring it back:{" "}
+              <button disabled={command.isPending} onClick={() => send({ stopped: false, paused: false })}
+                style={btn({ color: C.text, borderColor: C.line, fontSize: 11, padding: "2px 10px" })}>
+                <Play size={11} /> Start it again
+              </button>
+              {" "}then restart the agent's process (the proxy or the wrapped agent) — it comes back running.
+            </div>
+          )}
 
           <RunsPanel nodeId={node.node_id} paused={paused} stopped={stopped}
             disabled={command.isPending || !(!isCodingNode(node) || mine(node.profile?.developer) || canAdmin)} send={send} />
@@ -906,6 +925,15 @@ function ControlBody({ focusNode, testBench }: { focusNode?: string; testBench: 
                 ? `${desired.state.budget_cap_calls} calls`
                 : "unlimited"}
             </span>
+            {typeof desired?.state.budget_cap_calls === "number" && (
+              <Tooltip content="A running agent keeps the lower cap — it cannot be raised while it runs. Removing it here takes effect when the agent's process restarts.">
+                <button data-testid="cap-remove" disabled={command.isPending}
+                  onClick={() => send({ budget_cap_calls: null })}
+                  style={{ background: "none", border: "none", color: C.steel, fontFamily: MONO, fontSize: 11, cursor: "pointer", padding: 0 }}>
+                  remove
+                </button>
+              </Tooltip>
+            )}
             {isCodingNode(node) && typeof desired?.state.budget_cap_calls === "number" && (
               <span data-testid="budget-left" style={{ color: C.dim }}>
                 · {Math.max(0, (desired.state.budget_cap_calls as number) - (fleetRows.get(node.node_id)?.calls ?? 0))} left
@@ -921,7 +949,7 @@ function ControlBody({ focusNode, testBench }: { focusNode?: string; testBench: 
               disabled={stopped || command.isPending}
               style={{ width: 92, background: C.bg, border: `1px solid ${C.line}`, borderRadius: 4, color: C.text, fontFamily: MONO, fontSize: 11, padding: "4px 7px", outline: "none" }}
             />
-            <Tooltip content="Cap how many tool calls this agent may still make. You can set a cap or tighten it — raising it past the current cap is refused by the adapter (decrease-only).">
+            <Tooltip content="Cap how many tool calls this agent may still make. While it runs a cap can only be lowered (the agent refuses a raise); remove it and restart the agent to lift it.">
               <button
                 onClick={() => {
                   const entered = parseInt(budgetInput, 10);
@@ -929,7 +957,9 @@ function ControlBody({ focusNode, testBench }: { focusNode?: string; testBench: 
                   // a coding session: "N more calls" from where it is now
                   const n = isCodingNode(node) ? (fleetRows.get(node.node_id)?.calls ?? 0) + entered : entered;
                   const cur = typeof desired?.state.budget_cap_calls === "number" ? desired.state.budget_cap_calls : null;
-                  if (cur != null && n > cur) { setCmdError(`can only lower the cap — ${n} > current ${cur} (the adapter refuses widening)`); return; }
+                  if (cur != null && n > cur) { setCmdError(`can only lower the cap on a running agent — ${n} > current ${cur}. Remove it and restart the agent to start over.`); return; }
+                  if (cur == null && !window.confirm(
+                    `Cap ${node.node_id} at ${n} tool calls?\n\nWhile it runs the cap can only be lowered, never raised: when it is spent every call is refused (429) until you remove the cap and restart the agent.`)) return;
                   send({ budget_cap_calls: n });
                   setBudgetInput("");
                 }}
@@ -972,7 +1002,7 @@ function ControlBody({ focusNode, testBench }: { focusNode?: string; testBench: 
             <div className="flex gap-2 mt-2 flex-wrap">
               <Tooltip content="Stop this one agent for good — it finishes no further turns.">
                 <button
-                  onClick={() => send({ stopped: true })}
+                  onClick={() => { if (confirmStop(node.node_id, false)) send({ stopped: true }); }}
                   disabled={stopped || command.isPending}
                   style={btn({ color: stopped ? C.dim : C.mut, fontSize: 11, padding: "6px 10px" })}
                 >
@@ -982,7 +1012,7 @@ function ControlBody({ focusNode, testBench }: { focusNode?: string; testBench: 
               <Tooltip content="Stop this node AND every agent it spawned (its whole subtree) — the blast-radius kill switch.">
                 <button
                   onClick={() => {
-                    if (!node) return;
+                    if (!node || !confirmStop(node.node_id, true)) return;
                     cascade.reset();
                     cascade.mutate({
                       nodeId: node.node_id,
@@ -1274,7 +1304,7 @@ function RunRow({ run, first, paused, stopped, disabled, send }: {
             style={btn({ fontSize: 10, padding: "2px 8px", color: C.text })}>
             {paused ? <Play size={10} /> : <Pause size={10} />} {paused ? "resume" : "pause"}
           </button>
-          <button disabled={disabled} onClick={() => send({ stopped: true })}
+          <button disabled={disabled} onClick={() => { if (confirmStop("this agent", false)) send({ stopped: true }); }}
             style={btn({ fontSize: 10, padding: "2px 8px", color: C.mut })}>
             <Square size={10} /> stop
           </button>
@@ -2174,4 +2204,26 @@ export function hasRealWork(nodes: { node_id: string; example?: boolean }[]): bo
 /** The refusal the agent was told, cut to its first clause. */
 function shortReason(reason: string): string {
   return refusalWords(reason).split(/ — |\. /)[0].slice(0, 90);
+}
+
+
+// What an "applying …" line says about a desired-state field, in words.
+function stateWords(key: string, value: unknown): string {
+  switch (key) {
+    case "paused": return value ? "pause" : "resume";
+    case "stopped": return value ? "stop" : "start again";
+    case "budget_cap_calls": return value == null ? "remove the cap" : `a call cap of ${String(value)}`;
+    case "pending_injection": return "an injected note";
+    case "replan": return "a replan";
+    case "pending_experiment": return "a chaos test";
+    default: return key.replace(/_/g, " ");
+  }
+}
+
+// A stop is final for the agent's running process: say so before it happens.
+function confirmStop(nodeId: string, cascade: boolean): boolean {
+  return window.confirm(
+    `${cascade ? "Cascade-stop" : "Stop"} ${nodeId}${cascade ? " and every agent it started" : ""}?\n\n` +
+    "Its running process cannot be resumed — every tool call is refused (503). To bring it back you start it " +
+    "again here and restart the agent's process.");
 }

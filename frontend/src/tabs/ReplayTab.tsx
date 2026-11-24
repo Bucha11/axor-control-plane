@@ -392,8 +392,10 @@ export default function ReplayTab({ runId: runIdProp, cursor: cursorProp, seq: s
                   flex: 1, minWidth: 0, height: 38, cursor: "pointer", borderRadius: 4,
                   background: i === cursor ? "rgba(127,168,204,0.08)" : C.panel,
                   opacity: x.hypothetical ? 0.35 : 1,
-                  border: `1px solid ${i === cursor ? C.steel : divIndex === i ? C.red : C.line}`,
-                  borderBottom: `3px solid ${stepColor(x)}`,
+                  // longhands only: a `border` shorthand next to `borderBottom`
+                  // is the React styling warning on every re-render
+                  borderWidth: "1px 1px 3px 1px", borderStyle: "solid",
+                  borderColor: `${i === cursor ? C.steel : divIndex === i ? C.red : C.line} ${i === cursor ? C.steel : divIndex === i ? C.red : C.line} ${stepColor(x)}`,
                   display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: "0 4px",
                 }}>
                 <span style={{ fontFamily: MONO, fontSize: 8.5, color: isRefused(x) ? C.red : isTainted(x) ? C.amber : C.dim,

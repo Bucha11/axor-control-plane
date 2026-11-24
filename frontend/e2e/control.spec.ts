@@ -35,7 +35,7 @@ test.describe("control", () => {
     await goHash(page, "control");
     // the suite shares one backend, and other specs leave the example fleet on
     // it (a flagged resource, a drifting agent) — the heading is not this test's
-    await expect(page.getByRole("heading", { name: /All agents healthy\.|needs? attention\./ })).toBeVisible();
+    await expect(page.getByRole("heading", { name: /All agents healthy\.|needs? attention\.|Nothing needs you/ })).toBeVisible();
     await page.getByTestId(`agent-row-${node}`).click();
     await expect(page.getByText("desired", { exact: false }).first()).toBeVisible();
     await expect(page.getByText("reported", { exact: false }).first()).toBeVisible();
@@ -62,7 +62,8 @@ test.describe("control", () => {
     await goHash(page, "control");
     await page.getByTestId(`agent-row-${node}`).click();
 
-    // Set an initial cap of 5.
+    // Set an initial cap of 5 (the first cap is confirmed: it cannot be raised).
+    page.once("dialog", (d) => void d.accept());
     await page.getByPlaceholder("set / lower").fill("5");
     await page.getByRole("button", { name: /apply/ }).click();
     await expect(page.getByText("5 calls")).toBeVisible();
@@ -71,6 +72,42 @@ test.describe("control", () => {
     await page.getByPlaceholder("set / lower").fill("9");
     await page.getByRole("button", { name: /apply/ }).click();
     await expect(page.getByText(/can only lower the cap/)).toBeVisible();
+  });
+
+  test("a stop is confirmed, and a stopped agent can be started again", async ({ page, request }) => {
+    // A stop and a spent cap were dead ends: no Resume, the cap only lowered,
+    // and restarting the agent re-applied both from desired state. The running
+    // session stays stopped (the adapter's lattice); desired state is what the
+    // NEXT session starts from, and that is the operator's to clear.
+    const node = uniqueNode("gov-stop");
+    await seedNode(request, node);
+    await setConnection(page, { mode: "adapter" });
+    await goHash(page, "control");
+    await page.getByTestId(`agent-row-${node}`).click();
+
+    // declining the confirm sends nothing
+    page.once("dialog", (d) => void d.dismiss());
+    await page.getByRole("button", { name: "more…" }).click();
+    await page.getByRole("button", { name: "Stop", exact: true }).click();
+    await expect(page.getByTestId("stopped-note")).toHaveCount(0);
+
+    page.once("dialog", (d) => { expect(d.message()).toContain("cannot be resumed"); void d.accept(); });
+    await page.getByRole("button", { name: "Stop", exact: true }).click();
+    await expect(page.getByTestId("stopped-note")).toBeVisible();
+
+    await page.getByRole("button", { name: /Start it again/ }).click();
+    await expect(page.getByTestId("stopped-note")).toHaveCount(0);
+    const nodes = await (await request.get(`${BACKEND}/v1/plane/nodes`)).json();
+    const desired = nodes.find((n: { node_id: string }) => n.node_id === node).desired.state;
+    expect(desired.stopped).toBe(false);
+
+    // and a cap can be removed for the next session
+    page.once("dialog", (d) => void d.accept());
+    await page.getByPlaceholder("set / lower").fill("2");
+    await page.getByRole("button", { name: /apply/ }).click();
+    await expect(page.getByText("2 calls")).toBeVisible();
+    await page.getByTestId("cap-remove").click();
+    await expect(page.getByText("unlimited")).toBeVisible();
   });
 
   test("the intervention menu gates inject behind test-bench", async ({ page, request }) => {
@@ -142,6 +179,7 @@ test.describe("control", () => {
     await page.getByRole("button", { name: "more…" }).click();
 
     const sent = page.waitForRequest((r) => r.url().includes("/cascade-stop"));
+    page.once("dialog", (d) => void d.accept());
     await page.getByRole("button", { name: /Cascade stop/ }).click();
     const body = JSON.parse((await sent).postData() ?? "{}");
 
