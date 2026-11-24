@@ -739,6 +739,17 @@ async def consumed(node_id: str, body: dict, request: Request) -> dict:
         raise HTTPException(
             400, "key must be pending_injection|pending_excision|pending_experiment")
     await ctx.store.clear_desired_key(node_id, key)
+    # Clearing the one-shot bumps the version with no command behind it. The
+    # node took that version only from a snapshot, which it got only on a
+    # reconnect: until then the screens said "a command is on its way" about a
+    # test the agent had already run. A snapshot now; the node takes a
+    # snapshot's version without a new signature (removing a key forges nothing).
+    current = await ctx.store.get_desired(node_id)
+    if current is not None:
+        ctx.broadcast.publish(topic("plane", node_id), {
+            "type": "snapshot", "node_id": node_id, "version": current[0],
+            "state": current[1], "commands": await ctx.store.desired_commands(node_id),
+        })
     return {"cleared": key}
 
 
