@@ -140,6 +140,12 @@ async def notif_subscribe(
         notifier.validate(url, triggers)
     except (WebhookRefused, ValueError) as exc:
         raise HTTPException(400, str(exc)) from exc
+    # The form says what this channel hears about. Subscribing the same webhook
+    # (for the same agents) with another set of alerts kept the old set beside
+    # the new one: two subscriptions, and every alert in both delivered twice.
+    # There is no edit — so subscribing again IS the edit.
+    await store.remove_subscriptions(url, node_pattern=node_pattern)
+    notifier.unsubscribe(url, org=current_org_id(), node_pattern=node_pattern)
     await store.add_subscription(
         url, triggers, debounce, label=label, node_pattern=node_pattern
     )

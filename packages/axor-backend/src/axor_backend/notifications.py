@@ -334,7 +334,7 @@ class Notifier:
                 return
         self._subs.append(fresh)
 
-    def unsubscribe(self, url: str, org: str | None = None) -> int:
+    def unsubscribe(self, url: str, org: str | None = None, node_pattern: str | None = None) -> int:
         """Stop delivering to `url` for this tenant. Returns how many went.
 
         There was no way to do this at all: a webhook registered once fired
@@ -345,7 +345,8 @@ class Notifier:
         scope = org if org is not None else current_org_id()
         before = len(self._subs)
         self._subs = [
-            s for s in self._subs if not (s.url == url and s.org == scope)
+            s for s in self._subs if not (s.url == url and s.org == scope
+                                          and node_pattern in (None, s.node_pattern))
         ]
         return before - len(self._subs)
 

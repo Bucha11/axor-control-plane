@@ -2663,7 +2663,7 @@ class Store:
                 label=label, node_pattern=node_pattern, org_id=current_org_id(),
             ))
 
-    async def remove_subscriptions(self, url: str) -> int:
+    async def remove_subscriptions(self, url: str, node_pattern: str | None = None) -> int:
         """Drop this tenant's subscriptions for `url`. Returns how many went.
 
         Scoped by org like every other read here: one tenant unsubscribing must
@@ -2674,6 +2674,8 @@ class Store:
                 delete(notification_subs).where(
                     notification_subs.c.url == url,
                     notification_subs.c.org_id == current_org_id(),
+                    *([notification_subs.c.node_pattern == node_pattern]
+                      if node_pattern is not None else []),
                 )
             )
         return int(result.rowcount or 0)

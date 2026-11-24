@@ -1294,7 +1294,9 @@ export default function Settings({ tab = "workspace" }: { tab?: string } = {}) {
           style={btn({ color: C.steel, fontSize: 12 })}
         >
           {subscribe.isPending ? <Loader2 size={13} className="animate-spin" /> : subscribe.isSuccess ? <Check size={13} /> : null}
-          {subscribe.isSuccess ? "subscribed" : "Subscribe"}
+          {subscribe.isSuccess ? "subscribed"
+            : (subscriptions.data ?? []).some((x) => x.url === url && x.node_pattern === (nodePattern || "*"))
+              ? "Update its alerts" : "Subscribe"}
         </button>
         {subscribe.isError && (
           <div className="mt-2" style={{ fontFamily: MONO, fontSize: 11, color: C.red }}>
