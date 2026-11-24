@@ -18,7 +18,7 @@ import { C, MONO, btn } from "../theme";
 import { isCodingSession } from "../components/CodingOnboarding";
 import CutResult from "../components/CutResult";
 import Tooltip from "../components/Tooltip";
-import { NOT_A_TEST_BENCH, behindProxy, isTestBench } from "../agentName";
+import { NOT_A_TEST_BENCH, behindProxy, cannotCut, isTestBench } from "../agentName";
 
 const LIVE_MS = 1500;
 const IDLE_MS = 5000;
@@ -209,7 +209,7 @@ export default function RunControl({ runId }: { runId: string }) {
             ))}
           </div>
           <div className="flex gap-2 mt-3 flex-wrap">
-            {!coding && <Tooltip content={testBench
+            {!coding && !cannotCut(node) && <Tooltip content={testBench
               ? "Insert text into the agent's next model call to see how it handles it. Marked untrusted; test-bench only."
               : NOT_A_TEST_BENCH}>
               <button

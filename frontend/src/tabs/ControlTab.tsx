@@ -18,7 +18,7 @@ import { incidentWhat } from "./Evidence";
 import Tooltip from "../components/Tooltip";
 import { codingExampleOnly, fleetExampleOnly, isCodingSession } from "../components/CodingOnboarding";
 import { AlertMe, KeepAsTest, SignUpForYourAgent } from "../components/AccountAction";
-import { NOT_A_TEST_BENCH, behindProxy, isTestBench } from "../agentName";
+import { NOT_A_TEST_BENCH, behindProxy, cannotCut, isTestBench } from "../agentName";
 
 const REFETCH_MS = 5000;
 
@@ -1040,7 +1040,14 @@ function ControlBody({ focusNode, testBench }: { focusNode?: string; testBench: 
                   <Square size={12} /> Cascade stop
                 </button>
               </Tooltip>
-              {!isCodingNode(node) && <>
+              {!isCodingNode(node) && cannotCut(node) && (
+                <Tooltip content="Replan and injecting text reach an agent's model loop. This one's tools are wrapped, not its loop — or it is behind the proxy.">
+                  <span data-testid="no-loop" style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim, alignSelf: "center" }}>
+                    replan · inject — need the agent's loop wrapped (LangChain, Claude)
+                  </span>
+                </Tooltip>
+              )}
+              {!isCodingNode(node) && !cannotCut(node) && <>
               <Tooltip content="Ask the agent to drop its current plan and reconsider next turn. Your reason is recorded on the run.">
                 <button
                   onClick={() => {
