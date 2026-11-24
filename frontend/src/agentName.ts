@@ -36,3 +36,18 @@ export function isTestBench(
 export const NOT_A_TEST_BENCH =
   "Test-bench only: breaking a tool degrades a real user's answer. Start a copy of the agent "
   + "with no real users as a test bench — PlaneConnector(..., test_bench=True), or AXOR_TEST_BENCH=1.";
+
+// what a plain-Python agent wrapped with axor-wrap's toolset says it is: its
+// tool calls are checked, but its model loop is its own — nothing on the plane
+// can reach into its context
+export const TOOLSET_AGENT = "axor-wrap";
+
+/** Can a cut (removing a piece of context) reach this agent's model? Not
+ * behind the proxy, and not for tool functions wrapped without an agent loop. */
+export function cannotCut(node: { profile?: { agent?: string } | null } | null | undefined): boolean {
+  return behindProxy(node ?? undefined) || node?.profile?.agent === TOOLSET_AGENT;
+}
+
+export const NO_CUT =
+  "This agent's tools are wrapped, not its model loop: nothing here can reach into its context. "
+  + "Its next run starts without this text; to cut context live, wrap it with LangChain or the Claude adapter.";

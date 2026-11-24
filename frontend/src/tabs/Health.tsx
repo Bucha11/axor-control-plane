@@ -30,7 +30,7 @@ import { api, type HealAttempt, type ProbeFamily, type ProbeHealth } from "../ap
 import { C, MONO, btn } from "../theme";
 import Coach from "../components/Coach";
 import Tooltip from "../components/Tooltip";
-import { behindProxy } from "../agentName";
+import { NO_CUT, behindProxy, cannotCut } from "../agentName";
 
 // The demo battery's node: shown only when it is actually listed — it used to
 // be the default and was mixed into every workspace's agents as if it were one.
@@ -85,10 +85,13 @@ export default function Health() {
   // re-probe ends the wait (the stale list still holds the previous outcome).
   const [awaitAfterId, setAwaitAfterId] = useState(-1);
 
+  // a check lands after every run: a page left open must show the new one,
+  // not "same as before" beside an agent that has drifted since
   const report = useQuery({
     queryKey: ["probe-report", node],
     queryFn: () => api.probeReport(node),
     enabled: Boolean(node),
+    refetchInterval: 10_000,
   });
   // Opened on the default node with nothing to show while the example fleet IS
   // loaded: show the node that has a check, not an empty panel.
@@ -134,6 +137,9 @@ export default function Health() {
   const repair = useQuery({
     queryKey: ["repair", node],
     queryFn: () => api.repair(node),
+    // no node chosen yet: there is nothing to ask (it was GET /v1/plane//repair)
+    enabled: Boolean(node),
+    refetchInterval: 10_000,
   });
 
   // The heal is the excision itself: axor-probe shapes the cut from the node's
@@ -332,7 +338,10 @@ export default function Health() {
                           ? " The check did not trace it to a piece of its context, so there is nothing to remove yet."
                           : " The pieces of context that came from outside are not what changed it — removing them would not help."}
                     </span>
-                    {canCut && (
+                    {canCut && cannotCut(shownNode) && (
+                      <span data-testid="no-cut" style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim, maxWidth: 320 }}>{NO_CUT}</span>
+                    )}
+                    {canCut && !cannotCut(shownNode) && (
                       <Tooltip content={`Remove ${(proposal!.auto_excise.length ? proposal!.auto_excise : escalated).join(", ")} from the agent's context at its next turn; it is checked again afterwards.`}>
                         <button onClick={() => setPhase("reason")}
                           style={{ display: "flex", alignItems: "center", gap: 6, background: "none", border: `1px solid ${C.steel}`, borderRadius: 5, color: C.steel, fontFamily: MONO, fontSize: 11, padding: "5px 12px", cursor: "pointer", whiteSpace: "nowrap" }}>
