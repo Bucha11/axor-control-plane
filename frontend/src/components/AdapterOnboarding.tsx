@@ -113,20 +113,28 @@ ${env}
 ${imports}, asyncio, os, uuid
 from axor_wrap.runtime import WrappedToolset
 from axor_wrap.connect import PlaneConnector
+from axor_wrap.observe import Experiment
 
 ${load}
 node = PlaneConnector(os.environ["AXOR_PLANE_URL"], os.environ["AXOR_NODE_ID"],
-                      ingest_key=os.environ.get("AXOR_INGEST_KEY")).connect()
+                      ingest_key=os.environ.get("AXOR_INGEST_KEY"),
+                      test_bench=os.environ.get("AXOR_TEST_BENCH") == "1").connect()
 asyncio.create_task(node.run())     # keeps it live on the plane (inside your event loop)
+asyncio.create_task(node.post_profile("agent", agent="axor-wrap"))   # what it is, test bench or not
 
 async def handle(request: str) -> str:
+    run_id = f"{node.session.node_id}-{uuid.uuid4().hex[:10]}"
+    # a tool the plane asked to break on this run — only on a test bench (AXOR_TEST_BENCH=1,
+    # a copy with no real users; pip install axor-eval)
+    test = node.session.take_pending_experiment()
     # one toolset per request: the task is what the user asked, so values from it are trusted
     toolset = node.gate(WrappedToolset(${dict}, manifests,
-                                       node_id=node.session.node_id, task=request))
+                                       node_id=node.session.node_id, task=request,
+                                       experiment=Experiment(test["faults"], seed=run_id) if test else None))
     out = toolset.call("${last}", {...})   # or hand toolset.callables() to your loop
     answer = ...                           # what your agent tells the user
     # the run on the plane: every call, its verdict, and the answer it is audited against
-    await node.post_ingest(toolset.run_lines(answer), f"{node.session.node_id}-{uuid.uuid4().hex[:10]}")
+    await node.post_ingest(toolset.run_lines(answer), run_id)
     return answer
 
 # optional: reputation across runs (pip install axor-sentinel) and a health check
