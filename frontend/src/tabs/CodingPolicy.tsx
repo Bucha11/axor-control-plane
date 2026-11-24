@@ -39,6 +39,7 @@ export default function CodingPolicy() {
         What every developer's Claude Code and Codex is refused, whoever asked — the same rules on
         every machine of the team. A repository may refuse more; it cannot allow what is refused here.
       </div>
+      {d && canEdit && <PolicySignature signed={d.signed} />}
       {d && !d.set && (
         <div data-testid="policy-not-set" className="mb-4 p-3" style={{ border: `1px solid ${C.line}`, borderRadius: 8,
           fontFamily: MONO, fontSize: 11.5, color: C.mut, lineHeight: 1.6 }}>
@@ -231,6 +232,40 @@ function TrustedSources({ d, canEdit }: { d: CodingRules; canEdit: boolean }) {
         </div>
       )}
       {save.isError && <div style={{ fontFamily: MONO, fontSize: 11, color: C.red, marginTop: 6 }}>{errorWords((save.error as Error).message)}</div>}
+    </div>
+  );
+}
+
+
+/** Sidecars connected with operator keys take what widens — these rules, the
+ *  exceptions and trusted sources, the skills turned on for the team — only
+ *  from a policy an operator signed. Says whether what stands here is signed. */
+function PolicySignature({ signed }: { signed?: CodingRules["signed"] }) {
+  const qc = useQueryClient();
+  const sign = useMutation({
+    mutationFn: api.signCodingPolicy,
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ["coding-rules"] }),
+  });
+  const armed = api.canSign();
+  const current = !!signed?.current;
+  return (
+    <div data-testid="policy-signature" className="mb-4 p-3 flex items-center gap-3 flex-wrap"
+      style={{ border: `1px solid ${current ? C.line : C.amber}`, borderRadius: 8,
+               fontFamily: MONO, fontSize: 11.5, color: C.mut, lineHeight: 1.6 }}>
+      <span style={{ flex: 1, minWidth: 260 }}>
+        {current
+          ? `signed — sidecars with operator keys apply this policy (v${signed!.seq})`
+          : signed?.seq
+            ? `changed since it was signed (v${signed.seq}) — sidecars with operator keys keep the signed one until you sign this`
+            : "not signed — sidecars with operator keys apply none of what this policy allows, and install no team skill"}
+      </span>
+      {!current && (
+        armed
+          ? <button data-testid="policy-sign" onClick={() => sign.mutate()} disabled={sign.isPending}
+              style={btn({ fontSize: 11, padding: "4px 12px", color: C.text })}>sign the team's policy</button>
+          : <span style={{ color: C.dim }}>choose a signing key in Settings to sign it</span>
+      )}
+      {sign.error && <span style={{ color: C.red }}>{(sign.error as Error).message}</span>}
     </div>
   );
 }

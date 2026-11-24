@@ -398,7 +398,7 @@ function PairPane({ token }: { token: string }) {
   const feed = useQuery({ queryKey: ["pair", token], queryFn: () => api.pairFeed(token), refetchInterval: 2000, retry: false });
   const [text, setText] = useState("");
   const send = useMutation({
-    mutationFn: () => api.sendNote(token, text.trim()),
+    mutationFn: () => api.sendNote(token, text.trim(), feed.data?.pair.you === "teammate" ? feed.data.pair.node_id : undefined),
     onSuccess: () => { setText(""); void qc.invalidateQueries({ queryKey: ["pair", token] }); },
   });
   const command = useMutation({

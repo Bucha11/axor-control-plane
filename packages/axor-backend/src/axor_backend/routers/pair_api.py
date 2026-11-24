@@ -46,6 +46,22 @@ FEED_LIMIT = 200
 NOTE_KEEP = timedelta(hours=1)   # a note not taken within this is not given late
 
 
+def _signed_note(body: dict, node_id: str, text: str) -> dict | None:
+    """An operator's signature over this note, as the browser sent it — kept
+    for the sidecar to verify with its own keys (the plane only checks that it
+    signs THIS text to THIS session). None when unsigned."""
+    st = body.get("signed")
+    if st is None:
+        return None
+    payload = st.get("payload") if isinstance(st, dict) else None
+    if not isinstance(payload, dict) or payload.get("kind") != "note" \
+            or payload.get("node_id") != node_id or payload.get("text") != text \
+            or not isinstance(st.get("operator"), str) or not isinstance(st.get("sig"), str):
+        raise HTTPException(400, "signed is {payload: {kind: note, node_id, text, ts}, "
+                                 "operator, sig} over this note")
+    return {"payload": payload, "operator": st["operator"], "sig": st["sig"]}
+
+
 def _now() -> datetime:
     return datetime.now(UTC)
 
@@ -354,8 +370,9 @@ async def send_note(token: str, body: dict, request: Request, store: StoreDep,
     if len(text) > NOTE_MAX:
         raise HTTPException(413, f"a note is at most {NOTE_MAX} characters")
     by = _who(principal) or ("a teammate" if you == "teammate" else "a guest")
+    signed = _signed_note(body, pair["node_id"], text) if you != "guest" else None
     note_id = await store.add_pair_note(token, pair["node_id"], by, text, _now().isoformat(),
-                                        outside=you == "guest")
+                                        outside=you == "guest", signed=signed)
     from axor_backend.funnel import used
 
     await used(store, "pair_note")
@@ -420,7 +437,8 @@ async def say_to_agent(node_id: str, body: dict, request: Request, store: StoreD
     if len(text) > NOTE_MAX:
         raise HTTPException(413, f"a note is at most {NOTE_MAX} characters")
     by = _who(principal) or str(profile.get("developer") or "the developer")
-    note_id = await store.add_pair_note("", node_id, by, text, _now().isoformat())
+    note_id = await store.add_pair_note("", node_id, by, text, _now().isoformat(),
+                                        signed=_signed_note(body, node_id, text))
     from axor_backend.funnel import used
 
     await used(store, "say")

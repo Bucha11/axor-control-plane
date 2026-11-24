@@ -41,7 +41,8 @@ def priv() -> Ed25519PrivateKey:
 
 
 @pytest.fixture
-async def client(tmp_path: pathlib.Path, priv: Ed25519PrivateKey) -> AsyncIterator[httpx.AsyncClient]:
+async def client(tmp_path: pathlib.Path,
+                 priv: Ed25519PrivateKey) -> AsyncIterator[httpx.AsyncClient]:
     app = create_app(database_url=f"sqlite+aiosqlite:///{tmp_path}/i.db",
                      operator_keys={}, allow_unsigned=True, api_token="m",
                      identity_jwks=_jwks(priv))

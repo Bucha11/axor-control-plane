@@ -34,6 +34,7 @@ from sqlalchemy import (
     select,
     update,
 )
+from sqlalchemy import text as sa_text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
@@ -283,6 +284,10 @@ vault_audit = Table(
     Column("entry_json", _JSON, nullable=False),
     Column("created_ts", String(40), nullable=False),
     Column("org_id", String(64), nullable=False, server_default=PUBLIC_ORG, index=True),
+    # a hash chain per log (org, kind), migration 0037: the row before's hash
+    # and this row's — an edit or a removal in the middle shows (audit_chain)
+    Column("prev_hash", String(64), nullable=True),
+    Column("row_hash", String(64), nullable=True),
 )
 
 dead_letters = Table(
@@ -555,6 +560,8 @@ pair_notes = Table(
     Column("dismissed_ts", String(40), nullable=True),
     # a held message the developer was told of in their agent, once
     Column("told", Boolean, nullable=False, default=False),
+    # an operator's signature over the note (migration 0036), JSON
+    Column("signed", Text, nullable=True),
 )
 
 # A skill shared for the team: the latest upload, and the version turned on
@@ -703,6 +710,11 @@ async def init_db(engine: AsyncEngine) -> None:
 class Store:
     def __init__(self, engine: AsyncEngine) -> None:
         self.engine = engine
+        # one appender per process for the audit chain (Postgres adds an
+        # advisory lock across processes; SQLite is one process)
+        import asyncio
+
+        self._audit_lock = asyncio.Lock()
         # a demo plane shows the examples beside real work (config.keep_examples)
         self.keep_examples = False
 
@@ -1176,12 +1188,14 @@ class Store:
 
     async def add_pair_note(self, token: str, node_id: str, by: str, text: str,
                             ts: str, outside: bool = False, *, from_node: str | None = None,
-                            taint: list[str] | None = None, held: bool = False) -> int:
+                            taint: list[str] | None = None, held: bool = False,
+                            signed: dict | None = None) -> int:
         async with self.engine.begin() as conn:
             res = await conn.execute(insert(pair_notes).values(
                 org_id=current_org_id(), node_id=node_id, token=token, by=by,
                 text=text, ts=ts, outside=outside, from_node=from_node,
-                taint=json.dumps(list(taint or [])), held=held))
+                taint=json.dumps(list(taint or [])), held=held,
+                signed=json.dumps(signed) if signed else None))
         return int(res.inserted_primary_key[0])
 
     @staticmethod
@@ -1190,7 +1204,8 @@ class Store:
                 "outside": bool(r.outside), "delivered_ts": r.delivered_ts,
                 "delivered_at": r.delivered_at, "pair": bool(r.token),
                 "from_node": r.from_node, "taint": json.loads(r.taint or "[]"),
-                "held": bool(r.held), "dismissed_ts": r.dismissed_ts}
+                "held": bool(r.held), "dismissed_ts": r.dismissed_ts,
+                "signed": bool(r.signed)}
 
     async def pair_note(self, note_id: int) -> dict[str, Any] | None:
         async with self.engine.connect() as conn:
@@ -1259,6 +1274,7 @@ class Store:
             ).order_by(pair_notes.c.id))).all()
         return [{"id": r.id, "by": r.by, "text": r.text, "ts": r.ts,
                  "outside": bool(r.outside),
+                 **({"signed": json.loads(r.signed)} if r.signed else {}),
                  **({"from_node": r.from_node, "taint": json.loads(r.taint or "[]"),
                      "pair": bool(r.token)} if r.from_node else {})} for r in rows]
 
@@ -3270,11 +3286,38 @@ class Store:
         A bound on disk is housekeeping; it does not belong inside the
         transaction that records a privileged action.
         """
-        async with self.engine.begin() as conn:
-            await conn.execute(insert(vault_audit).values(
-                kind=kind, entry_json=entry, created_ts=ts,
-                org_id=current_org_id(),
-            ))
+        from axor_backend.audit_chain import row_hash
+
+        org = current_org_id()
+        async with self._audit_lock:
+            async with self.engine.begin() as conn:
+                if conn.dialect.name == "postgresql":
+                    # one writer per log at a time, across processes: the chain
+                    # must not fork between two appends reading the same tip
+                    await conn.execute(sa_text("SELECT pg_advisory_xact_lock(hashtext(:k))"),
+                                       {"k": f"vault_audit:{org}:{kind}"})
+                tip = (await conn.execute(
+                    select(vault_audit.c.row_hash).where(
+                        vault_audit.c.kind == kind, vault_audit.c.org_id == org,
+                        vault_audit.c.row_hash.is_not(None))
+                    .order_by(vault_audit.c.id.desc()).limit(1))).first()
+                prev = tip.row_hash if tip is not None else ""
+                await conn.execute(insert(vault_audit).values(
+                    kind=kind, entry_json=entry, created_ts=ts, org_id=org,
+                    prev_hash=prev, row_hash=row_hash(prev, org, kind, ts, entry),
+                ))
+
+    async def vault_audit_chain(self, kind: str) -> list[dict[str, Any]]:
+        """One log in write order, with its chain — what audit_chain.verify
+        walks."""
+        async with self.engine.connect() as conn:
+            rows = (await conn.execute(
+                select(vault_audit.c.id, vault_audit.c.entry_json, vault_audit.c.created_ts,
+                       vault_audit.c.prev_hash, vault_audit.c.row_hash)
+                .where(vault_audit.c.kind == kind, vault_audit.c.org_id == current_org_id())
+                .order_by(vault_audit.c.id))).all()
+        return [{"id": r.id, "entry": r.entry_json, "ts": r.created_ts,
+                 "prev_hash": r.prev_hash, "row_hash": r.row_hash} for r in rows]
 
     async def vault_audit_entries(
         self, kind: str, limit: int = 200, before_id: int | None = None,

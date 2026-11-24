@@ -27,6 +27,40 @@ tag; `deploy/offline` carries the same release to a machine with no network.
 - Migration `0034`: `pair_notes.from_node`, `taint`, `held`, `dismissed_ts`,
   `told`.
 
+### Security
+
+- **What widens for a coding agent must be signed.** A sidecar connected with
+  operator keys (`axor-wrap connect --operator-key`) takes the team's rules,
+  observe mode, exceptions, trusted sources and team skills only from a policy
+  an operator signed. The plane serves the document to sign
+  (`GET /v1/coding/policy/document`), keeps the signature
+  (`PUT /v1/coding/policy/signature` — refused when stale, not newer, or not
+  verifying against the plane's keyring) and serves it with the policy; team
+  skills are named by the hash of their files. The policy screen says whether
+  what stands is signed, and signs it when the browser holds a signing key.
+- **Signed notes.** "Say to your agent" and pair notes carry an operator's
+  signature when the browser can sign (`pair_notes.signed`, migration `0036`);
+  a sidecar with operator keys gives an unsigned one as outside text.
+- **Whose machine is whose** (`developer_identities`, migration `0035`): a
+  machine's developer id is bound to the person whose own key first reports
+  it; a second claim disputes it and it names nobody until an owner or admin
+  settles it (Settings, `GET|PUT /v1/identities`). Sessions are read through
+  the bindings, never rewritten.
+- **A tamper-evident audit trail.** Every custody-log row carries the hash of
+  the row before it (`vault_audit.prev_hash`, `row_hash`, migration `0037`);
+  `GET /v1/audit/verify` and the audit screen show whether it is untouched, or
+  the first row where an edit, a removal or an inserted row breaks it.
+  Retention pruning the oldest end keeps it whole. The compliance pack carries
+  the chains' heads, and is signed by default when the browser holds a signing
+  key.
+
+### Fixed
+
+- The config builder said a catastrophic call is "refused unless a person
+  approves it" — no approval exists on the plane. It now says what is true:
+  refused, unless the agent's own approval hook (axor-core escalation) grants
+  that one call.
+
 ## 0.5.0 — 2026-11-23
 
 The paid ladder becomes real: a workspace can be signed into by a company's
