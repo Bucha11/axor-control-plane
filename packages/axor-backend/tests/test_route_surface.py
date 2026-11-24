@@ -118,6 +118,8 @@ EXPECTED: dict[tuple[str, str], str] = {
     ("POST", "/v1/coding/say/{node_id}"): "operate",
     # the receiving developer: a held agent message on or away; manual or auto
     ("POST", "/v1/coding/say/{node_id}/held/{note_id}"): "operate",
+    ("GET", "/v1/identities"): "read",
+    ("PUT", "/v1/identities/{developer_id}"): "operate",
     ("GET", "/v1/coding/say/{node_id}/mode"): "read",
     ("PUT", "/v1/coding/say/{node_id}/mode"): "operate",
     ("GET", "/v1/skill-evals"): "read",

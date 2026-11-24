@@ -480,6 +480,20 @@ memory_changes = Table(
     Column("doc", Text, nullable=False),
 )
 
+# Which person a machine's opaque developer id is (migration 0035): bound when
+# that person's own key reports a session carrying it, or by an admin. The
+# first binding stands; another person claiming the same id disputes it, and a
+# disputed id names nobody until an admin settles it.
+developer_identities = Table(
+    "developer_identities", metadata,
+    Column("org_id", String(64), primary_key=True),
+    Column("developer_id", String(64), primary_key=True),
+    Column("email", String(255), nullable=False, index=True),
+    Column("source", String(16), nullable=False, server_default="personal_key"),
+    Column("ts", String(40), nullable=False),
+    Column("disputed_by", String(255), nullable=True),
+)
+
 # A pair session: someone's coding-agent session others watch live and send
 # notes into. The token is the link; it resolves across tenants (a guest from
 # outside the team reads the inviting org's session) — routers/pair_api checks
@@ -2129,6 +2143,65 @@ class Store:
                     org_id=org, node_id=node_id, day=day,
                 ))
 
+    # ── who a machine's developer id is ──────────────────────────────────────
+
+    async def bind_developer(self, developer_id: str, email: str, ts: str,
+                             source: str = "personal_key") -> str:
+        """``bound`` (new), ``same`` (already this person's), ``disputed``
+        (another person's — from now it names nobody) or ``refused`` (already
+        disputed). Sessions are not rewritten: :meth:`node_kinds` reads them
+        through the bindings, so a dispute or an admin's change takes back
+        exactly what a binding gave."""
+        org, email = current_org_id(), email.strip().lower()
+        async with self.engine.begin() as conn:
+            row = (await conn.execute(select(developer_identities).where(
+                developer_identities.c.org_id == org,
+                developer_identities.c.developer_id == developer_id))).first()
+            if row is None:
+                await conn.execute(insert(developer_identities).values(
+                    org_id=org, developer_id=developer_id, email=email, source=source, ts=ts))
+                return "bound"
+            if row.disputed_by:
+                return "refused"
+            if row.email == email:
+                return "same"
+            await conn.execute(update(developer_identities).where(
+                developer_identities.c.org_id == org,
+                developer_identities.c.developer_id == developer_id,
+            ).values(disputed_by=email))
+            return "disputed"
+
+    async def developer_of(self, developer_id: str) -> str | None:
+        """The person an opaque developer id is bound to; None when unbound or
+        disputed."""
+        async with self.engine.connect() as conn:
+            row = (await conn.execute(select(developer_identities).where(
+                developer_identities.c.org_id == current_org_id(),
+                developer_identities.c.developer_id == developer_id))).first()
+        return row.email if row is not None and not row.disputed_by else None
+
+    async def developer_bindings(self) -> list[dict[str, Any]]:
+        async with self.engine.connect() as conn:
+            rows = (await conn.execute(select(developer_identities).where(
+                developer_identities.c.org_id == current_org_id(),
+            ).order_by(developer_identities.c.email))).all()
+        return [{"developer_id": r.developer_id, "email": r.email, "source": r.source,
+                 "ts": r.ts, "disputed_by": r.disputed_by} for r in rows]
+
+    async def set_developer_binding(self, developer_id: str, email: str | None,
+                                    ts: str) -> None:
+        """An admin's word: bind (settling any dispute) or, with no email,
+        unbind."""
+        org = current_org_id()
+        async with self.engine.begin() as conn:
+            await conn.execute(delete(developer_identities).where(
+                developer_identities.c.org_id == org,
+                developer_identities.c.developer_id == developer_id))
+            if email:
+                await conn.execute(insert(developer_identities).values(
+                    org_id=org, developer_id=developer_id, email=email.strip().lower(),
+                    source="admin", ts=ts))
+
     async def put_node_profile(self, node_id: str, kind: str, agent: str,
                                developer: str, ts: str, repo: str = "",
                                repo_label: str = "", parent: str = "") -> None:
@@ -2172,10 +2245,19 @@ class Store:
                 ).values(repo=repo, repo_label=repo_label))
 
     async def node_kinds(self) -> dict[str, dict[str, str]]:
+        """Every profiled node. A session reported under a machine's opaque
+        developer id reads as the person that id is bound to (and keeps the id
+        it reported as ``developer_id``)."""
         async with self.engine.connect() as conn:
             rows = (await conn.execute(select(node_profiles).where(
                 node_profiles.c.org_id == current_org_id()))).all()
-        return {r.node_id: {"kind": r.kind, "agent": r.agent, "developer": r.developer,
+            bound = {b.developer_id: b.email for b in (await conn.execute(
+                select(developer_identities).where(
+                    developer_identities.c.org_id == current_org_id(),
+                    developer_identities.c.disputed_by.is_(None)))).all()}
+        return {r.node_id: {"kind": r.kind, "agent": r.agent,
+                            "developer": bound.get(r.developer, r.developer),
+                            **({"developer_id": r.developer} if r.developer in bound else {}),
                             "repo": r.repo, "repo_label": r.repo_label, "title": r.title,
                             **({"parent": r.parent} if r.parent else {})}
                 for r in rows}

@@ -1223,7 +1223,17 @@ async def post_profile(node_id: str, body: dict, request: Request) -> dict:
     # their email — not an id the machine derived (two machines, one person;
     # one machine, two people)
     principal = getattr(request.state, "principal", None)
+    ctx = _ctx(request)
     if kind in ("coding", "tree") and getattr(principal, "email", None):
+        if developer and "@" not in developer:
+            # the machine's own id, reported on its person's key: from now a
+            # session from this machine on a team key is theirs too
+            bound = await ctx.store.bind_developer(developer, str(principal.email), now())
+            if bound in ("bound", "disputed"):
+                from axor_backend import audit
+
+                await audit.record(ctx.store, request, f"developer_{bound}", developer,
+                                   email=str(principal.email))
         developer = str(principal.email)[:64]
     if kind == "coding" and not developer:
         raise HTTPException(400, "a coding session names its developer (an opaque id)")
@@ -1237,7 +1247,6 @@ async def post_profile(node_id: str, body: dict, request: Request) -> dict:
                    or not all(c.isalnum() or c in "-_.:" for c in parent)):
         raise HTTPException(400, "parent is the node id of the coding session that "
                                  "started this subagent")
-    ctx = _ctx(request)
     await ctx.store.put_node_profile(node_id, kind, agent, developer, now(),
                                      repo=repo, repo_label=label if repo else "",
                                      parent=parent)

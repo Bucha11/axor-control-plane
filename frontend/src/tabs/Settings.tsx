@@ -113,6 +113,39 @@ function OrgMembers() {
       {isAdmin && <SingleSignOn orgId={d.active_org} />}
       {isAdmin && <Provisioning orgId={d.active_org} />}
       {isAdmin && <Sessions orgId={d.active_org} />}
+      {isAdmin && <MachineIds />}
+    </div>
+  );
+}
+
+/** Whose machine is whose: a sidecar names its developer by an opaque id; the
+ *  first person whose own key reports it is bound to it, so their sessions on
+ *  a team key stay theirs. A second claim disputes it — settle it here. */
+function MachineIds() {
+  const qc = useQueryClient();
+  const q = useQuery({ queryKey: ["identities"], queryFn: api.identities, retry: false });
+  const set = useMutation({
+    mutationFn: ({ id, email }: { id: string; email: string | null }) => api.setIdentity(id, email),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ["identities"] }),
+  });
+  const rows = q.data?.identities ?? [];
+  if (!rows.length) return null;
+  return (
+    <div data-testid="machine-ids" style={{ marginTop: 6 }}>
+      <div style={{ color: C.text, marginBottom: 4 }}>machines and their people</div>
+      {rows.map((r) => (
+        <div key={r.developer_id} data-testid="machine-id" className="flex gap-2 items-center flex-wrap">
+          <span style={{ color: C.dim }}>{r.developer_id}</span>
+          <span>→ {r.disputed_by ? <span style={{ color: C.amber }}>disputed: {r.email} or {r.disputed_by}?</span>
+                                  : <span style={{ color: C.text }}>{r.email}</span>}</span>
+          {r.disputed_by && [r.email, r.disputed_by].map((e) => (
+            <button key={e} onClick={() => set.mutate({ id: r.developer_id, email: e })}
+              style={btn({ fontSize: 10.5, padding: "1px 8px" })}>it's {e}</button>
+          ))}
+          <button onClick={() => set.mutate({ id: r.developer_id, email: null })}
+            style={{ ...btn({ fontSize: 10.5, padding: "1px 8px" }), color: C.dim }}>unbind</button>
+        </div>
+      ))}
     </div>
   );
 }

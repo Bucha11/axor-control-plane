@@ -693,6 +693,9 @@ export interface PairNote {
   held?: boolean; dismissed_ts?: string | null;
 }
 export type AgentMsgMode = "manual" | "auto";
+export interface DeveloperIdentity {
+  developer_id: string; email: string; source: string; ts: string; disputed_by: string | null;
+}
 export interface PairFeed {
   pair: { node_id: string; agent: string; title?: string; created_by: string; created_ts: string; expires_ts: string;
           outside: boolean; guests: string[]; you: "teammate" | "guest"; paused: boolean;
@@ -1662,6 +1665,13 @@ export const api = {
     af(`/v1/coding/say/${encodeURIComponent(nodeId)}/mode`, {
       method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ mode }),
     }).then((r) => j<{ mode: AgentMsgMode }>(r)),
+  // whose machine id is whose (owner/admin): bound when a person's own key
+  // reports a session carrying it; a second claim disputes it
+  identities: () => af("/v1/identities").then((r) => j<{ identities: DeveloperIdentity[] }>(r)),
+  setIdentity: (developerId: string, email: string | null) =>
+    af(`/v1/identities/${encodeURIComponent(developerId)}`, {
+      method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ email }),
+    }).then((r) => j<{ developer_id: string; email: string | null }>(r)),
   // the team's brake: every coding agent held at once (admin)
   brake: () => af("/v1/coding/brake").then((r) => j<{ on: boolean; by?: string; ts?: string; reason?: string }>(r)),
   setBrake: (on: boolean, reason = "") =>
