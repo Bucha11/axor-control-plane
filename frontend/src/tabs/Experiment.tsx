@@ -391,7 +391,7 @@ export default function Experiment({ runId, autostart }: { runId?: string; autos
               ? <>{mode === "demo" ? "The example agent" : "Your agent"} <span style={{ color: C.red }}>{deviationHeadline(caught)}</span>
                   {caught.fault_attribution[0]
                     ? (caught.fault_attribution[0].fault_mode === "observed_held"
-                      ? ` when ${caught.fault_attribution[0].tool_name} never ran.`
+                      ? ` — ${caught.fault_attribution.map((f) => f.tool_name).join(", ")} never ran: the agent had been held.`
                       : caught.fault_attribution[0].fault_mode === "observed_error"
                         ? ` when ${caught.fault_attribution[0].tool_name} failed.`
                         : ` when ${caught.fault_attribution[0].tool_name} was broken on purpose.`)

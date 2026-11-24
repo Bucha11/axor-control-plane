@@ -266,7 +266,10 @@ function Item({ item, who }: { item: IncidentItem; who?: string }) {
   const color = KIND_COLOR[item.kind];
   const toStep = () => navigate(`explain/${encodeURIComponent(item.run_id)}`,
     item.seq != null ? { seq: item.seq, node: item.anchor_node ?? item.node_id } : undefined);
-  const title = item.kind === "made_up" ? incidentWhat(item.what)
+  // a stop held the calls: nothing failed, the agent answered as if they had run
+  const held = (item.case?.fault_attribution ?? []).filter((f) => f.fault_mode === "observed_held");
+  const title = item.kind === "made_up" && held.length ? "answered as if calls it was stopped from had run"
+    : item.kind === "made_up" ? incidentWhat(item.what)
     : item.kind === "dangerous" ? item.what
       : item.kind === "would_refuse" ? `${item.what} — would have been refused`
         : `${item.what} — refused${item.count > 1 ? ` ×${item.count}` : ""}`;
@@ -288,6 +291,7 @@ function Item({ item, who }: { item: IncidentItem; who?: string }) {
           <div>
             <div style={{ fontFamily: MONO, fontSize: 9.5, color: C.dim, letterSpacing: "0.1em", marginBottom: 4 }}>
               {check ? `${CHECK_WORDS[check.kind] ?? check.kind.toUpperCase()} · ${check.command}`
+                : held.length > 1 ? <>THE TOOLS · {held.map((f) => f.tool_name).join(", ")}</>
                 : <>THE TOOL {fault ? `· ${fault.tool_name}` : ""}</>}
             </div>
             <div style={{ fontFamily: MONO, fontSize: 11.5, color: C.mut, wordBreak: "break-word" }}>
