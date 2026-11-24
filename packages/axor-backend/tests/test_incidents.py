@@ -138,3 +138,28 @@ def test_what_a_force_push_deletes(command: str, wipes: bool) -> None:
     from axor_backend.step_search import what_it_did
 
     assert ("deletes" in what_it_did("Bash", {"command": command})) is wipes
+
+
+async def test_refused_sends_to_different_destinations_are_separate_items(
+        client: httpx.AsyncClient) -> None:
+    """A reply refused to the customer and an export refused to a stranger's
+    address share a tool, a day and a cause; folded into one "send_email ×3"
+    the attack was hidden among the false positives. Retrying the same send
+    is still one item — and a hold the operator placed (pause, stop, a budget)
+    is not a refusal at all."""
+    node = "support-1"
+    reason = "taint enforcement (per-value): the driving argument carries a tainted value"
+    await client.post(f"/v1/plane/{node}/telemetry", json={"run_id": f"{node}-r", "events": [
+        _line(node, 0, "tool_call", "deny", tool="send_email",
+              args={"to": "<21 chars sha256:aaaa>"}, reason=reason),
+        _line(node, 1, "tool_call", "deny", tool="send_email",
+              args={"to": "<21 chars sha256:aaaa>"}, reason=reason),
+        _line(node, 2, "tool_call", "deny", tool="send_email",
+              args={"to": "<31 chars sha256:bbbb>"}, reason=reason),
+        _line(node, 3, "tool_call", "deny", tool="send_email",
+              args={"to": "<9 chars sha256:cccc>"}, control="agent_stopped",
+              reason="this agent was stopped from the Control Plane"),
+    ]})
+    items = [i for i in (await _feed(client, kind="refused"))["items"] if i["node_id"] == node]
+    assert sorted((i["detail"], i["count"]) for i in items) == [
+        ("<21 chars sha256:aaaa>", 2), ("<31 chars sha256:bbbb>", 1)]

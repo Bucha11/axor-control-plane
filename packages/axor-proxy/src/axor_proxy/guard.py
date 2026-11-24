@@ -241,9 +241,12 @@ class Guard:
         if refusal is not None:
             # Held by the operator (pause / stop / budget), not judged by the
             # governor: there is no kernel record of it, so the line is ours.
+            # `control` marks it as held by the operator's own control, so it
+            # is not listed among what the rules refused (step_search "held")
             self._ship(s, [{"kind": "tool_call", "verdict": "deny",
                             "gate": refusal.category or "capability",
-                            "payload": {"tool": tool, "args": args}}])
+                            "payload": {"tool": tool, "args": args,
+                                        "control": refusal.error, "reason": refusal.detail}}])
             return None, refusal
         decision = s.governor.evaluate(tool, args)
         if not decision.allowed:

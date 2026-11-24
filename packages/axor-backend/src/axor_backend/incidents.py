@@ -132,9 +132,13 @@ async def incidents(store: Any, scan: int) -> list[dict[str, Any]]:  # noqa: ANN
         elif s["outcome"] == "refused":
             day = str(s["ts"] or "")[:10]
             # an agent retrying the same refused call is one item; a different
-            # reason (sending .env out vs a command from a web page) is another
+            # reason (sending .env out vs a command from a web page) is another,
+            # and so is a send to a different destination: a reply refused to the
+            # customer and an export refused to a stranger's address were one
+            # "send_email ×6", the attack hidden among the false positives
             cause = str(s["reason"] or "").removeprefix("axor: ").split(" — ")[0][:80]
-            key = f"refused:{s['node_id']}:{s['tool']}:{day}:{cause}"
+            dest = s.get("dest") or ""
+            key = f"refused:{s['node_id']}:{s['tool']}:{day}:{cause}" + (f":{dest}" if dest else "")
             group = refused.get(key)
             if group is None:   # newest first: the first seen is the latest
                 cause_key, cause_words = cause_of(s["reason"])

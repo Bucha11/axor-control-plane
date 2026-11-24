@@ -82,6 +82,18 @@ def _summary(args: dict[str, Any]) -> str:
     return json.dumps(args, ensure_ascii=False)[:200] if args else ""
 
 
+_DEST_KEYS = ("to", "recipient", "recipients", "channel", "url", "email", "address", "webhook")
+
+
+def _dest(args: dict[str, Any]) -> str:
+    """Where a send goes (its `to`, `channel`, `url`…) — "" for anything else."""
+    for key in _DEST_KEYS:
+        v = args.get(key)
+        if isinstance(v, str) and v.strip():
+            return v.strip()[:200]
+    return ""
+
+
 def _target(args: dict[str, Any]) -> dict[str, str]:
     command = args.get("command") or args.get("cmd")
     if isinstance(command, str) and command.strip():
@@ -158,6 +170,7 @@ def search(
             "what": _summary(args) if kind == "tool_call" else preview[:200],
             # what a team's exception would name: the path or the command
             "target": _target(args) if kind == "tool_call" else {},
+            "dest": _dest(args) if kind == "tool_call" else "",
             "allowed_by": p.get("allowed_by") if isinstance(p.get("allowed_by"), dict) else None,
             # whole enough to keep the "how to allow it" a refusal ends with
             "reason": str(reason)[:600],
