@@ -30,8 +30,11 @@ Sessions: ``X-Axor-Session`` names the conversation a call belongs to, so one
 user's untrusted text does not taint another's calls. Without it calls share
 one session, which ends after ``idle_s`` of quiet.
 
-The trace shipped to the plane keeps the proxy's privacy rule: argument names
-with sizes, never their values; no answer previews.
+The trace shipped to the plane is the governor's own record (verdict, which
+argument carried outside text and from which answer), bridged to the plane's
+event schema, so replay re-decides exactly what was decided live. It keeps the
+proxy's privacy rule: argument names with sizes, never their values; no answer
+previews.
 """
 from __future__ import annotations
 
@@ -103,6 +106,7 @@ class _Session:
     last_used: float = field(default_factory=time.time)
     calls: int = 0
     seq: int = 0
+    results: int = 0
 
 
 @dataclass
@@ -185,13 +189,15 @@ class Guard:
         """(decision, refusal). A refusal means: do not call the upstream."""
         refusal = self.posture_refusal(s)
         if refusal is not None:
-            self._ship(s, tool, args, None, gate=refusal.category, denied=True)
+            # Held by the operator (pause / stop / budget), not judged by the
+            # governor: there is no kernel record of it, so the line is ours.
+            self._ship(s, [{"kind": "tool_call", "verdict": "deny",
+                            "gate": refusal.category or "capability",
+                            "payload": {"tool": tool, "args": args}}])
             return None, refusal
         decision = s.governor.evaluate(tool, args)
         if not decision.allowed:
-            from axor_core.governor import gate_of
-
-            self._ship(s, tool, args, None, gate=gate_of(decision.category), denied=True)
+            self._ship_kernel(s)
             return decision, Refusal(403, "denied_by_policy", decision.reason, decision.category)
         s.calls += 1
         return decision, None
@@ -204,26 +210,66 @@ class Guard:
         ok = status is not None and status < 400
         if ok and decision is not None:
             s.governor.register_output(decision, answer_text(answer))
-        self._ship(s, tool, args, "ok" if ok else "error", gate="", denied=False)
+        # The governor records an answer only when it taints (that is the source
+        # replay folds); a clean or failed answer still closes the call on the
+        # timeline, under the ref the next call's lines can name.
+        self._ship_kernel(s, closing={"tool": tool, "status": "ok" if ok else "error"})
 
     # ── the plane trace (no values: the proxy's privacy rule) ─────────────────
 
-    def _ship(self, s: _Session, tool: str, args: dict[str, Any], status: str | None,
-              *, gate: str, denied: bool) -> None:
+    def _ship_kernel(self, s: _Session, closing: dict[str, Any] | None = None) -> None:
+        """Ship what the governor itself recorded for this call.
+
+        The kernel already records, per call, the verdict, which arguments carry
+        outside text and from which earlier answer (``arg_provenance``,
+        ``arg_refs``), the driving root, and — for a tainting answer — the
+        source with its root. That record is what replay re-gates and what
+        "Safe to ship?" checks a corpus against. Writing a hand-made line with
+        only the tool name and a verdict lost all of it: replay saw a clean call,
+        re-decided it as allowed, and reported that a refused exfiltration
+        "now gets through" under the very rules that refused it.
+        """
+        events = s.governor.drain_trace_events()
+        try:
+            from axor_wrap.plane.bridge import trace_to_kernel
+
+            kernel = trace_to_kernel(events, self.node_id)
+        except Exception:  # noqa: BLE001 - a trace must never fail a call
+            _log.debug("axor guard: trace not bridged", exc_info=True)
+            kernel = []
+        lines: list[dict[str, Any]] = []
+        for e in kernel:
+            line: dict[str, Any] = {"kind": e.kind.value, "payload": dict(e.payload)}
+            if e.verdict is not None:
+                line["verdict"] = e.verdict.value
+            if e.gate:
+                line["gate"] = e.gate
+            if e.causal_root:
+                line["causal_root"] = e.causal_root
+            lines.append(line)
+        if closing is not None:
+            results = [ln for ln in lines if ln["kind"] == "tool_result"]
+            if results:
+                results[-1]["payload"].setdefault("status", closing["status"])
+            else:
+                s.results += 1
+                ref = f"{self.node_id}:r{s.results}"
+                lines.append({"kind": "tool_result", "causal_root": ref,
+                              "payload": {**closing, "value_ref": ref}})
+        self._ship(s, lines)
+
+    def _ship(self, s: _Session, lines: list[dict[str, Any]]) -> None:
         link = self.link
-        if link is None:
+        if link is None or not lines:
             return
-        s.seq += 1
-        call_id = f"g{s.seq}"
-        call: dict[str, Any] = {"kind": "tool_call",
-                                "payload": {"tool": tool, "args": _redacted(args),
-                                            "tool_call_id": call_id}}
-        lines = [call]
-        if denied:
-            call.update(verdict="deny", gate=gate or "capability")
-        else:
-            lines.append({"kind": "tool_result", "causal_root": call_id,
-                          "payload": {"tool": tool, "status": status, "value_ref": call_id}})
+        for line in lines:
+            payload = line.get("payload") or {}
+            if isinstance(payload.get("args"), dict):
+                payload["args"] = _redacted(payload["args"])
+            # the timeline pairs a call with its answer by this id
+            if line["kind"] == "tool_call":
+                s.seq += 1
+                payload.setdefault("tool_call_id", f"g{s.seq}")
         run_id = s.run_id
         try:
             link.submit(lambda: link.connector.post_trace(lines, run_id))

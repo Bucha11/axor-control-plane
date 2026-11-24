@@ -252,6 +252,51 @@ class TestMustPassRegressesOnANewDenial:
         assert row["result"] == "passed"
 
 
+class TestATaintRefusalWithoutProvenanceIsNotAnEscape:
+    """A guard trace written before it carried the kernel's provenance records a
+    taint refusal as a bare ``verdict: deny`` — no driving root, no argument
+    refs. Replay folds that as a clean call and re-decides it as allowed, so the
+    report said "1 attack now gets through" under the very rules that refused
+    it. Nothing in the trace can tell the rules apart: withheld, not escaped."""
+
+    def _bare_taint_deny(self) -> list:
+        deny = _call(1, "send_email", "deny")
+        deny["gate"] = "taint_floor"
+        deny["payload"] = {"tool": "send_email", "args": {"to": "<20 chars sha256:x>"}}
+        return _trace(_call(0, "read_ticket", "pass"), deny)
+
+    def test_it_is_unanchored_and_named(self) -> None:
+        config = kernel_config_from_json({"sinks": {
+            "read_ticket": {"consequence_class": "READ"},
+            "send_email": {"consequence_class": "EXPORT"}}})
+        row = regression_row("r", "must_block", "attack", self._bare_taint_deny(), config)
+        assert row["result"] == "unanchored"
+        assert row["escaped_denials"] == []
+        assert [d["seq"] for d in row["unverifiable"]] == [1]
+
+    def test_a_refusal_with_provenance_is_still_judged(self) -> None:
+        deny = _call(1, "send_email", "deny")
+        deny["gate"] = "taint_floor"   # arg_refs present: re-derivable
+        row = regression_row("r", "must_block", "attack",
+                             _trace(_call(0, "read_ticket", "pass"), deny),
+                             kernel_config_from_json({"sinks": {
+                                 "read_ticket": {"consequence_class": "READ"},
+                                 "send_email": {"consequence_class": "EXPORT"}}}))
+        assert row["unverifiable"] == []
+        assert row["result"] in ("held", "escaped")
+
+
+class TestNormalWorkNamesTheRefusalItStillHits:
+    def test_a_recorded_refusal_still_given_is_listed(self) -> None:
+        """Not a regression and not a clean pass: the row says which step is
+        still refused, so "still passes" is not shown for a flow that does not."""
+        events = _trace(_call(0, "lookup", "pass"), _call(1, "send_email", "deny"))
+        row = regression_row("r", "must_pass", "normal", events,
+                             kernel_config_from_json({"allowed_tools": ["lookup"]}))
+        assert row["result"] == "passed"
+        assert [(d["tool"], d["seq"]) for d in row["still_refused"]] == [("send_email", 1)]
+
+
 # ── the config parser: 400, never a coerced 200 ───────────────────────────────
 
 class TestAMalformedConfigIsRefusedNotCoerced:

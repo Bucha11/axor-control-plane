@@ -447,6 +447,10 @@ export interface RegressionRow {
   new_denial: { seq: number; reason: string; category: string } | null;
   pinned_denials: number;
   escaped_denials: { node_id: string; seq: number; tool: string; gate: string | null }[];
+  // normal work: steps refused when it was kept, and still refused under these rules
+  still_refused?: { node_id: string; seq: number; tool: string; gate: string | null }[];
+  // refusals recorded without the value that drove them: not re-checkable
+  unverifiable?: { node_id: string; seq: number; tool: string; gate: string | null }[];
   // A pin on one of the canned demo runs, seeded by /v1/demo/*.
   demo: boolean;
 }
@@ -466,6 +470,8 @@ export interface RegressionReport {
   rows: RegressionRow[];
   regressed: number;
   escaped: number;
+  // normal flows with a refusal still given (not a regression, not a clean pass)
+  still_refused?: number;
   unanchored: number;
   skipped: SkippedPin[];
   // How much of the corpus is this deployment's own evidence, and how much

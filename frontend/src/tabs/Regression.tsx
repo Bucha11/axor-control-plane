@@ -520,6 +520,12 @@ function Report({ report, open, setOpen }: {
         ) : (
           <><span style={{ color: C.green }}>Safe to ship:</span> every attack still blocked, every normal flow still passes.</>
         )}
+        {broken.length === 0 && (report.still_refused ?? 0) > 0 && (
+          <div style={{ fontFamily: MONO, fontSize: 11.5, fontWeight: 400, color: C.amber, marginTop: 4 }}>
+            {plural(report.still_refused!, "normal flow was", "normal flows were")} kept with a refused step, and these
+            rules still refuse it — nothing got worse, but nothing got fixed
+          </div>
+        )}
       </div>
       {onlyExample && (
         <div style={{ fontFamily: MONO, fontSize: 11.5, color: C.dim, marginBottom: 14 }}>
@@ -543,8 +549,13 @@ function Report({ report, open, setOpen }: {
 
       <div className="mt-3" style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 8 }}>
         {report.rows.map((r, i) => {
-          const st = STATUS[r.result];
-          const hot = r.result !== "held" && r.result !== "passed";
+          const knownRefusal = r.result === "passed" && (r.still_refused?.length ?? 0) > 0;
+          const unverified = r.side !== "must_block" && (r.unverifiable?.length ?? 0) > 0;
+          const st = unverified ? { text: "can't be fully checked", color: C.amber }
+            : knownRefusal ? { text: `passes as kept · ${r.still_refused!.length} refused`, color: C.amber }
+            : STATUS[r.result];
+          const hot = (r.result !== "held" && r.result !== "passed")
+            || (r.side !== "must_block" && ((r.unverifiable?.length ?? 0) > 0 || (r.still_refused?.length ?? 0) > 0));
           const isOpen = open === r.run_id;
           return (
             <div key={r.run_id} data-testid={`case-${r.run_id}`} style={{ borderTop: i ? `1px solid ${C.line}` : "none" }}>
@@ -568,6 +579,24 @@ function Report({ report, open, setOpen }: {
                         was refused at {r.escaped_denials.map((d) => `${d.tool || "a step"} (step ${d.seq})`).join(", ")} —
                         these rules let it through
                       </span>
+                    ) : r.side !== "must_block" && (r.unverifiable?.length ?? 0) > 0 ? (
+                      <span style={{ color: C.amber }}>
+                        refused at {r.unverifiable!.map((d) => `${d.tool || "a step"} (step ${d.seq})`).join(", ")} when it
+                        was kept, but recorded without what drove the refusal — whether these rules still refuse
+                        it can't be checked. Keep a newer run of this case
+                      </span>
+                    ) : r.side !== "must_block" && (r.still_refused?.length ?? 0) > 0 ? (
+                      <span style={{ color: C.amber }}>
+                        goes as when it was kept — including the refusal at{" "}
+                        {r.still_refused!.map((d) => `${d.tool || "a step"} (step ${d.seq})`).join(", ")}.
+                        If that refusal is wrong, these rules have not fixed it
+                      </span>
+                    ) : r.result === "unanchored" && (r.unverifiable?.length ?? 0) > 0 ? (
+                      <span style={{ color: C.amber }}>
+                        refused at {r.unverifiable!.map((d) => `${d.tool || "a step"} (step ${d.seq})`).join(", ")}, but
+                        this run was recorded without what drove the refusal, so other rules can't be checked
+                        against it — keep a newer run of this case
+                      </span>
                     ) : r.result === "unanchored" ? (
                       <span style={{ color: C.amber }}>
                         nothing was refused in this run, so there is nothing to check — keep a run where
@@ -588,7 +617,7 @@ function Report({ report, open, setOpen }: {
                   <div>
                     <button
                       onClick={() => navigate(`explain/${r.run_id}`, {
-                        seq: r.escaped_denials[0]?.seq ?? r.new_denial?.seq ?? r.first_divergence ?? undefined,
+                        seq: r.escaped_denials[0]?.seq ?? r.still_refused?.[0]?.seq ?? r.new_denial?.seq ?? r.first_divergence ?? undefined,
                         node: r.escaped_denials[0]?.node_id,
                       })}
                       style={btn({ color: C.steel, fontSize: 11, padding: "5px 10px" })}>

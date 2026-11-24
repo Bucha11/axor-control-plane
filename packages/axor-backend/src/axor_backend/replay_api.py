@@ -405,6 +405,19 @@ def _pinned_denials(result: ReplayResult) -> list[ReplayStep]:
     ]
 
 
+# What a recorded call carries when its verdict can be re-derived: the kernel's
+# own record of which value drove it. A refusal written without any of these
+# (an observe-only or pre-provenance guard trace) replays as a clean call, so
+# re-gating it "allows" the attack it refused — a verdict about the recorder,
+# not about the rules.
+_PROVENANCE_KEYS = ("driving_root", "arg_refs", "arg_provenance", "driving_carried")
+
+
+def _rederivable(step: ReplayStep) -> bool:
+    payload = step.event.payload or {}
+    return any(payload.get(k) is not None for k in _PROVENANCE_KEYS)
+
+
 def _step_ref(step: ReplayStep) -> dict[str, Any]:
     return {
         "node_id": step.event.node_id,
@@ -436,7 +449,13 @@ def regression_row(
     and they must all be refused under the candidate config.
 
     must_pass mirrors it: a regression is a call the trace recorded as PASS
-    that the candidate config now denies.
+    that the candidate config now denies. A refusal the trace recorded and the
+    candidate still gives is listed in ``still_refused`` — not a regression,
+    and not a clean pass either.
+
+    A taint refusal recorded without provenance (no driving root, no argument
+    refs) replays as a clean call. Re-gating it cannot tell the rules apart, so
+    it is withheld (``unverifiable``) instead of reported as an escape.
 
     Steps after the first divergence are judged too. Under a config that denies
     something earlier, the recorded tail is counterfactual and an escape there
@@ -453,8 +472,16 @@ def regression_row(
             if s.event.kind is EventKind.TOOL_CALL
             and ((s.event.node_id, s.event.seq) in named or ("", s.event.seq) in named)
         ]
+    # A taint refusal recorded without the value that drove it cannot be
+    # re-decided: it is withheld, never reported as an escape.
+    unverifiable = [
+        s for s in pinned
+        if s.event.gate in ("taint_floor", "taint", "taint_enforcement")
+        and not _rederivable(s)
+    ]
     escaped_denials = [
-        _step_ref(s) for s in pinned if s.reevaluated_verdict is not Verdict.DENY
+        _step_ref(s) for s in pinned
+        if s.reevaluated_verdict is not Verdict.DENY and s not in unverifiable
     ]
     new_denials = [
         s for s in result.steps
@@ -462,8 +489,15 @@ def regression_row(
         and s.recorded_verdict is Verdict.PASS
         and s.reevaluated_verdict is Verdict.DENY
     ]
+    # Normal work kept with a refusal in it. A refusal recorded and still given
+    # is not a regression (nothing that passed stopped passing), but it is not
+    # "every step passes" either: named, so the report does not read a known
+    # refusal in a normal flow as a clean pass.
+    still_refused = [
+        s for s in pinned if s.reevaluated_verdict is Verdict.DENY
+    ]
     if side == "must_block":
-        if not pinned:
+        if not pinned or len(unverifiable) == len(pinned):
             outcome = "unanchored"
         else:
             outcome = "escaped" if escaped_denials else "held"
@@ -485,4 +519,6 @@ def regression_row(
         "new_denial": first_new_deny,
         "pinned_denials": len(pinned),
         "escaped_denials": escaped_denials,
+        "still_refused": [_step_ref(s) for s in still_refused] if side != "must_block" else [],
+        "unverifiable": [_step_ref(s) for s in unverifiable],
     }
