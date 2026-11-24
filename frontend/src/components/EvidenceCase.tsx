@@ -4,7 +4,7 @@
 // Replay, and it can leave the product (share permalink + export), per section
 // 8.3. Wherever a case is shown, it is shown through this component.
 import { useState } from "react";
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Check, ExternalLink, FlaskConical, Play, Share2 } from "lucide-react";
 import { KeepAsTest } from "./AccountAction";
 import { LAB_SHIPPED } from "../flags";
@@ -114,8 +114,15 @@ export default function EvidenceCase({
     );
   };
 
+  // Every link handed out for this case, not only the one this page made: a
+  // link already sent was otherwise unrevocable after a reload.
+  const qc = useQueryClient();
+  const links = useQuery({ queryKey: ["share-links", runId], queryFn: () => api.shareLinks(runId),
+                           retry: false });
+  const active = (links.data?.links ?? []).filter((l) => l.case_index === caseIndex && !l.revoked);
   const revoked = useMutation({
     mutationFn: (token: string) => api.revokeShare(token),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ["share-links", runId] }),
   });
 
   const share = useMutation({
@@ -126,6 +133,7 @@ export default function EvidenceCase({
       const absolute = `${window.location.origin}${r.url}`;
       setShareUrl(absolute);
       setShareToken(r.token);
+      void qc.invalidateQueries({ queryKey: ["share-links", runId] });
       void navigator.clipboard?.writeText(absolute).then(() => {
         setCopied(true);
         setTimeout(() => setCopied(false), 1500);
@@ -251,13 +259,26 @@ export default function EvidenceCase({
             : `revoke failed: ${(revoked.error as Error).message}`}
         </div>
       )}
+      {active.filter((l) => l.token !== shareToken).map((l) => (
+        <div key={l.token} data-testid="share-link" className="px-4 py-2 flex items-center gap-2"
+          style={{ borderTop: `1px solid ${C.line}` }}>
+          <span style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim }}>
+            shared {l.created_ts.slice(0, 16).replace("T", " ")} · still opens · {window.location.origin}{l.url}
+          </span>
+          <button onClick={() => revoked.mutate(l.token)} disabled={revoked.isPending}
+            style={{ ...action(C.mut), fontSize: 10 }}>
+            revoke
+          </button>
+        </div>
+      ))}
       {shareUrl && (
         <div className="px-4 py-2 flex items-center gap-2" style={{ borderTop: `1px solid ${C.line}` }}>
           <span style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim }}>
-            {revoked.isSuccess ? "revoked · this link no longer opens" : "revocable permalink"}
+            {shareToken && !active.some((l) => l.token === shareToken) && links.data
+              ? "revoked · this link no longer opens" : "revocable permalink"}
             {" · observations only, no raw bodies · "}{shareUrl}
           </span>
-          {shareToken && !revoked.isSuccess && (
+          {shareToken && (active.some((l) => l.token === shareToken) || !links.data) && (
             <button
               onClick={() => revoked.mutate(shareToken)}
               disabled={revoked.isPending}

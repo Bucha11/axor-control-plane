@@ -1784,6 +1784,11 @@ export const api = {
     af(`/v1/runs/${encodeURIComponent(runId)}/cases/${caseIndex}/share`, { method: "POST" }).then(
       (r) => j<{ token: string; url: string }>(r),
     ),
+  // the links handed out (one run's, when named) — each opens a case without an account
+  shareLinks: (runId?: string) =>
+    af(`/v1/share-links${runId ? `?run_id=${encodeURIComponent(runId)}` : ""}`).then((r) =>
+      j<{ links: { token: string; run_id: string; case_index: number; revoked: boolean;
+                   created_ts: string; url: string }[] }>(r)),
   revokeShare: (token: string) =>
     af(`/v1/share/${encodeURIComponent(token)}`, { method: "DELETE" }).then((r) => j<{ revoked: string }>(r)),
   // Fetch the export with header auth (so an expired token refreshes like any

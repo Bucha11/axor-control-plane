@@ -1352,6 +1352,9 @@ export default function Settings({ tab = "workspace" }: { tab?: string } = {}) {
           <Section title="HOW THIS PLANE IS PROTECTED">
             <SecurityPosture />
           </Section>
+          <Section title="LINKS SHARED OUTSIDE THE WORKSPACE">
+            <SharedLinks />
+          </Section>
           <FederationVault />
         </>
       )}
@@ -2265,5 +2268,35 @@ function FunnelPanel() {
         )}
       </div>
     </Section>
+  );
+}
+
+
+// Every receipt link handed out: each opens a case without an account. A link
+// was revocable only from the page that made it — after a reload, not at all.
+function SharedLinks() {
+  const qc = useQueryClient();
+  const links = useQuery({ queryKey: ["share-links", "all"], queryFn: () => api.shareLinks(), retry: false });
+  const revoke = useMutation({
+    mutationFn: (token: string) => api.revokeShare(token),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ["share-links"] }),
+  });
+  const open = (links.data?.links ?? []).filter((l) => !l.revoked);
+  if (links.isError) {
+    return <div style={{ fontFamily: MONO, fontSize: 11.5, color: C.dim }}>only an operator sees the shared links</div>;
+  }
+  return (
+    <div data-testid="shared-links" style={{ fontFamily: MONO, fontSize: 11.5, color: C.mut }}>
+      {open.length === 0 ? <span style={{ color: C.dim }}>none open — no receipt can be opened from outside</span>
+        : open.map((l) => (
+          <div key={l.token} className="flex items-center gap-2 py-1">
+            <span style={{ color: C.text, cursor: "pointer" }}
+              onClick={() => navigate(`catch/${encodeURIComponent(l.run_id)}`)}>{l.run_id}</span>
+            <span style={{ color: C.dim }}>case {l.case_index} · shared {l.created_ts.slice(0, 16).replace("T", " ")}</span>
+            <button onClick={() => revoke.mutate(l.token)} disabled={revoke.isPending}
+              style={btn({ color: C.mut, fontSize: 10.5, padding: "2px 8px" })}>revoke</button>
+          </div>
+        ))}
+    </div>
   );
 }

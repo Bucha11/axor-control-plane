@@ -2589,6 +2589,16 @@ class Store:
             )
         return bool(result.rowcount)
 
+    async def share_links_of(self, run_id: str | None) -> list[dict[str, Any]]:
+        """This workspace's links, newest first (one run's, when named)."""
+        q = select(share_links).where(share_links.c.org_id == current_org_id())
+        if run_id is not None:
+            q = q.where(share_links.c.run_id == run_id)
+        async with self.engine.connect() as conn:
+            rows = (await conn.execute(q.order_by(share_links.c.created_ts.desc()))).all()
+        return [{"token": r.token, "run_id": r.run_id, "case_index": r.case_index,
+                 "revoked": bool(r.revoked), "created_ts": r.created_ts} for r in rows]
+
     async def list_share_links(self) -> list[dict[str, Any]]:
         """Every link, across tenants — this feeds the boot rehydrate, which
         runs before any request and must repopulate the whole registry. Each

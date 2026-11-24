@@ -108,6 +108,9 @@ _READ_POLICY: tuple[tuple[str, str], ...] = (
     # Who did what to whose agent — and the export of it: an owner or admin
     # (checked by role in the handler, permissions.require_admin).
     ("/v1/audit", "operate"),
+    # The links handed out to people outside the workspace: each token opens a
+    # case without an account, so the list is an operator's, not a reader's.
+    ("/v1/share-links", "operate"),
     # Every enrolment with the nodes allowed to dispense it — the map of which
     # node can reach which tool credential.
     ("/v1/vault/creds/health", "admin"),

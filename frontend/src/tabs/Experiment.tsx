@@ -219,7 +219,8 @@ export default function Experiment({ runId, autostart }: { runId?: string; autos
     if (caughtHere && activeRun && focusRun?.run_id === activeRun) track("lie_caught");
   }, [caughtHere, activeRun, focusRun?.run_id]);
 
-  if (!isConnected(mode)) {
+  // a link to a receipt opens it whoever follows it; connecting is for running tests
+  if (!isConnected(mode) && !runId) {
     return (
       <Center>
         <div style={{ fontFamily: MONO, fontSize: 12.5, color: C.mut }}>
@@ -267,7 +268,7 @@ export default function Experiment({ runId, autostart }: { runId?: string; autos
             run another from the agent →
           </span>
         </div>
-      ) : (
+      ) : !isConnected(mode) ? null : (
       <div data-tour="eval-config" className="p-4 mb-4" style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 8 }}>
         <div style={{ fontSize: 10, fontFamily: MONO, color: C.dim, letterSpacing: "0.1em", marginBottom: 10 }}>
           BREAK A TOOL ON PURPOSE

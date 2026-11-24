@@ -13,7 +13,7 @@ user created would 404 under the public tenant.
 """
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException, Response
+from fastapi import APIRouter, HTTPException, Request, Response
 from fastapi.responses import HTMLResponse
 
 from axor_backend.clock import now
@@ -37,23 +37,42 @@ async def _case_run(store: Store, run_id: str, case_index: int) -> dict:
 
 @router.post("/runs/{run_id}/cases/{case_index}/share")
 async def create_share(
-    run_id: str, case_index: int, store: StoreDep
+    run_id: str, case_index: int, store: StoreDep, request: Request,
 ) -> dict:
     await _case_run(store, run_id, case_index)  # 404 before minting a dead token
     # The row remembers WHICH tenant's case it points at, because the route
     # that resolves it has no principal to ask.
     token = new_token()
     await store.create_share_link(token, run_id, case_index, now())
+    # publishing a case outside the workspace is on the trail
+    from axor_backend import audit
+
+    await audit.record(store, request, "share_made", f"{run_id} #{case_index}")
     return {"token": token, "url": f"/v1/share/{token}"}
 
 
+@router.get("/share-links")
+async def list_share_links(store: StoreDep, run_id: str = "") -> dict:
+    """The links this workspace has handed out — each a way in without an
+    account. Without this list a link was revocable only from the page that
+    made it: after a reload, "Share" minted a new one and "revoke" burned
+    that, while the link already sent kept opening."""
+    links = await store.share_links_of(run_id or None)
+    return {"links": [{**ln, "url": f"/v1/share/{ln['token']}"} for ln in links]}
+
+
 @router.delete("/share/{token}")
-async def revoke_share(token: str, store: StoreDep) -> dict:
+async def revoke_share(token: str, store: StoreDep, request: Request) -> dict:
     # Knowing a token must not let another tenant burn it — the UPDATE is
     # org-scoped, so a miss is either "no such token" or "not yours" and both
     # answer the same 404.
     if not await store.revoke_share_link(token):
         raise HTTPException(404, "unknown token")
+    from axor_backend import audit
+
+    link = next((ln for ln in await store.share_links_of(None) if ln["token"] == token), None)
+    await audit.record(store, request, "share_revoked",
+                       f"{link['run_id']} #{link['case_index']}" if link else token[:8])
     return {"revoked": token}
 
 
