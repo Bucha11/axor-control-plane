@@ -133,6 +133,10 @@ services:
       AXOR_PROXY_HOST: 0.0.0.0
       AXOR_PROXY_PORT: "8401"
       AXOR_PROXY_DEMO: ${AXOR_PROXY_DEMO:-1}   # demo mock tools by default
+      # Your agent's tools for a test run (the tools.json the Connect page
+      # gives you): mount it and point here, e.g. AXOR_PROXY_CONFIG=/config/tools.json
+      # with `- ./tools.json:/config/tools.json:ro` under volumes, and AXOR_PROXY_DEMO=0.
+      AXOR_PROXY_CONFIG: ${AXOR_PROXY_CONFIG:-}
       # The control surface arms runs, injects faults into live tool traffic and
       # reads back traces — and this service publishes its port. Empty keeps the
       # historical open posture; set it for anything beyond a local bench.

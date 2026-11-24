@@ -209,7 +209,7 @@ export default function AdapterOnboarding() {
         setToolClass(r.tool.id, { klass: r.klass, outside: r.outside, source: r.tool.source,
                                   args_schema: r.tool.args_schema, driving: r.tool.guess.driving_args });
       }
-      if (res.tools.length === 0) setScanErr("no tools found in those files");
+      if (res.tools.length === 0) setScanErr("no tools found in those files — the scanner finds LangChain @tool / Tool(...), FastMCP @mcp.tool(), and {name, description, input_schema} tool lists. Tools your agent calls over HTTP by URL are not in code it can see: add each one by hand");
     } catch (e) {
       const msg = (e as Error).message;
       setScanErr(msg.startsWith("501")

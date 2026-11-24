@@ -573,8 +573,33 @@ function ProxyOnboarding({ onWrap }: { onWrap: () => void }) {
 
       {step === 2 && (
         <>
-          <h1 style={{ fontSize: 22, fontWeight: 650, margin: "0 0 4px" }}>Point your agent at the proxy.</h1>
-          <div style={{ fontFamily: MONO, fontSize: 11.5, color: C.mut, marginBottom: 20 }}>In your agent's config, replace each tool's address with these. Nothing else changes.</div>
+          <h1 style={{ fontSize: 22, fontWeight: 650, margin: "0 0 4px" }}>Start the proxy with your tools, then point your agent at it.</h1>
+          {/* The proxy can only forward to tools it was started with. This step
+              used to say nothing of it, and step 3 answered "not registered on
+              the proxy" for every tool — the first the person heard of it. */}
+          <div data-testid="test-run-start-proxy" style={{ fontFamily: MONO, fontSize: 11.5, color: C.mut, margin: "6px 0 8px" }}>
+            1 · the proxy needs to know where each tool lives:{" "}
+            <button onClick={() => {
+              const a = document.createElement("a");
+              a.href = URL.createObjectURL(new Blob([JSON.stringify(
+                { tools: Object.fromEntries(tools.filter((t) => t.url).map((t) => [t.name, t.url])) }, null, 2)],
+                { type: "application/json" }));
+              a.download = "tools.json";
+              a.click();
+            }} style={btn({ color: C.steel, borderColor: C.steel, fontSize: 11, padding: "3px 10px" })}>
+              tools.json
+            </button>
+          </div>
+          <pre style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 8, padding: "10px 14px",
+                        fontFamily: MONO, fontSize: 11.5, color: C.text, whiteSpace: "pre-wrap", margin: "0 0 6px" }}>
+{`uv tool install axor-proxy        # or: pipx install axor-proxy
+axor-proxy --config tools.json --backend-url ${window.location.origin}`}
+          </pre>
+          <div style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim, marginBottom: 18 }}>
+            running the whole stack with docker compose? its proxy is this one — set AXOR_PROXY_CONFIG to the mounted
+            tools.json and AXOR_PROXY_DEMO=0 (see docker-compose.yml), then restart it
+          </div>
+          <div style={{ fontFamily: MONO, fontSize: 11.5, color: C.mut, marginBottom: 10 }}>2 · in your agent's config, replace each tool's address with these. Nothing else changes.</div>
           <div style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 8 }}>
             {tools.map((t, i) => {
               const proxied = `${PROXY_PUBLIC_URL}/t/${t.name}/`;

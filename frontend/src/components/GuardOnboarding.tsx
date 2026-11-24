@@ -4,7 +4,7 @@
 // what this screen builds: the tools, what each one does, and which bring in
 // outside text (axor.manifests.json, compiled by the same engine as the
 // Config Builder's), plus tools.json for where each tool really lives.
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Check, Copy, Download, Plug } from "lucide-react";
 import { api } from "../api";
@@ -31,7 +31,6 @@ const EXAMPLE: GuardTool[] = [
   { name: "run_query", url: "https://db.internal.example/query", klass: "READ", outside: false },
 ];
 
-const LOCAL_PROXY = "http://localhost:8401";
 
 function save(name: string, data: unknown): void {
   const a = document.createElement("a");
@@ -74,7 +73,13 @@ export default function GuardOnboarding() {
     ({ name, url: c.url ?? "", klass: c.klass, outside: c.outside }));
   const [draft, setDraft] = useState({ name: "", url: "" });
   const [savedManifests, setSavedManifests] = useState(false);
-  const [nodeId, setNodeId] = useState("agent-1");
+  // remembered: coming back here from Policy to put new rules to work must not
+  // quietly start a second agent under "agent-1"
+  const [nodeId, setNodeId] = useState(() => localStorage.getItem("axor-guard-node") || "agent-1");
+  const [port, setPort] = useState(() => localStorage.getItem("axor-guard-port") || "8401");
+  useEffect(() => { localStorage.setItem("axor-guard-node", nodeId); }, [nodeId]);
+  useEffect(() => { localStorage.setItem("axor-guard-port", port); }, [port]);
+  const proxyBase = `http://localhost:${/^\d+$/.test(port) ? port : "8401"}`;
   const [key, setKey] = useState<string | null>(null);
   const connect = useApp((s) => s.connect);
   const email = useApp((s) => s.identityEmail);
@@ -122,9 +127,13 @@ export default function GuardOnboarding() {
     "",
     `export AXOR_PLANE_URL=${window.location.origin}`,
     needsKey ? `export AXOR_INGEST_KEY=${key ?? "<create the key above>"}` : null,
-    `axor-proxy --guard --config tools.json --manifests axor.manifests.json --node-id ${nodeId || "agent-1"}`,
+    `axor-proxy --guard --config tools.json --manifests axor.manifests.json --node-id ${nodeId || "agent-1"}`
+      + (port && port !== "8401" ? ` --port ${port}` : ""),
   ].filter((l) => l !== null).join("\n");
-  const urls = (tools.length ? tools : EXAMPLE).map((t) => `${t.name}  →  ${LOCAL_PROXY}/t/${t.name}/`).join("\n");
+  // no tools yet: no addresses — the example's read as if they were already added
+  const urls = tools.length
+    ? tools.map((t) => `${t.name}  →  ${proxyBase}/t/${t.name}/`).join("\n")
+    : "add your agent's tools in step 1 — each one's address through the proxy appears here";
 
   return (
     <div data-testid="guard-onboarding">
@@ -215,6 +224,9 @@ export default function GuardOnboarding() {
           <span style={{ ...hint, color: C.mut, fontSize: 11 }}>agent name</span>
           <input value={nodeId} onChange={(e) => { setNodeId(e.target.value); setKey(null); }}
             aria-label="agent name" style={{ ...input, width: 160 }} />
+          <span style={{ ...hint, color: C.mut, fontSize: 11 }}>port</span>
+          <input value={port} onChange={(e) => setPort(e.target.value.replace(/[^\d]/g, "").slice(0, 5))}
+            aria-label="proxy port" style={{ ...input, width: 64 }} />
           {needsKey && !key && (
             <button onClick={() => mint.mutate()} disabled={!nodeId.trim() || mint.isPending} data-testid="guard-mint"
               style={btn({ color: C.steel, borderColor: C.steel, fontSize: 11, padding: "4px 10px" })}>
@@ -229,6 +241,10 @@ export default function GuardOnboarding() {
 
       {step(4, "RUN THE PROXY BESIDE YOUR AGENT")}
       <Block id="guard-run" text={run} />
+      <div style={{ ...hint, marginTop: 6 }}>
+        changed the rules later (in Policy)? download axor.manifests.json again and restart the proxy — a running
+        proxy keeps the rules it started with
+      </div>
 
       {step(5, "POINT YOUR AGENT AT IT")}
       <Block id="guard-urls" text={urls} />

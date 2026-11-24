@@ -37,7 +37,7 @@ export default function ScanTools({ onFound, label = "find them in your code", t
         });
       }
       setNote(res.tools.length ? `found ${res.tools.length} tool${res.tools.length === 1 ? "" : "s"} — check what each does`
-                               : "no tools found in those files");
+                               : "no tools found in those files — the scanner finds LangChain @tool / Tool(...), FastMCP @mcp.tool(), and {name, description, input_schema} tool lists. Tools your agent calls over HTTP by URL are not in code it can see: add each one by hand below");
       onFound?.(res.tools);
     } catch (e) {
       const msg = (e as Error).message;

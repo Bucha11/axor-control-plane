@@ -3,6 +3,7 @@
 // established — and the current session focus (last run). It is deliberately
 // small: everything server-derived stays in Query.
 import { create } from "zustand";
+import { guessKlass } from "./policyConfig";
 import { createJSONStorage, persist } from "zustand/middleware";
 
 // The connection model (spec section 2). Depth determines the availability
@@ -233,7 +234,7 @@ export const useApp = create<AppState>()(
       toolPolicy: {},
       setToolClass: (name, patch) =>
         set((s) => ({ toolPolicy: { ...s.toolPolicy,
-          [name]: { ...({ klass: "READ", outside: false } as ToolClass), ...s.toolPolicy[name], ...patch } } })),
+          [name]: { ...({ klass: guessKlass(name), outside: false } as ToolClass), ...s.toolPolicy[name], ...patch } } })),
       tourStep: null,
       tourSide: "production",
       connect: (mode, tools) =>

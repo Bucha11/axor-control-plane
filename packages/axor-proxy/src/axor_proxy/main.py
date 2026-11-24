@@ -35,7 +35,10 @@ def cli() -> None:
         raise SystemExit(_vault_cli(sys.argv[2:]))
 
     parser = argparse.ArgumentParser(prog="axor-proxy")
-    parser.add_argument("--config", type=Path, help="tools.json")
+    parser.add_argument("--config", type=Path,
+                        default=(Path(os.environ["AXOR_PROXY_CONFIG"])
+                                 if os.environ.get("AXOR_PROXY_CONFIG") else None),
+                        help="tools.json: where each tool lives (env AXOR_PROXY_CONFIG)")
     parser.add_argument("--demo", action="store_true",
                         default=os.environ.get("AXOR_PROXY_DEMO", "") == "1",
                         help="serve built-in mock tools (no config needed)")
@@ -47,7 +50,8 @@ def cli() -> None:
                         default=Path(os.environ.get("AXOR_TRACE_DIR", "./axor-traces")))
     parser.add_argument("--backend-url",
                         default=os.environ.get("AXOR_BACKEND_URL"),
-                        help="push trace + evidence to this backend on claim")
+                        help="push trace + evidence to this backend on claim "
+                             "(guard mode reports to AXOR_PLANE_URL when set, else here)")
     parser.add_argument("--token", default=os.environ.get("AXOR_PROXY_TOKEN"),
                         help="require this bearer token on the /axor control "
                              "routes (arm runs, inject faults, read traces). "
