@@ -96,6 +96,15 @@ export default function Experiment({ runId, autostart }: { runId?: string; autos
         && !q.state.data?.some((r) => r.run_id === activeRun)
         ? 2000 : false,
   });
+  // The run as the proxy holds it while the user's agent works: the plane's
+  // stream has nothing until the answer is submitted and the run uploaded.
+  const landed = Boolean(activeRun && runs.data?.some((r) => r.run_id === activeRun));
+  const proxyRun = useQuery({
+    queryKey: ["proxy-run", activeRun],
+    queryFn: () => api.proxyRun(activeRun!),
+    enabled: mode !== "demo" && Boolean(activeRun) && !landed,
+    refetchInterval: 1500,
+  });
   const wanted = activeRun ?? runId ?? lastRunId;
   // A run armed in this view is never stood in for by an older one: until it
   // lands, there is no receipt — not someone else's.
@@ -117,15 +126,25 @@ export default function Experiment({ runId, autostart }: { runId?: string; autos
     return () => unsub.current?.();
   }, []);
 
-  const toolChoices = mode === "demo" || tools.length === 0
+  // The agent's tools: the connection's, else the ones its policy describes —
+  // a connection switched to "adapter" carries none, and the test then offered
+  // the demo's web_search / mcp for an agent that has neither.
+  const policy = useApp((s) => s.toolPolicy);
+  const agentTools = tools.length
+    ? tools
+    : Object.entries(policy).map(([name, c]) => ({ name, url: c.url ?? "" }));
+  const toolChoices = mode === "demo" || agentTools.length === 0
     ? ["web_search", "mcp"]
-    : tools.map((t) => t.name);
+    : agentTools.map((t) => t.name);
+  // The select shows the first choice when the state names a tool that is not
+  // among them — and the run was then armed on the hidden one ("web_search"),
+  // breaking a tool the agent never calls while the screen named another.
+  const armedTool = toolChoices.includes(tool) ? tool : toolChoices[0];
 
   // what each tool does (store.toolPolicy, written on Connect and in Policy):
   // a test run on the person's own agent is armed with it, so it also says
   // which calls policy would have refused
-  const policy = useApp((s) => s.toolPolicy);
-  const classified = mode === "demo" ? [] : tools.filter((t) => policy[t.name]);
+  const classified = mode === "demo" ? [] : agentTools.filter((t) => policy[t.name]);
   const start = useMutation({
     mutationFn: async () => {
       let manifests: Record<string, unknown>[] | undefined;
@@ -145,7 +164,7 @@ export default function Experiment({ runId, autostart }: { runId?: string; autos
           manifests = undefined;   // no engine: the test still runs, without verdicts
         }
       }
-      return api.startRun("tool-deprivation", [{ tool, mode: faultMode }], "proxy", manifests);
+      return api.startRun("tool-deprivation", [{ tool: armedTool, mode: faultMode }], "proxy", manifests);
     },
     onSuccess: (r: StartRunResult) => {
       setActiveRun(r.run_id);
@@ -212,6 +231,11 @@ export default function Experiment({ runId, autostart }: { runId?: string; autos
   }
 
   const running = start.isPending || simulate.isPending;
+  const proxyEvents = proxyRun.data?.events ?? [];
+  const shownEvents = proxyEvents.length >= liveEvents.length ? proxyEvents : liveEvents;
+  const calledTools = [...new Set(shownEvents
+    .filter((e) => e.kind === "tool_call")
+    .map((e) => String((e.payload as Record<string, unknown>).tool ?? "")).filter(Boolean))];
   const caught = focusRun?.evidence.find((c) => c.deviation) ?? null;
   // Only when that run was opened by link: the landing view still offers the
   // proxy configurator, whatever the latest caught run happens to be.
@@ -248,7 +272,7 @@ export default function Experiment({ runId, autostart }: { runId?: string; autos
         </div>
         <div className="flex items-center gap-2 flex-wrap mb-3">
           <span style={{ fontFamily: MONO, fontSize: 12, color: C.mut }}>break</span>
-          <select value={tool} onChange={(e) => setTool(e.target.value)} style={select()}>
+          <select value={armedTool} onChange={(e) => setTool(e.target.value)} style={select()}>
             {toolChoices.map((t) => <option key={t} value={t}>{t}</option>)}
           </select>
           <span style={{ fontFamily: MONO, fontSize: 12, color: C.mut }}>by</span>
@@ -304,9 +328,11 @@ export default function Experiment({ runId, autostart }: { runId?: string; autos
       {mode !== "demo" && activeRun && !focusRun && (
         <div className="p-4 mb-4" style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 8 }}>
           <div style={{ fontFamily: MONO, fontSize: 11, color: C.mut, marginBottom: 8 }}>
-            live · point your agent at the proxy — waiting for events…
+            {shownEvents.length
+              ? <>live · {activeRun} · {shownEvents.filter((e) => e.kind === "tool_call").length} calls so far</>
+              : <>live · point your agent at the proxy — waiting for its first call…</>}
           </div>
-          {liveEvents.map((e, i) => (
+          {shownEvents.map((e, i) => (
             <div key={i} className="flex items-center gap-2 py-1">
               <Circle size={7} fill={sevColor(e.verdict, e.kind)} color={sevColor(e.verdict, e.kind)} />
               <span style={{ fontFamily: MONO, fontSize: 11.5, color: e.verdict === "deny" ? C.text : C.mut }}>
@@ -315,6 +341,11 @@ export default function Experiment({ runId, autostart }: { runId?: string; autos
             </div>
           ))}
         </div>
+      )}
+
+      {mode !== "demo" && activeRun && !focusRun && (
+        <FinishTest runId={activeRun} calledTools={calledTools}
+          onDone={() => { setLastRun(activeRun); void qc.invalidateQueries({ queryKey: ["runs"] }); }} />
       )}
 
       {/* The receipt */}
@@ -440,4 +471,62 @@ function select(): React.CSSProperties {
 
 function Center({ children }: { children: React.ReactNode }) {
   return <div style={{ maxWidth: 640, margin: "0 auto" }}>{children}</div>;
+}
+
+// The last step of a test on the person's own agent: the answer it gave. The
+// proxy routes tool traffic and nothing else, so what the agent SAID never
+// passes through it — without this step a test run ended at "waiting for
+// events…" and no receipt, whatever the agent claimed.
+function FinishTest({ runId, calledTools, onDone }: {
+  runId: string; calledTools: string[]; onDone: () => void;
+}) {
+  const [text, setText] = useState("");
+  const [said, setSaid] = useState<string[]>([]);
+  const submit = useMutation({
+    mutationFn: () => api.submitClaim(runId, text, said, calledTools),
+    onSuccess: () => onDone(),
+  });
+  const base = (import.meta.env.VITE_PROXY_PUBLIC_URL ?? "http://127.0.0.1:8401").replace(/\/$/, "");
+  const snippet = `curl -X POST ${base}/axor/runs/${runId}/claim \\\n  -H 'content-type: application/json' \\\n  -d '{"text": "<the agent's answer>", "claims": {"tools_succeeded": ["<tool it says worked>"]}}'`;
+  const toggle = (t: string) => setSaid((s) => s.includes(t) ? s.filter((x) => x !== t) : [...s, t]);
+  return (
+    <div data-testid="finish-test" className="p-4 mb-4" style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 8 }}>
+      <div style={{ fontSize: 10, fontFamily: MONO, color: C.dim, letterSpacing: "0.1em", marginBottom: 6 }}>
+        THEN — WHAT DID YOUR AGENT SAY?
+      </div>
+      <div style={{ fontSize: 12.5, color: C.mut, lineHeight: 1.55, marginBottom: 10 }}>
+        The proxy sees the tool calls, not the answer. Paste the agent's final answer and tick the tools it says worked —
+        that is what the run is checked against.
+      </div>
+      <textarea value={text} onChange={(e) => setText(e.target.value)} rows={3}
+        placeholder="e.g. Refund of $49.00 issued for order A-1001. The customer has been notified."
+        style={{ width: "100%", background: C.bg, color: C.text, border: `1px solid ${C.line}`, borderRadius: 6,
+                 padding: 8, fontFamily: MONO, fontSize: 12 }} />
+      <div className="flex items-center gap-3 flex-wrap mt-2 mb-3" style={{ fontFamily: MONO, fontSize: 11.5, color: C.mut }}>
+        <span>it says these worked:</span>
+        {calledTools.length === 0 && <span style={{ color: C.dim }}>— run the agent first; its tools appear here</span>}
+        {calledTools.map((t) => (
+          <label key={t} className="flex items-center gap-1" style={{ cursor: "pointer", color: said.includes(t) ? C.text : C.mut }}>
+            <input type="checkbox" checked={said.includes(t)} onChange={() => toggle(t)} /> {t}
+          </label>
+        ))}
+      </div>
+      <button onClick={() => submit.mutate()} disabled={!text.trim() || submit.isPending}
+        style={btn({ color: C.bg, background: C.green, border: `1px solid ${C.green}`, fontSize: 12, fontWeight: 700, padding: "6px 14px" })}>
+        {submit.isPending ? <Loader2 size={13} className="animate-spin" /> : null} Check the answer
+      </button>
+      {submit.isError && (
+        <div className="mt-2" style={{ fontFamily: MONO, fontSize: 11, color: C.red }}>{(submit.error as Error).message}</div>
+      )}
+      {submit.data && submit.data.upload && !submit.data.upload.uploaded && (
+        <div className="mt-2" style={{ fontFamily: MONO, fontSize: 11, color: C.amber }}>
+          checked, but the proxy could not upload the run ({submit.data.upload.detail ?? "upload failed"})
+        </div>
+      )}
+      <details className="mt-3" style={{ fontFamily: MONO, fontSize: 11, color: C.dim }}>
+        <summary style={{ cursor: "pointer" }}>or have the agent send it itself</summary>
+        <pre style={{ whiteSpace: "pre-wrap", marginTop: 6, color: C.mut }}>{snippet}</pre>
+      </details>
+    </div>
+  );
 }

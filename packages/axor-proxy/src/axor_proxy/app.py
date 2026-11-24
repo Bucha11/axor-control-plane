@@ -845,6 +845,11 @@ def create_app(state: ProxyState) -> Starlette:
             "call_counts": run.call_counts,
             "trace_path": str(run.recorder.path),
             "evidence": [evidence_to_dict(c) for c in run.evidence],
+            # The run as it happens. A test run reaches the plane only once the
+            # agent's answer is submitted, so the plane's live stream has
+            # nothing to show while the agent works; this is the same recorded
+            # trace (sizes and hashes, never values), readable before then.
+            "events": await run.recorder.lines(),
         })
 
     async def preflight(request: Request) -> Response:

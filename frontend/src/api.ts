@@ -1542,6 +1542,21 @@ export const api = {
       // what policy would have said — the run still only watches
       body: JSON.stringify({ scenario, faults, node_id: nodeId, ...(manifests ? { manifests } : {}) }),
     }).then((r) => j<StartRunResult>(r)),
+  // A test run as the proxy holds it, before it reaches the plane: the plane
+  // gets the run when the agent's answer is submitted, so this is the only
+  // view of it while the agent works (sizes and hashes, never values).
+  proxyRun: (runId: string) =>
+    af(`/axor/runs/${encodeURIComponent(runId)}`).then((r) =>
+      j<{ run_id: string; armed: boolean; completed: boolean; events: KernelEvent[] }>(r)),
+  // The agent's answer — what the audit compares the run against. `tools_succeeded`
+  // is the deterministic form: free text alone is matched only when it names the
+  // tool, which an agent's answer to a customer never does.
+  submitClaim: (runId: string, text: string, toolsSucceeded: string[], toolsUsed: string[]) =>
+    af(`/axor/runs/${encodeURIComponent(runId)}/claim`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ text, claims: { tools_succeeded: toolsSucceeded, tools_used: toolsUsed } }),
+    }).then((r) => j<{ run_id: string; deviations: number; upload: { uploaded?: boolean; detail?: string } | null }>(r)),
   simulate: (runId: string, body: Record<string, unknown> = {}) =>
     af(`/axor/runs/${encodeURIComponent(runId)}/simulate`, {
       method: "POST",

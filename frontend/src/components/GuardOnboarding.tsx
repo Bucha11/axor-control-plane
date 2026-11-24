@@ -247,7 +247,12 @@ export default function GuardOnboarding() {
           : <span style={{ color: C.mut }}>waiting for <span style={{ color: C.text }}>{nodeId || "agent-1"}</span> to report in — start the proxy…</span>}
       </div>
       {live && (
-        <button onClick={() => { connect("adapter", []); navigate(`govern/${encodeURIComponent(nodeId)}`); }}
+        <button onClick={() => {
+          // the agent's tools stay on the connection: a chaos test on this
+          // agent offers them, not the demo's web_search / mcp
+          connect("adapter", tools.map((t) => ({ name: t.name, url: t.url })));
+          navigate(`govern/${encodeURIComponent(nodeId)}`);
+        }}
           className="mt-4" style={btn({ color: C.text, borderColor: C.green, fontSize: 12, padding: "7px 16px" })}>
           See it in Agents →
         </button>
