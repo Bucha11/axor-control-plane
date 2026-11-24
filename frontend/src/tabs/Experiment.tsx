@@ -53,7 +53,9 @@ function observedInWords(v: unknown): string {
     // seen in live work: the tool really failed, or the operator held the call
     if (typeof o.tool === "string" && o.observed === "error") return `${o.tool} returned an error`;
     if (typeof o.tool === "string" && o.observed === "held") {
-      return `${o.tool} never ran — ${String(o.actual_result ?? "the operator held it")}`;
+      const more = Array.isArray(o.also_never_ran) && o.also_never_ran.length
+        ? ` (nor did ${(o.also_never_ran as string[]).join(", ")})` : "";
+      return `${o.tool}${more} never ran — ${String(o.actual_result ?? "the operator held it")}`;
     }
     if (typeof o.tool === "string" && typeof o.injected === "string") {
       const got = o.actual_result === "error" ? "an error" : String(o.actual_result ?? "something else");

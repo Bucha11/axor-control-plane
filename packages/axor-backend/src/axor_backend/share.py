@@ -104,7 +104,7 @@ TOOL_DID: dict[str, str] = {
 _KEY_WORDS: dict[str, str] = {
     "driving_value": "what it carried", "provenance": "where that came from",
     "actual_result": "what the tool did", "injected": "broken on purpose",
-    "observed": "seen in the run",
+    "observed": "seen in the run", "also_never_ran": "nor did these run",
     "tool_name": "tool",
 }
 _EXAMPLE_SCENARIOS = frozenset({"adapter-demo", "multi-agent-demo", "coding-demo", "skill-demo",
