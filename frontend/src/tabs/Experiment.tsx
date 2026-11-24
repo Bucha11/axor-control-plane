@@ -50,6 +50,11 @@ const linkBtn: CSSProperties = {
 function observedInWords(v: unknown): string {
   if (v && typeof v === "object" && !Array.isArray(v)) {
     const o = v as Record<string, unknown>;
+    // seen in live work: the tool really failed, or the operator held the call
+    if (typeof o.tool === "string" && o.observed === "error") return `${o.tool} returned an error`;
+    if (typeof o.tool === "string" && o.observed === "held") {
+      return `${o.tool} never ran — ${String(o.actual_result ?? "the operator held it")}`;
+    }
     if (typeof o.tool === "string" && typeof o.injected === "string") {
       const got = o.actual_result === "error" ? "an error" : String(o.actual_result ?? "something else");
       return `${o.tool} returned ${got} — we broke it on purpose`;
@@ -382,7 +387,13 @@ export default function Experiment({ runId, autostart }: { runId?: string; autos
           <h1 style={{ fontSize: 22, fontWeight: 650, lineHeight: 1.3, margin: "0 0 20px" }}>
             {caught
               ? <>{mode === "demo" ? "The example agent" : "Your agent"} <span style={{ color: C.red }}>{deviationHeadline(caught)}</span>
-                  {caught.fault_attribution[0] ? ` when ${caught.fault_attribution[0].tool_name} was broken on purpose.` : "."}</>
+                  {caught.fault_attribution[0]
+                    ? (caught.fault_attribution[0].fault_mode === "observed_held"
+                      ? ` when ${caught.fault_attribution[0].tool_name} never ran.`
+                      : caught.fault_attribution[0].fault_mode === "observed_error"
+                        ? ` when ${caught.fault_attribution[0].tool_name} failed.`
+                        : ` when ${caught.fault_attribution[0].tool_name} was broken on purpose.`)
+                    : "."}</>
               : focusRun.completed
                 ? <>No discrepancies caught in this run.</>
                 : <>Run in progress.</>}

@@ -64,6 +64,9 @@ const TOOL_DID: Record<string, string> = {
   tool_substitution: "was swapped for a different tool",
   timeout: "timed out",
   empty_result: "returned nothing",
+  // seen in live work, not broken on purpose
+  observed_error: "failed — its answer was an error",
+  observed_held: "never ran — the operator had held the agent",
 };
 const toolDid = (mode: string) => TOOL_DID[mode] ?? mode.replace(/_/g, " ");
 
@@ -324,7 +327,8 @@ function Item({ item, who }: { item: IncidentItem; who?: string }) {
       )}
       <div className="flex items-center justify-between flex-wrap" style={{ gap: 8 }}>
         <span style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim }}>
-          {who && who !== item.node_id ? who : <>agent {item.node_id}</>} · {source(item.scenario, (item.case?.fault_attribution ?? []).some((a) => a.fault_mode))}
+          {who && who !== item.node_id ? who : <>agent {item.node_id}</>} · {source(item.scenario, (item.case?.fault_attribution ?? [])
+            .some((a) => a.fault_mode && !a.fault_mode.startsWith("observed_")))}
           {item.origin && <span data-testid="incident-origin"> · {ORIGIN_WORDS[item.origin] ?? item.origin}</span>}
         </span>
         <span className="flex gap-2 items-center">

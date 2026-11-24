@@ -91,6 +91,9 @@ HEADLINE: dict[str, str] = {
     "behavioral_drift": "The agent's behaviour drifted from what it was checked to do.",
 }
 TOOL_DID: dict[str, str] = {
+    # seen in live work (axor-eval's observed-failure audit), not broken on purpose
+    "observed_error": "failed — its answer was an error",
+    "observed_held": "never ran — the operator had held the agent",
     "silent_fail": "returned an error",
     "corrupt_retrieval": "returned corrupted results",
     "instruction_injection": "returned text with a hidden instruction in it",
@@ -101,6 +104,7 @@ TOOL_DID: dict[str, str] = {
 _KEY_WORDS: dict[str, str] = {
     "driving_value": "what it carried", "provenance": "where that came from",
     "actual_result": "what the tool did", "injected": "broken on purpose",
+    "observed": "seen in the run",
     "tool_name": "tool",
 }
 _EXAMPLE_SCENARIOS = frozenset({"adapter-demo", "multi-agent-demo", "coding-demo", "skill-demo",
