@@ -438,7 +438,8 @@ export default function Experiment({ runId, autostart }: { runId?: string; autos
                       style={btn({ color: C.text, borderColor: C.steel, fontSize: 12, padding: "6px 14px" })}>
                       break another tool on its next run →
                     </button>
-                    <span style={{ color: C.dim }}>keep this one as a test, above, so a fix has to hold</span>
+                    <span style={{ color: C.dim }}>or break it on a schedule, so a fix has to hold ·</span>
+                    <button onClick={() => navigate("chaos")} style={linkBtn}>Chaos tests →</button>
                   </>
                 ) : (
                   <>
