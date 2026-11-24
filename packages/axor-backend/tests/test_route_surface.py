@@ -123,6 +123,10 @@ EXPECTED: dict[tuple[str, str], str] = {
     # what widens for sidecars with operator keys: the document, and its signature
     ("GET", "/v1/coding/policy/document"): "ingest",
     ("GET", "/v1/coding/operator-keys"): "read",
+    ("GET", "/v1/operators"): "read",
+    ("POST", "/v1/operators"): "operate",
+    ("PUT", "/v1/operators/{op_id}/endorsement"): "operate",
+    ("DELETE", "/v1/operators/{op_id}"): "operate",
     ("PUT", "/v1/coding/policy/signature"): "operate",
     ("PUT", "/v1/identities/{developer_id}"): "operate",
     ("GET", "/v1/coding/say/{node_id}/mode"): "read",

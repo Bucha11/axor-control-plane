@@ -485,6 +485,22 @@ memory_changes = Table(
     Column("doc", Text, nullable=False),
 )
 
+# An operator's signing key made in their browser (migration 0038): the plane
+# keeps the public half only. Machines trust it once an operator they already
+# trust endorses it — the signed ``endorsement`` — or when it is put into
+# ``axor-wrap connect`` directly.
+operator_keys = Table(
+    "operator_keys", metadata,
+    Column("org_id", String(64), primary_key=True),
+    Column("operator_id", String(200), primary_key=True),
+    Column("email", String(255), nullable=False, index=True),
+    Column("pubkey", String(64), nullable=False),
+    Column("label", String(100), nullable=False, server_default=""),
+    Column("created_ts", String(40), nullable=False),
+    Column("revoked_ts", String(40), nullable=True),
+    Column("endorsement", Text, nullable=True),
+)
+
 # Which person a machine's opaque developer id is (migration 0035): bound when
 # that person's own key reports a session carrying it, or by an admin. The
 # first binding stands; another person claiming the same id disputes it, and a
@@ -2158,6 +2174,44 @@ class Store:
                 await conn.execute(insert(node_activity).values(
                     org_id=org, node_id=node_id, day=day,
                 ))
+
+    # ── operators' browser keys ───────────────────────────────────────────────
+
+    @staticmethod
+    def _op_row(r: Any) -> dict[str, Any]:  # noqa: ANN401
+        return {"operator_id": r.operator_id, "org": r.org_id, "email": r.email, "pubkey": r.pubkey,
+                "label": r.label, "created_ts": r.created_ts, "revoked_ts": r.revoked_ts,
+                "endorsement": json.loads(r.endorsement) if r.endorsement else None}
+
+    async def add_operator_key(self, operator_id: str, email: str, pubkey: str,
+                               label: str, ts: str) -> None:
+        async with self.engine.begin() as conn:
+            await conn.execute(insert(operator_keys).values(
+                org_id=current_org_id(), operator_id=operator_id, email=email.lower(),
+                pubkey=pubkey.lower(), label=label[:100], created_ts=ts))
+
+    async def operator_keys_list(self) -> list[dict[str, Any]]:
+        async with self.engine.connect() as conn:
+            rows = (await conn.execute(select(operator_keys).where(
+                operator_keys.c.org_id == current_org_id(),
+            ).order_by(operator_keys.c.created_ts))).all()
+        return [self._op_row(r) for r in rows]
+
+    async def operator_key(self, operator_id: str) -> dict[str, Any] | None:
+        async with self.engine.connect() as conn:
+            r = (await conn.execute(select(operator_keys).where(
+                operator_keys.c.org_id == current_org_id(),
+                operator_keys.c.operator_id == operator_id))).first()
+        return self._op_row(r) if r else None
+
+    async def set_operator_key(self, operator_id: str, **values: Any) -> bool:  # noqa: ANN401
+        if "endorsement" in values and values["endorsement"] is not None:
+            values["endorsement"] = json.dumps(values["endorsement"])
+        async with self.engine.begin() as conn:
+            res = await conn.execute(update(operator_keys).where(
+                operator_keys.c.org_id == current_org_id(),
+                operator_keys.c.operator_id == operator_id).values(**values))
+        return bool(res.rowcount)
 
     # ── who a machine's developer id is ──────────────────────────────────────
 

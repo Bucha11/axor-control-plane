@@ -66,10 +66,19 @@ async def policy(request: Request, store: StoreDep) -> dict:
             # operator keys take rules and team skills only from here)
             **({"signed": {k: signed[k] for k in ("payload", "operator", "sig")}}
                if signed else {}),
+            # browser keys machines may add (endorsed by one they trust) and
+            # the ones revoked (dropping a key only narrows)
+            "operators": await _operators_for_machines(store),
             **({"rules": {k: rules[k] for k in ("allow", "mode", "exceptions", "trusted_sources")}}
                if rules["set"] else {}),
             # an admin's brake: every coding agent of the team held at once
             **({"brake": brake} if (brake := await _brake(store)) else {})}
+
+
+async def _operators_for_machines(store: Any) -> dict:  # noqa: ANN401
+    from axor_backend import operators
+
+    return await operators.for_machines(store)
 
 
 # ── the team's rules for coding agents ───────────────────────────────────────
@@ -531,12 +540,14 @@ async def sign_policy(body: dict, request: Request, store: StoreDep,
             or payload.get("org") != current_org_id():
         raise HTTPException(409, "the policy changed since this document was fetched — "
                                  "fetch it again and sign that")
-    keyring = request.app.state.keyring
-    if not keyring.empty:
+    from axor_backend import operators
+
+    if await operators.signing_required(request.app.state, store):
         from axor_core.kernel.jcs import canonicalize
 
         try:
-            keyring.verify(operator, canonicalize(payload), sig)
+            await operators.verify(request.app.state, store, operator,
+                                   canonicalize(payload), sig)
         except CommandRejected as exc:
             raise HTTPException(403, f"the signature does not verify: {exc}") from exc
     elif not isinstance(operator, str) or not isinstance(sig, str):
@@ -554,7 +565,9 @@ async def operator_keys(request: Request) -> dict:
     the signed posture with no extra step. Trust on first use: a person can
     compare the fingerprint ``axor-wrap connect`` prints with one their admin
     shared out of band."""
+    from axor_backend import operators
     from axor_backend.signing import fingerprint
 
-    keys = request.app.state.keyring.public_keys()
+    keys = {**request.app.state.keyring.public_keys(),
+            **await operators.active_keys(request.app.state.store)}
     return {"keys": keys, "fingerprint": fingerprint(keys)}

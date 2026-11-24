@@ -38,6 +38,18 @@ tag; `deploy/offline` carries the same release to a machine with no network.
   verifying against the plane's keyring) and serves it with the policy; team
   skills are named by the hash of their files. The policy screen says whether
   what stands is signed, and signs it when the browser holds a signing key.
+- **Operators sign from their own browser.** Settings → "make a signing key
+  in this browser": an Ed25519 pair made by WebCrypto, private half
+  non-extractable in IndexedDB — the plane keeps only the public half, bound
+  to the account (`operator_keys`, migration `0038`; `GET|POST /v1/operators`,
+  `DELETE /v1/operators/{id}`). Commands, the coding policy and notes are
+  signed with it; the plane checks them against it as against its keyring,
+  and records the signature for the node. A compromised plane cannot sign.
+- **A vouch instead of a reconnect.** An operator vouches for another's key
+  (`PUT /v1/operators/{id}/endorsement`, signed with their own); machines add
+  a key only when one they already trust vouched for it, transitively.
+  Revocation is served and taken unsigned — it only narrows — and a machine
+  whose every key is revoked trusts nobody, never the plane.
 - **Connect in the signed posture by default.** The Connect page, "My keys"
   and the laptop key preset put the plane's operator keys into `axor-wrap
   connect` (`GET /v1/coding/operator-keys`) and show their fingerprint; a

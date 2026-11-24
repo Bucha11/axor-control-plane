@@ -209,6 +209,8 @@ _WRITE_POLICY: tuple[tuple[str, str], ...] = (
     ("/v1/keys", "admin"),            # mint / revoke API keys
     # whose machine id is whose: an owner's or admin's (checked in the handler)
     ("/v1/identities", "operate"),
+    # registering, endorsing, revoking an operator key: owner/admin (handler)
+    ("/v1/operators", "operate"),
     ("/v1/regression/schedule", "operate"),  # EE schedule is operator config
     ("/v1/regression", "read"),       # replay-only, no state change
     ("/v1/replay/", "read"),          # counterfactual POST is read-only

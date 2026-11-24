@@ -1,4 +1,5 @@
 import { canonicalize } from "./jcs";
+import * as opKey from "./opKey";
 import { IDENTITY_BASE, refresh } from "./identity";
 import { useApp } from "./store";
 import { track } from "./funnel";
@@ -696,6 +697,11 @@ export interface PairNote {
   held?: boolean; dismissed_ts?: string | null;
 }
 export type AgentMsgMode = "manual" | "auto";
+export interface OperatorKey {
+  operator_id: string; email: string; pubkey: string; label: string; created_ts: string;
+  revoked_ts: string | null; org?: string;
+  endorsement: { payload: Record<string, unknown>; operator: string; sig: string } | null;
+}
 export interface DeveloperIdentity {
   developer_id: string; email: string; source: string; ts: string; disputed_by: string | null;
 }
@@ -1122,15 +1128,25 @@ async function vaultSign(payloadObj: unknown): Promise<string> {
 // unsigned and a sidecar with operator keys treats it as outside text.
 async function signedStatement(payload: Record<string, unknown>):
     Promise<{ payload: Record<string, unknown>; operator: string; sig: string } | undefined> {
-  if (!signingArmed()) return undefined;
-  return { payload, operator: "op_ui", sig: await vaultSign(payload) };
+  const s = await operatorSign(payload);
+  return s ? { payload, ...s } : undefined;
+}
+
+// Who signs, from this browser: its own operator key (WebCrypto, private half
+// never leaves it) first, else the deployment's signing custody when a vault
+// key is chosen; null when neither.
+async function operatorSign(payload: unknown): Promise<{ operator: string; sig: string } | null> {
+  const own = await opKey.sign(payload);
+  if (own) return own;
+  if (useApp.getState().signingKeyId) return { operator: "op_ui", sig: await vaultSign(payload) };
+  return null;
 }
 
 // True when the signed posture is armed: a signing key is selected, so the
 // browser signs via the vault. The signing-token is sent alongside and is only
 // required when the backend has configured a signing gate (open in dev).
 function signingArmed(): boolean {
-  return Boolean(useApp.getState().signingKeyId);
+  return opKey.ready() || Boolean(useApp.getState().signingKeyId);
 }
 
 // ── agent tree runs (axor-wrap `tree run`) ───────────────────────────────────
@@ -1483,13 +1499,12 @@ export const api = {
     // One timestamp, signed and sent — the adapter reconstructs the exact bytes
     // from (node_id, version, body=state, timestamp), so they must match.
     const timestamp = new Date().toISOString();
-    const sig = signingArmed()
-      ? await vaultSign({ node_id: nodeId, version, body: state, timestamp })
-      : "";
+    const signed = await operatorSign({ node_id: nodeId, version, body: state, timestamp });
     const r = await af(`/v1/plane/${encodeURIComponent(nodeId)}/command`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ version, state, operator: "op_ui", timestamp, sig }),
+      body: JSON.stringify({ version, state, operator: signed?.operator ?? "op_ui", timestamp,
+                             sig: signed?.sig ?? "" }),
     });
     return j<{ node_id: string; version: number; state: Record<string, unknown> }>(r);
   },
@@ -1666,16 +1681,42 @@ export const api = {
     });
     return j<{ id: number }>(r);
   },
+  // operators' browser keys: register this browser's, vouch for another's, revoke
+  operators: () => af("/v1/operators").then((r) => j<{ operators: OperatorKey[] }>(r)),
+  registerOperatorKey: async (label: string) => {
+    const k = (await opKey.load()) ?? (await opKey.create());
+    const r = await af("/v1/operators", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ pubkey: k.pubHex, label }),
+    });
+    const out = await j<{ operator_id: string }>(r);
+    await opKey.setOperatorId(out.operator_id);
+    return out;
+  },
+  endorseOperatorKey: async (k: OperatorKey) => {
+    const payload = { kind: "operator_key", org: k.org ?? "", operator: k.operator_id, pubkey: k.pubkey };
+    const signed = await opKey.sign(payload);
+    if (!signed) throw new Error("this browser has no operator key to vouch with");
+    const r = await af(`/v1/operators/${encodeURIComponent(k.operator_id)}/endorsement`, {
+      method: "PUT", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ payload, ...signed }),
+    });
+    return j<{ operator_id: string }>(r);
+  },
+  revokeOperatorKey: (operatorId: string) =>
+    af(`/v1/operators/${encodeURIComponent(operatorId)}`, { method: "DELETE" }).then((r) =>
+      j<{ revoked: boolean }>(r)),
   // the operators' public keys, for `axor-wrap connect --operator-key`
   operatorKeys: () => af("/v1/coding/operator-keys").then((r) =>
     j<{ keys: Record<string, string>; fingerprint: string }>(r)),
   // what widens for sidecars with operator keys: sign the policy as it stands
   signCodingPolicy: async () => {
     const doc = await j<{ payload: Record<string, unknown> }>(await af("/v1/coding/policy/document"));
-    const sig = await vaultSign(doc.payload);
+    const signed = await operatorSign(doc.payload);
+    if (!signed) throw new Error("this browser has no operator key — make one in Settings");
     const r = await af("/v1/coding/policy/signature", {
       method: "PUT", headers: { "content-type": "application/json" },
-      body: JSON.stringify({ payload: doc.payload, operator: "op_ui", sig }),
+      body: JSON.stringify({ payload: doc.payload, ...signed }),
     });
     return j<{ seq: number; current: boolean }>(r);
   },

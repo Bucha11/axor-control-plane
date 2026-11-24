@@ -16,6 +16,7 @@ import { navigate } from "../router";
 import { MODE_LABEL, useApp } from "../store";
 import { C, MONO, btn } from "../theme";
 import { useOperatorKeys } from "../signedConnect";
+import * as opKey from "../opKey";
 import Coach from "../components/Coach";
 import ToolCredentials from "../components/ToolCredentials";
 import UsageAndBilling from "../components/UsageAndBilling";
@@ -114,7 +115,83 @@ function OrgMembers() {
       {isAdmin && <SingleSignOn orgId={d.active_org} />}
       {isAdmin && <Provisioning orgId={d.active_org} />}
       {isAdmin && <Sessions orgId={d.active_org} />}
+      {isAdmin && <OperatorKeys />}
       {isAdmin && <MachineIds />}
+    </div>
+  );
+}
+
+/** This browser's operator key and the workspace's. The private half is made
+ *  here (WebCrypto, non-extractable) and never leaves; the plane keeps the
+ *  public half. Machines trust a key put into `axor-wrap connect`, and any key
+ *  an operator they trust vouched for — so a new operator needs one vouch,
+ *  not every machine reconnected. */
+function OperatorKeys() {
+  const qc = useQueryClient();
+  const list = useQuery({ queryKey: ["operators"], queryFn: api.operators, retry: false });
+  const mine = useQuery({ queryKey: ["op-key-local"], queryFn: () => opKey.load() });
+  const can = useQuery({ queryKey: ["op-key-supported"], queryFn: () => opKey.supported() });
+  const done = () => {
+    void qc.invalidateQueries({ queryKey: ["operators"] });
+    void qc.invalidateQueries({ queryKey: ["op-key-local"] });
+    void qc.invalidateQueries({ queryKey: ["operator-keys"] });
+  };
+  const make = useMutation({ mutationFn: () => api.registerOperatorKey(navigator.platform || "browser"), onSuccess: done });
+  const vouch = useMutation({ mutationFn: api.endorseOperatorKey, onSuccess: done });
+  const revoke = useMutation({ mutationFn: api.revokeOperatorKey, onSuccess: done });
+  const forget = useMutation({ mutationFn: () => opKey.forget(), onSuccess: done });
+  const keys = (list.data?.operators ?? []).filter((k) => !k.revoked_ts);
+  const local = mine.data;
+  const localId = local?.operatorId ?? null;
+  const registered = !!localId && keys.some((k) => k.operator_id === localId);
+  const fp = (h: string) => h.slice(0, 16).replace(/(.{4})(?=.)/g, "$1 ");
+  const err = (make.error ?? vouch.error ?? revoke.error) as Error | null;
+  return (
+    <div data-testid="operator-keys" style={{ marginTop: 6 }}>
+      <div style={{ color: C.text, marginBottom: 4 }}>signing keys</div>
+      <div style={{ color: C.dim, fontSize: 10.5, marginBottom: 6 }}>
+        your agents' machines take the team's rules, skills and notes only when an operator signed them.
+        The key is made in this browser and never leaves it.
+      </div>
+      {registered ? (
+        <div data-testid="op-key-mine" className="flex gap-2 items-center flex-wrap" style={{ marginBottom: 6 }}>
+          <span style={{ color: C.green }}>this browser signs</span>
+          <span style={{ color: C.text }}>{localId}</span>
+          <span style={{ color: C.dim }}>{fp(local!.pubHex)}</span>
+        </div>
+      ) : can.data === false ? (
+        <div style={{ color: C.amber }}>this browser cannot make Ed25519 keys — use a current Chrome, Edge, Firefox or Safari</div>
+      ) : (
+        <button data-testid="op-key-make" onClick={() => make.mutate()} disabled={make.isPending}
+          style={btn({ fontSize: 11, padding: "3px 10px", color: C.text })}>
+          {make.isPending ? "…" : "make a signing key in this browser"}
+        </button>
+      )}
+      {keys.map((k) => {
+        const own = k.operator_id === localId;
+        return (
+          <div key={k.operator_id} data-testid="op-key" className="flex gap-2 items-center flex-wrap">
+            <span style={{ color: C.text }}>{k.operator_id}</span>
+            <span style={{ color: C.dim }}>{fp(k.pubkey)}</span>
+            {k.endorsement
+              ? <span style={{ color: C.green }}>vouched for by {k.endorsement.operator}</span>
+              : <span style={{ color: C.amber }}>not vouched for — machines trust it only if it was in their connect command</span>}
+            {registered && !own && !k.endorsement && (
+              <button data-testid="op-key-vouch" onClick={() => vouch.mutate(k)} disabled={vouch.isPending}
+                style={btn({ fontSize: 10.5, padding: "1px 8px", color: C.green, borderColor: C.green })}>vouch for it</button>
+            )}
+            <button data-testid="op-key-revoke"
+              onClick={() => { if (confirm(`Revoke ${k.operator_id}? Machines stop trusting it.`)) revoke.mutate(k.operator_id); }}
+              style={{ ...btn({ fontSize: 10.5, padding: "1px 8px" }), color: C.dim }}>revoke</button>
+          </div>
+        );
+      })}
+      {local && !registered && localId && (
+        <button onClick={() => forget.mutate()} style={{ ...btn({ fontSize: 10.5, padding: "1px 8px" }), color: C.dim }}>
+          forget the revoked key in this browser
+        </button>
+      )}
+      {err && <div style={{ color: C.red }}>{err.message}</div>}
     </div>
   );
 }
