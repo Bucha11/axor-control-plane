@@ -1481,6 +1481,10 @@ export const api = {
   },
   // `mustRefuse` names the calls a must_block pin holds — needed when the run
   // was recorded ungoverned and refused nothing (else it can't be checked)
+  // take a case out of the check (Safe to ship?)
+  unpin: (runId: string) =>
+    af(`/v1/pins/${encodeURIComponent(runId)}`, { method: "DELETE" })
+      .then((r) => j<{ unpinned: string }>(r)),
   pin: (runId: string, side: "must_block" | "must_pass", label: string,
         mustRefuse?: { node_id: string; seq: number }[]) =>
     af(`/v1/pins/${encodeURIComponent(runId)}`, {

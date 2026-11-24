@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 
 from axor_backend.corpus import record_corpus_run, regression_report
 from axor_backend.deps import StateDep, StoreDep
@@ -23,7 +23,7 @@ router = APIRouter(prefix="/v1", tags=["corpus"])
 
 
 @router.post("/pins/{run_id}")
-async def pin_run(run_id: str, body: dict, store: StoreDep) -> dict:
+async def pin_run(run_id: str, body: dict, store: StoreDep, request: Request) -> dict:
     side = body.get("side")
     if side not in ("must_block", "must_pass"):
         raise HTTPException(400, "side must be must_block|must_pass")
@@ -39,7 +39,25 @@ async def pin_run(run_id: str, body: dict, store: StoreDep) -> dict:
             raise HTTPException(400, "must_refuse is a list of {node_id, seq}")
         anchors = [{"node_id": a.get("node_id", ""), "seq": a["seq"]} for a in raw]
     await store.pin(run_id, side, body.get("label", ""), anchors)
+    # what "Safe to ship?" holds a release to is a control like any other
+    from axor_backend import audit
+
+    await audit.record(store, request, "pin_" + side, run_id, label=body.get("label", ""))
     return {"pinned": run_id, "side": side}
+
+
+@router.delete("/pins/{run_id}")
+async def unpin_run(run_id: str, store: StoreDep, request: Request) -> dict:
+    """Take a case out of the check. A pin nothing can be verified against —
+    or one kept by mistake — used to hold every release at "not safe" for
+    good, with no way to remove it."""
+    removed = await store.unpin(run_id)
+    if not removed:
+        raise HTTPException(404, f"{run_id} is not kept as a case")
+    from axor_backend import audit
+
+    await audit.record(store, request, "unpin", run_id)
+    return {"unpinned": run_id}
 
 
 @router.get("/pins")

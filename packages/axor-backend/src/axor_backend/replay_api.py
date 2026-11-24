@@ -439,6 +439,9 @@ def regression_row(
     call satisfies — the corpus then answered ``held``, and ``safe_to_ship``,
     for a config that ships the breach.
 
+    A must_block pin on a run that only watched holds the calls it recorded as
+    ``would_deny`` — what the rules would have refused, had they enforced.
+
     A must_block pin whose trace recorded no denial at all has nothing to hold:
     it was recorded ungoverned, so the call that should be blocked is not
     marked anywhere in it. That is ``unanchored`` — reported, and never counted
@@ -465,6 +468,14 @@ def regression_row(
     """
     result = replay(events, config)
     pinned = _pinned_denials(result)
+    if side == "must_block" and not pinned:
+        # A run that only watched (a test run, enforcement off) refused nothing,
+        # but recorded what the rules would have refused (`would_deny`): those
+        # calls are the boundary the pin is about.
+        pinned = [
+            s for s in result.steps
+            if s.event.kind is EventKind.TOOL_CALL and (s.event.payload or {}).get("would_deny")
+        ]
     if side == "must_block" and not pinned and must_refuse:
         named = {(str(a.get("node_id", "")), int(a["seq"])) for a in must_refuse}
         pinned = [

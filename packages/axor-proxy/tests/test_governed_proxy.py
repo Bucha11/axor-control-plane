@@ -11,7 +11,7 @@ on a `WrappedToolset`: there is no callable to wrap. The governor underneath it
 is the same one, so it is held per run and consulted per call:
 
     mcp:web_search  tool_call   verdict=pass  ledger={"registered": true, "value_ref": "v1"}
-    mcp:slack_post  tool_call   verdict=deny  gate=taint_floor
+    mcp:slack_post  tool_call   verdict=pass  would_deny={gate: taint_floor, …}
 
 Two things are deliberately NOT inferred. Manifests are the operator's: an MCP
 `tools/list` names a tool and describes it, and nothing in that says whether it
@@ -101,10 +101,18 @@ class TestTheBoundaryProducesVerdicts:
         calls = [e for e in trace(tmp_path, run_id) if e["kind"] == "tool_call"]
         assert [c["payload"]["tool"] for c in calls] == [
             "mcp:web_search", "mcp:slack_post"]
-        assert [c["verdict"] for c in calls] == ["pass", "deny"]
-        assert calls[1]["gate"] == "taint_floor"
-        assert calls[1]["payload"]["category"] == "taint_enforcement"
-        assert "tainted" in calls[1]["payload"]["reason"]
+        # the call went through (a test run only watches): the recorded verdict
+        # is what happened, and what the rules say rides as `would_deny` — a
+        # `deny` here read as a refusal that never happened
+        assert [c["verdict"] for c in calls] == ["pass", "pass"]
+        would = calls[1]["payload"]["would_deny"]
+        assert would["gate"] == "taint_floor"
+        assert would["category"] == "taint_enforcement"
+        assert "tainted" in would["reason"]
+        # with what it was judged on: which argument, from which answer
+        assert calls[1]["payload"]["driving_root"]["sources"]
+        assert list(calls[1]["payload"]["arg_refs"].values()) == ["v1"]
+        assert "args" not in calls[1]["payload"]
 
     async def test_the_read_is_registered_in_the_ledger(
         self, proxy: httpx.AsyncClient, tmp_path: Path,

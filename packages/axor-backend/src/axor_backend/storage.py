@@ -2456,6 +2456,13 @@ class Store:
         except IntegrityError:
             await self._pin(run_id, side, label, anchors)  # the row now exists: update it
 
+    async def unpin(self, run_id: str) -> bool:
+        """Take a run out of the corpus. True when there was a pin to remove."""
+        async with self.engine.begin() as conn:
+            result = await conn.execute(delete(pins).where(
+                pins.c.run_id == run_id, pins.c.org_id == current_org_id()))
+        return bool(result.rowcount)
+
     async def _pin(self, run_id: str, side: str, label: str, anchors: str | None) -> None:
         async with self.engine.begin() as conn:
             dup = (await conn.execute(

@@ -11,6 +11,10 @@ import { errorWords } from "../refusal";
 // an act, as a person says it
 const WORDS: Record<string, string> = {
   pause: "paused", resume: "resumed", stop: "stopped", cascade_stop: "stopped with everything it started",
+  start_again: "let start again", pin_must_block: "kept as an attack that must stay blocked",
+  pin_must_pass: "kept as normal work that must keep passing", unpin: "took out of the release check",
+  share_made: "shared a link to the case", share_revoked: "revoked the shared link to",
+  alert_subscribed: "subscribed alerts to", alert_unsubscribed: "stopped alerts to",
   budget: "capped the calls of", excise: "cut context from", inject: "injected into",
   replan: "asked to replan", experiment: "armed an experiment on", say: "said to the agent of",
   brake_on: "pulled the team's brake on", brake_off: "released the team's brake on",

@@ -472,7 +472,7 @@ export default function Regression({ rules: rulesParam }: { rules?: string } = {
         )}
       </div>
 
-      {report && <Report report={report} open={open} setOpen={setOpen} />}
+      {report && <Report report={report} open={open} setOpen={setOpen} onRemoved={run} />}
 
       <div style={{ marginTop: 28 }}>
         <Fold label="run this check on a schedule (Team)">
@@ -497,9 +497,17 @@ function Fold({ label, children }: { label: string; children: React.ReactNode })
   );
 }
 
-function Report({ report, open, setOpen }: {
+function Report({ report, open, setOpen, onRemoved }: {
   report: RegressionReport; open: string | null; setOpen: (v: string | null) => void;
+  onRemoved: () => void;
 }) {
+  const qc = useQueryClient();
+  // A case nothing can be checked against (or one kept by mistake) held every
+  // release at "not safe" with no way to take it out.
+  const unpin = useMutation({
+    mutationFn: (runId: string) => api.unpin(runId),
+    onSuccess: () => { void qc.invalidateQueries({ queryKey: ["pins"] }); onRemoved(); },
+  });
   const broken: string[] = [];
   if (report.escaped) broken.push(`${plural(report.escaped, "attack", "attacks")} now ${report.escaped === 1 ? "gets" : "get"} through`);
   if (report.regressed) broken.push(`${plural(report.regressed, "normal flow is", "normal flows are")} now refused`);
@@ -623,6 +631,17 @@ function Report({ report, open, setOpen }: {
                       style={btn({ color: C.steel, fontSize: 11, padding: "5px 10px" })}>
                       <Play size={11} /> show where
                     </button>
+                    {!r.demo && (
+                      <button data-testid={`unpin-${r.run_id}`} disabled={unpin.isPending}
+                        onClick={() => {
+                          if (window.confirm("Take this case out of the check? Releases will no longer be checked against it.")) {
+                            unpin.mutate(r.run_id);
+                          }
+                        }}
+                        style={btn({ color: C.mut, fontSize: 11, padding: "5px 10px", marginLeft: 8 })}>
+                        take it out of the check
+                      </button>
+                    )}
                   </div>
                 </div>
               )}

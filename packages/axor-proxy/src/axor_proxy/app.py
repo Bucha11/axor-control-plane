@@ -88,6 +88,11 @@ def _gate(category: str) -> str:
     return gate_of(category)
 
 
+# the kernel's per-call provenance (axor_core governor call_payload), no values
+_PROVENANCE = ("arg_provenance", "arg_refs", "driving_args", "driving_root",
+               "driving_carried", "floor_active", "roles", "integrity_default")
+
+
 def _govern(
     run: Run, tool: str, args: dict[str, Any] | None, payload: dict[str, Any],
 ) -> tuple[object | None, str | None, Verdict | None]:
@@ -113,11 +118,26 @@ def _govern(
         return None, None, None
     decision = run.governor.evaluate(tool, args)  # type: ignore[attr-defined]
     payload["governance"] = {"governed": True, "enforcement": "off"}
+    # What the governor judged the call on — which argument carried outside
+    # text, from which earlier answer — from its own trace record, values
+    # left out. Without it a "would refuse" cannot be re-checked under other
+    # rules (Safe to ship? read such a run as "can't be checked").
+    for event in run.governor.drain_trace_events():  # type: ignore[attr-defined]
+        recorded = dict(getattr(event, "payload", None) or {})
+        if recorded.get("tool") == tool and "driving_root" in recorded:
+            for key in _PROVENANCE:
+                if key in recorded:
+                    payload[key] = recorded[key]
     if decision.allowed:
         return decision, None, Verdict.PASS
-    payload["reason"] = decision.reason
-    payload["category"] = decision.category
-    return decision, _gate(decision.category), Verdict.DENY
+    # The call goes through (the proxy only watches here), so the recorded
+    # verdict is what HAPPENED: pass. What the rules say rides as
+    # `would_deny` — the form every reader already takes for "would have been
+    # refused". A `deny` here read as a refusal that never happened: a
+    # "refused" incident, a must-block pin on a run that refused nothing.
+    payload["would_deny"] = {"reason": decision.reason, "category": decision.category,
+                             "gate": _gate(decision.category)}
+    return decision, None, Verdict.PASS
 
 
 def hasher_hex(raw: bytes) -> str:

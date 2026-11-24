@@ -61,7 +61,8 @@ function observedInWords(v: unknown): string {
 function eventLabel(e: KernelEvent): string {
   const p = e.payload as Record<string, unknown>;
   switch (e.kind) {
-    case "tool_call": return `${p.tool ?? ""} — ${e.verdict === "deny" ? "DENIED" : "call"}`;
+    case "tool_call": return `${p.tool ?? ""} — ${e.verdict === "deny" ? "DENIED"
+      : p.would_deny ? "call · policy would refuse it" : "call"}`;
     case "tool_result": return `${p.tool ?? ""} → ${p.faulted ? "faulted result" : `status ${p.status}`}`;
     case "fault_injected": return `⚡ injected fault: ${p.mode} on ${p.tool}`;
     case "claim": return `claim submitted`;
@@ -443,7 +444,9 @@ function WouldRefuse({ runId }: { runId: string }) {
   const calls = (events.data ?? []).filter((e) => e.kind === "tool_call");
   const governed = calls.filter((e) => (e.payload.governance as { governed?: boolean } | undefined)?.governed);
   if (governed.length === 0) return null;
-  const refused = governed.filter((e) => e.verdict === "deny");
+  // a test run only watches: what policy says rides as `would_deny` (older
+  // runs recorded it as the verdict itself)
+  const refused = governed.filter((e) => e.verdict === "deny" || Boolean(e.payload.would_deny));
   const names = [...new Set(refused.map((e) => String(e.payload.tool ?? "")))].filter(Boolean);
   return (
     <div data-testid="would-refuse" className="mb-4 p-3" style={{ background: C.panel, borderRadius: 8,
