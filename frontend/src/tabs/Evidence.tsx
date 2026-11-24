@@ -22,6 +22,7 @@ import { C, MONO } from "../theme";
 import { useCanAdmin } from "../team";
 import { errorWords } from "../refusal";
 import { agentLabel } from "../agentName";
+import { useWorkStarted } from "../workStarted";
 
 
 /** One line of whatever the agent claimed or the tool returned. */
@@ -162,6 +163,7 @@ export default function Evidence({ agent: agentParam }: { agent?: string } = {})
     return kind ? ["coding", "tree"].includes(String(kind)) : journey === "coding";
   };
   const nothingAtAll = all.isSuccess && all.data.items.length === 0;
+  const started = useWorkStarted();
 
   return (
     <div style={{ maxWidth: 720, margin: "0 auto" }}>
@@ -183,14 +185,14 @@ export default function Evidence({ agent: agentParam }: { agent?: string } = {})
           <div style={{ fontFamily: MONO, fontSize: 13, color: C.text, marginBottom: 6 }}>No incidents yet.</div>
           <div style={{ fontFamily: MONO, fontSize: 11.5, color: C.dim, lineHeight: 1.6, marginBottom: 16 }}>
             one appears the first time an agent says a tool worked when it didn't, a dangerous call goes
-            through, or the rules refuse one. the fastest way to see one: test our example agent — we
-            break its search on purpose and check what it says.
+            through, or the rules refuse one.{!started && <> the fastest way to see one: test our example agent — we
+            break its search on purpose and check what it says.</>}
           </div>
           <div className="flex gap-2 flex-wrap">
-            <button onClick={() => { connect("demo"); navigate("catch", { auto: "1" }); }}
+            {!started && <button onClick={() => { connect("demo"); navigate("catch", { auto: "1" }); }}
               style={{ display: "flex", alignItems: "center", gap: 6, background: "none", border: `1px solid ${C.green}`, borderRadius: 6, color: C.green, fontFamily: MONO, fontSize: 12, padding: "7px 14px", cursor: "pointer" }}>
               <Zap size={13} /> test the example agent
-            </button>
+            </button>}
             {!isConnected(mode) && (
               <button onClick={() => navigate("connect")}
                 style={{ display: "flex", alignItems: "center", gap: 6, background: "none", border: `1px solid ${C.steel}`, borderRadius: 6, color: C.steel, fontFamily: MONO, fontSize: 12, padding: "7px 14px", cursor: "pointer" }}>

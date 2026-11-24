@@ -13,6 +13,7 @@ import { api, MemoryChange, MemoryItem, MemoryRepo } from "../api";
 import { navigate } from "../router";
 import { C, MONO, btn } from "../theme";
 import { HowItWorks } from "../components/MachineCommand";
+import { useWorkStarted } from "../workStarted";
 
 const label: React.CSSProperties = {
   fontFamily: MONO, fontSize: 10.5, color: C.dim, letterSpacing: "0.1em", marginBottom: 8,
@@ -42,6 +43,7 @@ export default function TeamMemory() {
   const qc = useQueryClient();
   const q = useQuery({ queryKey: ["memory"], queryFn: api.memory });
   const [pick, setPick] = useState<string | null>(null);
+  const started = useWorkStarted();
   const example = useMutation({
     mutationFn: api.seedMemory,
     onSuccess: (r) => { setPick(r.repo); void qc.invalidateQueries({ queryKey: ["memory"] }); },
@@ -81,13 +83,13 @@ export default function TeamMemory() {
 
       {repo ? <RepoMemory repo={repo} freshDays={freshDays} /> : !q.isLoading && (
         <div data-testid="memory-empty" style={{ ...panel, padding: 16, fontSize: 13, color: C.mut, lineHeight: 1.6 }}>
-          Nothing yet. It fills in as coding sessions with the axor hooks run checks in a repository.{" "}
-          <button onClick={() => example.mutate()} data-testid="memory-example" style={{ ...link, fontSize: 13 }}>
+          Nothing yet. It fills in as coding sessions with the axor hooks run checks in a repository.
+          {!started && <>{" "}<button onClick={() => example.mutate()} data-testid="memory-example" style={{ ...link, fontSize: 13 }}>
             {example.isPending ? "loading…" : "see an example →"}
-          </button>
+          </button></>}
         </div>
       )}
-      {repo && !repos.some((r) => r.label === "acme/api" && r.items.length) && (
+      {!started && repo && !repos.some((r) => r.label === "acme/api" && r.items.length) && (
         <div className="mt-6" style={{ fontFamily: MONO, fontSize: 11.5 }}>
           <button onClick={() => example.mutate()} data-testid="memory-example" style={link}>
             {example.isPending ? "loading…" : "see an example →"}

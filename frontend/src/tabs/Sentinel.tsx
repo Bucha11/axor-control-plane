@@ -16,6 +16,7 @@ import { Radar } from "lucide-react";
 import { api, type ReputationSnapshot } from "../api";
 import { C, MONO, btn } from "../theme";
 import { navigate, useRoute } from "../router";
+import { useWorkStarted } from "../workStarted";
 
 type Level = "CLEAN" | "WATCH" | "FLAGGED";
 type EdgeKind = "export_denied" | "staging" | "read" | "export" | "touched";
@@ -181,6 +182,7 @@ export default function Sentinel() {
     enabled: node !== null,
   });
   const [selected, setSelected] = useState<string | null>(null);
+  const started = useWorkStarted();
   const seed = useMutation({
     mutationFn: api.seedFleet,
     onSuccess: () => {
@@ -216,12 +218,12 @@ export default function Sentinel() {
           </div>
           <div style={{ fontFamily: MONO, fontSize: 11.5, color: C.dim, lineHeight: 1.6, marginBottom: 14 }}>
             so nothing here is marked clean either. axor-sentinel runs beside the agent and
-            reports here. to see what it looks like:
+            reports here.{!started && " to see what it looks like:"}
           </div>
-          <button onClick={() => seed.mutate()} disabled={seed.isPending}
+          {!started && <button onClick={() => seed.mutate()} disabled={seed.isPending}
             style={btn({ color: C.steel, borderColor: C.steel, fontSize: 12, padding: "7px 14px" })}>
             <Radar size={13} /> {seed.isPending ? "loading…" : "Load an example fleet"}
-          </button>
+          </button>}
           {seed.isError && <div style={{ color: C.red, fontFamily: MONO, fontSize: 11, marginTop: 8 }}>{(seed.error as Error).message}</div>}
         </div>
       )}

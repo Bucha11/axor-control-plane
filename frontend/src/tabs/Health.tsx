@@ -31,6 +31,7 @@ import { C, MONO, btn } from "../theme";
 import Coach from "../components/Coach";
 import Tooltip from "../components/Tooltip";
 import { NO_CUT, behindProxy, cannotCut } from "../agentName";
+import { useWorkStarted } from "../workStarted";
 
 // The demo battery's node: shown only when it is actually listed — it used to
 // be the default and was mixed into every workspace's agents as if it were one.
@@ -72,6 +73,7 @@ export default function Health() {
   const [node, setNode] = useState(route.query.node || "");
   const [chosen, setChosen] = useState(Boolean(route.query.node));
   const nodes = useQuery({ queryKey: ["nodes"], queryFn: api.nodes });
+  const started = useWorkStarted();
   // the examples hide once the workspace's own agents report, as on every
   // screen — unless one was opened on purpose ("see an example")
   const own = (nodes.data ?? []).filter((n) => !n.example_hidden);
@@ -268,14 +270,14 @@ export default function Health() {
                   wrap it in code →
                 </button>
               </div>
-              <div className="mt-3">
+              {!started && <div className="mt-3">
                 <button onClick={() => showExample.mutate()} disabled={showExample.isPending}
                   data-testid="health-example"
                   style={{ background: "none", border: "none", padding: 0, cursor: "pointer",
                            fontFamily: MONO, fontSize: 11, color: C.steel }}>
                   {showExample.isPending ? "loading…" : "see what a drift check looks like (example) →"}
                 </button>
-              </div>
+              </div>}
             </div>
           ) : (
             <>
@@ -287,14 +289,14 @@ export default function Health() {
                 agent&apos;s plane link sends the result here (axor-probe README, “Reporting to the
                 Control Plane”). The plane never starts your agent itself.
               </div>
-              <div className="mt-3">
+              {!started && <div className="mt-3">
                 <button onClick={() => showExample.mutate()} disabled={showExample.isPending}
                   data-testid="health-example"
                   style={{ background: "none", border: "none", padding: 0, cursor: "pointer",
                            fontFamily: MONO, fontSize: 11, color: C.steel }}>
                   {showExample.isPending ? "loading…" : "see what a drift check looks like (example) →"}
                 </button>
-              </div>
+              </div>}
             </>
           )}
         </div>

@@ -14,6 +14,7 @@ import { untrustedFields } from "../policyConfig";
 import ScanTools from "./ScanTools";
 import { C, MONO, btn } from "../theme";
 import { IdentityLogin } from "../tabs/Settings";
+import { useWorkStarted } from "../workStarted";
 
 type Klass = ToolKlass;
 interface GuardTool { name: string; url: string; klass: Klass; outside: boolean }
@@ -65,6 +66,7 @@ function Block({ text, id }: { text: string; id: string }) {
 }
 
 export default function GuardOnboarding() {
+  const started = useWorkStarted();
   // the shared record of the agent's tools (store.toolPolicy): what was
   // classified here shows in Policy and in a test run, and the other way round
   const policy = useApp((s) => s.toolPolicy);
@@ -147,7 +149,7 @@ export default function GuardOnboarding() {
       {step(1, "YOUR AGENT'S TOOLS — AND WHAT EACH ONE DOES")}
       <div className="flex gap-2 flex-wrap items-center" style={{ marginBottom: 8 }}>
         <ScanTools testId="guard-scan" />
-        {tools.length === 0 && (
+        {tools.length === 0 && !started && (
           <button onClick={() => { for (const t of EXAMPLE) setToolClass(t.name, t); setSavedManifests(false); }}
             data-testid="guard-example"
             style={btn({ color: C.steel, borderColor: C.line, fontSize: 11.5, padding: "5px 12px" })}>

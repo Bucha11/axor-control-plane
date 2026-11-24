@@ -316,7 +316,9 @@ export default function ControlTab({ focusNode }: { focusNode?: string }) {
           itself takes the button out from under the pointer */}
       {!isAdapter(mode) && fleet.isSuccess && !codingTeam
         && !codingExampleOnly((fleet.data ?? []).map((n) => n.node_id))
-        && !fleetExampleOnly((fleet.data ?? []).map((n) => n.node_id)) && (hasAgents ? (
+        && !fleetExampleOnly((fleet.data ?? []).map((n) => n.node_id))
+        // the workspace's own agents are on screen: no example agents to offer
+        && !(workStarted && hasAgents) && (hasAgents ? (
         // agents are already on screen: one line, the example tools folded away
         <div data-testid="adapter-note" style={{ fontFamily: MONO, fontSize: 11, color: C.mut,
                                                   lineHeight: 1.6, marginBottom: 14 }}>

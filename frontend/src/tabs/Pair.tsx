@@ -15,6 +15,7 @@ import { C, MONO, btn } from "../theme";
 import { HowItWorks } from "../components/MachineCommand";
 import { useApp } from "../store";
 import { useMine } from "../team";
+import { useWorkStarted } from "../workStarted";
 
 const label: React.CSSProperties = {
   fontFamily: MONO, fontSize: 10.5, color: C.dim, letterSpacing: "0.1em", marginBottom: 8,
@@ -101,6 +102,7 @@ function PairHome({ node }: { node?: string }) {
     mutationFn: (nodeId: string) => api.askToPair(nodeId),
     onSuccess: () => void qc.invalidateQueries({ queryKey: ["pair-requests"] }),
   });
+  const started = useWorkStarted();
   const example = useMutation({
     mutationFn: api.seedPair,
     onSuccess: (r) => { void qc.invalidateQueries({ queryKey: ["pairs"] }); navigate(`pair/${r.token}`); },
@@ -171,7 +173,7 @@ function PairHome({ node }: { node?: string }) {
         {yours.length === 0 ? (
           <div style={{ ...panel, padding: 16, fontSize: 13, color: C.mut }}>
             None of your sessions is running now — start your agent, and it appears here.
-            {!anySessions && <>{" "}
+            {!anySessions && !started && <>{" "}
               <button onClick={() => example.mutate()} data-testid="pair-example" style={{ ...link, fontSize: 13 }}>
                 {example.isPending ? "loading…" : "see an example pair →"}
               </button></>}

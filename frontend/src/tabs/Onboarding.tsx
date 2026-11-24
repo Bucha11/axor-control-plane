@@ -14,6 +14,7 @@ import { ConnectionMode, useApp, type ToolKlass } from "../store";
 import { C, MONO, btn } from "../theme";
 import Coach from "../components/Coach";
 import Tooltip from "../components/Tooltip";
+import { useWorkStarted } from "../workStarted";
 
 interface Tool {
   name: string;
@@ -374,6 +375,7 @@ function ProxyOnboarding({ onWrap }: { onWrap: () => void }) {
   // is armed with it, so it says which calls policy would have refused
   const policy = useApp((s) => s.toolPolicy);
   const setToolClass = useApp((s) => s.setToolClass);
+  const started = useWorkStarted();
   const loadExample = (set: Tool[]) => {
     setTools(set);
     for (const t of set) setToolClass(t.name, { url: t.url, ...(TOOL_CLASSES[t.name] ?? {}) });
@@ -460,23 +462,25 @@ function ProxyOnboarding({ onWrap }: { onWrap: () => void }) {
 
           {tools.length === 0 ? (
             <div className="p-8 flex flex-col items-center gap-3" style={{ background: C.panel, border: `1px dashed ${C.line}`, borderRadius: 8 }}>
-              <Tooltip content="Fills in a realistic 3-tool sample (search / report / query) so you can walk the flow without typing endpoints.">
+              {!started && <Tooltip content="Fills in a realistic 3-tool sample (search / report / query) so you can walk the flow without typing endpoints.">
                 <button onClick={() => loadExample(TOOLS)} style={btn({ color: C.steel, borderColor: C.steel, fontSize: 12 })}>
                   <Plug size={13} /> Load example tools
                 </button>
-              </Tooltip>
+              </Tooltip>}
               <ScanTools testId="proxy-scan" onFound={(found) => setTools((prev) => [
                 ...prev, ...found.filter((f) => !prev.some((t) => t.name === f.id))
                   .map((f) => ({ name: f.id, url: policy[f.id]?.url ?? "" }))])} />
               <span style={{ fontFamily: MONO, fontSize: 11, color: C.dim }}>
-                loads a sample set · or find them in your agent's code · or add each tool by hand below · or paste an MCP config further down · or{" "}
+                {started
+                  ? "find them in your agent's code · or add each tool by hand below · or paste an MCP config further down"
+                  : <>loads a sample set · or find them in your agent's code · or add each tool by hand below · or paste an MCP config further down · or{" "}
                 <span
                   role="button"
                   onClick={() => loadExample(MOCK_TOOLS)}
                   style={{ color: C.steel, cursor: "pointer" }}
                 >
                   use our mock tools (zero creds)
-                </span>
+                </span></>}
               </span>
               <div className="w-full">{addRow}</div>
             </div>

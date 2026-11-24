@@ -13,6 +13,7 @@ import Coach from "../components/Coach";
 import { useApp } from "../store";
 import { LAB_SHIPPED } from "../flags";
 import Tooltip from "../components/Tooltip";
+import { useWorkStarted } from "../workStarted";
 
 // The example corpus's runs (backend demo.DEMO_RUN_IDS) and what each one is,
 // in words: their pins all carry the scenario as label, which tells two apart
@@ -289,6 +290,10 @@ export default function Regression({ rules: rulesParam }: { rules?: string } = {
   const corpus = useQuery({ queryKey: ["pins"], queryFn: api.getPins });
   const pins = corpus.data?.pins ?? [];
   const ownPins = pins.filter((p) => !(p.run_id in DEMO_CASES));
+  // once the workspace's own agents report, the example's rules are not
+  // offered — unless its cases were kept here before, and need them
+  const started = useWorkStarted();
+  const offerExample = !started || pins.some((p) => p.run_id in DEMO_CASES);
 
   // `?rules=policy` — arriving from Replay's "make it a rule"
   const [chosen, setChosen] = useState<RulesFrom | null>(
@@ -296,7 +301,7 @@ export default function Regression({ rules: rulesParam }: { rules?: string } = {
   // until the person picks: their own cases are checked against their Policy;
   // the example's cases against the example's rules
   const rulesFrom: RulesFrom = chosen
-    ?? (ownPins.length > 0 ? "policy"
+    ?? (ownPins.length > 0 || !offerExample ? "policy"
       : pins.length > 0 || policyTools.length === 0 ? "example" : "policy");
   const [variant, setVariant] = useState<Variant>("as-is");
   const [raw, setRaw] = useState("");
@@ -415,9 +420,9 @@ export default function Regression({ rules: rulesParam }: { rules?: string } = {
           disabled={policyTools.length === 0}>
           from Policy{policyTools.length ? ` (${plural(policyTools.length, "tool", "tools")})` : " — none yet"}
         </button>
-        <button data-testid="rules-example" onClick={() => pick("example")} style={chip(rulesFrom === "example")}>
+        {offerExample && <button data-testid="rules-example" onClick={() => pick("example")} style={chip(rulesFrom === "example")}>
           the example's
-        </button>
+        </button>}
         <button data-testid="rules-json" onClick={() => pick("json")} style={chip(rulesFrom === "json")}>
           edit as JSON
         </button>

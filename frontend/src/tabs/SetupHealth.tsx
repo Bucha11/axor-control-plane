@@ -15,6 +15,7 @@ import { navigate } from "../router";
 import { C, MONO, btn } from "../theme";
 import { HowItWorks, MachineCommand } from "../components/MachineCommand";
 import { SkillSwitch } from "../components/SkillsOff";
+import { useWorkStarted } from "../workStarted";
 
 
 const label: React.CSSProperties = {
@@ -37,11 +38,14 @@ const HEADLINE: Record<SetupHealthCheck["verdict"], [string, string]> = {
 export default function SetupHealth() {
   const qc = useQueryClient();
   const q = useQuery({ queryKey: ["setup-health"], queryFn: api.setupHealth });
+  const started = useWorkStarted();
   const example = useMutation({
     mutationFn: api.seedSetupHealth,
     onSuccess: () => void qc.invalidateQueries({ queryKey: ["setup-health"] }),
   });
-  const checks = q.data?.checks ?? [];
+  // an example check someone opened before their own agents reported is not
+  // theirs: once they report, it is out of the way like every other example
+  const checks = (q.data?.checks ?? []).filter((c) => !(started && c.example));
   const latest = checks[0];
   const mem = useQuery({ queryKey: ["memory"], queryFn: api.memory, retry: false });
   const drifted = (mem.data?.repos ?? []).filter((r) => r.drift);
@@ -74,7 +78,7 @@ export default function SetupHealth() {
 
       {checks.length > 1 && <History checks={checks} />}
       <HowToRun />
-      {!checks.some((c) => c.example) && (
+      {!started && !checks.some((c) => c.example) && (
         <div className="mt-4" style={{ fontFamily: MONO, fontSize: 12, color: C.mut }}>
           <button onClick={() => example.mutate()} data-testid="setup-health-example"
             style={{ background: "none", border: "none", padding: 0, cursor: "pointer", fontFamily: MONO,

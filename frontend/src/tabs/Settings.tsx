@@ -1977,7 +1977,10 @@ function Connections({ coding, prod }: { coding: boolean; prod: boolean }) {
   const admin = authStatus.data?.auth_enabled === true && (authStatus.data?.scopes ?? []).includes("admin");
   const keys = useQuery({ queryKey: ["api-keys"], queryFn: api.listKeys, enabled: admin, retry: false });
   const bound = new Set((keys.data ?? []).map((k) => k.node_id).filter(Boolean));
-  const all = (nodes.data ?? []).filter((n) => !/example/.test(n.node_id) && !n.profile?.developer?.startsWith("dev-example-"));
+  // what is reporting is the workspace's own: the product's example nodes
+  // (the tree-* fleet among them) never were, and are hidden once it has its own
+  const all = (nodes.data ?? []).filter((n) => !n.example_hidden && !/example/.test(n.node_id)
+    && !n.profile?.developer?.startsWith("dev-example-"));
   const agents = all.filter((n) => !n.profile || n.profile.kind === "agent");
   // coding agents per developer this month, from the seat meter (activity, not
   // heartbeats — a session that never heartbeat is still a developer's)

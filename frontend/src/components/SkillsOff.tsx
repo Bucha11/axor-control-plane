@@ -8,6 +8,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, TeamSkill } from "../api";
 import { C, MONO, btn } from "../theme";
 import { HowItWorks, MachineCommand } from "./MachineCommand";
+import { useWorkStarted } from "../workStarted";
 
 export function useSkillsOff() {
   const qc = useQueryClient();
@@ -111,6 +112,7 @@ export function TeamSkillsPanel() {
   const qc = useQueryClient();
   const { shared } = useSkillsOff();
   const [open, setOpen] = useState<string | null>(null);
+  const started = useWorkStarted();
   const example = useMutation({
     mutationFn: api.seedTeamSkill,
     onSuccess: () => void qc.invalidateQueries({ queryKey: ["coding-skills"] }),
@@ -164,7 +166,7 @@ export function TeamSkillsPanel() {
       )}
       <div style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim, marginBottom: 6 }}>share one</div>
       <MachineCommand testId="team-share-cmd" cmd="axor-wrap skill share ./.claude/skills/my-skill" />
-      {!shared.length && (
+      {!shared.length && !started && (
         <button onClick={() => example.mutate()} data-testid="team-skill-example"
           style={{ ...link, fontSize: 11.5, marginTop: 8 }}>
           {example.isPending ? "loading…" : "see an example →"}
