@@ -35,6 +35,7 @@ from sqlalchemy import (
     update,
 )
 from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy import false as sa_false
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
@@ -412,6 +413,10 @@ node_profiles = Table(
     # a subagent (Claude Code's Agent tool) names the session that started it;
     # its type ("Explore") is its agent
     Column("parent", String(200), nullable=False, server_default=""),
+    # the agent says it is a test bench (a staging copy, no real users): the
+    # plane may then break its tools on purpose. Unlike the kind, the last word
+    # wins — the same node restarted for real users is a test bench no longer.
+    Column("test_bench", Boolean, nullable=False, default=False, server_default=sa_false()),
 )
 
 # Agent tree runs (axor-wrap `tree run`): the latest snapshot of each run —
@@ -2099,7 +2104,8 @@ class Store:
 
     async def put_node_profile(self, node_id: str, kind: str, agent: str,
                                developer: str, ts: str, repo: str = "",
-                               repo_label: str = "", parent: str = "") -> None:
+                               repo_label: str = "", parent: str = "",
+                               test_bench: bool = False) -> None:
         """First word wins: a node is what it said it was when it first
         reported, so a later profile cannot move it out of the fleet count.
         The repository is the exception — it is not metered, and a session
@@ -2109,14 +2115,15 @@ class Store:
         for attempt in (1, 2):
             try:
                 await self._put_node_profile(node_id, kind, agent, developer, ts, repo, repo_label,
-                                             parent)
+                                             parent, test_bench)
                 return
             except IntegrityError:
                 if attempt == 2:
                     raise
 
     async def _put_node_profile(self, node_id: str, kind: str, agent: str, developer: str,
-                                ts: str, repo: str, repo_label: str, parent: str = "") -> None:
+                                ts: str, repo: str, repo_label: str, parent: str = "",
+                                test_bench: bool = False) -> None:
         org = current_org_id()
         async with self.engine.begin() as conn:
             held = (await conn.execute(select(node_profiles.c.node_id, node_profiles.c.repo,
@@ -2128,16 +2135,17 @@ class Store:
                 await conn.execute(update(node_profiles).where(
                     node_profiles.c.org_id == org, node_profiles.c.node_id == node_id,
                 ).values(kind=kind, agent=agent, developer=developer, first_ts=ts,
-                         repo=repo, repo_label=repo_label, parent=parent))
+                         repo=repo, repo_label=repo_label, parent=parent, test_bench=test_bench))
             elif held is None:
                 await conn.execute(node_profiles.insert().values(
                     org_id=org, node_id=node_id, kind=kind, agent=agent,
                     developer=developer, first_ts=ts, repo=repo, repo_label=repo_label,
-                    parent=parent))
-            elif repo and not held.repo:
+                    parent=parent, test_bench=test_bench))
+            else:
+                late = {"repo": repo, "repo_label": repo_label} if repo and not held.repo else {}
                 await conn.execute(update(node_profiles).where(
                     node_profiles.c.org_id == org, node_profiles.c.node_id == node_id,
-                ).values(repo=repo, repo_label=repo_label))
+                ).values(test_bench=test_bench, **late))
 
     async def node_kinds(self) -> dict[str, dict[str, str]]:
         async with self.engine.connect() as conn:
@@ -2145,7 +2153,8 @@ class Store:
                 node_profiles.c.org_id == current_org_id()))).all()
         return {r.node_id: {"kind": r.kind, "agent": r.agent, "developer": r.developer,
                             "repo": r.repo, "repo_label": r.repo_label, "title": r.title,
-                            **({"parent": r.parent} if r.parent else {})}
+                            **({"parent": r.parent} if r.parent else {}),
+                            **({"test_bench": True} if r.test_bench else {})}
                 for r in rows}
 
     async def set_node_title(self, node_id: str, title: str) -> bool:

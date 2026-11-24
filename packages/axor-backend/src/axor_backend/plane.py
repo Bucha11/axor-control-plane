@@ -1241,10 +1241,12 @@ async def post_profile(node_id: str, body: dict, request: Request) -> dict:
                    or not all(c.isalnum() or c in "-_.:" for c in parent)):
         raise HTTPException(400, "parent is the node id of the coding session that "
                                  "started this subagent")
+    # a production agent's own word that no real user is behind it
+    test_bench = kind == "agent" and body.get("test_bench") is True
     ctx = _ctx(request)
     await ctx.store.put_node_profile(node_id, kind, agent, developer, now(),
                                      repo=repo, repo_label=label if repo else "",
-                                     parent=parent)
+                                     parent=parent, test_bench=test_bench)
     # past the free plan, the session is kept but not shown or operated: the
     # answer says so, and the sidecar tells the developer in their own agent
     from axor_backend.ee.entitlements import (

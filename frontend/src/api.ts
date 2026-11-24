@@ -286,6 +286,8 @@ export interface NodeInfo {
     kind: "coding" | "agent" | "tree"; agent: string; developer: string; title?: string;
     // a subagent (Claude Code's Agent tool): the session that started it
     parent?: string;
+    // a production agent started as a test bench (no real users behind it)
+    test_bench?: boolean;
   } | null;
 }
 

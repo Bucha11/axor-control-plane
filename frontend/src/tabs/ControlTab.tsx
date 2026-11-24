@@ -18,7 +18,7 @@ import { incidentWhat } from "./Evidence";
 import Tooltip from "../components/Tooltip";
 import { codingExampleOnly, fleetExampleOnly, isCodingSession } from "../components/CodingOnboarding";
 import { AlertMe, KeepAsTest, SignUpForYourAgent } from "../components/AccountAction";
-import { behindProxy } from "../agentName";
+import { NOT_A_TEST_BENCH, behindProxy, isTestBench } from "../agentName";
 
 const REFETCH_MS = 5000;
 
@@ -550,6 +550,7 @@ function ControlBody({ focusNode, testBench }: { focusNode?: string; testBench: 
   }
 
   const node = list.find((n) => n.node_id === sel) ?? null;
+  const benchOk = isTestBench(node, testBench);
 
   const desired = node?.desired ?? null;
   const reported = node?.reported ?? null;
@@ -1054,8 +1055,8 @@ function ControlBody({ focusNode, testBench }: { focusNode?: string; testBench: 
                   <GitBranch size={12} /> Replan
                 </button>
               </Tooltip>
-              <Tooltip content={!testBench
-                ? "Test-bench only (enable in Settings). Injects text into the agent's next turn to probe recovery — so the run is marked intervened and excluded from scores."
+              <Tooltip content={!benchOk
+                ? NOT_A_TEST_BENCH
                 : "Insert text into the agent's next turn to probe how it recovers. The run is marked intervened and excluded from scores."}>
                 <button
                   onClick={() => {
@@ -1069,8 +1070,8 @@ function ControlBody({ focusNode, testBench }: { focusNode?: string; testBench: 
                       },
                     });
                   }}
-                  disabled={!testBench || stopped || command.isPending}
-                  style={btn({ color: (!testBench || stopped) ? C.dim : C.mut, fontSize: 11, padding: "6px 10px", cursor: (!testBench || stopped) ? "default" : "pointer", opacity: (!testBench || stopped) ? 0.6 : 1 })}
+                  disabled={!benchOk || stopped || command.isPending}
+                  style={btn({ color: (!benchOk || stopped) ? C.dim : C.mut, fontSize: 11, padding: "6px 10px", cursor: (!benchOk || stopped) ? "default" : "pointer", opacity: (!benchOk || stopped) ? 0.6 : 1 })}
                 >
                   <Syringe size={12} /> Inject next turn
                 </button>

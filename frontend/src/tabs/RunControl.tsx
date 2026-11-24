@@ -17,7 +17,7 @@ import { C, MONO, btn } from "../theme";
 import { isCodingSession } from "../components/CodingOnboarding";
 import CutResult from "../components/CutResult";
 import Tooltip from "../components/Tooltip";
-import { behindProxy } from "../agentName";
+import { NOT_A_TEST_BENCH, behindProxy, isTestBench } from "../agentName";
 
 const LIVE_MS = 1500;
 const IDLE_MS = 5000;
@@ -50,7 +50,7 @@ function compactArgs(args: unknown): string {
 
 export default function RunControl({ runId }: { runId: string }) {
   const qc = useQueryClient();
-  const testBench = useApp((s) => s.connection.testBench);
+  const browserBench = useApp((s) => s.connection.testBench);
   const runs = useQuery({ queryKey: ["runs"], queryFn: api.listRuns });
   const nodeId = (runs.data ?? []).find((r) => r.run_id === runId)?.node_id;
 
@@ -71,6 +71,7 @@ export default function RunControl({ runId }: { runId: string }) {
   const nodes = useQuery({ queryKey: ["nodes"], queryFn: api.nodes, refetchInterval: LIVE_MS });
   const proxied = behindProxy((nodes.data ?? []).find((n) => n.node_id === nodeId));
   const node = (nodes.data ?? []).find((n) => n.node_id === nodeId);
+  const testBench = isTestBench(node, browserBench);
   const probe = useQuery({ queryKey: ["probe-report", nodeId], queryFn: () => api.probeReport(nodeId!), enabled: !!nodeId });
   const repair = useQuery({ queryKey: ["repair", nodeId], queryFn: () => api.repair(nodeId!), enabled: !!nodeId, refetchInterval: IDLE_MS });
   const reputation = useQuery({ queryKey: ["reputation", nodeId], queryFn: () => api.reputation(nodeId!), enabled: !!nodeId });
@@ -209,7 +210,7 @@ export default function RunControl({ runId }: { runId: string }) {
           <div className="flex gap-2 mt-3 flex-wrap">
             {!coding && <Tooltip content={testBench
               ? "Insert text into the agent's next model call to see how it handles it. Marked untrusted; test-bench only."
-              : "Test-bench only (enable in Settings; the agent needs AXOR_TEST_BENCH=1)."}>
+              : NOT_A_TEST_BENCH}>
               <button
                 onClick={() => {
                   const text = window.prompt("Injection text — the agent sees it in its next model call:");
@@ -499,7 +500,7 @@ function NextRunTest({ tools, testBench, armed, disabled, onArm }: {
         {FAULTS.map((f) => <option key={f.mode} value={f.mode}>{f.label}</option>)}
       </select>
       <Tooltip content={testBench ? "Break this tool on the agent's next run and audit its answer."
-        : "Test-bench only: breaking a tool degrades a real user's answer."}>
+        : NOT_A_TEST_BENCH}>
         <button disabled={!testBench || disabled || !tool} onClick={() => onArm(tool, mode)}
           style={btn({ fontSize: 11, padding: "2px 8px", color: testBench ? C.steel : C.dim })}>
           test next run

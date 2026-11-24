@@ -23,3 +23,16 @@ export const PROXY_AGENT = "axor-proxy";
 export function behindProxy(node: { profile?: { agent?: string } | null } | undefined): boolean {
   return node?.profile?.agent === PROXY_AGENT;
 }
+
+/** May the plane break this agent's tools on purpose (inject, fail a tool)?
+ * The agent's own word (started with test_bench=True) decides; the
+ * per-browser switch in Settings is kept for agents from before that word. */
+export function isTestBench(
+  node: { profile?: { test_bench?: boolean } | null } | null | undefined, browserBench: boolean,
+): boolean {
+  return node?.profile?.test_bench === true || browserBench;
+}
+
+export const NOT_A_TEST_BENCH =
+  "Test-bench only: breaking a tool degrades a real user's answer. Start a copy of the agent "
+  + "with no real users as a test bench — PlaneConnector(..., test_bench=True), or AXOR_TEST_BENCH=1.";
