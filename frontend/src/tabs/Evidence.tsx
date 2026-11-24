@@ -87,7 +87,7 @@ function when(ts: string | null): string {
 }
 
 const KIND_CHIPS: [string, string][] = [
-  ["made_up,dangerous,would_refuse,memory_worse", "needs a look"],
+  ["made_up,dangerous,would_refuse,refused,memory_worse", "needs a look"],
   ["made_up", "made something up"],
   ["dangerous", "dangerous, let through"],
   ["would_refuse", "would have been refused"],

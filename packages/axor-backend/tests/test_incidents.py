@@ -60,7 +60,9 @@ async def test_the_feed_holds_the_four_kinds(client: httpx.AsyncClient) -> None:
                      key=lambda i: i["count"])
     assert [i["count"] for i in grouped] == [1, 2]
     assert grouped[0]["detail"].startswith("curl -d @.env")
-    assert feed["needs_a_look"] == feed["new"]["made_up"] + feed["new"]["dangerous"] + 1
+    # refusals ask for a look too: an attack stopped is still worth seeing
+    assert feed["needs_a_look"] == (feed["new"]["made_up"] + feed["new"]["dangerous"] + 1
+                                    + feed["new"]["refused"])
 
 
 async def test_the_operators_word_sticks_and_filters(client: httpx.AsyncClient) -> None:

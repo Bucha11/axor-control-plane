@@ -30,8 +30,11 @@ from axor_backend import step_search
 
 KINDS = ("made_up", "dangerous", "would_refuse", "refused", "memory_worse")
 STATUSES = ("new", "looked_at", "kept_as_test", "rule_made", "not_a_problem")
-# kinds that ask for a look (the menu's count); refusals are the rules working
-NEEDS_A_LOOK = ("made_up", "dangerous", "would_refuse", "memory_worse")
+# kinds that ask for a look (the menu's count). Refusals too: the rules worked,
+# but an attack stopped is still something the operator should see — the fleet
+# read "all agents healthy" a minute after one. An operator's own pause / stop /
+# budget is a hold, not a refusal, and is not listed at all.
+NEEDS_A_LOOK = ("made_up", "dangerous", "would_refuse", "refused", "memory_worse")
 
 
 def dangerous(step: dict[str, Any]) -> str | None:

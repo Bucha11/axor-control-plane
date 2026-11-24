@@ -373,11 +373,12 @@ function ControlBody({ focusNode, testBench }: { focusNode?: string; testBench: 
                                 refetchInterval: REFETCH_MS });
   const lookOf = new Map<string, { label: string; more: number }>();
   for (const i of incidentsQ.data?.items ?? []) {
-    if (i.status !== "new" || i.kind === "refused") continue;
+    // refusals count too: an attack the rules stopped is something to look at,
+    // not "all agents healthy" (an operator's own pause / stop is not a refusal)
+    if (i.status !== "new") continue;
     const had = lookOf.get(i.node_id);
     if (had) { had.more += 1; continue; }
-    lookOf.set(i.node_id, { more: 0, label: i.kind === "made_up" ? incidentWhat(i.what)
-      : i.kind === "would_refuse" ? `${i.what} — would have been refused` : i.what });
+    lookOf.set(i.node_id, { more: 0, label: lookLabel(i) });
   }
   const topo = useQuery({
     queryKey: ["topology"],
@@ -876,7 +877,7 @@ function ControlBody({ focusNode, testBench }: { focusNode?: string; testBench: 
 
           <NeedsALook nodeId={node.node_id}
             items={(incidentsQ.data?.items ?? []).filter((i) => i.node_id === node.node_id
-              && i.status === "new" && i.kind !== "refused")} />
+              && i.status === "new")} />
 
           {stopped && (
             <div data-testid="stopped-note" className="mb-3 p-3"
@@ -1139,8 +1140,7 @@ function NeedsALook({ nodeId, items }: { nodeId: string; items: IncidentItem[] }
           <button onClick={() => navigate(`explain/${encodeURIComponent(i.run_id)}`,
               i.seq != null ? { seq: i.seq, node: i.anchor_node ?? i.node_id } : undefined)}
             style={{ ...panelLink, fontSize: 11.5, color: C.text, textAlign: "left" }}>
-            {i.kind === "made_up" ? incidentWhat(i.what)
-              : i.kind === "would_refuse" ? `${i.what} — would have been refused` : i.what}
+            {lookLabel(i)}
             {i.detail ? <span style={{ color: C.mut }}> · {i.detail.slice(0, 60)}</span> : null} →
           </button>
         </div>
@@ -2226,4 +2226,13 @@ function confirmStop(nodeId: string, cascade: boolean): boolean {
     `${cascade ? "Cascade-stop" : "Stop"} ${nodeId}${cascade ? " and every agent it started" : ""}?\n\n` +
     "Its running process cannot be resumed — every tool call is refused (503). To bring it back you start it " +
     "again here and restart the agent's process.");
+}
+
+
+/** One incident in a few words, for "needs a look". */
+function lookLabel(i: IncidentItem): string {
+  if (i.kind === "made_up") return incidentWhat(i.what);
+  if (i.kind === "would_refuse") return `${i.what} — would have been refused`;
+  if (i.kind === "refused") return `${i.what} — refused${(i.count ?? 1) > 1 ? ` ×${i.count}` : ""}`;
+  return i.what;
 }
