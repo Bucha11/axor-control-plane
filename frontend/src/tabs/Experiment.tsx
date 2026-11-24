@@ -220,6 +220,11 @@ export default function Experiment({ runId, autostart }: { runId?: string; autos
   }, [caughtHere, activeRun, focusRun?.run_id]);
 
   // a link to a receipt opens it whoever follows it; connecting is for running tests
+  // (above the early return: hooks run unconditionally)
+  const runEventsQ = useQuery({
+    queryKey: ["run-events", focusRun?.run_id], queryFn: () => api.runEvents(focusRun!.run_id),
+    enabled: Boolean(focusRun?.run_id && focusRun.evidence.some((c) => c.deviation)),
+  });
   if (!isConnected(mode) && !runId) {
     return (
       <Center>
@@ -244,6 +249,12 @@ export default function Experiment({ runId, autostart }: { runId?: string; autos
   // proxy configurator, whatever the latest caught run happens to be.
   const nodeExperiment = Boolean(runId) && (focusRun?.scenario ?? "").endsWith("-experiment");
   const caseIndex = caught ? focusRun!.evidence.indexOf(caught) : 0;
+  // the agent's own words (its recorded answer), not the audit's reading of them
+  const said = (() => {
+    const claim = [...(runEventsQ.data ?? [])].reverse().find((e) => e.kind === "claim");
+    const text = (claim?.payload as { text?: unknown } | undefined)?.text;
+    return typeof text === "string" ? text.trim() : "";
+  })();
 
   return (
     <div style={{ maxWidth: 640, margin: "0 auto" }}>
@@ -380,8 +391,13 @@ export default function Experiment({ runId, autostart }: { runId?: string; autos
                   <div style={{ flex: "1 1 220px" }}>
                     <div style={{ fontFamily: MONO, fontSize: 10, color: C.dim, letterSpacing: "0.1em", marginBottom: 4 }}>YOUR AGENT SAID</div>
                     <div style={{ fontSize: 14, color: C.text }}>
-                      {typeof caught.agent_claim === "string" ? caught.agent_claim : JSON.stringify(caught.agent_claim)}
+                      {said ? <>“{said}”</> : typeof caught.agent_claim === "string" ? caught.agent_claim : JSON.stringify(caught.agent_claim)}
                     </div>
+                    {said && (
+                      <div style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim, marginTop: 4 }}>
+                        read as: {typeof caught.agent_claim === "string" ? caught.agent_claim : JSON.stringify(caught.agent_claim)}
+                      </div>
+                    )}
                   </div>
                 </div>
                 <div style={{ fontFamily: MONO, fontSize: 11, color: C.mut, marginTop: 10, lineHeight: 1.6 }}>
@@ -389,7 +405,7 @@ export default function Experiment({ runId, autostart }: { runId?: string; autos
                   and it can become a test.
                 </div>
               </div>
-              <EvidenceCase runId={focusRun.run_id} caseIndex={caseIndex} c={caught}
+              <EvidenceCase runId={focusRun.run_id} caseIndex={caseIndex} c={caught} said={said}
                 replayStep={caught.anchor?.seq} replayNode={caught.anchor?.node_id} />
               <div data-testid="catch-next" className="mt-4 flex gap-3 flex-wrap items-center"
                 style={{ fontFamily: MONO, fontSize: 11.5 }}>

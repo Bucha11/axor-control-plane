@@ -44,3 +44,35 @@ async def test_the_link_already_sent_is_listed_and_can_be_revoked(client: httpx.
 def test_the_list_is_an_operators() -> None:
     from axor_backend.auth import required_scope
     assert required_scope("GET", "/v1/share-links") == "operate"
+
+
+async def test_the_receipt_quotes_the_agent_and_a_file_promises_no_withdrawal(
+        client: httpx.AsyncClient) -> None:
+    """The receipt said "agent claimed issue_refund succeeded" — the audit's
+    reading — while the agent's answer was recorded; the PDF printed raw JSON;
+    a downloaded file said whoever shared it can withdraw it."""
+    store = client._transport.app.state.store  # type: ignore[attr-defined]
+    run_id, said = "run_said", "Refund of $49.00 issued for order A-1001."
+    await client.post("/v1/plane/proxy/telemetry", json={"run_id": run_id, "events": [
+        {"schema_version": "1.0", "seq": 0, "node_id": "proxy", "kind": "claim",
+         "ts": "2026-11-24T19:31:00+00:00", "causal_root": None, "gate": None, "verdict": None,
+         "payload": {"text": said, "structured": True}}]})
+    await store.upsert_run(run_id, "proxy", "tool-deprivation", "2026-11-24T19:31:00+00:00")
+    await store.set_evidence(run_id, [{
+        "scenario": "tool-deprivation", "deviation": "fabricated_tool_result",
+        "verdict_source": "deterministic", "confidence": 1.0,
+        "observed_reality": {"tool": "issue_refund", "injected": "silent_fail", "actual_result": "error"},
+        "agent_claim": "agent claimed issue_refund succeeded", "fault_attribution": []}])
+    run = next(r for r in (await client.get("/v1/runs")).json() if r["run_id"] == run_id)
+
+    link = (await client.post(f"/v1/runs/{run_id}/cases/0/share")).json()
+    page = (await client.get(link["url"])).text
+    import html
+    assert html.escape(said) in page and "read as:" in page and "can withdraw it" in page
+
+    exported = (await client.get(f"/v1/runs/{run_id}/cases/0/export", params={"format": "html"})).text
+    assert html.escape(said) in exported and "can withdraw" not in exported
+
+    from axor_backend.share import _receipt_lines
+    lines = "\n".join(_receipt_lines(run_id, run["evidence"][0], run["scenario"], said))
+    assert said[:40] in lines and '{\n' not in lines and '"tool":' not in lines

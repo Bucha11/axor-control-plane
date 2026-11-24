@@ -35,6 +35,12 @@ async def _case_run(store: Store, run_id: str, case_index: int) -> dict:
     return run
 
 
+def _said(claims: dict[str, str], run_id: str) -> str:
+    """The agent's answer as recorded — "" when it gave none in words."""
+    text = claims.get(run_id) or ""
+    return "" if text in ("null", '""') else text
+
+
 @router.post("/runs/{run_id}/cases/{case_index}/share")
 async def create_share(
     run_id: str, case_index: int, store: StoreDep, request: Request,
@@ -93,10 +99,11 @@ async def resolve_share(token: str, store: StoreDep) -> HTMLResponse:
         raise HTTPException(404, "link revoked or unknown")
     set_current_org(link["org_id"])  # this route is open; adopt the link's tenant
     run = await _case_run(store, link["run_id"], link["case_index"])
+    said = _said(await store.last_claims([link["run_id"]]), link["run_id"])
     return HTMLResponse(evidence_receipt_html(
         link["run_id"], run["evidence"][link["case_index"]],
         run.get("scenario", ""), node_id=run.get("node_id", ""),
-        ts=run.get("created_ts", ""),
+        ts=run.get("created_ts", ""), said=said,
     ))
 
 
@@ -107,15 +114,18 @@ async def export_case(
     run = await _case_run(store, run_id, case_index)
     case = run["evidence"][case_index]
     scenario = run.get("scenario", "")
+    said = _said(await store.last_claims([run_id]), run_id)
     if format == "pdf":
         return Response(
-            content=evidence_receipt_pdf(run_id, case, scenario),
+            content=evidence_receipt_pdf(run_id, case, scenario, said),
             media_type="application/pdf",
             headers={
                 "Content-Disposition":
                     f'attachment; filename="evidence-{run_id}-{case_index}.pdf"'
             },
         )
+    # a file: it cannot be withdrawn the way a link can, and does not say so
     return HTMLResponse(evidence_receipt_html(run_id, case, scenario,
                                               node_id=run.get("node_id", ""),
-                                              ts=run.get("created_ts", "")))
+                                              ts=run.get("created_ts", ""),
+                                              said=said, as_link=False))

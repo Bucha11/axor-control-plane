@@ -60,6 +60,7 @@ export default function EvidenceCase({
   c,
   replayStep,
   replayNode,
+  said,
 }: {
   runId: string;
   caseIndex: number;
@@ -68,6 +69,8 @@ export default function EvidenceCase({
   replayStep?: number;
   // the node that step belongs to (seqs restart per node in a multi-node run)
   replayNode?: string;
+  // the agent's own words, when its answer was recorded
+  said?: string;
 }) {
   const [shareUrl, setShareUrl] = useState<string | null>(null);
   const [moreExports, setMoreExports] = useState(false);
@@ -153,7 +156,10 @@ export default function EvidenceCase({
         <div style={{ fontSize: 10, fontFamily: MONO, color: C.dim, letterSpacing: "0.1em", marginBottom: 6 }}>
           WHAT THE AGENT SAID
         </div>
-        <div style={{ fontFamily: MONO, fontSize: 13, color: C.text }}>{render(c.agent_claim)}</div>
+        <div style={{ fontFamily: MONO, fontSize: 13, color: C.text }}>{said ? `“${said}”` : render(c.agent_claim)}</div>
+        {said && (
+          <div style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim, marginTop: 4 }}>read as: {render(c.agent_claim)}</div>
+        )}
       </div>
       <div
         className="px-4 py-3 flex items-center justify-between flex-wrap gap-2"
