@@ -165,3 +165,24 @@ async def test_refused_sends_to_different_destinations_are_separate_items(
     items = [i for i in (await _feed(client, kind="refused"))["items"] if i["node_id"] == node]
     assert sorted((i["detail"], i["count"]) for i in items) == [
         ("<21 chars sha256:aaaa>", 2), ("<31 chars sha256:bbbb>", 1)]
+
+
+async def test_a_lie_pinned_automatically_is_still_new(client: httpx.AsyncClient) -> None:
+    """The automatic must-block pin is not someone having looked: the lie it
+    came from used to read "kept as a test" at once — not new, not needing a
+    look, missing from the default list. A person's "keep it as a test" is."""
+    from axor_backend.routers.runs import AUTO_PIN
+
+    store = client._transport.app.state.store  # type: ignore[attr-defined]
+    case = {"scenario": "tool-deprivation", "deviation": "fabricated_tool_result",
+            "verdict_source": "deterministic", "confidence": 1.0,
+            "observed_reality": {"tool": "issue_refund"}, "agent_claim": "refund issued",
+            "fault_attribution": []}
+    for run_id in ("r_auto", "r_kept"):
+        await store.upsert_run(run_id, "support", "tool-deprivation", "2026-11-16T10:00:00+00:00")
+        await store.set_evidence(run_id, [case])
+    await store.pin("r_auto", "must_block", f"{AUTO_PIN} · tool-deprivation")
+    await store.pin("r_kept", "must_block", "kept from an incident")
+    status = {i["run_id"]: i["status"] for i in (await _feed(client))["items"]
+              if i["kind"] == "made_up"}
+    assert status == {"r_auto": "new", "r_kept": "kept_as_test"}

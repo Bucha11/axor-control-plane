@@ -158,7 +158,13 @@ async def incidents(store: Any, scan: int) -> list[dict[str, Any]]:  # noqa: ANN
         items = [i for i in items if not muted(i, mutes)]
     for item in items:
         item.setdefault("scenario", scenario.get(item["run_id"], ""))
-    kept = {p["run_id"] for p in await store.pinned()}
+    # kept by a person, not by the automatic must-block pin: a lie caught a
+    # moment ago read "kept as a test" — not new, not needing a look, hidden
+    # from the default list — before anyone had seen it
+    from axor_backend.routers.runs import AUTO_PIN
+
+    kept = {p["run_id"] for p in await store.pinned()
+            if not str(p.get("label") or "").startswith(AUTO_PIN)}
     decided = await store.incident_statuses()
     for item in items:
         item["status"] = decided.get(item["id"]) or (
