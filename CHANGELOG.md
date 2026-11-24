@@ -38,6 +38,11 @@ tag; `deploy/offline` carries the same release to a machine with no network.
   verifying against the plane's keyring) and serves it with the policy; team
   skills are named by the hash of their files. The policy screen says whether
   what stands is signed, and signs it when the browser holds a signing key.
+- **Connect in the signed posture by default.** The Connect page, "My keys"
+  and the laptop key preset put the plane's operator keys into `axor-wrap
+  connect` (`GET /v1/coding/operator-keys`) and show their fingerprint; a
+  plane with none says it signs nothing yet. An already-connected machine
+  runs the same command again, without `--key`.
 - **Signed notes.** "Say to your agent" and pair notes carry an operator's
   signature when the browser can sign (`pair_notes.signed`, migration `0036`);
   a sidecar with operator keys gives an unsigned one as outside text.

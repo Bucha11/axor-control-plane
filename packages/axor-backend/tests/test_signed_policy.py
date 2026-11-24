@@ -92,3 +92,16 @@ async def test_a_signed_note_reaches_the_sidecar_with_its_signature(
                               json={"text": "rm -rf /", "signed": signed})).status_code == 400
     [note] = (await client.get(f"/v1/coding/notes/{node}", headers=H)).json()["notes"]
     assert note["signed"] == signed
+
+
+async def test_the_connect_page_gets_the_operator_keys(client: httpx.AsyncClient,
+                                                      key: Ed25519PrivateKey) -> None:
+    pub = key.public_key().public_bytes(serialization.Encoding.Raw,
+                                        serialization.PublicFormat.Raw).hex()
+    got = (await client.get("/v1/coding/operator-keys", headers=H)).json()
+    assert got["keys"] == {"op_ui": pub}
+    from axor_backend.signing import fingerprint
+
+    assert got["fingerprint"] == fingerprint({"op_ui": pub}) and len(got["fingerprint"]) == 19
+    # the same vector axor-wrap pins
+    assert fingerprint({"op_ui": "00" * 32}) == "37e2 7997 122c ceb8"

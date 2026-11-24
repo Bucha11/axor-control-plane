@@ -24,8 +24,24 @@ test.describe("three ways in", () => {
     // the machine connects with one command — no env vars to export
     await expect(page.getByTestId("cmd-connect")).toContainText("axor-wrap connect http");
     await expect(page.getByText(/AXOR_[A-Z_]+/)).toHaveCount(0);
+    // this plane has no operator keys: it says so, and asks for no flag
+    await expect(page.getByTestId("connect-unsigned")).toContainText("signs nothing yet");
+    await expect(page.getByTestId("cmd-connect")).not.toContainText("--operator-key");
     // no tool declaration, no base URL to repoint
     await expect(page.getByText("What tools does your agent use?")).toHaveCount(0);
+  });
+
+  test("a plane with operator keys puts them into the connect command", async ({ page }) => {
+    await setConnection(page, { mode: "none" });
+    const hex = "ab".repeat(32);
+    await page.route("**/v1/coding/operator-keys", (route) => route.fulfill({
+      status: 200, contentType: "application/json",
+      body: JSON.stringify({ keys: { op_ui: hex }, fingerprint: "1a2b 3c4d 5e6f 7a8b" }),
+    }));
+    await goHash(page, "connect");
+    await page.getByTestId("way-coding").click();
+    await expect(page.getByTestId("cmd-connect")).toContainText(`--operator-key op_ui=${hex}`);
+    await expect(page.getByTestId("connect-signed")).toContainText("1a2b 3c4d 5e6f 7a8b");
   });
 
   test("with auth on, a signed-out visitor is asked to sign in before the key", async ({ page }) => {

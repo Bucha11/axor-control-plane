@@ -545,3 +545,16 @@ async def sign_policy(body: dict, request: Request, store: StoreDep,
                                             "sig": sig, "ts": datetime.now(UTC).isoformat()})
     await audit.record(store, request, "coding_policy_signed", "", seq=seq, operator=operator)
     return await signing_state(store)
+
+
+@router.get("/operator-keys")
+async def operator_keys(request: Request) -> dict:
+    """The operators' public keys and their fingerprint — what the Connect page
+    puts into ``axor-wrap connect --operator-key``, so a machine connects in
+    the signed posture with no extra step. Trust on first use: a person can
+    compare the fingerprint ``axor-wrap connect`` prints with one their admin
+    shared out of band."""
+    from axor_backend.signing import fingerprint
+
+    keys = request.app.state.keyring.public_keys()
+    return {"keys": keys, "fingerprint": fingerprint(keys)}

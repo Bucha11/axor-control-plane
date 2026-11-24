@@ -57,6 +57,12 @@ class OperatorKeyring:
 
     def __init__(self, keys: dict[str, str]) -> None:
         self._keys = {op: _public_key(op, hexkey) for op, hexkey in keys.items()}
+        self._hex = {op: str(hexkey).lower() for op, hexkey in keys.items()}
+
+    def public_keys(self) -> dict[str, str]:
+        """operator id -> public key hex: what a machine puts in its LOCAL
+        config (``axor-wrap connect --operator-key``). Public by nature."""
+        return dict(self._hex)
 
     def verify(self, operator: str, message: bytes, sig_hex: str) -> None:
         """Good signature, or :class:`CommandRejected`. Never anything else.
@@ -124,3 +130,15 @@ def _public_key(operator: str, hexkey: Any) -> VerifyKey:  # noqa: ANN401 - env 
             f"private seed or a PEM will not do — this is the public half."
         )
     return VerifyKey(raw)
+
+
+def fingerprint(keys: dict[str, str]) -> str:
+    """A short digest of a keyset, for a person to compare by eye — the same
+    as ``axor-wrap connect`` prints (axor_wrap.agents.signed.fingerprint)."""
+    import hashlib
+
+    if not keys:
+        return ""
+    line = "\n".join(sorted(f"{op}={str(k).lower()}" for op, k in keys.items()))
+    digest = hashlib.sha256(line.encode()).hexdigest()[:16]
+    return " ".join(digest[i:i + 4] for i in range(0, 16, 4))

@@ -15,6 +15,7 @@ import {
 import { navigate } from "../router";
 import { MODE_LABEL, useApp } from "../store";
 import { C, MONO, btn } from "../theme";
+import { useOperatorKeys } from "../signedConnect";
 import Coach from "../components/Coach";
 import ToolCredentials from "../components/ToolCredentials";
 import UsageAndBilling from "../components/UsageAndBilling";
@@ -1790,6 +1791,7 @@ function KeyRole({ keyId, scopes }: { keyId: string; scopes: string[] }) {
 /** A member's own keys: one per machine, ingest only, theirs to revoke. */
 function MyKeys() {
   const qc = useQueryClient();
+  const signedKeys = useOperatorKeys();
   const mine = useQuery({ queryKey: ["my-keys"], queryFn: api.myKeys, retry: false });
   const [secret, setSecret] = useState<string | null>(null);
   const mint = useMutation({
@@ -1807,7 +1809,7 @@ function MyKeys() {
         <>
           <pre data-testid="my-key-connect" style={{ background: C.bg, border: `1px solid ${C.line}`, borderRadius: 5,
             padding: "8px 10px", margin: "0 0 4px", color: C.text, whiteSpace: "pre-wrap", wordBreak: "break-all" }}>
-            axor-wrap connect {PLANE_URL} --key {secret}
+            axor-wrap connect {PLANE_URL} --key {secret}{signedKeys.flags}
           </pre>
           <div style={{ color: C.amber, fontSize: 10.5, marginBottom: 8 }}>shown once — run it on your machine now</div>
         </>
@@ -1833,6 +1835,7 @@ function MyKeys() {
 /** API keys, minted for what they are for, with the lines to put them to use. */
 function AgentKeys({ journey, menuAll }: { journey: Journey | null; menuAll: boolean }) {
   const qc = useQueryClient();
+  const signedKeys = useOperatorKeys();
   const apiToken = useApp((s) => s.apiToken);
   const authStatus = useQuery({ queryKey: ["auth-status", apiToken], queryFn: api.authStatus });
   const admin = (authStatus.data?.scopes ?? []).includes("admin");
@@ -1866,7 +1869,7 @@ function AgentKeys({ journey, menuAll }: { journey: Journey | null; menuAll: boo
       <div data-testid="keys-open" style={{ fontFamily: MONO, fontSize: 11.5, color: C.mut, lineHeight: 1.7 }}>
         This plane is open — no key needed. A developer's machine:
         <pre style={{ background: C.bg, border: `1px solid ${C.line}`, borderRadius: 5, padding: "8px 10px", margin: "8px 0 0", color: C.text }}>
-          axor-wrap connect {PLANE_URL}
+          axor-wrap connect {PLANE_URL}{signedKeys.flags}
         </pre>
         <div style={{ marginTop: 8 }}>A production agent's process: <span style={{ color: C.text }}>AXOR_PLANE_URL={PLANE_URL}</span></div>
       </div>
@@ -1884,7 +1887,7 @@ function AgentKeys({ journey, menuAll }: { journey: Journey | null; menuAll: boo
       ? `export AXOR_PLANE_URL=${PLANE_URL}\nexport AXOR_NODE_ID=${node.trim()}\nexport AXOR_INGEST_KEY=${minted.secret}`
       : minted.preset === "ci"
         ? `AXOR_PLANE_URL=${PLANE_URL}\nAXOR_INGEST_KEY=${minted.secret}   # as CI secrets`
-        : `axor-wrap connect ${PLANE_URL} --key ${minted.secret}`
+        : `axor-wrap connect ${PLANE_URL} --key ${minted.secret}${signedKeys.flags}`
     : "";
   return (
     <div data-testid="agent-keys">

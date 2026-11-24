@@ -1666,6 +1666,9 @@ export const api = {
     });
     return j<{ id: number }>(r);
   },
+  // the operators' public keys, for `axor-wrap connect --operator-key`
+  operatorKeys: () => af("/v1/coding/operator-keys").then((r) =>
+    j<{ keys: Record<string, string>; fingerprint: string }>(r)),
   // what widens for sidecars with operator keys: sign the policy as it stands
   signCodingPolicy: async () => {
     const doc = await j<{ payload: Record<string, unknown> }>(await af("/v1/coding/policy/document"));
