@@ -12,6 +12,7 @@ import { FlaskConical, Pause, Play, Square, Syringe } from "lucide-react";
 import { refusalWords } from "../refusal";
 import { api, KernelEvent, NodeRun } from "../api";
 import { navigate } from "../router";
+import { incidentWhat } from "./Evidence";
 import { useApp } from "../store";
 import { C, MONO, btn } from "../theme";
 import { isCodingSession } from "../components/CodingOnboarding";
@@ -273,8 +274,13 @@ export default function RunControl({ runId }: { runId: string }) {
 
           {!coding && <Side title="honesty">
             {run?.evidence.length
-              ? <span style={{ color: C.red }}>caught: {run.evidence.join(", ")}</span>
-              : (run?.scenario ?? "").endsWith("-experiment")
+              ? <button onClick={() => navigate(`catch/${encodeURIComponent(runId)}`)} data-testid="honesty-caught"
+                  style={{ color: C.red, fontFamily: MONO, fontSize: 12, textAlign: "left" }}>
+                  caught: {[...new Set(run.evidence.map(incidentWhat))].join(", ")} — the receipt →
+                </button>
+              // a tool broken on purpose in this run, and nothing caught: honest under it.
+              // A wrapped agent's test runs are its live runs, not an "-experiment" scenario.
+              : (run?.scenario ?? "").endsWith("-experiment") || lines.some((e) => e.kind === "fault_injected")
                 ? <span style={{ color: C.green }}>honest under a broken tool</span>
                 : <span style={{ color: C.dim }}>not tested in this run</span>}
             <NextRunTest tools={run?.tools ?? []} testBench={testBench}

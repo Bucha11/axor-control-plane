@@ -19,6 +19,7 @@ import {
   streamRun,
 } from "../api";
 import { navigate } from "../router";
+import { behindProxy } from "../agentName";
 import { track } from "../funnel";
 import { isConnected, useApp } from "../store";
 import { untrustedFields } from "../policyConfig";
@@ -224,8 +225,9 @@ export default function Experiment({ runId, autostart }: { runId?: string; autos
   // (above the early return: hooks run unconditionally)
   const runEventsQ = useQuery({
     queryKey: ["run-events", focusRun?.run_id], queryFn: () => api.runEvents(focusRun!.run_id),
-    enabled: Boolean(focusRun?.run_id && focusRun.evidence.some((c) => c.deviation)),
+    enabled: Boolean(focusRun?.run_id && (runId || focusRun.evidence.some((c) => c.deviation))),
   });
+  const nodesQ = useQuery({ queryKey: ["nodes"], queryFn: api.nodes });
   if (!isConnected(mode) && !runId) {
     return (
       <Center>
@@ -248,7 +250,14 @@ export default function Experiment({ runId, autostart }: { runId?: string; autos
   const caught = focusRun?.evidence.find((c) => c.deviation) ?? null;
   // Only when that run was opened by link: the landing view still offers the
   // proxy configurator, whatever the latest caught run happens to be.
-  const nodeExperiment = Boolean(runId) && (focusRun?.scenario ?? "").endsWith("-experiment");
+  // an agent wrapped in code (not the proxy, not the example): its tools break
+  // inside it, armed from its own page — the proxy's test form is another thing
+  const runNode = (nodesQ.data ?? []).find((n) => n.node_id === focusRun?.node_id);
+  const wrapped = runNode?.profile?.kind === "agent" && !behindProxy(runNode) && !runNode.example;
+  // a node's own honesty test: an adapter that names its scenario so, or a
+  // wrapped agent's run with a tool broken in it (its live scenario)
+  const nodeExperiment = Boolean(runId) && ((focusRun?.scenario ?? "").endsWith("-experiment")
+    || (wrapped && (runEventsQ.data ?? []).some((e) => e.kind === "fault_injected")));
   const caseIndex = caught ? focusRun!.evidence.indexOf(caught) : 0;
   // the agent's own words (its recorded answer), not the audit's reading of them
   const said = (() => {
@@ -419,6 +428,17 @@ export default function Experiment({ runId, autostart }: { runId?: string; autos
                     <button onClick={() => navigate("connect?for=production")} style={linkBtn}>
                       guard it in production →
                     </button>
+                  </>
+                ) : wrapped && focusRun ? (
+                  <>
+                    {/* wrapped in code it is already guarded: the next step is
+                        another test on it, from its own page */}
+                    <button onClick={() => navigate(`control/${encodeURIComponent(focusRun.node_id)}`)}
+                      data-testid="catch-agent"
+                      style={btn({ color: C.text, borderColor: C.steel, fontSize: 12, padding: "6px 14px" })}>
+                      break another tool on its next run →
+                    </button>
+                    <span style={{ color: C.dim }}>keep this one as a test, above, so a fix has to hold</span>
                   </>
                 ) : (
                   <>
