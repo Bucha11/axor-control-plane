@@ -113,6 +113,13 @@ export default function Health() {
       setNode(EXAMPLE_PROBE_NODE);
     }
   }, [node, report.isSuccess, report.data, listed.join(",")]); // eslint-disable-line react-hooks/exhaustive-deps
+  // A production agent's drift check, on example data: the example fleet posts
+  // one, but once the workspace's own agents report the lists hide examples,
+  // so it was out of reach exactly when someone wanted to see what they'd get.
+  const showExample = useMutation({
+    mutationFn: async () => { await api.seedFleet(); },
+    onSuccess: () => pickNode(EXAMPLE_PROBE_NODE),
+  });
   const reprobe = useMutation({
     mutationFn: api.fleetReprobe,
     onSuccess: () => {
@@ -243,6 +250,14 @@ export default function Health() {
                   wrap it in code →
                 </button>
               </div>
+              <div className="mt-3">
+                <button onClick={() => showExample.mutate()} disabled={showExample.isPending}
+                  data-testid="health-example"
+                  style={{ background: "none", border: "none", padding: 0, cursor: "pointer",
+                           fontFamily: MONO, fontSize: 11, color: C.steel }}>
+                  {showExample.isPending ? "loading…" : "see what a drift check looks like (example) →"}
+                </button>
+              </div>
             </div>
           ) : (
             <>
@@ -254,11 +269,24 @@ export default function Health() {
                 agent&apos;s plane link sends the result here (axor-probe README, “Reporting to the
                 Control Plane”). The plane never starts your agent itself.
               </div>
+              <div className="mt-3">
+                <button onClick={() => showExample.mutate()} disabled={showExample.isPending}
+                  data-testid="health-example"
+                  style={{ background: "none", border: "none", padding: 0, cursor: "pointer",
+                           fontFamily: MONO, fontSize: 11, color: C.steel }}>
+                  {showExample.isPending ? "loading…" : "see what a drift check looks like (example) →"}
+                </button>
+              </div>
             </>
           )}
         </div>
       ) : (
         <>
+          {node === EXAMPLE_PROBE_NODE && (
+            <div data-testid="health-example-badge" style={{ fontFamily: MONO, fontSize: 11, color: C.amber, marginBottom: 6 }}>
+              example — a production agent&apos;s drift check, on example data
+            </div>
+          )}
           <h1 style={{ fontSize: 22, fontWeight: 650, margin: "0 0 4px" }}>
             {VERDICT_LINE[latest.overall_verdict]}
           </h1>

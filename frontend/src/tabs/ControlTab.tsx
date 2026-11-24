@@ -18,6 +18,7 @@ import { incidentWhat } from "./Evidence";
 import Tooltip from "../components/Tooltip";
 import { codingExampleOnly, fleetExampleOnly, isCodingSession } from "../components/CodingOnboarding";
 import { AlertMe, KeepAsTest, SignUpForYourAgent } from "../components/AccountAction";
+import { behindProxy } from "../agentName";
 
 const REFETCH_MS = 5000;
 
@@ -899,6 +900,8 @@ function ControlBody({ focusNode, testBench }: { focusNode?: string; testBench: 
               {" "}then restart the agent's process (the proxy or the wrapped agent) — it comes back running.
             </div>
           )}
+
+          {!isCodingNode(node) && <HealthAndReputation node={node} />}
 
           <RunsPanel nodeId={node.node_id} paused={paused} stopped={stopped}
             disabled={command.isPending || !(!isCodingNode(node) || mine(node.profile?.developer) || canAdmin)} send={send} />
@@ -2243,4 +2246,41 @@ function lookLabel(i: IncidentItem): string {
   if (i.kind === "would_refuse") return `${i.what} — would have been refused`;
   if (i.kind === "refused") return `${i.what} — refused${(i.count ?? 1) > 1 ? ` ×${i.count}` : ""}`;
   return i.what;
+}
+
+
+// Whether the agent still answers the way it used to, and what it touched
+// across sessions — on its own panel. They were only on the page of a single
+// run, so "is my agent drifting?" meant opening one of its runs.
+function HealthAndReputation({ node }: { node: NodeInfo }) {
+  const proxied = behindProxy(node);
+  const p = node.probe;
+  const r = node.reputation;
+  const row = (label: string, body: React.ReactNode, go: string) => (
+    <div className="flex items-center gap-2" style={{ lineHeight: 1.7 }}>
+      <span style={{ color: C.dim, width: 150 }}>{label}</span>
+      <span style={{ flex: 1 }}>{body}</span>
+      <span style={{ color: C.steel, cursor: "pointer" }} onClick={() => navigate(go)}>→</span>
+    </div>
+  );
+  const unavailable = <span style={{ color: C.dim }}>not available behind the proxy</span>;
+  return (
+    <div data-testid="agent-health" className="mb-3 p-3"
+      style={{ border: `1px solid ${C.line}`, borderRadius: 8, fontFamily: MONO, fontSize: 11 }}>
+      {row("health check", p
+        ? <span style={{ color: p.verdict === "DRIFT_DETECTED" ? C.red : p.verdict === "CONSISTENT" ? C.green : C.amber }}>
+            {p.verdict === "DRIFT_DETECTED" ? "drifted" : p.verdict === "CONSISTENT" ? "answers as it used to" : "not enough to tell"}
+            <span style={{ color: C.dim }}> · {ago(p.created_ts)}</span>
+          </span>
+        : proxied ? unavailable : <span style={{ color: C.dim }}>not checked yet</span>,
+        `health?node=${encodeURIComponent(node.node_id)}`)}
+      {row("data across sessions", r
+        ? <span style={{ color: r.flagged ? C.red : r.watch ? C.amber : C.green }}>
+            {r.flagged ? `${r.flagged} flagged` : r.watch ? `${r.watch} to watch` : "all clean"}
+            {r.flagged && r.watch ? <span style={{ color: C.amber }}> · {r.watch} to watch</span> : null}
+          </span>
+        : proxied ? unavailable : <span style={{ color: C.dim }}>not reporting</span>,
+        `sentinel?node=${encodeURIComponent(node.node_id)}`)}
+    </div>
+  );
 }
