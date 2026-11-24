@@ -33,3 +33,9 @@ async def test_a_kept_case_can_be_taken_out_and_both_are_audited(client: httpx.A
 
     acts = [i["action"] for i in (await client.get("/v1/audit")).json()["items"]]
     assert "pin_must_block" in acts and "unpin" in acts
+
+
+def test_only_an_operator_takes_a_case_out() -> None:
+    from axor_backend.auth import required_scope
+    assert required_scope("POST", "/v1/pins/run_a") == "ingest"
+    assert required_scope("DELETE", "/v1/pins/run_a") == "operate"

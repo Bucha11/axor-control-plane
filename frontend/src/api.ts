@@ -1,3 +1,4 @@
+import type { ToolClass } from "./store";
 import { canonicalize } from "./jcs";
 import { IDENTITY_BASE, refresh } from "./identity";
 import { useApp } from "./store";
@@ -1481,6 +1482,13 @@ export const api = {
   },
   // `mustRefuse` names the calls a must_block pin holds — needed when the run
   // was recorded ungoverned and refused nothing (else it can't be checked)
+  // the workspace's tool policy (what each tool does) — one for everyone
+  getPolicy: () =>
+    af("/v1/policy").then((r) => j<{ tools: Record<string, ToolClass>; updated_ts: string | null }>(r)),
+  putPolicy: (tools: Record<string, ToolClass>) =>
+    af("/v1/policy", { method: "PUT", headers: { "content-type": "application/json" },
+                       body: JSON.stringify({ tools }) })
+      .then((r) => j<{ tools: Record<string, ToolClass>; changed: string[] }>(r)),
   // take a case out of the check (Safe to ship?)
   unpin: (runId: string) =>
     af(`/v1/pins/${encodeURIComponent(runId)}`, { method: "DELETE" })

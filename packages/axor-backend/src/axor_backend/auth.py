@@ -281,6 +281,11 @@ def required_scope(method: str, path: str) -> str:
     for prefix, suffix, scope in _ROUTE_POLICY:
         if path.startswith(prefix) and path.endswith(suffix):
             return scope
+    # Taking a case out of the release check is an operator's decision: an
+    # agent's ingest key (which may pin) must not unpin "the attack that must
+    # stay blocked".
+    if method == "DELETE" and path.startswith("/v1/pins/"):
+        return "operate"
     for prefix, scope in _WRITE_POLICY:
         if path.startswith(prefix):
             return scope
