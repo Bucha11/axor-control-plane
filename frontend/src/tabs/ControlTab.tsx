@@ -1575,8 +1575,8 @@ function FleetTotals({ totals }: { totals: { runs: number; calls: number; tainte
       {part(totals.denied, "refused", C.red)}
       {totals.lies > 0 ? (
         <button onClick={() => navigate("evidence")} style={{ background: "none", border: "none", padding: 0, cursor: "pointer",
-          fontFamily: MONO, fontSize: 11, color: C.red }}>{totals.lies} incident{totals.lies === 1 ? "" : "s"} →</button>
-      ) : part(0, "incidents")}
+          fontFamily: MONO, fontSize: 11, color: C.red }}>{totals.lies} made up →</button>
+      ) : part(0, "made up")}
     </div>
   );
 }
