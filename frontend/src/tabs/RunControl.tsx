@@ -165,7 +165,7 @@ export default function RunControl({ runId }: { runId: string }) {
           </Tooltip>
           <Tooltip content="End the agent for good — it finishes no further turns.">
             <button
-              onClick={() => { if (window.confirm(`Stop ${nodeId}?\n\nIts running process cannot be resumed — every tool call is refused (503). To bring it back, start it again on its agent card and restart the agent's process.`)) send({ stopped: true }); }}
+              onClick={() => { if (window.confirm(`Stop ${nodeId}?\n\nIts running process cannot be resumed — every tool call is refused (the proxy answers 503; a wrapped agent's call raises AdmissionHeld). To bring it back, start it again on its agent card and restart the agent's process.`)) send({ stopped: true }); }}
               disabled={stopped || command.isPending}
               style={btn({ fontSize: 12, padding: "6px 12px", color: stopped ? C.dim : C.red, borderColor: stopped ? C.line : C.red })}>
               <Square size={12} /> Stop{live ? "" : " agent"}

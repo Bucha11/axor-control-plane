@@ -2243,7 +2243,7 @@ function stateWords(key: string, value: unknown): string {
 function confirmStop(nodeId: string, cascade: boolean): boolean {
   return window.confirm(
     `${cascade ? "Cascade-stop" : "Stop"} ${nodeId}${cascade ? " and every agent it started" : ""}?\n\n` +
-    "Its running process cannot be resumed — every tool call is refused (503). To bring it back you start it " +
+    "Its running process cannot be resumed — every tool call is refused (the proxy answers 503; a wrapped agent's call raises AdmissionHeld). To bring it back you start it " +
     "again here and restart the agent's process.");
 }
 
