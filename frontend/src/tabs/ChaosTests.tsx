@@ -55,8 +55,14 @@ export default function ChaosTests() {
   const example = () => { connect("demo"); navigate("catch", { auto: "1" }); };
   const data = useQuery({ queryKey: ["chaos"], queryFn: api.chaos });
   const runs = useQuery({ queryKey: ["runs"], queryFn: api.listRuns });
-  const agents = useMemo(() => liveAgents([...new Set((runs.data ?? []).map((r) => r.node_id))].sort()), [runs.data]);
-  const list = data.data?.runs ?? [];
+  // the product's examples hide once the workspace's own agents report, as on
+  // every other screen: their tests are not this workspace's findings
+  const nodes = useQuery({ queryKey: ["nodes"], queryFn: api.nodes });
+  const hidden = useMemo(() => new Set((nodes.data ?? []).filter((n) => n.example_hidden).map((n) => n.node_id)),
+    [nodes.data]);
+  const agents = useMemo(() => liveAgents([...new Set((runs.data ?? []).map((r) => r.node_id))].sort())
+    .filter((a) => !hidden.has(a)), [runs.data, hidden]);
+  const list = (data.data?.runs ?? []).filter((r) => !hidden.has(r.node_id));
   const counts = list.reduce<Record<string, number>>((m, r) => ({ ...m, [r.verdict]: (m[r.verdict] ?? 0) + 1 }), {});
 
   return (
