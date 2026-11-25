@@ -31,7 +31,8 @@ export default function ScanTools({ onFound, label = "find them in your code", t
           continue;
         }
         setToolClass(t.id, {
-          klass: t.guess.default_class === "UNKNOWN" ? "READ" : t.guess.default_class,
+          // unsure is "changes something", not "reads"
+          klass: t.guess.default_class === "UNKNOWN" ? "WRITE" : t.guess.default_class,
           outside: t.guess.untrusted_fields.length > 0,
           source: t.source, args_schema: t.args_schema, driving: t.guess.driving_args,
         });

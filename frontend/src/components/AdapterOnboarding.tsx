@@ -5,7 +5,7 @@
 // report in. The tool classes are what lets a call be refused: a value from a
 // tool that brings in outside text, driving a tool that sends something out, is
 // denied. Without them the wrap only pauses and stops.
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Check, Copy, Download, Upload } from "lucide-react";
 import { api, type WrapTool } from "../api";
@@ -183,7 +183,14 @@ export default function AdapterOnboarding() {
   const authOn = auth.data?.auth_enabled ?? null;
   const signedIn = !!email || (!!token && !isGuestToken(token));
   const nodes = useQuery({ queryKey: ["nodes"], queryFn: api.nodes, refetchInterval: 3000 });
-  const live = (nodes.data ?? []).some((n) => n.node_id === nodeId.trim());
+  // the agents already on the plane when this page opened: a name among them is
+  // another agent's, and "reported in" for it would be that agent reporting
+  const [takenAtOpen, setTakenAtOpen] = useState<Set<string> | null>(null);
+  useEffect(() => {
+    if (takenAtOpen === null && nodes.data) setTakenAtOpen(new Set(nodes.data.map((n) => n.node_id)));
+  }, [nodes.data, takenAtOpen]);
+  const taken = takenAtOpen?.has(nodeId.trim()) ?? false;
+  const live = !taken && (nodes.data ?? []).some((n) => n.node_id === nodeId.trim());
 
   const mint = useMutation({
     mutationFn: () => api.createKey(["ingest"], `node ${nodeId}`, nodeId),
@@ -220,10 +227,17 @@ export default function AdapterOnboarding() {
       const next = res.tools.map((t) => ({
         tool: t,
         // a tool already classified (here, in Policy, for the proxy) keeps that call
-        klass: policy[t.id]?.klass ?? (t.guess.default_class === "UNKNOWN" ? "READ" : t.guess.default_class),
+        // unsure is "changes something", not "reads": a wrong "reads" lets outside text drive it
+        klass: policy[t.id]?.klass ?? (t.guess.default_class === "UNKNOWN" ? "WRITE" : t.guess.default_class),
         outside: policy[t.id]?.outside ?? t.guess.untrusted_fields.length > 0,
       }));
       setRows(next);
+      // the agent's name from its file, unless one was typed that no agent has yet
+      const stem = picked[0]?.path.split("/").pop()?.replace(/\.py$/, "").replace(/[^a-zA-Z0-9]+/g, "-").toLowerCase();
+      if (stem && stem !== "main" && stem !== "agent" && (nodeId === "agent-1" || takenAtOpen?.has(nodeId.trim()))) {
+        setNodeId(stem);
+        setKey(null);
+      }
       for (const r of next) {
         setToolClass(r.tool.id, { klass: r.klass, outside: r.outside, source: r.tool.source,
                                   args_schema: r.tool.args_schema, driving: r.tool.guess.driving_args });
@@ -370,6 +384,11 @@ export default function AdapterOnboarding() {
         border: `1px solid ${live ? C.green : C.line}` }}>
         {live
           ? <span style={{ color: C.green }}>● {nodeId} reported in — it is on the plane</span>
+          : taken
+          ? <span data-testid="adapter-name-taken" style={{ color: C.amber }}>
+              {nodeId} is already on this plane — if this is that agent, its new manifests take effect on restart;
+              a different agent needs its own name, or their runs mix
+            </span>
           : <span style={{ color: C.mut }}>waiting for <span style={{ color: C.text }}>{nodeId || "agent-1"}</span> to report in — run your agent…</span>}
       </div>
       <div className="flex gap-3 mt-4 items-center">

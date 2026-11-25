@@ -75,8 +75,9 @@ export function plainGuess(reason: string, confidence: string): string {
   const arg = /carrier arg '([^']+)'/.exec(reason)?.[1];
   const said = name
     ? `guessed from '${name}' in the name${arg ? `, '${arg}' says where it goes` : ""}`
-    : `guessed: ${reason.replace(/\s*→\s*[A-Z?]+\s*$/, "")}`;
-  return confidence === "low" ? `${said} — unsure, check it` : said;
+    : `guessed: ${reason.replace(/\s*→\s*[A-Z?]+\s*$/, "")
+        .replace(/\s*—\s*classify manually in the config builder/, "")}`;
+  return confidence === "low" ? `${said} — unsure: set what it does` : said;
 }
 
 const TYPE_COLOR: Record<SinkType, string> = {
