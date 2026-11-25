@@ -145,10 +145,14 @@ async def command(node_id: str, body: dict, request: Request) -> dict:
     expected = (current[0] if current else 0) + 1
     if version != expected:
         raise HTTPException(409, f"stale version {version}; expected {expected}")
-    if not ctx.keyring.empty:
+    from axor_backend import operators
+
+    signing = await operators.signing_required(ctx, ctx.store)
+    if signing:
         try:
-            ctx.keyring.verify(
-                operator, signed_payload(node_id, version, delta, timestamp), sig
+            await operators.verify(
+                ctx, ctx.store, operator,
+                signed_payload(node_id, version, delta, timestamp), sig
             )
         except CommandRejected as exc:
             raise HTTPException(403, str(exc)) from exc
@@ -160,7 +164,7 @@ async def command(node_id: str, body: dict, request: Request) -> dict:
     # when two commands arrive together.
     new_version, state = await _apply(
         ctx, node_id, delta, expect_version=version - 1,
-        signature=_signature(ctx, operator, timestamp, sig),
+        signature=_signature(operator, timestamp, sig, verified=signing),
     )
     # A commanded cut opens the heal half of the heal->verify pair. The hook is
     # HERE, at the write that actually reaches the node's desired state, not on
@@ -178,6 +182,8 @@ async def command(node_id: str, body: dict, request: Request) -> dict:
 
     for act, detail in audit.command_acts(delta):
         await audit.record(ctx.store, request, act, node_id, **detail)
+    # a pair watching this session sees the hold at once
+    ctx.broadcast.publish(topic("node", node_id), {"type": "wake"})
     return {"node_id": node_id, "version": new_version, "state": state}
 
 
@@ -243,7 +249,9 @@ async def cascade_stop(node_id: str, request: Request, body: dict | None = None)
     from axor_backend.funnel import used
 
     await used(ctx.store, "cascade_stop")
-    if not ctx.keyring.empty:
+    from axor_backend import operators
+
+    if await operators.signing_required(ctx, ctx.store):
         body = body or {}
         delta = {"stopped": True, "cascade": True}
         version = body.get("version")
@@ -252,8 +260,8 @@ async def cascade_stop(node_id: str, request: Request, body: dict | None = None)
         if version != expected:
             raise HTTPException(409, f"stale version {version}; expected {expected}")
         try:
-            ctx.keyring.verify(
-                body.get("operator", ""),
+            await operators.verify(
+                ctx, ctx.store, body.get("operator", ""),
                 signed_payload(node_id, version, delta, body.get("timestamp", "")),
                 body.get("sig", ""),
             )
@@ -262,8 +270,8 @@ async def cascade_stop(node_id: str, request: Request, body: dict | None = None)
         new_version, state = await _apply(
             ctx, node_id, delta, expect_version=version - 1,
             signature=_signature(
-                ctx, body.get("operator", ""), body.get("timestamp", ""),
-                body.get("sig", ""),
+                body.get("operator", ""), body.get("timestamp", ""),
+                body.get("sig", ""), verified=True,
             ),
         )
         ctx.broadcast.publish(topic("plane", node_id), {
@@ -385,6 +393,9 @@ async def telemetry(
             topic("run", run_id),
             {"type": "event", "id": event_id, "line": line},
         )
+    if result.rows:
+        # a pair watching this session reads its steps now, not at its next look
+        ctx.broadcast.publish(topic("node", node_id), {"type": "wake"})
     # A chaos test on a live agent streams here, not to /v1/ingest — and only
     # ingest audited a run, so every one of them read "no lie found". So does a
     # coding agent's turn, whose answer is checked against the tests it ran
@@ -531,6 +542,8 @@ async def _fold_reported(
         topic("plane", node_id),
         {"type": "reported", "node_id": node_id, "reported": last},
     )
+    # a pair watching it sees the agent confirm a hold, not only the command
+    ctx.broadcast.publish(topic("node", node_id), {"type": "wake"})
     # Upward degradation transition — spec §16 trigger.
     notifier = getattr(ctx, "notifier", None)
     if notifier is None:
@@ -653,10 +666,12 @@ async def append_fact(node_id: str, body: dict, request: Request) -> dict:
     sig = body.get("sig", "")
     if fact.get("fact_type") == ATTESTATION_FACT_TYPE:
         _check_attestation(fact, operator)
-    if not ctx.keyring.empty:
+    from axor_backend import operators
+
+    if await operators.signing_required(ctx, ctx.store):
         try:
-            ctx.keyring.verify(
-                operator, signed_payload(node_id, 0, fact, timestamp), sig
+            await operators.verify(
+                ctx, ctx.store, operator, signed_payload(node_id, 0, fact, timestamp), sig
             )
         except CommandRejected as exc:
             raise HTTPException(403, str(exc)) from exc
@@ -1223,7 +1238,17 @@ async def post_profile(node_id: str, body: dict, request: Request) -> dict:
     # their email — not an id the machine derived (two machines, one person;
     # one machine, two people)
     principal = getattr(request.state, "principal", None)
+    ctx = _ctx(request)
     if kind in ("coding", "tree") and getattr(principal, "email", None):
+        if developer and "@" not in developer:
+            # the machine's own id, reported on its person's key: from now a
+            # session from this machine on a team key is theirs too
+            bound = await ctx.store.bind_developer(developer, str(principal.email), now())
+            if bound in ("bound", "disputed"):
+                from axor_backend import audit
+
+                await audit.record(ctx.store, request, f"developer_{bound}", developer,
+                                   email=str(principal.email))
         developer = str(principal.email)[:64]
     if kind == "coding" and not developer:
         raise HTTPException(400, "a coding session names its developer (an opaque id)")
@@ -1237,7 +1262,6 @@ async def post_profile(node_id: str, body: dict, request: Request) -> dict:
                    or not all(c.isalnum() or c in "-_.:" for c in parent)):
         raise HTTPException(400, "parent is the node id of the coding session that "
                                  "started this subagent")
-    ctx = _ctx(request)
     await ctx.store.put_node_profile(node_id, kind, agent, developer, now(),
                                      repo=repo, repo_label=label if repo else "",
                                      parent=parent)
@@ -1485,16 +1509,16 @@ async def nodes(request: Request) -> list[dict]:
 
 
 def _signature(
-    ctx: Any, operator: str, timestamp: str, sig: str,  # noqa: ANN401
+    operator: str, timestamp: str, sig: str, *, verified: bool,
 ) -> dict[str, str] | None:
     """The triple to record with a delta, or None when nothing was verified.
 
-    An open deployment (no keyring) checks no signature, so it has none to
+    A deployment that asks for no signature checks none, so it has none to
     record — and recording the caller's unverified claim would be worse than
     recording nothing: the adapter would be handed a `sig` that fails
     verification, when the truth is that this field was never signed at all.
     """
-    if ctx.keyring.empty:
+    if not verified:
         return None
     return {"operator": operator, "timestamp": timestamp, "sig": sig}
 

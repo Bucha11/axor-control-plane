@@ -1,4 +1,5 @@
 import { canonicalize } from "./jcs";
+import * as opKey from "./opKey";
 import { IDENTITY_BASE, refresh } from "./identity";
 import { useApp } from "./store";
 import { track } from "./funnel";
@@ -259,6 +260,9 @@ export interface CodingRules {
   set: boolean; allow: string[]; mode: "enforce" | "observe"; by: string; ts: string;
   exceptions: CodingException[]; trusted_sources: string[];
   catalog?: { id: string; what: string; why: string; fixed: boolean }[];
+  // the policy an operator last signed (sidecars with operator keys take what
+  // widens only from it), and whether it is still what stands here
+  signed?: { seq: number; current: boolean; operator?: string; ts?: string };
 }
 
 export interface NodeInfo {
@@ -679,22 +683,46 @@ export interface PairRequest {
   status: "pending" | "accepted" | "declined"; token?: string | null;
 }
 export interface PairStep {
-  id: number; ts: string; kind: "tool_call" | "tool_result" | "claim" | "task";
+  id: number; ts: string; kind: "tool_call" | "tool_result" | "claim" | "task" | "said";
   tool?: string; target?: string; refused?: boolean; reason?: string;
   failed?: boolean; preview?: string; check?: { kind: string; passed: boolean; summary: string } | null;
   text?: string;
+  // the run (one turn of the agent) it belongs to
+  run?: string;
+  // "said": who — the developer's request, or the agent on the way
+  role?: "developer" | "assistant";
+  // an edit: the text replaced and what replaced it, or a patch
+  diff?: { path: string; hunks?: { old: string; new: string }[]; patch?: string };
 }
 export interface PairNote {
   id: number; by: string; text: string; ts: string; outside: boolean;
   delivered_ts: string | null; delivered_at: string | null;
+  // from another session's agent (agent-to-agent): the sender's node, what its
+  // taint ledger found in the text, and whether it waits for the developer's OK
+  from_node?: string | null; node_id?: string; taint?: string[];
+  held?: boolean; dismissed_ts?: string | null;
+}
+export type AgentMsgMode = "manual" | "auto";
+export interface OperatorKey {
+  operator_id: string; email: string; pubkey: string; label: string; created_ts: string;
+  revoked_ts: string | null; org?: string;
+  endorsement: { payload: Record<string, unknown>; operator: string; sig: string } | null;
+}
+export interface DeveloperIdentity {
+  developer_id: string; email: string; source: string; ts: string; disputed_by: string | null;
 }
 export interface PairFeed {
   pair: { node_id: string; agent: string; title?: string; created_by: string; created_ts: string; expires_ts: string;
           outside: boolean; guests: string[]; you: "teammate" | "guest"; paused: boolean;
           joined?: string[]; invited?: string[]; yours?: boolean;
-          stopped: boolean; desired_version: number; level: string };
+          stopped: boolean; desired_version: number; level: string;
+          // whether the agent has applied the last hold / let-go yet
+          confirmed?: boolean };
   steps: PairStep[]; cursor: number; notes: PairNote[];
+  controls?: PairControl[];
 }
+/** A hold, a let-go or a stop of the session, from the audit trail. */
+export interface PairControl { ts: string; kind: "control"; act: string; by: string }
 
 /** A skill shared for the team: the latest upload and the version on. */
 export interface TeamSkill {
@@ -1106,11 +1134,31 @@ async function vaultSign(payloadObj: unknown): Promise<string> {
   return signature_hex;
 }
 
+// An operator's signature over a statement (a note, the coding policy), when
+// the browser is armed to sign; undefined otherwise — the plane takes it
+// unsigned and a sidecar with operator keys treats it as outside text.
+async function signedStatement(payload: Record<string, unknown>):
+    Promise<{ payload: Record<string, unknown>; operator: string; sig: string } | undefined> {
+  const s = await opKey.sign(payload);
+  return s ? { payload, ...s } : undefined;
+}
+
+// A plane command, from this browser: its own operator key first, else the
+// deployment's signing custody (the vault) as before; null when neither.
+// Everything newer — notes, the coding policy, vouches — is signed by this
+// browser's key alone (opKey.sign).
+async function operatorSign(payload: unknown): Promise<{ operator: string; sig: string } | null> {
+  const own = await opKey.sign(payload);
+  if (own) return own;
+  if (useApp.getState().signingKeyId) return { operator: "op_ui", sig: await vaultSign(payload) };
+  return null;
+}
+
 // True when the signed posture is armed: a signing key is selected, so the
 // browser signs via the vault. The signing-token is sent alongside and is only
 // required when the backend has configured a signing gate (open in dev).
 function signingArmed(): boolean {
-  return Boolean(useApp.getState().signingKeyId);
+  return opKey.ready() || Boolean(useApp.getState().signingKeyId);
 }
 
 // ── agent tree runs (axor-wrap `tree run`) ───────────────────────────────────
@@ -1463,13 +1511,12 @@ export const api = {
     // One timestamp, signed and sent — the adapter reconstructs the exact bytes
     // from (node_id, version, body=state, timestamp), so they must match.
     const timestamp = new Date().toISOString();
-    const sig = signingArmed()
-      ? await vaultSign({ node_id: nodeId, version, body: state, timestamp })
-      : "";
+    const signed = await operatorSign({ node_id: nodeId, version, body: state, timestamp });
     const r = await af(`/v1/plane/${encodeURIComponent(nodeId)}/command`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ version, state, operator: "op_ui", timestamp, sig }),
+      body: JSON.stringify({ version, state, operator: signed?.operator ?? "op_ui", timestamp,
+                             sig: signed?.sig ?? "" }),
     });
     return j<{ node_id: string; version: number; state: Record<string, unknown> }>(r);
   },
@@ -1638,13 +1685,76 @@ export const api = {
       body: JSON.stringify({ node_id: nodeId, outside, invite }),
     }).then((r) => j<{ token: string; node_id: string; outside: boolean; expires_ts: string }>(r)),
   // the developer, to their own agent (the notes channel)
-  sayToAgent: (nodeId: string, text: string) =>
-    af(`/v1/coding/say/${encodeURIComponent(nodeId)}`, {
-      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ text }),
-    }).then((r) => j<{ id: number }>(r)),
+  sayToAgent: async (nodeId: string, text: string) => {
+    const signed = await signedStatement({ kind: "note", node_id: nodeId, text, ts: new Date().toISOString() });
+    const r = await af(`/v1/coding/say/${encodeURIComponent(nodeId)}`, {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ text, ...(signed ? { signed } : {}) }),
+    });
+    return j<{ id: number }>(r);
+  },
+  // operators' browser keys: register this browser's, vouch for another's, revoke
+  operators: () => af("/v1/operators").then((r) => j<{ operators: OperatorKey[] }>(r)),
+  registerOperatorKey: async (label: string) => {
+    const k = (await opKey.load()) ?? (await opKey.create());
+    const r = await af("/v1/operators", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ pubkey: k.pubHex, label }),
+    });
+    const out = await j<{ operator_id: string }>(r);
+    await opKey.setOperatorId(out.operator_id);
+    return out;
+  },
+  endorseOperatorKey: async (k: OperatorKey) => {
+    const payload = { kind: "operator_key", org: k.org ?? "", operator: k.operator_id, pubkey: k.pubkey };
+    const signed = await opKey.sign(payload);
+    if (!signed) throw new Error("this browser has no operator key to vouch with");
+    const r = await af(`/v1/operators/${encodeURIComponent(k.operator_id)}/endorsement`, {
+      method: "PUT", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ payload, ...signed }),
+    });
+    return j<{ operator_id: string }>(r);
+  },
+  revokeOperatorKey: (operatorId: string) =>
+    af(`/v1/operators/${encodeURIComponent(operatorId)}`, { method: "DELETE" }).then((r) =>
+      j<{ revoked: boolean }>(r)),
+  // the operators' public keys, for `axor-wrap connect --operator-key`
+  operatorKeys: () => af("/v1/coding/operator-keys").then((r) =>
+    j<{ keys: Record<string, string>; fingerprint: string }>(r)),
+  // what widens for sidecars with operator keys: sign the policy as it stands
+  signCodingPolicy: async () => {
+    const doc = await j<{ payload: Record<string, unknown> }>(await af("/v1/coding/policy/document"));
+    const signed = await opKey.sign(doc.payload);
+    if (!signed) throw new Error("this browser has no operator key — make one in Settings");
+    const r = await af("/v1/coding/policy/signature", {
+      method: "PUT", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ payload: doc.payload, ...signed }),
+    });
+    return j<{ seq: number; current: boolean }>(r);
+  },
+  canSign: () => opKey.ready(),
   saidToAgent: (nodeId: string) =>
     af(`/v1/coding/say/${encodeURIComponent(nodeId)}`).then((r) =>
       j<{ notes: (PairNote & { pair: boolean })[] }>(r)),
+  // messages from other sessions' agents: send a held one on, or dismiss it;
+  // and whether teammates' agents wait for your OK ("manual") or not ("auto")
+  decideAgentMessage: (nodeId: string, id: number, send: boolean) =>
+    af(`/v1/coding/say/${encodeURIComponent(nodeId)}/held/${id}`, {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ send }),
+    }).then((r) => j<{ id: number; status: string }>(r)),
+  agentMsgMode: (nodeId: string) =>
+    af(`/v1/coding/say/${encodeURIComponent(nodeId)}/mode`).then((r) => j<{ mode: AgentMsgMode }>(r)),
+  setAgentMsgMode: (nodeId: string, mode: AgentMsgMode) =>
+    af(`/v1/coding/say/${encodeURIComponent(nodeId)}/mode`, {
+      method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ mode }),
+    }).then((r) => j<{ mode: AgentMsgMode }>(r)),
+  // whose machine id is whose (owner/admin): bound when a person's own key
+  // reports a session carrying it; a second claim disputes it
+  identities: () => af("/v1/identities").then((r) => j<{ identities: DeveloperIdentity[] }>(r)),
+  setIdentity: (developerId: string, email: string | null) =>
+    af(`/v1/identities/${encodeURIComponent(developerId)}`, {
+      method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ email }),
+    }).then((r) => j<{ developer_id: string; email: string | null }>(r)),
   // the team's brake: every coding agent held at once (admin)
   brake: () => af("/v1/coding/brake").then((r) => j<{ on: boolean; by?: string; ts?: string; reason?: string }>(r)),
   setBrake: (on: boolean, reason = "") =>
@@ -1669,12 +1779,17 @@ export const api = {
     af(`/v1/pair/${encodeURIComponent(token)}`, { method: "DELETE" }).then((r) => j<{ closed: boolean }>(r)),
   pairFeed: (token: string) =>
     af(`/v1/pair/${encodeURIComponent(token)}/feed`).then((r) => j<PairFeed>(r)),
-  sendNote: (token: string, text: string) =>
-    af(`/v1/pair/${encodeURIComponent(token)}/notes`, {
+  sendNote: async (token: string, text: string, nodeId?: string) => {
+    const signed = nodeId
+      ? await signedStatement({ kind: "note", node_id: nodeId, text, ts: new Date().toISOString() })
+      : undefined;
+    const r = await af(`/v1/pair/${encodeURIComponent(token)}/notes`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ text }),
-    }).then((r) => j<{ id: number }>(r)),
+      body: JSON.stringify({ text, ...(signed ? { signed } : {}) }),
+    });
+    return j<{ id: number }>(r);
+  },
   seedPair: () =>
     af("/v1/demo/seed-pair", { method: "POST" }).then((r) => j<{ token: string; node_id: string }>(r)),
   setupHealth: () =>
@@ -1876,13 +1991,19 @@ export const api = {
   // the legal holds that keep its evidence alive
   compliancePack: async (from: string, to: string, format: "json" | "html" = "json",
                          sign?: string): Promise<{ blob: Blob; name: string }> => {
-    const q = new URLSearchParams({ from, to, format, ...(sign ? { sign } : {}) });
-    const r = await af(`/v1/audit/compliance?${q}`);
+    // signed by default when this browser is armed to sign (a signing key chosen)
+    const key = sign ?? (signingArmed() ? useApp.getState().signingKeyId : "");
+    const q = new URLSearchParams({ from, to, format, ...(key ? { sign: key } : {}) });
+    const r = await (key ? afSigning : af)(`/v1/audit/compliance?${q}`);
     if (!r.ok) throw new Error(`${r.status} ${await r.text()}`);
     const name = /filename="([^"]+)"/.exec(r.headers.get("content-disposition") ?? "")?.[1]
       ?? `axor-compliance.${format}`;
     return { blob: await r.blob(), name };
   },
+  // walk the audit trail's hash chains: whole, or where one breaks
+  verifyTrail: () => af("/v1/audit/verify").then((r) => j<{ ok: boolean; chains: Record<string, {
+    ok: boolean; rows: number; unchained?: number; broken_at?: number; reason?: string;
+    head?: { id: number; hash: string } | null }> }>(r)),
   holds: () => af("/v1/audit/holds").then((r) => j<{ holds: Hold[] }>(r)),
   placeHold: (reason: string) =>
     af("/v1/audit/holds", { method: "POST", headers: { "content-type": "application/json" },
@@ -2152,6 +2273,28 @@ export const api = {
       >(r),
     ),
 };
+
+// A pair session's feed, live: steps as the agent works, the notes when they
+// change, the session held or let go. Returns an unsubscribe fn.
+export function streamPair(
+  token: string,
+  after: number,
+  on: { step: (s: PairStep) => void; notes: (n: PairNote[]) => void;
+        pair: (p: { paused: boolean; stopped: boolean; desired_version: number; confirmed: boolean }) => void;
+        control: (c: PairControl) => void;
+        ended: () => void },
+): () => void {
+  const es = new EventSource(withToken(`/v1/pair/${encodeURIComponent(token)}/stream?after=${after}`));
+  const read = <T,>(e: Event, f: (v: T) => void) => {
+    try { f(JSON.parse((e as MessageEvent).data) as T); } catch { /* malformed frame */ }
+  };
+  es.addEventListener("step", (e) => read<PairStep>(e, on.step));
+  es.addEventListener("notes", (e) => read<PairNote[]>(e, on.notes));
+  es.addEventListener("pair", (e) => read(e, on.pair));
+  es.addEventListener("control", (e) => read<PairControl>(e, on.control));
+  es.addEventListener("ended", () => { es.close(); on.ended(); });
+  return () => es.close();
+}
 
 // Live audit stream (spec 8): SSE of colour-coded events for a run. Returns an
 // unsubscribe fn. Uses fetch-based EventSource polyfill semantics via the

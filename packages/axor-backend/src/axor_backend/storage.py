@@ -34,6 +34,7 @@ from sqlalchemy import (
     select,
     update,
 )
+from sqlalchemy import text as sa_text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
@@ -283,6 +284,10 @@ vault_audit = Table(
     Column("entry_json", _JSON, nullable=False),
     Column("created_ts", String(40), nullable=False),
     Column("org_id", String(64), nullable=False, server_default=PUBLIC_ORG, index=True),
+    # a hash chain per log (org, kind), migration 0037: the row before's hash
+    # and this row's — an edit or a removal in the middle shows (audit_chain)
+    Column("prev_hash", String(64), nullable=True),
+    Column("row_hash", String(64), nullable=True),
 )
 
 dead_letters = Table(
@@ -480,6 +485,36 @@ memory_changes = Table(
     Column("doc", Text, nullable=False),
 )
 
+# An operator's signing key made in their browser (migration 0038): the plane
+# keeps the public half only. Machines trust it once an operator they already
+# trust endorses it — the signed ``endorsement`` — or when it is put into
+# ``axor-wrap connect`` directly.
+operator_keys = Table(
+    "operator_keys", metadata,
+    Column("org_id", String(64), primary_key=True),
+    Column("operator_id", String(200), primary_key=True),
+    Column("email", String(255), nullable=False, index=True),
+    Column("pubkey", String(64), nullable=False),
+    Column("label", String(100), nullable=False, server_default=""),
+    Column("created_ts", String(40), nullable=False),
+    Column("revoked_ts", String(40), nullable=True),
+    Column("endorsement", Text, nullable=True),
+)
+
+# Which person a machine's opaque developer id is (migration 0035): bound when
+# that person's own key reports a session carrying it, or by an admin. The
+# first binding stands; another person claiming the same id disputes it, and a
+# disputed id names nobody until an admin settles it.
+developer_identities = Table(
+    "developer_identities", metadata,
+    Column("org_id", String(64), primary_key=True),
+    Column("developer_id", String(64), primary_key=True),
+    Column("email", String(255), nullable=False, index=True),
+    Column("source", String(16), nullable=False, server_default="personal_key"),
+    Column("ts", String(40), nullable=False),
+    Column("disputed_by", String(255), nullable=True),
+)
+
 # A pair session: someone's coding-agent session others watch live and send
 # notes into. The token is the link; it resolves across tenants (a guest from
 # outside the team reads the inviting org's session) — routers/pair_api checks
@@ -532,6 +567,17 @@ pair_notes = Table(
     Column("ts", String(40), nullable=False),
     Column("delivered_ts", String(40), nullable=True),
     Column("delivered_at", String(128), nullable=True),
+    # from another agent session (agent-to-agent, migration 0034): the
+    # sender's node, what its taint ledger said of the text (TaintSource
+    # values), and whether it waits for the receiving developer's OK
+    Column("from_node", String(128), nullable=True),
+    Column("taint", Text, nullable=False, server_default="[]"),
+    Column("held", Boolean, nullable=False, default=False),
+    Column("dismissed_ts", String(40), nullable=True),
+    # a held message the developer was told of in their agent, once
+    Column("told", Boolean, nullable=False, default=False),
+    # an operator's signature over the note (migration 0036), JSON
+    Column("signed", Text, nullable=True),
 )
 
 # A skill shared for the team: the latest upload, and the version turned on
@@ -680,6 +726,11 @@ async def init_db(engine: AsyncEngine) -> None:
 class Store:
     def __init__(self, engine: AsyncEngine) -> None:
         self.engine = engine
+        # one appender per process for the audit chain (Postgres adds an
+        # advisory lock across processes; SQLite is one process)
+        import asyncio
+
+        self._audit_lock = asyncio.Lock()
         # a demo plane shows the examples beside real work (config.keep_examples)
         self.keep_examples = False
 
@@ -1152,20 +1203,73 @@ class Store:
                 pair_sessions.c.token == token).values(**values))
 
     async def add_pair_note(self, token: str, node_id: str, by: str, text: str,
-                            ts: str, outside: bool = False) -> int:
+                            ts: str, outside: bool = False, *, from_node: str | None = None,
+                            taint: list[str] | None = None, held: bool = False,
+                            signed: dict | None = None) -> int:
         async with self.engine.begin() as conn:
             res = await conn.execute(insert(pair_notes).values(
                 org_id=current_org_id(), node_id=node_id, token=token, by=by,
-                text=text, ts=ts, outside=outside))
+                text=text, ts=ts, outside=outside, from_node=from_node,
+                taint=json.dumps(list(taint or [])), held=held,
+                signed=json.dumps(signed) if signed else None))
         return int(res.inserted_primary_key[0])
+
+    @staticmethod
+    def _note_row(r: Any) -> dict[str, Any]:  # noqa: ANN401 - a Row
+        return {"id": r.id, "node_id": r.node_id, "by": r.by, "text": r.text, "ts": r.ts,
+                "outside": bool(r.outside), "delivered_ts": r.delivered_ts,
+                "delivered_at": r.delivered_at, "pair": bool(r.token),
+                "from_node": r.from_node, "taint": json.loads(r.taint or "[]"),
+                "held": bool(r.held), "dismissed_ts": r.dismissed_ts,
+                "signed": bool(r.signed)}
+
+    async def pair_note(self, note_id: int) -> dict[str, Any] | None:
+        async with self.engine.connect() as conn:
+            r = (await conn.execute(select(pair_notes).where(
+                pair_notes.c.org_id == current_org_id(), pair_notes.c.id == note_id))).first()
+        return self._note_row(r) if r else None
+
+    async def decide_held_note(self, note_id: int, send: bool, ts: str) -> bool:
+        """A held agent message let through (it is given from now, as if sent
+        now) or dismissed. False when it is not held any more."""
+        values: dict[str, Any] = ({"held": False, "ts": ts} if send
+                                  else {"held": False, "dismissed_ts": ts})
+        async with self.engine.begin() as conn:
+            res = await conn.execute(update(pair_notes).where(
+                pair_notes.c.org_id == current_org_id(), pair_notes.c.id == note_id,
+                pair_notes.c.held.is_(True)).values(**values))
+        return bool(res.rowcount)
+
+    async def untold_held(self, node_id: str) -> list[dict[str, Any]]:
+        """Held agent messages to this session the developer has not been told
+        of — marked told as they are read (the sidecar says each once)."""
+        org = current_org_id()
+        async with self.engine.begin() as conn:
+            rows = (await conn.execute(select(pair_notes).where(
+                pair_notes.c.org_id == org, pair_notes.c.node_id == node_id,
+                pair_notes.c.held.is_(True), pair_notes.c.told.is_(False)))).all()
+            if rows:
+                await conn.execute(update(pair_notes).where(
+                    pair_notes.c.id.in_([r.id for r in rows])).values(told=True))
+        return [self._note_row(r) for r in rows]
+
+    async def agent_messages_between(self, a: str, b: str,
+                                     limit: int = 20) -> list[dict[str, Any]]:
+        """The latest agent messages either way between two sessions."""
+        both = ((pair_notes.c.node_id == a) & (pair_notes.c.from_node == b)) | (
+            (pair_notes.c.node_id == b) & (pair_notes.c.from_node == a))
+        async with self.engine.connect() as conn:
+            rows = (await conn.execute(select(pair_notes).where(
+                pair_notes.c.org_id == current_org_id(), both,
+            ).order_by(pair_notes.c.id.desc()).limit(limit))).all()
+        return [self._note_row(r) for r in reversed(rows)]
 
     async def pair_notes_of(self, token: str) -> list[dict[str, Any]]:
         async with self.engine.connect() as conn:
             rows = (await conn.execute(select(pair_notes).where(
                 pair_notes.c.org_id == current_org_id(), pair_notes.c.token == token,
             ).order_by(pair_notes.c.id))).all()
-        return [{"id": r.id, "by": r.by, "text": r.text, "ts": r.ts, "outside": bool(r.outside),
-                 "delivered_ts": r.delivered_ts, "delivered_at": r.delivered_at} for r in rows]
+        return [self._note_row(r) for r in rows]
 
     async def notes_of_node(self, node_id: str, limit: int = 20) -> list[dict[str, Any]]:
         """The latest notes to one session, from anyone, with where they landed."""
@@ -1173,9 +1277,7 @@ class Store:
             rows = (await conn.execute(select(pair_notes).where(
                 pair_notes.c.org_id == current_org_id(), pair_notes.c.node_id == node_id,
             ).order_by(pair_notes.c.id.desc()).limit(limit))).all()
-        return [{"id": r.id, "by": r.by, "text": r.text, "ts": r.ts, "outside": bool(r.outside),
-                 "delivered_ts": r.delivered_ts, "delivered_at": r.delivered_at,
-                 "pair": bool(r.token)} for r in reversed(rows)]
+        return [self._note_row(r) for r in reversed(rows)]
 
     async def pending_notes(self, node_id: str, since_ts: str) -> list[dict[str, Any]]:
         """Notes for one agent session not yet given to it (newer than since)."""
@@ -1183,9 +1285,14 @@ class Store:
             rows = (await conn.execute(select(pair_notes).where(
                 pair_notes.c.org_id == current_org_id(), pair_notes.c.node_id == node_id,
                 pair_notes.c.delivered_ts.is_(None), pair_notes.c.ts > since_ts,
+                # an agent message waiting for the developer's OK, or dismissed
+                pair_notes.c.held.is_(False), pair_notes.c.dismissed_ts.is_(None),
             ).order_by(pair_notes.c.id))).all()
         return [{"id": r.id, "by": r.by, "text": r.text, "ts": r.ts,
-                 "outside": bool(r.outside)} for r in rows]
+                 "outside": bool(r.outside),
+                 **({"signed": json.loads(r.signed)} if r.signed else {}),
+                 **({"from_node": r.from_node, "taint": json.loads(r.taint or "[]"),
+                     "pair": bool(r.token)} if r.from_node else {})} for r in rows]
 
     async def mark_notes_delivered(self, node_id: str, ids: list[int], ts: str,
                                    at: str) -> int:
@@ -2068,6 +2175,103 @@ class Store:
                     org_id=org, node_id=node_id, day=day,
                 ))
 
+    # ── operators' browser keys ───────────────────────────────────────────────
+
+    @staticmethod
+    def _op_row(r: Any) -> dict[str, Any]:  # noqa: ANN401
+        return {"operator_id": r.operator_id, "org": r.org_id, "email": r.email, "pubkey": r.pubkey,
+                "label": r.label, "created_ts": r.created_ts, "revoked_ts": r.revoked_ts,
+                "endorsement": json.loads(r.endorsement) if r.endorsement else None}
+
+    async def add_operator_key(self, operator_id: str, email: str, pubkey: str,
+                               label: str, ts: str) -> None:
+        async with self.engine.begin() as conn:
+            await conn.execute(insert(operator_keys).values(
+                org_id=current_org_id(), operator_id=operator_id, email=email.lower(),
+                pubkey=pubkey.lower(), label=label[:100], created_ts=ts))
+
+    async def operator_keys_list(self) -> list[dict[str, Any]]:
+        async with self.engine.connect() as conn:
+            rows = (await conn.execute(select(operator_keys).where(
+                operator_keys.c.org_id == current_org_id(),
+            ).order_by(operator_keys.c.created_ts))).all()
+        return [self._op_row(r) for r in rows]
+
+    async def operator_key(self, operator_id: str) -> dict[str, Any] | None:
+        async with self.engine.connect() as conn:
+            r = (await conn.execute(select(operator_keys).where(
+                operator_keys.c.org_id == current_org_id(),
+                operator_keys.c.operator_id == operator_id))).first()
+        return self._op_row(r) if r else None
+
+    async def set_operator_key(self, operator_id: str, **values: Any) -> bool:  # noqa: ANN401
+        if "endorsement" in values and values["endorsement"] is not None:
+            values["endorsement"] = json.dumps(values["endorsement"])
+        async with self.engine.begin() as conn:
+            res = await conn.execute(update(operator_keys).where(
+                operator_keys.c.org_id == current_org_id(),
+                operator_keys.c.operator_id == operator_id).values(**values))
+        return bool(res.rowcount)
+
+    # ── who a machine's developer id is ──────────────────────────────────────
+
+    async def bind_developer(self, developer_id: str, email: str, ts: str,
+                             source: str = "personal_key") -> str:
+        """``bound`` (new), ``same`` (already this person's), ``disputed``
+        (another person's — from now it names nobody) or ``refused`` (already
+        disputed). Sessions are not rewritten: :meth:`node_kinds` reads them
+        through the bindings, so a dispute or an admin's change takes back
+        exactly what a binding gave."""
+        org, email = current_org_id(), email.strip().lower()
+        async with self.engine.begin() as conn:
+            row = (await conn.execute(select(developer_identities).where(
+                developer_identities.c.org_id == org,
+                developer_identities.c.developer_id == developer_id))).first()
+            if row is None:
+                await conn.execute(insert(developer_identities).values(
+                    org_id=org, developer_id=developer_id, email=email, source=source, ts=ts))
+                return "bound"
+            if row.disputed_by:
+                return "refused"
+            if row.email == email:
+                return "same"
+            await conn.execute(update(developer_identities).where(
+                developer_identities.c.org_id == org,
+                developer_identities.c.developer_id == developer_id,
+            ).values(disputed_by=email))
+            return "disputed"
+
+    async def developer_of(self, developer_id: str) -> str | None:
+        """The person an opaque developer id is bound to; None when unbound or
+        disputed."""
+        async with self.engine.connect() as conn:
+            row = (await conn.execute(select(developer_identities).where(
+                developer_identities.c.org_id == current_org_id(),
+                developer_identities.c.developer_id == developer_id))).first()
+        return row.email if row is not None and not row.disputed_by else None
+
+    async def developer_bindings(self) -> list[dict[str, Any]]:
+        async with self.engine.connect() as conn:
+            rows = (await conn.execute(select(developer_identities).where(
+                developer_identities.c.org_id == current_org_id(),
+            ).order_by(developer_identities.c.email))).all()
+        return [{"developer_id": r.developer_id, "email": r.email, "source": r.source,
+                 "ts": r.ts, "disputed_by": r.disputed_by} for r in rows]
+
+    async def set_developer_binding(self, developer_id: str, email: str | None,
+                                    ts: str) -> None:
+        """An admin's word: bind (settling any dispute) or, with no email,
+        unbind."""
+        org = current_org_id()
+        async with self.engine.begin() as conn:
+            await conn.execute(delete(developer_identities).where(
+                developer_identities.c.org_id == org,
+                developer_identities.c.developer_id == developer_id))
+            if email:
+                await conn.execute(insert(developer_identities).values(
+                    org_id=org, developer_id=developer_id, email=email.strip().lower(),
+                    source="admin", ts=ts))
+
     async def put_node_profile(self, node_id: str, kind: str, agent: str,
                                developer: str, ts: str, repo: str = "",
                                repo_label: str = "", parent: str = "") -> None:
@@ -2111,10 +2315,19 @@ class Store:
                 ).values(repo=repo, repo_label=repo_label))
 
     async def node_kinds(self) -> dict[str, dict[str, str]]:
+        """Every profiled node. A session reported under a machine's opaque
+        developer id reads as the person that id is bound to (and keeps the id
+        it reported as ``developer_id``)."""
         async with self.engine.connect() as conn:
             rows = (await conn.execute(select(node_profiles).where(
                 node_profiles.c.org_id == current_org_id()))).all()
-        return {r.node_id: {"kind": r.kind, "agent": r.agent, "developer": r.developer,
+            bound = {b.developer_id: b.email for b in (await conn.execute(
+                select(developer_identities).where(
+                    developer_identities.c.org_id == current_org_id(),
+                    developer_identities.c.disputed_by.is_(None)))).all()}
+        return {r.node_id: {"kind": r.kind, "agent": r.agent,
+                            "developer": bound.get(r.developer, r.developer),
+                            **({"developer_id": r.developer} if r.developer in bound else {}),
                             "repo": r.repo, "repo_label": r.repo_label, "title": r.title,
                             **({"parent": r.parent} if r.parent else {})}
                 for r in rows}
@@ -3127,11 +3340,38 @@ class Store:
         A bound on disk is housekeeping; it does not belong inside the
         transaction that records a privileged action.
         """
-        async with self.engine.begin() as conn:
-            await conn.execute(insert(vault_audit).values(
-                kind=kind, entry_json=entry, created_ts=ts,
-                org_id=current_org_id(),
-            ))
+        from axor_backend.audit_chain import row_hash
+
+        org = current_org_id()
+        async with self._audit_lock:
+            async with self.engine.begin() as conn:
+                if conn.dialect.name == "postgresql":
+                    # one writer per log at a time, across processes: the chain
+                    # must not fork between two appends reading the same tip
+                    await conn.execute(sa_text("SELECT pg_advisory_xact_lock(hashtext(:k))"),
+                                       {"k": f"vault_audit:{org}:{kind}"})
+                tip = (await conn.execute(
+                    select(vault_audit.c.row_hash).where(
+                        vault_audit.c.kind == kind, vault_audit.c.org_id == org,
+                        vault_audit.c.row_hash.is_not(None))
+                    .order_by(vault_audit.c.id.desc()).limit(1))).first()
+                prev = tip.row_hash if tip is not None else ""
+                await conn.execute(insert(vault_audit).values(
+                    kind=kind, entry_json=entry, created_ts=ts, org_id=org,
+                    prev_hash=prev, row_hash=row_hash(prev, org, kind, ts, entry),
+                ))
+
+    async def vault_audit_chain(self, kind: str) -> list[dict[str, Any]]:
+        """One log in write order, with its chain — what audit_chain.verify
+        walks."""
+        async with self.engine.connect() as conn:
+            rows = (await conn.execute(
+                select(vault_audit.c.id, vault_audit.c.entry_json, vault_audit.c.created_ts,
+                       vault_audit.c.prev_hash, vault_audit.c.row_hash)
+                .where(vault_audit.c.kind == kind, vault_audit.c.org_id == current_org_id())
+                .order_by(vault_audit.c.id))).all()
+        return [{"id": r.id, "entry": r.entry_json, "ts": r.created_ts,
+                 "prev_hash": r.prev_hash, "row_hash": r.row_hash} for r in rows]
 
     async def vault_audit_entries(
         self, kind: str, limit: int = 200, before_id: int | None = None,

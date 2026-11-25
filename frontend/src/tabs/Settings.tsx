@@ -15,6 +15,8 @@ import {
 import { navigate } from "../router";
 import { MODE_LABEL, useApp } from "../store";
 import { C, MONO, btn } from "../theme";
+import { useOperatorKeys } from "../signedConnect";
+import * as opKey from "../opKey";
 import Coach from "../components/Coach";
 import ToolCredentials from "../components/ToolCredentials";
 import UsageAndBilling from "../components/UsageAndBilling";
@@ -113,6 +115,115 @@ function OrgMembers() {
       {isAdmin && <SingleSignOn orgId={d.active_org} />}
       {isAdmin && <Provisioning orgId={d.active_org} />}
       {isAdmin && <Sessions orgId={d.active_org} />}
+      {isAdmin && <OperatorKeys />}
+      {isAdmin && <MachineIds />}
+    </div>
+  );
+}
+
+/** This browser's operator key and the workspace's. The private half is made
+ *  here (WebCrypto, non-extractable) and never leaves; the plane keeps the
+ *  public half. Machines trust a key put into `axor-wrap connect`, and any key
+ *  an operator they trust vouched for — so a new operator needs one vouch,
+ *  not every machine reconnected. */
+function OperatorKeys() {
+  const qc = useQueryClient();
+  const list = useQuery({ queryKey: ["operators"], queryFn: api.operators, retry: false });
+  const mine = useQuery({ queryKey: ["op-key-local"], queryFn: () => opKey.load() });
+  const can = useQuery({ queryKey: ["op-key-supported"], queryFn: () => opKey.supported() });
+  const done = () => {
+    void qc.invalidateQueries({ queryKey: ["operators"] });
+    void qc.invalidateQueries({ queryKey: ["op-key-local"] });
+    void qc.invalidateQueries({ queryKey: ["operator-keys"] });
+  };
+  const make = useMutation({ mutationFn: () => api.registerOperatorKey(navigator.platform || "browser"), onSuccess: done });
+  const vouch = useMutation({ mutationFn: api.endorseOperatorKey, onSuccess: done });
+  const revoke = useMutation({ mutationFn: api.revokeOperatorKey, onSuccess: done });
+  const forget = useMutation({ mutationFn: () => opKey.forget(), onSuccess: done });
+  const keys = (list.data?.operators ?? []).filter((k) => !k.revoked_ts);
+  const local = mine.data;
+  const localId = local?.operatorId ?? null;
+  const registered = !!localId && keys.some((k) => k.operator_id === localId);
+  const fp = (h: string) => h.slice(0, 16).replace(/(.{4})(?=.)/g, "$1 ");
+  const err = (make.error ?? vouch.error ?? revoke.error) as Error | null;
+  return (
+    <div data-testid="operator-keys" style={{ marginTop: 6 }}>
+      <div style={{ color: C.text, marginBottom: 4 }}>signing keys</div>
+      <div style={{ color: C.dim, fontSize: 10.5, marginBottom: 6 }}>
+        your agents' machines take the team's rules, skills and notes only when an operator signed them.
+        The key is made in this browser and never leaves it.
+      </div>
+      {registered ? (
+        <div data-testid="op-key-mine" className="flex gap-2 items-center flex-wrap" style={{ marginBottom: 6 }}>
+          <span style={{ color: C.green }}>this browser signs</span>
+          <span style={{ color: C.text }}>{localId}</span>
+          <span style={{ color: C.dim }}>{fp(local!.pubHex)}</span>
+        </div>
+      ) : can.data === false ? (
+        <div style={{ color: C.amber }}>this browser cannot make Ed25519 keys — use a current Chrome, Edge, Firefox or Safari</div>
+      ) : (
+        <button data-testid="op-key-make" onClick={() => make.mutate()} disabled={make.isPending}
+          style={btn({ fontSize: 11, padding: "3px 10px", color: C.text })}>
+          {make.isPending ? "…" : "make a signing key in this browser"}
+        </button>
+      )}
+      {keys.map((k) => {
+        const own = k.operator_id === localId;
+        return (
+          <div key={k.operator_id} data-testid="op-key" className="flex gap-2 items-center flex-wrap">
+            <span style={{ color: C.text }}>{k.operator_id}</span>
+            <span style={{ color: C.dim }}>{fp(k.pubkey)}</span>
+            {k.endorsement
+              ? <span style={{ color: C.green }}>vouched for by {k.endorsement.operator}</span>
+              : <span style={{ color: C.amber }}>not vouched for — machines trust it only if it was in their connect command</span>}
+            {registered && !own && !k.endorsement && (
+              <button data-testid="op-key-vouch" onClick={() => vouch.mutate(k)} disabled={vouch.isPending}
+                style={btn({ fontSize: 10.5, padding: "1px 8px", color: C.green, borderColor: C.green })}>vouch for it</button>
+            )}
+            <button data-testid="op-key-revoke"
+              onClick={() => { if (confirm(`Revoke ${k.operator_id}? Machines stop trusting it.`)) revoke.mutate(k.operator_id); }}
+              style={{ ...btn({ fontSize: 10.5, padding: "1px 8px" }), color: C.dim }}>revoke</button>
+          </div>
+        );
+      })}
+      {local && !registered && localId && (
+        <button onClick={() => forget.mutate()} style={{ ...btn({ fontSize: 10.5, padding: "1px 8px" }), color: C.dim }}>
+          forget the revoked key in this browser
+        </button>
+      )}
+      {err && <div style={{ color: C.red }}>{err.message}</div>}
+    </div>
+  );
+}
+
+/** Whose machine is whose: a sidecar names its developer by an opaque id; the
+ *  first person whose own key reports it is bound to it, so their sessions on
+ *  a team key stay theirs. A second claim disputes it — settle it here. */
+function MachineIds() {
+  const qc = useQueryClient();
+  const q = useQuery({ queryKey: ["identities"], queryFn: api.identities, retry: false });
+  const set = useMutation({
+    mutationFn: ({ id, email }: { id: string; email: string | null }) => api.setIdentity(id, email),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ["identities"] }),
+  });
+  const rows = q.data?.identities ?? [];
+  if (!rows.length) return null;
+  return (
+    <div data-testid="machine-ids" style={{ marginTop: 6 }}>
+      <div style={{ color: C.text, marginBottom: 4 }}>machines and their people</div>
+      {rows.map((r) => (
+        <div key={r.developer_id} data-testid="machine-id" className="flex gap-2 items-center flex-wrap">
+          <span style={{ color: C.dim }}>{r.developer_id}</span>
+          <span>→ {r.disputed_by ? <span style={{ color: C.amber }}>disputed: {r.email} or {r.disputed_by}?</span>
+                                  : <span style={{ color: C.text }}>{r.email}</span>}</span>
+          {r.disputed_by && [r.email, r.disputed_by].map((e) => (
+            <button key={e} onClick={() => set.mutate({ id: r.developer_id, email: e })}
+              style={btn({ fontSize: 10.5, padding: "1px 8px" })}>it's {e}</button>
+          ))}
+          <button onClick={() => set.mutate({ id: r.developer_id, email: null })}
+            style={{ ...btn({ fontSize: 10.5, padding: "1px 8px" }), color: C.dim }}>unbind</button>
+        </div>
+      ))}
     </div>
   );
 }
@@ -1757,6 +1868,7 @@ function KeyRole({ keyId, scopes }: { keyId: string; scopes: string[] }) {
 /** A member's own keys: one per machine, ingest only, theirs to revoke. */
 function MyKeys() {
   const qc = useQueryClient();
+  const signedKeys = useOperatorKeys();
   const mine = useQuery({ queryKey: ["my-keys"], queryFn: api.myKeys, retry: false });
   const [secret, setSecret] = useState<string | null>(null);
   const mint = useMutation({
@@ -1774,7 +1886,7 @@ function MyKeys() {
         <>
           <pre data-testid="my-key-connect" style={{ background: C.bg, border: `1px solid ${C.line}`, borderRadius: 5,
             padding: "8px 10px", margin: "0 0 4px", color: C.text, whiteSpace: "pre-wrap", wordBreak: "break-all" }}>
-            axor-wrap connect {PLANE_URL} --key {secret}
+            axor-wrap connect {PLANE_URL} --key {secret}{signedKeys.flags}
           </pre>
           <div style={{ color: C.amber, fontSize: 10.5, marginBottom: 8 }}>shown once — run it on your machine now</div>
         </>
@@ -1800,6 +1912,7 @@ function MyKeys() {
 /** API keys, minted for what they are for, with the lines to put them to use. */
 function AgentKeys({ journey, menuAll }: { journey: Journey | null; menuAll: boolean }) {
   const qc = useQueryClient();
+  const signedKeys = useOperatorKeys();
   const apiToken = useApp((s) => s.apiToken);
   const authStatus = useQuery({ queryKey: ["auth-status", apiToken], queryFn: api.authStatus });
   const admin = (authStatus.data?.scopes ?? []).includes("admin");
@@ -1833,7 +1946,7 @@ function AgentKeys({ journey, menuAll }: { journey: Journey | null; menuAll: boo
       <div data-testid="keys-open" style={{ fontFamily: MONO, fontSize: 11.5, color: C.mut, lineHeight: 1.7 }}>
         This plane is open — no key needed. A developer's machine:
         <pre style={{ background: C.bg, border: `1px solid ${C.line}`, borderRadius: 5, padding: "8px 10px", margin: "8px 0 0", color: C.text }}>
-          axor-wrap connect {PLANE_URL}
+          axor-wrap connect {PLANE_URL}{signedKeys.flags}
         </pre>
         <div style={{ marginTop: 8 }}>A production agent's process: <span style={{ color: C.text }}>AXOR_PLANE_URL={PLANE_URL}</span></div>
       </div>
@@ -1851,7 +1964,7 @@ function AgentKeys({ journey, menuAll }: { journey: Journey | null; menuAll: boo
       ? `export AXOR_PLANE_URL=${PLANE_URL}\nexport AXOR_NODE_ID=${node.trim()}\nexport AXOR_INGEST_KEY=${minted.secret}`
       : minted.preset === "ci"
         ? `AXOR_PLANE_URL=${PLANE_URL}\nAXOR_INGEST_KEY=${minted.secret}   # as CI secrets`
-        : `axor-wrap connect ${PLANE_URL} --key ${minted.secret}`
+        : `axor-wrap connect ${PLANE_URL} --key ${minted.secret}${signedKeys.flags}`
     : "";
   return (
     <div data-testid="agent-keys">

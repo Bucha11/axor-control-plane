@@ -5,6 +5,85 @@ The Control Plane ships as three packages from one tag (`axor-backend`,
 images (`axor-platform`, `axor-frontend`). Self-hosted operators upgrade by
 tag; `deploy/offline` carries the same release to a machine with no network.
 
+## Unreleased
+
+### Added — agents of a pair, to each other
+
+- **Agent-to-agent messages.** A coding session's agent writes to a peer
+  session's agent through the sidecar (`axor-wrap`'s `axor_pair`): another
+  session of the same developer, or one joined by an open pair either way
+  round. Provider-blind — Claude Code to Codex and back.
+  `GET /v1/coding/peers/{node}`, `POST /v1/coding/notes/{node}/send`,
+  `GET /v1/coding/notes/{node}/with/{peer}`.
+- **Manual or auto, per developer.** Between one developer's own sessions a
+  message is given at once. From a teammate's agent it waits for the
+  receiving developer's OK (`manual`, the default) — they are told in their
+  agent and send it on or dismiss it on the session panel — or goes straight
+  through (`auto`). `POST /v1/coding/say/{node}/held/{id}`,
+  `GET|PUT /v1/coding/say/{node}/mode`.
+- **The sender's taint rides with the text** (`pair_notes.taint`), shown on
+  the session panel and in the pair feed; every message, OK, dismissal and
+  mode change is on the audit trail.
+- Migration `0034`: `pair_notes.from_node`, `taint`, `held`, `dismissed_ts`,
+  `told`.
+- **The pair feed is live, both ways.** `GET /v1/pair/{token}/stream` (SSE,
+  resumes from `Last-Event-ID`) pushes each step as the sidecar reports it,
+  the notes whenever one is sent, given or decided, and the hold — the page
+  no longer polls every two seconds. The feed shows the developer's requests,
+  what the agent says on the way, and its edits as diffs (Edit, MultiEdit,
+  Write, Codex's apply_patch), beside the calls, checks and answer it showed.
+
+### Security
+
+- **What widens for a coding agent must be signed.** A sidecar connected with
+  operator keys (`axor-wrap connect --operator-key`) takes the team's rules,
+  observe mode, exceptions, trusted sources and team skills only from a policy
+  an operator signed. The plane serves the document to sign
+  (`GET /v1/coding/policy/document`), keeps the signature
+  (`PUT /v1/coding/policy/signature` — refused when stale, not newer, or not
+  verifying against the plane's keyring) and serves it with the policy; team
+  skills are named by the hash of their files. The policy screen says whether
+  what stands is signed, and signs it when the browser holds a signing key.
+- **Operators sign from their own browser.** Settings → "make a signing key
+  in this browser": an Ed25519 pair made by WebCrypto, private half
+  non-extractable in IndexedDB — the plane keeps only the public half, bound
+  to the account (`operator_keys`, migration `0038`; `GET|POST /v1/operators`,
+  `DELETE /v1/operators/{id}`). Commands, the coding policy and notes are
+  signed with it; the plane checks them against it as against its keyring,
+  and records the signature for the node. A compromised plane cannot sign.
+- **A vouch instead of a reconnect.** An operator vouches for another's key
+  (`PUT /v1/operators/{id}/endorsement`, signed with their own); machines add
+  a key only when one they already trust vouched for it, transitively.
+  Revocation is served and taken unsigned — it only narrows — and a machine
+  whose every key is revoked trusts nobody, never the plane.
+- **Connect in the signed posture by default.** The Connect page, "My keys"
+  and the laptop key preset put the plane's operator keys into `axor-wrap
+  connect` (`GET /v1/coding/operator-keys`) and show their fingerprint; a
+  plane with none says it signs nothing yet. An already-connected machine
+  runs the same command again, without `--key`.
+- **Signed notes.** "Say to your agent" and pair notes carry an operator's
+  signature when the browser can sign (`pair_notes.signed`, migration `0036`);
+  a sidecar with operator keys gives an unsigned one as outside text.
+- **Whose machine is whose** (`developer_identities`, migration `0035`): a
+  machine's developer id is bound to the person whose own key first reports
+  it; a second claim disputes it and it names nobody until an owner or admin
+  settles it (Settings, `GET|PUT /v1/identities`). Sessions are read through
+  the bindings, never rewritten.
+- **A tamper-evident audit trail.** Every custody-log row carries the hash of
+  the row before it (`vault_audit.prev_hash`, `row_hash`, migration `0037`);
+  `GET /v1/audit/verify` and the audit screen show whether it is untouched, or
+  the first row where an edit, a removal or an inserted row breaks it.
+  Retention pruning the oldest end keeps it whole. The compliance pack carries
+  the chains' heads, and is signed by default when the browser holds a signing
+  key.
+
+### Fixed
+
+- The config builder said a catastrophic call is "refused unless a person
+  approves it" — no approval exists on the plane. It now says what is true:
+  refused, unless the agent's own approval hook (axor-core escalation) grants
+  that one call.
+
 ## 0.5.0 — 2026-11-23
 
 The paid ladder becomes real: a workspace can be signed into by a company's
