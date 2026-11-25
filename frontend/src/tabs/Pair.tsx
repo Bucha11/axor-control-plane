@@ -204,11 +204,24 @@ function PairHome({ node }: { node?: string }) {
               {yours.map((n, i) => (
                 <div key={n.node_id} data-testid={`pair-session-${n.node_id}`} className="flex items-center gap-3 px-4 py-2 flex-wrap"
                   style={{ ...row(i), background: node === n.node_id ? "rgba(127,168,204,0.08)" : "none" }}>
-                  <span style={{ width: 7, height: 7, borderRadius: 4, background: C.green }} />
-                  <span style={{ fontSize: 13, color: C.text, flex: 1, minWidth: 200 }}>
-                    {n.profile?.title || short(n.node_id)}
-                    {n.profile?.title && <span style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim }}> · {short(n.node_id)}</span>}
-                  </span>
+                  {(() => {
+                    const r = rows.get(n.node_id);
+                    const last = r?.last_ts ? Date.now() - new Date(r.last_ts).getTime() : Infinity;
+                    const now = !!r?.active_run && last < 120_000;
+                    return (
+                      <>
+                        <span style={{ width: 7, height: 7, borderRadius: 4, background: now ? C.green : C.dim }} />
+                        <span style={{ fontSize: 13, color: C.text, flex: 1, minWidth: 200 }}>
+                          {n.profile?.title || short(n.node_id)}
+                          {n.profile?.title && <span style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim }}> · {short(n.node_id)}</span>}
+                        </span>
+                        <span data-testid={`pair-activity-${n.node_id}`} style={{ fontFamily: MONO, fontSize: 10.5, color: now ? C.green : C.dim }}>
+                          {now ? `working now${r?.current_tool ? ` · ${r.current_tool}` : ""}`
+                            : r?.last_ts ? `last step ${Math.round(last / 60000)} min ago` : "no steps yet"}
+                        </span>
+                      </>
+                    );
+                  })()}
                   <span style={{ fontFamily: MONO, fontSize: 11, color: C.dim }}>{n.profile?.agent}</span>
                   <button onClick={() => open.mutate(n.node_id)} disabled={open.isPending}
                     data-testid={`pair-start-${n.node_id}`} style={btn({ color: C.text, fontSize: 11, padding: "4px 12px" })}>
@@ -364,7 +377,7 @@ const VERB: Record<string, string> = {
   Skill: "used the skill", Task: "started a subagent:",
 };
 
-type Item = { ts: string; step?: PairStep; note?: PairNote; control?: PairControl };
+type Item = { ts: string; step?: PairStep; note?: PairNote; control?: PairControl; newTurn?: boolean };
 
 // The lines an edit changed, with the lines around them it kept as context:
 // what is the same at the start and at the end is said once, not removed and
@@ -480,8 +493,16 @@ function PairPane({ token }: { token: string }) {
       .map((s) => ({ ts: s.ts, step: s })),
     // a note sits where the agent was given it; until then, where it was sent
     ...(liveNotes ?? feed.data?.notes ?? []).map((n) => ({ ts: n.delivered_ts ?? n.ts, note: n })),
-    ...[...(feed.data?.controls ?? []), ...liveControls].map((c) => ({ ts: c.ts, control: c })),
+    ...[...new Map([...(feed.data?.controls ?? []), ...liveControls]
+      .map((c) => [`${c.ts}|${c.act}`, c] as const)).values()].map((c) => ({ ts: c.ts, control: c })),
   ].sort((a, b) => a.ts.localeCompare(b.ts));
+  // a turn (one run of the agent) starts where the run changes
+  let prevRun: string | undefined;
+  for (const it of items) {
+    if (!it.step?.run) continue;
+    it.newTurn = prevRun !== undefined && it.step.run !== prevRun;
+    prevRun = it.step.run;
+  }
   // what the agent is working on: the developer's latest request
   const asked = [...steps].reverse().find((st) => st.kind === "said" && st.role === "developer")?.text;
   // an answer right after a check that failed — said beside the answer
@@ -537,15 +558,15 @@ function PairPane({ token }: { token: string }) {
           <span style={{ flex: 1 }} />
           <span data-testid="pair-state" style={{ fontFamily: MONO, fontSize: 11,
             color: f.pair.stopped ? C.red : f.pair.paused ? C.amber : f.pair.confirmed === false ? C.dim : C.green }}>
-            {command.isPending ? (f.pair.paused ? "letting it go…" : "holding…")
+            {command.isPending ? (f.pair.paused ? "resuming…" : "pausing…")
               : f.pair.stopped ? "stopped"
               : f.pair.paused
-                ? (f.pair.confirmed === false ? "held — waiting for the agent to stop" : "held — the agent is waiting")
-                : (f.pair.confirmed === false ? "let go — waiting for the agent" : "working")}
+                ? (f.pair.confirmed === false ? "paused — waiting for the agent to stop" : "paused — the agent is waiting")
+                : (f.pair.confirmed === false ? "resumed — waiting for the agent" : "running")}
           </span>
           {teammate && f.pair.yours !== false && !f.pair.stopped && (
             <button onClick={() => command.mutate(f)} disabled={command.isPending} data-testid="pair-hold"
-              style={btn({ fontSize: 10.5, padding: "3px 9px" })}>{f.pair.paused ? "let it continue" : "hold the agent"}</button>
+              style={btn({ fontSize: 10.5, padding: "3px 9px" })}>{f.pair.paused ? "resume the agent" : "pause the agent"}</button>
           )}
           {teammate && f.pair.yours !== false && <CopyLink token={token} />}
           {teammate && f.pair.yours !== false && <button onClick={() => end.mutate()} style={{ ...link, color: C.mut }}>end pairing</button>}
@@ -553,7 +574,7 @@ function PairPane({ token }: { token: string }) {
         <div data-testid="pair-who" style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim, marginTop: 4, lineHeight: 1.6 }}>
           {f.pair.yours === false
             ? `${f.pair.created_by}'s session · you're here at their invitation`
-            : <>{f.pair.created_by ? `your session · ` : ""}{teammate ? "only you hold the agent" : "you're here as a guest from outside the team"}</>}
+            : <>{f.pair.created_by ? `your session · ` : ""}{teammate ? "only you can pause or stop it" : "you're here as a guest from outside the team"}</>}
           {f.pair.joined?.length ? ` · watching: ${f.pair.joined.join(", ")}` : ""}
           {f.pair.guests.length ? ` · from outside: ${f.pair.guests.join(", ")}` : f.pair.outside ? " · open to outside the team" : " · team only"}
           {` · link open until ${clock(f.pair.expires_ts)}`}
@@ -573,7 +594,12 @@ function PairPane({ token }: { token: string }) {
             {clock(it.ts)} · {it.control.act}{it.control.by ? ` by ${it.control.by}` : ""}
           </div>
         ) : it.step ? (
-          <div key={`s${it.step.id}`} className="flex gap-3" style={{ padding: "3px 0" }}>
+          <div key={`s${it.step.id}`}>
+          {it.newTurn && (
+            <div data-testid="pair-turn" style={{ fontFamily: MONO, fontSize: 10, color: C.dim,
+              borderTop: `1px solid ${C.line}`, margin: "8px 0 4px", paddingTop: 3 }}>new turn · {clock(it.ts)}</div>
+          )}
+          <div className="flex gap-3" style={{ padding: "3px 0" }}>
             <span style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim, width: 60, flexShrink: 0, whiteSpace: "nowrap", paddingTop: 2 }}>{clock(it.ts)}</span>
             <span style={{ minWidth: 0, overflowWrap: "anywhere" }}>
               <StepLine s={it.step} />
@@ -583,6 +609,7 @@ function PairPane({ token }: { token: string }) {
                 </div>
               )}
             </span>
+          </div>
           </div>
         ) : (
           <div key={`n${it.note!.id}`} data-testid="pair-note" className="my-2"

@@ -136,6 +136,16 @@ async def open_pair(body: dict, request: Request, store: StoreDep,
         raise _plan_required("inviting people from outside the team is on the paid plan — "
                              "teammates can join on any plan")
     invited = [str(e).strip().lower() for e in body.get("invite") or [] if str(e).strip()][:20]
+    # one open pair per session and person: opening again returns it (with
+    # anyone newly invited added), not a second link to the same thing
+    for held in await store.list_pairs(_now().isoformat()):
+        if held["node_id"] == node_id and held["outside"] == outside \
+                and str(held["created_by"]).lower() == _who(principal).lower():
+            more = sorted(set(held["invited"]) | set(invited))
+            if more != sorted(held["invited"]):
+                await store.update_pair(held["token"], invited=more)
+            return {"token": held["token"], "node_id": node_id, "outside": outside,
+                    "invited": more, "expires_ts": held["expires_ts"], "reused": True}
     from axor_backend.funnel import used
 
     await used(store, "pair_open")
@@ -364,7 +374,7 @@ async def pair_feed(token: str, request: Request, store: StoreDep, principal: Pr
                     after: int = 0) -> dict:
     pair, you = await _let_in(token, request, store, principal)
     rows = await store.node_events_after(pair["node_id"], max(after, 0), FEED_LIMIT)
-    steps = [s for i, _run, line in rows if (s := _step(i, line)) is not None]
+    steps = [{**s, "run": run} for i, run, line in rows if (s := _step(i, line)) is not None]
     profile = (await store.node_kinds()).get(pair["node_id"], {})
     posture = ((await store.get_reported(pair["node_id"])) or {}).get("level") or ""
     desired = await store.get_desired(pair["node_id"])
@@ -392,7 +402,7 @@ async def pair_feed(token: str, request: Request, store: StoreDep, principal: Pr
     }
 
 
-_CONTROL_ACTS = {"pause": "held", "resume": "let go", "stop": "stopped",
+_CONTROL_ACTS = {"pause": "paused", "resume": "resumed", "stop": "stopped",
                  "cascade_stop": "stopped, with its tree"}
 
 
@@ -475,11 +485,12 @@ async def pair_stream(token: str, request: Request, store: StoreDep, principal: 
                 except HTTPException as exc:
                     yield {"event": "ended", "data": json.dumps({"status": exc.status_code})}
                     return
-                for event_id, _run, line in await store.node_events_after(node, cursor,
-                                                                          FEED_LIMIT):
+                for event_id, run, line in await store.node_events_after(node, cursor,
+                                                                         FEED_LIMIT):
                     cursor = event_id
                     if (step := _step(event_id, line)) is not None:
-                        yield {"event": "step", "id": str(event_id), "data": json.dumps(step)}
+                        yield {"event": "step", "id": str(event_id),
+                               "data": json.dumps({**step, "run": run})}
                 notes = json.dumps(await store.pair_notes_of(token))
                 if notes != last_notes:
                     last_notes = notes

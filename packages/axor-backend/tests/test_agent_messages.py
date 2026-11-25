@@ -235,7 +235,7 @@ async def test_the_pair_sees_a_hold_by_whom_and_when_the_agent_confirms_it(
     assert r.status_code < 300, r.text
     feed = (await client.get(f"/v1/pair/{token}/feed", headers=ada)).json()
     assert feed["pair"]["paused"] is True and feed["pair"]["confirmed"] is False
-    assert [(c["act"], c["by"]) for c in feed["controls"]] == [("held", "ada@acme.io")]
+    assert [(c["act"], c["by"]) for c in feed["controls"]] == [("paused", "ada@acme.io")]
     # the sidecar reports it applied the command
     await client.post("/v1/plane/cc-ada-1/telemetry", headers=ada, json={
         "run_id": "cc-ada-1", "events": [{
@@ -244,3 +244,15 @@ async def test_the_pair_sees_a_hold_by_whom_and_when_the_agent_confirms_it(
             "payload": {"applied_version": 1, "level": "NORMAL"}}]})
     feed = (await client.get(f"/v1/pair/{token}/feed", headers=ada)).json()
     assert feed["pair"]["confirmed"] is True
+
+
+async def test_opening_a_pair_again_returns_the_open_one(
+        client: httpx.AsyncClient, priv: Ed25519PrivateKey) -> None:
+    ada = _user(priv, "ada@acme.io")
+    await _session(client, "cc-ada-1", "ada@acme.io")
+    first = (await client.post("/v1/pair", headers=ada, json={"node_id": "cc-ada-1"})).json()
+    again = (await client.post("/v1/pair", headers=ada, json={
+        "node_id": "cc-ada-1", "invite": ["sam@acme.io"]})).json()
+    assert again["token"] == first["token"] and again["invited"] == ["sam@acme.io"]
+    pairs = (await client.get("/v1/pair", headers=ada)).json()["pairs"]
+    assert len([p for p in pairs if p["node_id"] == "cc-ada-1"]) == 1

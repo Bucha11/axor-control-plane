@@ -254,7 +254,7 @@ test.describe("coding agents: their menu, and trying a skill", () => {
     const token = page.url().split("/pair/")[1];
     const pane = page.getByTestId("pair-pane");
     // the developer's own session: only they hold the agent
-    await expect(pane.getByTestId("pair-who")).toContainText("only you hold the agent");
+    await expect(pane.getByTestId("pair-who")).toContainText("only you can pause or stop it");
     const feed = pane.getByTestId("pair-feed");
     await expect(feed).toContainText("ran pytest -q tests/auth");
     await expect(feed).toContainText("tests failed — === 1 failed, 11 passed in 0.82s ===");
@@ -288,9 +288,9 @@ test.describe("coding agents: their menu, and trying a skill", () => {
     await expect(feed.getByTestId("pair-diff").last()).toContainText("+ address = Column()");
     // hold the agent, and let it go again
     await pane.getByTestId("pair-hold").click();
-    await expect(pane.getByTestId("pair-hold")).toHaveText("let it continue");
+    await expect(pane.getByTestId("pair-hold")).toHaveText("resume the agent");
     await pane.getByTestId("pair-hold").click();
-    await expect(pane.getByTestId("pair-hold")).toHaveText("hold the agent");
+    await expect(pane.getByTestId("pair-hold")).toHaveText("pause the agent");
     // a second session beside it
     const other = await (await request.post(`${B}/v1/pair`, { data: { node_id: "codex-example-77b0e4d2" } })).json();
     await page.getByTestId("pair-split").click();

@@ -687,6 +687,8 @@ export interface PairStep {
   tool?: string; target?: string; refused?: boolean; reason?: string;
   failed?: boolean; preview?: string; check?: { kind: string; passed: boolean; summary: string } | null;
   text?: string;
+  // the run (one turn of the agent) it belongs to
+  run?: string;
   // "said": who — the developer's request, or the agent on the way
   role?: "developer" | "assistant";
   // an edit: the text replaced and what replaced it, or a patch
