@@ -30,7 +30,7 @@ import { api, type HealAttempt, type ProbeFamily, type ProbeHealth } from "../ap
 import { C, MONO, btn } from "../theme";
 import Coach from "../components/Coach";
 import Tooltip from "../components/Tooltip";
-import { NO_CUT, behindProxy, cannotCut } from "../agentName";
+import { NO_TOOLSET_CUT, behindProxy, cannotCut } from "../agentName";
 import { useWorkStarted } from "../workStarted";
 
 // The demo battery's node: shown only when it is actually listed — it used to
@@ -350,7 +350,12 @@ export default function Health() {
                           : " The pieces of context that came from outside are not what changed it — removing them would not help."}
                     </span>
                     {canCut && cannotCut(shownNode) && (
-                      <span data-testid="no-cut" style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim, maxWidth: 320 }}>{NO_CUT}</span>
+                      <span data-testid="no-cut" style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim, maxWidth: 360 }}>
+                        {/* a wrapped agent's own loop: nothing here can cut it, so say
+                            what it was, and where the fix is — at its source */}
+                        the piece: <span style={{ color: C.text }}>{(proposal!.auto_excise.length ? proposal!.auto_excise : escalated).join(", ")}</span>.{" "}
+                        {NO_TOOLSET_CUT}
+                      </span>
                     )}
                     {canCut && !cannotCut(shownNode) && (
                       <Tooltip content={`Remove ${(proposal!.auto_excise.length ? proposal!.auto_excise : escalated).join(", ")} from the agent's context at its next turn; it is checked again afterwards.`}>

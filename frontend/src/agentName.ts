@@ -48,6 +48,13 @@ export function cannotCut(node: { profile?: { agent?: string } | null } | null |
   return behindProxy(node ?? undefined) || node?.profile?.agent === TOOLSET_AGENT;
 }
 
+/** The health page's word for it: the piece came from somewhere the agent reads. */
+export const NO_TOOLSET_CUT =
+  "Nothing here can reach into this agent's context — its tools are wrapped, not its model loop. "
+  + "If it came from something the agent reads again (a page, a knowledge-base article, a ticket), "
+  + "fix it there: the next run reads it again. To cut context live, wrap the loop (LangChain, Claude).";
+
 export const NO_CUT =
   "This agent's tools are wrapped, not its model loop: nothing here can reach into its context. "
-  + "Its next run starts without this text; to cut context live, wrap it with LangChain or the Claude adapter.";
+  + "If this text came from something it reads again, fix it there — its next run reads it again. "
+  + "To cut context live, wrap the loop (LangChain, Claude).";
