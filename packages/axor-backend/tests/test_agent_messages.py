@@ -228,7 +228,8 @@ async def test_the_pair_sees_a_hold_by_whom_and_when_the_agent_confirms_it(
         client: httpx.AsyncClient, priv: Ed25519PrivateKey) -> None:
     ada = _user(priv, "ada@acme.io")
     await _session(client, "cc-ada-1", "ada@acme.io")
-    token = (await client.post("/v1/pair", headers=ada, json={"node_id": "cc-ada-1"})).json()["token"]
+    opened = await client.post("/v1/pair", headers=ada, json={"node_id": "cc-ada-1"})
+    token = opened.json()["token"]
     r = await client.post("/v1/plane/cc-ada-1/command", headers=ada,
                           json={"version": 1, "state": {"paused": True}})
     assert r.status_code < 300, r.text
