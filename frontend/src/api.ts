@@ -713,9 +713,14 @@ export interface PairFeed {
   pair: { node_id: string; agent: string; title?: string; created_by: string; created_ts: string; expires_ts: string;
           outside: boolean; guests: string[]; you: "teammate" | "guest"; paused: boolean;
           joined?: string[]; invited?: string[]; yours?: boolean;
-          stopped: boolean; desired_version: number; level: string };
+          stopped: boolean; desired_version: number; level: string;
+          // whether the agent has applied the last hold / let-go yet
+          confirmed?: boolean };
   steps: PairStep[]; cursor: number; notes: PairNote[];
+  controls?: PairControl[];
 }
+/** A hold, a let-go or a stop of the session, from the audit trail. */
+export interface PairControl { ts: string; kind: "control"; act: string; by: string }
 
 /** A skill shared for the team: the latest upload and the version on. */
 export interface TeamSkill {
@@ -2273,7 +2278,8 @@ export function streamPair(
   token: string,
   after: number,
   on: { step: (s: PairStep) => void; notes: (n: PairNote[]) => void;
-        pair: (p: { paused: boolean; stopped: boolean; desired_version: number }) => void;
+        pair: (p: { paused: boolean; stopped: boolean; desired_version: number; confirmed: boolean }) => void;
+        control: (c: PairControl) => void;
         ended: () => void },
 ): () => void {
   const es = new EventSource(withToken(`/v1/pair/${encodeURIComponent(token)}/stream?after=${after}`));
@@ -2283,6 +2289,7 @@ export function streamPair(
   es.addEventListener("step", (e) => read<PairStep>(e, on.step));
   es.addEventListener("notes", (e) => read<PairNote[]>(e, on.notes));
   es.addEventListener("pair", (e) => read(e, on.pair));
+  es.addEventListener("control", (e) => read<PairControl>(e, on.control));
   es.addEventListener("ended", () => { es.close(); on.ended(); });
   return () => es.close();
 }

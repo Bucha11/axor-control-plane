@@ -1197,13 +1197,14 @@ function AgentMessages({ nodeId }: { nodeId: string }) {
       <div className="flex items-center gap-2" style={{ marginBottom: 6 }}>
         <span>from other agents</span>
         <span style={{ flex: 1 }} />
-        <span style={{ color: C.dim, fontSize: 10.5 }}>teammates' agents:</span>
+        <span style={{ color: C.dim, fontSize: 10.5 }}>a teammate's agent writes:</span>
         {(["manual", "auto"] as const).map((m) => (
           <button key={m} data-testid={`agent-msg-mode-${m}`} onClick={() => setMode.mutate(m)}
-            disabled={setMode.isPending || current === m}
+            disabled={setMode.isPending || current === m} aria-pressed={current === m}
             style={btn({ fontSize: 10.5, padding: "2px 8px",
-                         color: current === m ? C.text : C.dim, borderColor: current === m ? C.text : C.line })}>
-            {m === "manual" ? "wait for my OK" : "let through"}
+                         color: current === m ? C.bg : C.dim, borderColor: current === m ? C.green : C.line,
+                         ...(current === m ? { background: C.green } : {}) })}>
+            {current === m ? "✓ " : ""}{m === "manual" ? "I OK each message" : "it goes straight to my agent"}
           </button>
         ))}
       </div>

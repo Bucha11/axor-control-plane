@@ -222,3 +222,24 @@ def test_the_feed_shows_requests_what_the_agent_says_and_its_edits() -> None:
         "tool": "Bash", "args": {"command": "ls"}}})
     # an intent with no role (a production agent's) stays what it was
     assert _step(7, {"kind": "intent", "payload": {"text": "x"}})["kind"] == "task"
+
+
+async def test_the_pair_sees_a_hold_by_whom_and_when_the_agent_confirms_it(
+        client: httpx.AsyncClient, priv: Ed25519PrivateKey) -> None:
+    ada = _user(priv, "ada@acme.io")
+    await _session(client, "cc-ada-1", "ada@acme.io")
+    token = (await client.post("/v1/pair", headers=ada, json={"node_id": "cc-ada-1"})).json()["token"]
+    r = await client.post("/v1/plane/cc-ada-1/command", headers=ada,
+                          json={"version": 1, "state": {"paused": True}})
+    assert r.status_code < 300, r.text
+    feed = (await client.get(f"/v1/pair/{token}/feed", headers=ada)).json()
+    assert feed["pair"]["paused"] is True and feed["pair"]["confirmed"] is False
+    assert [(c["act"], c["by"]) for c in feed["controls"]] == [("held", "ada@acme.io")]
+    # the sidecar reports it applied the command
+    await client.post("/v1/plane/cc-ada-1/telemetry", headers=ada, json={
+        "run_id": "cc-ada-1", "events": [{
+            "schema_version": "1.0", "seq": 1, "node_id": "cc-ada-1", "kind": "heartbeat",
+            "ts": "2026-11-25T00:00:00+00:00", "causal_root": None, "gate": None, "verdict": None,
+            "payload": {"applied_version": 1, "level": "NORMAL"}}]})
+    feed = (await client.get(f"/v1/pair/{token}/feed", headers=ada)).json()
+    assert feed["pair"]["confirmed"] is True

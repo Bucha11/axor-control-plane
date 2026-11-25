@@ -182,6 +182,8 @@ async def command(node_id: str, body: dict, request: Request) -> dict:
 
     for act, detail in audit.command_acts(delta):
         await audit.record(ctx.store, request, act, node_id, **detail)
+    # a pair watching this session sees the hold at once
+    ctx.broadcast.publish(topic("node", node_id), {"type": "wake"})
     return {"node_id": node_id, "version": new_version, "state": state}
 
 
@@ -540,6 +542,8 @@ async def _fold_reported(
         topic("plane", node_id),
         {"type": "reported", "node_id": node_id, "reported": last},
     )
+    # a pair watching it sees the agent confirm a hold, not only the command
+    ctx.broadcast.publish(topic("node", node_id), {"type": "wake"})
     # Upward degradation transition — spec §16 trigger.
     notifier = getattr(ctx, "notifier", None)
     if notifier is None:

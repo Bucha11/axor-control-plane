@@ -382,11 +382,43 @@ async def pair_feed(token: str, request: Request, store: StoreDep, principal: Pr
                  "yours": _person(principal) is False or str(pair["created_by"]).lower()
                  == _who(principal).lower(),
                  "paused": paused, "stopped": bool(desired and desired[1].get("stopped")),
+                 "confirmed": (await _hold_state(store, pair["node_id"]))["confirmed"],
                  "desired_version": desired[0] if desired else 0, "level": posture},
         "steps": steps,
         "cursor": rows[-1][0] if rows else after,
         "notes": await store.pair_notes_of(token),
+        # holds and let-gos, to mark in the feed
+        "controls": await _controls(store, pair["node_id"]),
     }
+
+
+_CONTROL_ACTS = {"pause": "held", "resume": "let go", "stop": "stopped",
+                 "cascade_stop": "stopped, with its tree"}
+
+
+async def _controls(store: Any, node_id: str, after_ts: str = "") -> list[dict]:  # noqa: ANN401
+    """Holds, let-gos and stops of this session, from the audit trail — the
+    feed marks when they were done and by whom, oldest first."""
+    from axor_backend import audit
+
+    rows = await store.vault_audit_entries(audit.KIND, limit=200)
+    out = [{"ts": r["ts"], "kind": "control", "act": _CONTROL_ACTS[r["action"]],
+            "by": (r.get("by") or {}).get("who", "")}
+           for r in rows if r.get("target") == node_id and r.get("action") in _CONTROL_ACTS
+           and str(r.get("ts", "")) > after_ts]
+    return sorted(out, key=lambda c: c["ts"])
+
+
+async def _hold_state(store: Any, node_id: str) -> dict:  # noqa: ANN401
+    """Held or not as commanded, and whether the agent has confirmed it yet
+    (its sidecar reports the command version it applied)."""
+    desired = await store.get_desired(node_id)
+    reported = await store.get_reported(node_id) or {}
+    version = desired[0] if desired else 0
+    return {"paused": bool(desired and desired[1].get("paused")),
+            "stopped": bool(desired and desired[1].get("stopped")),
+            "desired_version": version,
+            "confirmed": int(reported.get("applied_version") or 0) >= version}
 
 
 # How long the stream sleeps with nothing new before it looks again (a note
@@ -429,6 +461,7 @@ async def pair_stream(token: str, request: Request, store: StoreDep, principal: 
     async def stream():  # noqa: ANN202
         nonlocal cursor
         last_notes = last_pair = ""
+        last_control = _now().isoformat()
         # the shared loop: it ends when the bus drops this reader. One wait at
         # a time that outlives the idle timeout — cancelling it would close
         # the loop, and the stream with it
@@ -451,10 +484,10 @@ async def pair_stream(token: str, request: Request, store: StoreDep, principal: 
                 if notes != last_notes:
                     last_notes = notes
                     yield {"event": "notes", "id": str(cursor), "data": notes}
-                desired = await store.get_desired(node)
-                state = json.dumps({"paused": bool(desired and desired[1].get("paused")),
-                                    "stopped": bool(desired and desired[1].get("stopped")),
-                                    "desired_version": desired[0] if desired else 0})
+                for control in await _controls(store, node, last_control):
+                    last_control = control["ts"]
+                    yield {"event": "control", "id": str(cursor), "data": json.dumps(control)}
+                state = json.dumps(await _hold_state(store, node))
                 if state != last_pair:
                     last_pair = state
                     yield {"event": "pair", "id": str(cursor), "data": state}
