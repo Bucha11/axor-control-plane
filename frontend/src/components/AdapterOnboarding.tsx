@@ -110,7 +110,7 @@ agent = create_agent(model, [tool(f) for f in checked.values()],
 
 ${env}
 
-${imports}, asyncio, os, uuid
+${imports}, os, uuid
 from axor_wrap.runtime import WrappedToolset
 from axor_wrap.connect import PlaneConnector
 from axor_wrap.observe import Experiment
@@ -118,11 +118,11 @@ from axor_wrap.observe import Experiment
 ${load}
 node = PlaneConnector(os.environ["AXOR_PLANE_URL"], os.environ["AXOR_NODE_ID"],
                       ingest_key=os.environ.get("AXOR_INGEST_KEY"),
-                      test_bench=os.environ.get("AXOR_TEST_BENCH") == "1").connect()
-asyncio.create_task(node.run())     # keeps it live on the plane (inside your event loop)
-asyncio.create_task(node.post_profile("agent", agent="axor-wrap"))   # what it is, test bench or not
+                      test_bench=os.environ.get("AXOR_TEST_BENCH") == "1").start()   # live, in the background
+node.submit(node.post_profile("agent", agent="axor-wrap"))   # what it is, test bench or not
+# (an async app: asyncio.create_task(node.run()) instead of start(), and await what submit() runs)
 
-async def handle(request: str) -> str:
+def handle(request: str) -> str:
     run_id = f"{node.session.node_id}-{uuid.uuid4().hex[:10]}"
     # a tool the plane asked to break on this run — only on a test bench (AXOR_TEST_BENCH=1,
     # a copy with no real users; pip install axor-eval)
@@ -134,12 +134,20 @@ async def handle(request: str) -> str:
     out = toolset.call("${last}", {...})   # or hand toolset.callables() to your loop
     answer = ...                           # what your agent tells the user
     # the run on the plane: every call, its verdict, and the answer it is audited against
-    await node.post_ingest(toolset.run_lines(answer), run_id)
+    node.submit(node.post_ingest(toolset.run_lines(answer), run_id))
     return answer
 
-# optional: reputation across runs (pip install axor-sentinel) and a health check
-# after a run (pip install axor-probe; costs model calls) — ReputationBook and
-# HealthCheck in axor_wrap.observe, posted with node.post_reputation / post_health_check`;
+# optional — drift: a health check after a run (pip install axor-probe; costs model calls)
+# from axor_wrap.observe import HealthCheck
+# health = HealthCheck(probes=2)
+#   in handle(), after post_ingest — infer(messages) -> {"text", "tool_calls"} is your model call;
+#   name each tool result by its tool, so the health page can say which one changed the agent:
+#   body = node.submit(health.run(infer=infer, infer_sync=infer_sync, system_text=SYSTEM,
+#                                 window=messages[-6:],
+#                                 fragments=[(f"{tool}#{i}", brings_outside_text, message), ...],
+#                                 node_id=node.session.node_id, run_id=run_id))
+#   if body: node.submit(node.post_health_check(body))
+# optional — reputation across runs (pip install axor-sentinel): ReputationBook, node.post_reputation`;
 }
 
 const step = (n: number, text: string) => (

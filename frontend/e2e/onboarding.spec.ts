@@ -107,6 +107,9 @@ test.describe("onboarding", () => {
     // each run reaches the plane with its answer, so a claimed success that failed is caught
     await expect(snippet).toContainText("task=request");
     await expect(snippet).toContainText("node.post_ingest(toolset.run_lines(answer)");
+    // a synchronous agent: the node runs in the background, its calls go through submit()
+    await expect(snippet).toContainText(".start()   # live, in the background");
+    await expect(snippet).toContainText("node.submit(node.post_health_check(body))");
     // Claude: its own tools run on axor-core — no scan step.
     await page.getByRole("button", { name: /Claude Agent/ }).click();
     await expect(snippet).toContainText("session = axor_claude.make_session()");
