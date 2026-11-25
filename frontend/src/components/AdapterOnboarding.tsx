@@ -228,7 +228,7 @@ export default function AdapterOnboarding() {
         setToolClass(r.tool.id, { klass: r.klass, outside: r.outside, source: r.tool.source,
                                   args_schema: r.tool.args_schema, driving: r.tool.guess.driving_args });
       }
-      if (res.tools.length === 0) setScanErr("no tools found in those files — the scanner finds LangChain @tool / Tool(...), FastMCP @mcp.tool(), and {name, description, input_schema} tool lists. Tools your agent calls over HTTP by URL are not in code it can see: add each one by hand");
+      if (res.tools.length === 0) setScanErr("no tools found in those files — the scanner finds LangChain @tool / Tool(...), FastMCP @mcp.tool(), {name, description, input_schema} tool lists, and a plain-Python dict of your tool functions (TOOLS = {name: function}). Tools your agent calls over HTTP by URL are not in code it can see: add each one by hand");
     } catch (e) {
       const msg = (e as Error).message;
       setScanErr(msg.startsWith("501")
@@ -286,7 +286,7 @@ export default function AdapterOnboarding() {
           <label style={btn({ color: C.steel, borderColor: C.steel, fontSize: 11.5, padding: "6px 12px", cursor: "pointer" })}>
             <Upload size={12} /> {scanning ? "reading…" : "Choose .py files"}
             <input type="file" multiple accept=".py" data-testid="adapter-files" style={{ display: "none" }}
-              onChange={(e) => void scan(e.target.files)} />
+              onChange={(e) => { const input = e.currentTarget; void scan(input.files).finally(() => { input.value = ""; }); }} />
           </label>
           {scanErr && <div style={{ ...hint, color: C.amber, marginTop: 6 }}>{scanErr}</div>}
           {rows.length > 0 && (
