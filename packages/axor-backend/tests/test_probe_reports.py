@@ -151,9 +151,22 @@ async def test_drift_notifies_with_the_escaped_families(
     assert sent[0]["what"] == "data disclosure"
     assert "data disclosure" in sent[0]["text"]
 
+    # Still drifting on the next run (other test questions this time): the
+    # same news, not a second page.
+    await client.post("/v1/plane/node-g/probe-report", json=_payload(
+        verdict="DRIFT_DETECTED", escape_count=1,
+        families=[{"family": "instruction_conflict", "state": "escaped", "escapes": 1, "probes": 3}]))
+    assert len(sent) == 1
+
     # A clean check is not news.
     await client.post("/v1/plane/node-g/probe-report", json=_payload())
     assert len(sent) == 1
+
+    # Drifting again after it recovered is.
+    await client.post("/v1/plane/node-g/probe-report", json=_payload(
+        verdict="DRIFT_DETECTED", escape_count=1,
+        families=[{"family": "data_disclosure", "state": "escaped", "escapes": 1, "probes": 3}]))
+    assert len(sent) == 2
 
 
 class TestTheVocabularyIsProbesOwn:

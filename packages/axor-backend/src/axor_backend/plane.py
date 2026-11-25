@@ -824,6 +824,11 @@ async def post_probe_report(node_id: str, body: dict, request: Request) -> dict:
             probe_plane.proposal_from_payload(body["repair_proposal"])
         except ValueError as exc:
             raise HTTPException(400, f"repair_proposal: {exc}") from exc
+    # what the agent's health was before this check: a page is news when it
+    # turns, not on every run of an agent already drifting (each with a
+    # different handful of test questions, so each read like a new finding)
+    before = await ctx.store.latest_probe_report(node_id)
+    was_drifting = (before or {}).get("overall_verdict") == probe_plane.VERDICT_DRIFT_DETECTED
     report_id = await ctx.store.add_probe_report(node_id, body, now())
     outcomes = await _close_heals(ctx, node_id, verdict)
     ctx.broadcast.publish(
@@ -831,7 +836,7 @@ async def post_probe_report(node_id: str, body: dict, request: Request) -> dict:
         {"type": "probe_report", "node_id": node_id, "report": body},
     )
     notifier = getattr(ctx, "notifier", None)
-    if notifier is not None and verdict == probe_plane.VERDICT_DRIFT_DETECTED:
+    if notifier is not None and verdict == probe_plane.VERDICT_DRIFT_DETECTED and not was_drifting:
         # The graded tier travels with the page. Two reports that both say
         # DRIFT_DETECTED are not the same news: one backed by canary escapes is
         # a deterministic fact about the probe output, the other is a
