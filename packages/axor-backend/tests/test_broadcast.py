@@ -125,7 +125,7 @@ class TestTheSharedLoopEndsOnTheMarker:
             path for path in src.rglob("*.py")
             if "EventSourceResponse" in path.read_text("utf-8")
         ]
-        assert {path.name for path in streams} == {"plane.py", "runs.py"}
+        assert {path.name for path in streams} == {"plane.py", "runs.py", "pair_api.py"}
         for path in streams:
             body = path.read_text("utf-8")
             assert "bus_messages(queue)" in body, (
@@ -133,3 +133,18 @@ class TestTheSharedLoopEndsOnTheMarker:
                 f"shared loop — a reader the bus drops would park on "
                 f"queue.get() forever and its response would never close"
             )
+
+
+async def test_a_wait_that_outlives_an_idle_timeout_keeps_the_loop_open() -> None:
+    """The pair stream waits with a timeout and must not close the shared loop
+    when nothing happens for a while (routers/pair_api.pair_stream)."""
+    bus = Broadcast()
+    t = topic("node", "n1")
+    q = bus.subscribe(t)
+    woken = messages(q)
+    waiting = asyncio.ensure_future(anext(woken))
+    done, _ = await asyncio.wait({waiting}, timeout=0.05)
+    assert not done                          # idle: still waiting, not closed
+    bus.publish(t, {"type": "wake"})
+    done, _ = await asyncio.wait({waiting}, timeout=1)
+    assert done and waiting.result() == {"type": "wake"}

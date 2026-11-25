@@ -415,7 +415,7 @@ async def pair_stream(token: str, request: Request, store: StoreDep, principal: 
 
     from sse_starlette.sse import EventSourceResponse
 
-    from axor_backend.broadcast import OVERFLOW
+    from axor_backend.broadcast import messages as bus_messages
     from axor_backend.tenancy import topic
 
     pair, _you = await _let_in(token, request, store, principal)
@@ -429,6 +429,11 @@ async def pair_stream(token: str, request: Request, store: StoreDep, principal: 
     async def stream():  # noqa: ANN202
         nonlocal cursor
         last_notes = last_pair = ""
+        # the shared loop: it ends when the bus drops this reader. One wait at
+        # a time that outlives the idle timeout — cancelling it would close
+        # the loop, and the stream with it
+        woken = bus_messages(queue)
+        waiting: asyncio.Future | None = None
         try:
             while True:
                 set_current_org(org)
@@ -453,13 +458,17 @@ async def pair_stream(token: str, request: Request, store: StoreDep, principal: 
                 if state != last_pair:
                     last_pair = state
                     yield {"event": "pair", "id": str(cursor), "data": state}
-                try:
-                    message = await asyncio.wait_for(queue.get(), STREAM_IDLE)
-                except TimeoutError:
+                if waiting is None:
+                    waiting = asyncio.ensure_future(anext(woken))
+                done, _ = await asyncio.wait({waiting}, timeout=STREAM_IDLE)
+                if not done:
                     continue
-                if message.get("type") == OVERFLOW:
+                if isinstance(waiting.exception(), StopAsyncIteration):
                     return
+                waiting = None
         finally:
+            if waiting is not None:
+                waiting.cancel()
             request.app.state.broadcast.unsubscribe(topic("node", node, org), queue)
 
     return EventSourceResponse(stream())
