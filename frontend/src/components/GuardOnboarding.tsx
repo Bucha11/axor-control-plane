@@ -255,6 +255,13 @@ export default function GuardOnboarding() {
         conversation's outside text out of another's. A refused call answers 403 (MCP: a JSON-RPC error);
         while paused, 503.
       </div>
+      <div style={{ ...hint, marginTop: 10 }}>
+        and when it has answered, one more line — the proxy sees the tool calls, not what your agent tells
+        the customer; with this, an answer that says a failed or held call worked is caught, and the run closes:
+      </div>
+      <Block id="guard-answer" text={`POST http://localhost:${port}/axor/answer
+X-Axor-Session: <the same conversation id>
+{"text": "<what your agent answered>"}`} />
 
       {step(6, "RUN IT")}
       <div data-testid="guard-live" className="p-3" style={{ background: C.panel, borderRadius: 8, fontFamily: MONO, fontSize: 11.5,

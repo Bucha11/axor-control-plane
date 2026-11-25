@@ -307,3 +307,35 @@ def test_the_guard_tells_the_plane_it_is_the_proxy(link: FakeLink) -> None:
     the plane can say so for this node only if it knows the node is guarded."""
     Guard(MANIFESTS, "support-agent", link=link)
     assert link.profile == ("agent", "axor-proxy")
+
+
+async def test_the_agents_answer_goes_to_the_plane_and_closes_the_conversation(
+        proxy: httpx.AsyncClient, link: FakeLink) -> None:
+    """The proxy sees the tool calls, never what the agent tells the customer:
+    an answer of "sent" after a call the operator held went by unaudited, and
+    the run read "running". The agent sends its answer; it ships as the run's
+    claim, read against what the tools did, and the next call is a new run."""
+    h = {"X-Axor-Session": "t-100"}
+    await proxy.get("/t/search/", params={"q": "x"}, headers=h)
+    link.state = "stopped"
+    held = await proxy.post("/t/send_email/", json={"to": "boss@corp.example"}, headers=h)
+    assert held.status_code == 503
+    r = await proxy.post("/axor/answer", json={"text": "Sent the weekly report."}, headers=h)
+    assert r.status_code == 200, r.text
+    out = r.json()
+    # the held send is among what the answer claims: it never ran
+    assert out["claims"]["tools_succeeded"] == ["search", "send_email"]
+    claim = [ln for batch in link.shipped for ln in batch if ln["kind"] == "claim"]
+    assert claim[0]["payload"]["text"] == "Sent the weekly report."
+    # the conversation is over: answering again has nothing to answer for
+    again = await proxy.post("/axor/answer", json={"text": "x"}, headers=h)
+    assert again.status_code == 404 and again.json()["error"] == "no_conversation"
+    assert (await proxy.post("/axor/answer", json={"txt": 1}, headers=h)).status_code == 400
+
+
+async def test_an_answer_admitting_the_failure_claims_nothing(
+        proxy: httpx.AsyncClient, link: FakeLink) -> None:
+    h = {"X-Axor-Session": "t-101"}
+    await proxy.get("/t/search/", params={"q": "x"}, headers=h)
+    r = await proxy.post("/axor/answer", json={"text": "I could not find anything."}, headers=h)
+    assert r.json()["claims"]["tools_succeeded"] == []

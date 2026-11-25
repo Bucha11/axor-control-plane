@@ -1041,6 +1041,29 @@ def create_app(state: ProxyState) -> Starlette:
             "tools": info["tools"],
         })
 
+    async def agent_answer(request: Request) -> Response:
+        """Guard mode: the agent's answer for its conversation (X-Axor-Session),
+        so the plane can audit it against what the tools did (Guard.answer).
+        Agent traffic, like /t/…: the agent sends it, not an operator."""
+        if state.guard is None:
+            return JSONResponse({"error": "not_guarding",
+                                 "detail": "the answer is read in guard mode (--guard)"}, status_code=404)
+        try:
+            body = await request.json()
+        except ValueError:
+            body = None
+        text = body.get("text") if isinstance(body, dict) else None
+        if not isinstance(text, str):
+            return JSONResponse({"error": "bad_request",
+                                 "detail": 'send {"text": "<what the agent answered>"}'}, status_code=400)
+        out = state.guard.answer(request.headers.get("x-axor-session"), text)
+        if out is None:
+            return JSONResponse({"error": "no_conversation",
+                                 "detail": "no tool call was made under this X-Axor-Session "
+                                           "(or it idled out): nothing to read the answer against"},
+                                status_code=404)
+        return JSONResponse(out)
+
     async def healthz(request: Request) -> Response:
         out: dict[str, Any] = {"ok": True, "armed": state.runs.active is not None}
         if state.guard is not None:
@@ -1059,6 +1082,7 @@ def create_app(state: ProxyState) -> Starlette:
         # healthz stays open: it is what a container's health check calls, and
         # it reveals only liveness plus whether a run is armed.
         Route("/axor/healthz", healthz),
+        Route("/axor/answer", agent_answer, methods=["POST"]),
         Route("/axor/preflight", guarded(preflight)),
         Route("/axor/mcp/discover", guarded(mcp_discover), methods=["POST"]),
         Route("/axor/governed/spawn", guarded(spawn_governed), methods=["POST"]),

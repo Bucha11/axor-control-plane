@@ -205,7 +205,7 @@ function ProductionOnboarding({ initial, proxyMode }: { initial?: ProdWay; proxy
     ["pause, stop, call budget — live", <>{yes} — the whole agent</>, <>{yes} — its tool calls; the agent still talks</>],
     ["sees the model: cut a bad item from its context", <>{yes} (LangChain, Claude)</>, no],
     ["tools inside the agent (functions, files, shell)", yes, <>{no} — only calls over HTTP or MCP</>],
-    ["catches a made-up answer", <>{yes} (opt-in)</>, <>{yes} — in test runs, it breaks a tool on purpose</>],
+    ["catches a made-up answer", <>{yes} (opt-in)</>, <>{yes} — when the agent sends its answer (one call), and in test runs</>],
     ["works with", "Python: LangChain, Claude Agent, tool functions", "any language or platform"],
   ];
   return (

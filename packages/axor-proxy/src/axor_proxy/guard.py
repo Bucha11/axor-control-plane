@@ -157,6 +157,9 @@ class _Session:
     calls: int = 0
     seq: int = 0
     results: int = 0
+    # what the agent asked for this conversation: what ran, and what the
+    # operator held — the tools its answer is read against (answer())
+    asked: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -258,6 +261,7 @@ class Guard:
             # governor: there is no kernel record of it, so the line is ours.
             # `control` marks it as held by the operator's own control, so it
             # is not listed among what the rules refused (step_search "held")
+            s.asked.append(tool)
             self._ship(s, [{"kind": "tool_call", "verdict": "deny",
                             "gate": refusal.category or "capability",
                             "payload": {"tool": tool, "args": args,
@@ -276,12 +280,39 @@ class Guard:
              status: int | None) -> None:
         """Fold an executed call's answer into the session's ledger."""
         ok = status is not None and status < 400
+        s.asked.append(tool)
         if ok and decision is not None:
             s.governor.register_output(decision, outside_text(self._by_tool.get(tool), answer))
         # The governor records an answer only when it taints (that is the source
         # replay folds); a clean or failed answer still closes the call on the
         # timeline, under the ref the next call's lines can name.
         self._ship_kernel(s, closing={"tool": tool, "status": "ok" if ok else "error"})
+
+    # ── the agent's answer ───────────────────────────────────────────────────
+
+    def answer(self, key: str | None, text: str) -> dict[str, Any] | None:
+        """The agent's answer to this conversation (X-Axor-Session), read
+        against what its tools did.
+
+        The proxy sees the tool calls, never what the agent then tells the
+        customer: a refund that failed upstream and an answer of "refund
+        issued" went by with nothing to audit, and the run stayed "running".
+        Sent here, the answer goes to the plane as the run's ``claim`` — the
+        plane audits it as it audits a wrapped agent's, and the run closes.
+        The conversation ends with it: the next call starts a new run.
+        None when there is no such conversation (nothing called yet, or it
+        idled out)."""
+        from axor_proxy.run_cli import reconstruct_claim
+
+        key = (key or DEFAULT_SESSION)[:120]
+        with self._lock:
+            s = self._sessions.pop(key, None)
+        if s is None:
+            return None
+        claims = reconstruct_claim(list(dict.fromkeys(s.asked)), text)
+        self._ship(s, [{"kind": "claim",
+                        "payload": {"text": text[:4000], "structured": True, "claims": claims}}])
+        return {"run_id": s.run_id, "claims": claims}
 
     # ── the plane trace (no values: the proxy's privacy rule) ─────────────────
 
