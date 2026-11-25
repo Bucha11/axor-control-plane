@@ -1092,6 +1092,9 @@ function ControlBody({ focusNode, testBench }: { focusNode?: string; testBench: 
           {isCodingNode(node) && mine(node.profile?.developer) && !stopped && (
             <SayToAgent nodeId={node.node_id} />
           )}
+          {isCodingNode(node) && mine(node.profile?.developer) && (
+            <AgentMessages nodeId={node.node_id} />
+          )}
           </>}
 
           {/* What is actually holding this node down, and what vouching for it
@@ -1192,7 +1195,7 @@ function SayToAgent({ nodeId }: { nodeId: string }) {
     mutationFn: () => api.sayToAgent(nodeId, text.trim()),
     onSuccess: () => { setText(""); void qc.invalidateQueries({ queryKey: ["said", nodeId] }); },
   });
-  const notes = (said.data?.notes ?? []).filter((n) => !n.pair).slice(-3);
+  const notes = (said.data?.notes ?? []).filter((n) => !n.pair && !n.from_node).slice(-3);
   return (
     <div data-testid="say-to-agent" className="mt-4" style={{ fontFamily: MONO, fontSize: 11, color: C.mut }}>
       <div style={{ marginBottom: 6 }}>say to the agent</div>
@@ -1217,6 +1220,76 @@ function SayToAgent({ nodeId }: { nodeId: string }) {
         reaches the agent at its next step, as your words — you see it in your agent too
       </div>
       {send.error && <div style={{ color: C.red, marginTop: 4 }}>{(send.error as Error).message}</div>}
+    </div>
+  );
+}
+
+/** What the agents of other sessions wrote to this one (axor_pair): another
+ *  session of yours reaches your agent at once; a teammate's agent waits for
+ *  your OK in manual mode, or goes straight through in auto. */
+function AgentMessages({ nodeId }: { nodeId: string }) {
+  const qc = useQueryClient();
+  const said = useQuery({ queryKey: ["said", nodeId], queryFn: () => api.saidToAgent(nodeId),
+                          refetchInterval: 3000, retry: false });
+  const mode = useQuery({ queryKey: ["agent-msg-mode", nodeId], queryFn: () => api.agentMsgMode(nodeId),
+                          retry: false });
+  const decide = useMutation({
+    mutationFn: ({ id, send }: { id: number; send: boolean }) => api.decideAgentMessage(nodeId, id, send),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ["said", nodeId] }),
+  });
+  const setMode = useMutation({
+    mutationFn: (m: "manual" | "auto") => api.setAgentMsgMode(nodeId, m),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ["agent-msg-mode", nodeId] }),
+  });
+  const msgs = (said.data?.notes ?? []).filter((n) => n.from_node).slice(-5);
+  const current = mode.data?.mode ?? "manual";
+  return (
+    <div data-testid="agent-messages" className="mt-4" style={{ fontFamily: MONO, fontSize: 11, color: C.mut }}>
+      <div className="flex items-center gap-2" style={{ marginBottom: 6 }}>
+        <span>from other agents</span>
+        <span style={{ flex: 1 }} />
+        <span style={{ color: C.dim, fontSize: 10.5 }}>a teammate's agent writes:</span>
+        {(["manual", "auto"] as const).map((m) => (
+          <button key={m} data-testid={`agent-msg-mode-${m}`} onClick={() => setMode.mutate(m)}
+            disabled={setMode.isPending || current === m} aria-pressed={current === m}
+            style={btn({ fontSize: 10.5, padding: "2px 8px",
+                         color: current === m ? C.bg : C.dim, borderColor: current === m ? C.green : C.line,
+                         ...(current === m ? { background: C.green } : {}) })}>
+            {current === m ? "✓ " : ""}{m === "manual" ? "I OK each message" : "it goes straight to my agent"}
+          </button>
+        ))}
+      </div>
+      {msgs.length === 0 && (
+        <div style={{ color: C.dim, fontSize: 10.5 }}>
+          none yet — agents write to each other with the axor_pair tool, across Claude Code and Codex
+        </div>
+      )}
+      {msgs.map((n) => (
+        <div key={n.id} data-testid="agent-message" style={{ marginBottom: 6, lineHeight: 1.5 }}>
+          <span style={{ color: C.dim }}>{n.pair ? "teammate's agent" : "your other session"} · {n.from_node}</span>
+          {n.taint && n.taint.length > 0 && (
+            <span data-testid="agent-message-taint" style={{ color: C.amber }}> · carries {n.taint.join(", ")}</span>
+          )}
+          <div style={{ color: C.text }}>“{n.text}”</div>
+          {n.held ? (
+            <span className="flex gap-2 mt-1">
+              <button data-testid="agent-message-send" onClick={() => decide.mutate({ id: n.id, send: true })}
+                disabled={decide.isPending} style={btn({ fontSize: 10.5, padding: "2px 9px", color: C.green, borderColor: C.green })}>
+                send to my agent
+              </button>
+              <button data-testid="agent-message-dismiss" onClick={() => decide.mutate({ id: n.id, send: false })}
+                disabled={decide.isPending} style={btn({ fontSize: 10.5, padding: "2px 9px" })}>dismiss</button>
+            </span>
+          ) : (
+            <span style={{ color: n.dismissed_ts ? C.dim : n.delivered_ts ? C.green : C.dim }}>
+              {n.dismissed_ts ? "dismissed" : n.delivered_ts
+                ? `given ${n.delivered_at === "prompt" ? "with the next prompt" : n.delivered_at === "stop" ? "as it was about to stop" : `after ${n.delivered_at}`}`
+                : "waiting for its next step"}
+            </span>
+          )}
+        </div>
+      ))}
+      {decide.error && <div style={{ color: C.red, marginTop: 4 }}>{(decide.error as Error).message}</div>}
     </div>
   );
 }

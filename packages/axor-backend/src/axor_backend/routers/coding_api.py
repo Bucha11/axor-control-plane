@@ -36,7 +36,9 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
 
+from axor_backend import operators
 from axor_backend.deps import PrincipalDep, StoreDep
+from axor_backend.tenancy import current_org_id
 
 router = APIRouter(prefix="/v1/coding", tags=["coding"])
 
@@ -59,7 +61,16 @@ async def policy(request: Request, store: StoreDep) -> dict:
     team = [{"name": t["name"], "version": t["live"]["version"]}
             for t in await store.team_skills() if t["live"]]
     rules = await _rules(store)
+    signed = await _signed(store)
     return {"skills_off": sorted(await _off(request)), "skills_team": team,
+            # what widens, as an operator last signed it (sidecars with
+            # operator keys take rules and team skills only from here)
+            **({"signed": {k: signed[k] for k in ("payload", "operator", "sig")}}
+               if signed else {}),
+            # browser keys machines may add (endorsed by one they trust) and
+            # the ones revoked (dropping a key only narrows)
+            **({"operators": ops} if (ops := await operators.for_machines(store))["endorsed"]
+               or ops["revoked"] else {}),
             **({"rules": {k: rules[k] for k in ("allow", "mode", "exceptions", "trusted_sources")}}
                if rules["set"] else {}),
             # an admin's brake: every coding agent of the team held at once
@@ -157,7 +168,8 @@ def _sources(raw: object) -> list[str]:
 
 @router.get("/rules")
 async def rules_for_screen(store: StoreDep) -> dict:
-    return {**await _rules(store), "catalog": _catalog()}
+    return {**await _rules(store), "catalog": _catalog(),
+            "signed": await signing_state(store)}
 
 
 @router.put("/rules")
@@ -437,3 +449,118 @@ async def set_brake(body: dict, request: Request, principal: PrincipalDep) -> di
     await audit.record(store, request, "brake_on" if on else "brake_off", "every coding agent",
                        **({"reason": value["reason"]} if value["reason"] else {}))
     return value
+
+
+# ── the signed policy: what widens, as an operator signed it ─────────────────
+#
+# A sidecar with operator keys in its LOCAL config (axor_wrap.agents.signed)
+# takes what narrows from this plane as it is — a skill off, the brake — and
+# what widens only from the last policy an operator signed: the team's rules
+# (allow, observe, exceptions, trusted sources) and the skills turned on, each
+# named by the hash of its files. Changing them here changes nothing for such a
+# sidecar until an operator signs the new document; the screen says so.
+
+SIGNED_POLICY = "coding_policy_signed"
+
+
+def bundle_digest(files: list[dict]) -> str:
+    """The hash a signed policy names a team skill's files by — the same as
+    axor_wrap.agents.signed.bundle_digest (test-vectored in tests)."""
+    from axor_core.kernel.jcs import canonicalize
+
+    rows = sorted(({"path": str(f.get("path", "")), "content": str(f.get("content", ""))}
+                   for f in files if isinstance(f, dict)), key=lambda f: f["path"])
+    return hashlib.sha256(canonicalize({"files": rows})).hexdigest()
+
+
+async def _signed(store: Any) -> dict | None:  # noqa: ANN401
+    value = await store.get_setting(SIGNED_POLICY)
+    return value if isinstance(value, dict) and isinstance(value.get("payload"), dict) else None
+
+
+async def policy_document(store: Any, seq: int) -> dict:  # noqa: ANN401
+    """The document an operator signs: what widens, now."""
+    rules = await _rules(store)
+    return {
+        "kind": "coding_policy", "org": current_org_id(), "seq": seq,
+        "rules": ({k: rules[k] for k in ("allow", "mode", "exceptions", "trusted_sources")}
+                  if rules["set"] else None),
+        "skills_team": [{"name": t["name"], "version": t["live"]["version"],
+                         "sha256": bundle_digest(t["live"].get("files") or [])}
+                        for t in await store.team_skills() if t["live"]],
+    }
+
+
+def _same(a: dict, b: dict) -> bool:
+    return {k: v for k, v in a.items() if k != "seq"} == {k: v for k, v in b.items()
+                                                          if k != "seq"}
+
+
+async def signing_state(store: Any) -> dict:  # noqa: ANN401
+    signed = await _signed(store)
+    seq = int(signed["payload"].get("seq") or 0) if signed else 0
+    current = bool(signed) and _same(signed["payload"], await policy_document(store, seq))
+    return {"seq": seq, "current": current,
+            **({"operator": signed.get("operator"), "ts": signed.get("ts")} if signed else {})}
+
+
+@router.get("/policy/document")
+async def policy_to_sign(store: StoreDep, principal: PrincipalDep) -> dict:
+    """What an operator signs next: the policy as it stands, one seq on."""
+    from axor_backend import permissions
+
+    permissions.require_admin(principal)
+    state = await signing_state(store)
+    return {"payload": await policy_document(store, state["seq"] + 1), "signed": state}
+
+
+@router.put("/policy/signature")
+async def sign_policy(body: dict, request: Request, store: StoreDep,
+                      principal: PrincipalDep) -> dict:
+    """``{"payload", "operator", "sig"}`` — the document from
+    ``/policy/document``, signed. Refused when it is not what stands now, or
+    not newer than the one signed before; verified against the plane's
+    operator keyring when it has one (the sidecar verifies it in any case)."""
+    from axor_backend import audit, permissions
+    from axor_backend.signing import CommandRejected
+
+    permissions.require_admin(principal)
+    payload, operator, sig = body.get("payload"), body.get("operator"), body.get("sig")
+    if not isinstance(payload, dict) or payload.get("kind") != "coding_policy":
+        raise HTTPException(400, "payload is the document from /v1/coding/policy/document")
+    state = await signing_state(store)
+    seq = payload.get("seq")
+    if not isinstance(seq, int) or seq <= state["seq"]:
+        raise HTTPException(409, "a signed policy is newer than this one — fetch it again")
+    if not _same(payload, await policy_document(store, seq)) \
+            or payload.get("org") != current_org_id():
+        raise HTTPException(409, "the policy changed since this document was fetched — "
+                                 "fetch it again and sign that")
+    if await operators.signing_required(request.app.state, store):
+        from axor_core.kernel.jcs import canonicalize
+
+        try:
+            await operators.verify(request.app.state, store, operator,
+                                   canonicalize(payload), sig)
+        except CommandRejected as exc:
+            raise HTTPException(403, f"the signature does not verify: {exc}") from exc
+    elif not isinstance(operator, str) or not isinstance(sig, str):
+        raise HTTPException(400, "operator and sig are strings")
+    await store.set_setting(SIGNED_POLICY, {"payload": payload, "operator": operator,
+                                            "sig": sig, "ts": datetime.now(UTC).isoformat()})
+    await audit.record(store, request, "coding_policy_signed", "", seq=seq, operator=operator)
+    return await signing_state(store)
+
+
+@router.get("/operator-keys")
+async def operator_keys(request: Request) -> dict:
+    """The operators' public keys and their fingerprint — what the Connect page
+    puts into ``axor-wrap connect --operator-key``, so a machine connects in
+    the signed posture with no extra step. Trust on first use: a person can
+    compare the fingerprint ``axor-wrap connect`` prints with one their admin
+    shared out of band."""
+    from axor_backend.signing import fingerprint
+
+    keys = {**request.app.state.keyring.public_keys(),
+            **await operators.active_keys(request.app.state.store)}
+    return {"keys": keys, "fingerprint": fingerprint(keys)}

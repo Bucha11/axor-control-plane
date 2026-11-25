@@ -126,7 +126,8 @@ def _count(rows: list[dict[str, Any]], key: str) -> dict[str, int]:
 def build(*, organization: str, frm: str, to: str, generated_by: str, tier: str,
           licensed_to: str, rows: list[dict[str, Any]], attestations: list[dict[str, Any]],
           fleet: dict[str, dict[str, str]], developers: list[str], held: list[dict[str, Any]],
-          retention_days: int | None, truncated_at: int = 0) -> dict[str, Any]:
+          retention_days: int | None, truncated_at: int = 0,
+          chain: dict[str, Any] | None = None) -> dict[str, Any]:
     """One period, from rows already read for it. Pure, so the arithmetic a
     reviewer may challenge is testable without a database."""
     control_rows = [r for r in rows if r.get("kind") == audit.KIND]
@@ -225,6 +226,11 @@ def build(*, organization: str, frm: str, to: str, generated_by: str, tier: str,
          "evidence": {s: _section_count(body, s) for s in sections}}
         for name, asks, sections in CONTROLS
     ]
+    if chain is not None:
+        # the audit trail's hash chains as they stand: whole or not, and the
+        # head — signed with this document, so a later trail that no longer
+        # contains this head was rewritten
+        body["trail_chain"] = chain
     body["integrity"] = {
         "sha256": digest(body),
         "how": "sha256 of this document with `integrity` removed, keys sorted, "

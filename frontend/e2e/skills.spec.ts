@@ -254,7 +254,7 @@ test.describe("coding agents: their menu, and trying a skill", () => {
     const token = page.url().split("/pair/")[1];
     const pane = page.getByTestId("pair-pane");
     // the developer's own session: only they hold the agent
-    await expect(pane.getByTestId("pair-who")).toContainText("only you hold the agent");
+    await expect(pane.getByTestId("pair-who")).toContainText("only you can pause or stop it");
     const feed = pane.getByTestId("pair-feed");
     await expect(feed).toContainText("ran pytest -q tests/auth");
     await expect(feed).toContainText("tests failed — === 1 failed, 11 passed in 0.82s ===");
@@ -270,11 +270,27 @@ test.describe("coding agents: their menu, and trying a skill", () => {
     expect(ids.length).toBeGreaterThan(0);
     await request.post(`${B}/v1/coding/notes/${claude}/delivered`, { data: { ids, at: "Bash" } });
     await expect(note.getByTestId("pair-note-state")).toContainText("given to the agent after Bash");
+    // live, without a reload: the developer's request, what the agent says on
+    // the way, and its edit as a diff — the page looks again only every 30 s
+    const now = new Date().toISOString();
+    const line = (seq: number, kind: string, payload: Record<string, unknown>) => ({
+      schema_version: "1.0", seq, node_id: claude, kind, ts: now, causal_root: null, gate: null,
+      verdict: kind === "tool_call" ? "pass" : null, payload });
+    await request.post(`${B}/v1/plane/${claude}/telemetry`, { data: { run_id: `${claude}-live`, events: [
+      line(9001, "intent", { role: "developer", text: "rename email to address" }),
+      line(9002, "intent", { role: "assistant", text: "Starting with models.py." }),
+      line(9003, "tool_call", { tool: "Edit", args: { file_path: "models.py",
+        old_string: "email = Column()", new_string: "address = Column()" } }),
+    ] } });
+    await expect(feed.getByTestId("pair-asked").last()).toContainText("rename email to address", { timeout: 5000 });
+    await expect(feed.getByTestId("pair-agent-said").last()).toContainText("Starting with models.py.");
+    await expect(feed.getByTestId("pair-diff").last()).toContainText("- email = Column()");
+    await expect(feed.getByTestId("pair-diff").last()).toContainText("+ address = Column()");
     // hold the agent, and let it go again
     await pane.getByTestId("pair-hold").click();
-    await expect(pane.getByTestId("pair-hold")).toHaveText("let it continue");
+    await expect(pane.getByTestId("pair-hold")).toHaveText("resume the agent");
     await pane.getByTestId("pair-hold").click();
-    await expect(pane.getByTestId("pair-hold")).toHaveText("hold the agent");
+    await expect(pane.getByTestId("pair-hold")).toHaveText("pause the agent");
     // a second session beside it
     const other = await (await request.post(`${B}/v1/pair`, { data: { node_id: "codex-example-77b0e4d2" } })).json();
     await page.getByTestId("pair-split").click();
@@ -559,6 +575,41 @@ test.describe("session controls for coding agents", () => {
     await page.getByRole("button", { name: "more…" }).click();
     await expect(page.getByRole("button", { name: /Replan/ })).toHaveCount(0);
     await expect(page.getByRole("button", { name: /Inject next turn/ })).toHaveCount(0);
+  });
+
+  test("agents write to each other: another session's message lands, marked with what it carries", async ({ page, request }) => {
+    const claude = "claude-code-example-3f9a21c0";
+    const other = "codex-example-ada-second";
+    await request.post(`${B}/v1/demo/seed-coding`);
+    // a second session of the same developer, on Codex
+    await request.post(`${B}/v1/plane/${other}/profile`,
+      { data: { kind: "coding", agent: "codex", developer: "dev-example-ada" } });
+    const peers = await (await request.get(`${B}/v1/coding/peers/${other}`)).json();
+    expect(peers.peers.map((p: { node_id: string; relation: string }) => `${p.node_id}:${p.relation}`))
+      .toContain(`${claude}:own`);
+    const sent = await request.post(`${B}/v1/coding/notes/${other}/send`,
+      { data: { to: claude, text: "I moved the rate limiter into middleware/", taint: ["web"] } });
+    expect((await sent.json()).status).toBe("queued");
+    await setConnection(page, { mode: "demo" });
+    await journey(page, "coding");
+    await goHash(page, `govern/${claude}`);
+    const box = page.getByTestId("agent-messages");
+    await expect(box.getByTestId("agent-message").last()).toContainText("I moved the rate limiter");
+    await expect(box.getByTestId("agent-message-taint").last()).toContainText("carries web");
+    await expect(box.getByTestId("agent-message").last()).toContainText("waiting for its next step");
+    // it is not shown as the developer's own words
+    await expect(page.getByTestId("say-to-agent").getByTestId("said")
+      .filter({ hasText: "rate limiter" })).toHaveCount(0);
+    const id = (await sent.json()).id;
+    await request.post(`${B}/v1/coding/notes/${claude}/delivered`, { data: { ids: [id], at: "stop" } });
+    await expect(box.getByTestId("agent-message").last()).toContainText("as it was about to stop");
+    // teammates' agents: wait for my OK, or let them through
+    await box.getByTestId("agent-msg-mode-auto").click();
+    await expect.poll(async () => (await (await request.get(`${B}/v1/coding/say/${claude}/mode`)).json()).mode)
+      .toBe("auto");
+    await box.getByTestId("agent-msg-mode-manual").click();
+    await expect.poll(async () => (await (await request.get(`${B}/v1/coding/say/${claude}/mode`)).json()).mode)
+      .toBe("manual");
   });
 
   test("the team's brake holds every agent, and lets them go", async ({ page, request }) => {

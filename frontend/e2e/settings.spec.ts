@@ -267,4 +267,7 @@ test("the audit trail: who did what to which agent; its export is the Business p
   await expect(trail.getByTestId("audit-window")).toContainText("the last 30 days");
   await trail.getByTestId("audit-export-csv").click();
   await expect(trail).toContainText("exporting the audit trail is on the Business plan");
+  // the trail is a hash chain, and it is untouched
+  await trail.getByTestId("trail-verify").click();
+  await expect(trail.getByTestId("trail-ok")).toContainText("untouched");
 });

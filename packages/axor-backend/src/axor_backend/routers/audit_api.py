@@ -234,6 +234,22 @@ async def release_hold(hold_id: str, request: Request, store: StoreDep,
     return released
 
 
+async def _chains(store: Any) -> dict[str, Any]:  # noqa: ANN401
+    from axor_backend import audit_chain
+
+    return {kind: audit_chain.verify(await store.vault_audit_chain(kind), current_org_id(), kind)
+            for kind in KINDS}
+
+
+@router.get("/verify")
+async def verify_trail(store: StoreDep, principal: PrincipalDep) -> dict:
+    """Walk the audit trail's hash chains: whole, or the first row where one
+    breaks and why — an edit, a removal from the middle, a row slipped in."""
+    permissions.require_admin(principal)
+    chains = await _chains(store)
+    return {"ok": all(c["ok"] for c in chains.values()), "chains": chains}
+
+
 @router.get("/compliance")
 async def compliance_pack(request: Request, state: StateDep, store: StoreDep,
                           principal: PrincipalDep, format: str = "json",  # noqa: A002
@@ -265,6 +281,7 @@ async def compliance_pack(request: Request, state: StateDep, store: StoreDep,
         truncated_at=EXPORT_MAX if len(rows) >= EXPORT_MAX else 0,
         retention_days=keep if isinstance(keep := await store.get_setting(
             audit.RETENTION_SETTING), int) else None,
+        chain=await _chains(store),
     )
     if sign:
         # Signing is the vault's custody, and it keeps its own wall: a

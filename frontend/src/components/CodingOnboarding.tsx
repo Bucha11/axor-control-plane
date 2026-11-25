@@ -4,6 +4,7 @@
 // on its own. What a first-time visitor asks before any of that is answered at
 // the top: what is free, and whether they need an account (they do when the
 // plane has auth on — the sessions report into their workspace).
+import { useOperatorKeys } from "../signedConnect";
 import { useEffect, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Check, Copy } from "lucide-react";
@@ -115,7 +116,8 @@ export default function CodingOnboarding({ then }: { then?: () => void }) {
   const needsKey = authOn !== false;
   // one command, once per machine: axor-wrap saves the plane and the key, and
   // every axor command on the machine reads them — nothing to export
-  const connectCmd = `axor-wrap connect ${PLANE_URL}${needsKey ? ` --key ${key ?? "<create the key below>"}` : ""}`;
+  const signedKeys = useOperatorKeys();
+  const connectCmd = `axor-wrap connect ${PLANE_URL}${needsKey ? ` --key ${key ?? "<create the key below>"}` : ""}${signedKeys.flags}`;
   // on to the next part of "both" is not a connection: nothing reported yet
   const goAgents = () => { if (then) { then(); return; } connect("adapter", []); navigate("govern"); };
 
@@ -203,6 +205,18 @@ export default function CodingOnboarding({ then }: { then?: () => void }) {
               {mint.isPending ? "…" : "create the key"}
             </button>
           )}
+          {signedKeys.count > 0 ? (
+            <div data-testid="connect-signed" style={{ ...hint, marginTop: 6 }}>
+              <span style={{ color: C.green }}>signed</span>: your agents take the team's rules, skills and
+              notes only when an operator signed them. Keys fingerprint{" "}
+              <span style={{ color: C.text }}>{signedKeys.fingerprint}</span> — the command prints it too.
+              Already connected? Run it again without <span style={{ color: C.text }}>--key</span>: your key is kept.
+            </div>
+          ) : (
+            <div data-testid="connect-unsigned" style={{ ...hint, marginTop: 6 }}>
+              this plane signs nothing yet (no operator keys): your agents take its word as it is.
+            </div>
+          )}
           <div style={{ ...hint, marginTop: 6 }}>
             {key ? <span style={{ color: C.amber }}>the key is shown once — copy it now. </span> : null}
             {needsKey
@@ -222,6 +236,7 @@ export default function CodingOnboarding({ then }: { then?: () => void }) {
       {step(4, "IN EACH REPOSITORY")}
       <Block id="repo" copied={copied} onCopy={copy}
         text={agents.map((a) => `axor-wrap agents install ${a}`).join("\n") || "# pick an agent above"} />
+      <div style={hint}>already installed? run it again — it adds axor_pair, so agents can write to each other.</div>
       {agents.map((a) => (
         <div key={a} style={hint}>
           {AGENTS.find((x) => x.id === a)!.label}: {AGENTS.find((x) => x.id === a)!.note}

@@ -148,7 +148,7 @@ const CONSEQUENCE: [Consequence | undefined, string, string][] = [
   ["BENIGN", "harmless", "let through"],
   ["REVERSIBLE", "can be undone", "let through"],
   ["CONSEQUENTIAL", "costly", "let through — the most an agent may do on its own"],
-  ["CATASTROPHIC", "can't be undone", "refused unless a person approves it"],
+  ["CATASTROPHIC", "can't be undone", "refused — unless the agent's own approval hook grants that one call"],
 ];
 
 function argCandidates(sink: Sink, schema?: Record<string, unknown>): string[] {
@@ -961,7 +961,9 @@ export default function ConfigBuilder() {
     ? <> Only {always(x).map((a) => `${a.arg} ${a.set.join(" / ")}`).join("; ")} — any other value is refused.</>
     : null;
   const worst = (x: Sink) => x.consequence === "CATASTROPHIC"
-    ? <span style={{ color: C.red }}> Can't be undone: refused unless a person approves it.</span>
+    ? <span style={{ color: C.red }}> Can't be undone: refused, unless the agent's own approval
+        hook (axor-core escalation, in your code) grants that one call — there is no approval
+        from this plane.</span>
     : null;
   const sayTool = (x: Sink): React.ReactNode => {
     const name = <b style={{ color: C.text }}>{x.name}</b>;

@@ -236,11 +236,11 @@ test.describe("config builder", () => {
     await decides.getByLabel("allowed to").press("Enter");
     await expect(decides).toContainText("any other value is refused");
     await page.getByTestId("consequence-send_email").getByRole("button", { name: "can't be undone" }).click();
-    await expect(page.getByTestId("consequence-send_email")).toContainText("refused unless a person approves it");
+    await expect(page.getByTestId("consequence-send_email")).toContainText("refused — unless the agent's own approval hook grants that one call");
     await page.getByRole("button", { name: /See what gets refused/ }).click();
     const reading = page.getByTestId("policy-reading");
     await expect(reading).toContainText("Only to boss@corp.example — any other value is refused.");
-    await expect(reading).toContainText("Can't be undone: refused unless a person approves it.");
+    await expect(reading).toContainText("there is no approval from this plane");
   });
 
   test("the config beside the form: a click shows where, a hand edit comes back", async ({ page }) => {

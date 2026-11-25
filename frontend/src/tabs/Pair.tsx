@@ -9,7 +9,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Check, Copy } from "lucide-react";
-import { api, PairFeed, PairNote, PairStep } from "../api";
+import { api, PairControl, PairFeed, PairNote, PairStep, streamPair } from "../api";
 import { navigate } from "../router";
 import { C, MONO, btn } from "../theme";
 import { HowItWorks } from "../components/MachineCommand";
@@ -206,11 +206,24 @@ function PairHome({ node }: { node?: string }) {
               {yours.map((n, i) => (
                 <div key={n.node_id} data-testid={`pair-session-${n.node_id}`} className="flex items-center gap-3 px-4 py-2 flex-wrap"
                   style={{ ...row(i), background: node === n.node_id ? "rgba(127,168,204,0.08)" : "none" }}>
-                  <span style={{ width: 7, height: 7, borderRadius: 4, background: C.green }} />
-                  <span style={{ fontSize: 13, color: C.text, flex: 1, minWidth: 200 }}>
-                    {n.profile?.title || short(n.node_id)}
-                    {n.profile?.title && <span style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim }}> · {short(n.node_id)}</span>}
-                  </span>
+                  {(() => {
+                    const r = rows.get(n.node_id);
+                    const last = r?.last_ts ? Date.now() - new Date(r.last_ts).getTime() : Infinity;
+                    const now = !!r?.active_run && last < 120_000;
+                    return (
+                      <>
+                        <span style={{ width: 7, height: 7, borderRadius: 4, background: now ? C.green : C.dim }} />
+                        <span style={{ fontSize: 13, color: C.text, flex: 1, minWidth: 200 }}>
+                          {n.profile?.title || short(n.node_id)}
+                          {n.profile?.title && <span style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim }}> · {short(n.node_id)}</span>}
+                        </span>
+                        <span data-testid={`pair-activity-${n.node_id}`} style={{ fontFamily: MONO, fontSize: 10.5, color: now ? C.green : C.dim }}>
+                          {now ? `working now${r?.current_tool ? ` · ${r.current_tool}` : ""}`
+                            : r?.last_ts ? `last step ${Math.round(last / 60000)} min ago` : "no steps yet"}
+                        </span>
+                      </>
+                    );
+                  })()}
                   <span style={{ fontFamily: MONO, fontSize: 11, color: C.dim }}>{n.profile?.agent}</span>
                   <button onClick={() => open.mutate(n.node_id)} disabled={open.isPending}
                     data-testid={`pair-start-${n.node_id}`} style={btn({ color: C.text, fontSize: 11, padding: "4px 12px" })}>
@@ -366,9 +379,51 @@ const VERB: Record<string, string> = {
   Skill: "used the skill", Task: "started a subagent:",
 };
 
-type Item = { ts: string; step?: PairStep; note?: PairNote };
+type Item = { ts: string; step?: PairStep; note?: PairNote; control?: PairControl; newTurn?: boolean };
+
+// The lines an edit changed, with the lines around them it kept as context:
+// what is the same at the start and at the end is said once, not removed and
+// added again.
+function lineDiff(oldText: string, newText: string): { sign: " " | "-" | "+"; text: string }[] {
+  const a = oldText ? oldText.split("\n") : [];
+  const b = newText.split("\n");
+  let head = 0;
+  while (head < a.length && head < b.length && a[head] === b[head]) head++;
+  let tail = 0;
+  while (tail < a.length - head && tail < b.length - head
+         && a[a.length - 1 - tail] === b[b.length - 1 - tail]) tail++;
+  return [
+    ...a.slice(0, head).map((t) => ({ sign: " " as const, text: t })),
+    ...a.slice(head, a.length - tail).map((t) => ({ sign: "-" as const, text: t })),
+    ...b.slice(head, b.length - tail).map((t) => ({ sign: "+" as const, text: t })),
+    ...a.slice(a.length - tail).map((t) => ({ sign: " " as const, text: t })),
+  ];
+}
+
+function Diff({ d }: { d: NonNullable<PairStep["diff"]> }) {
+  return (
+    <div data-testid="pair-diff" style={{ fontFamily: MONO, fontSize: 11, background: C.bg, border: `1px solid ${C.line}`,
+      borderRadius: 5, padding: "4px 8px", margin: "3px 0 2px", maxHeight: 220, overflow: "auto", whiteSpace: "pre-wrap" }}>
+      {d.patch
+        ? d.patch.split("\n").map((t, i) => (
+            <div key={i} style={{ color: t.startsWith("+") ? C.green : t.startsWith("-") ? C.red : C.dim }}>{t}</div>))
+        : (d.hunks ?? []).map((h, i) => (
+            <div key={i} style={{ marginBottom: 4 }}>
+              {lineDiff(h.old, h.new).map((l, j) => (
+                <div key={j} style={{ color: l.sign === "-" ? C.red : l.sign === "+" ? C.green : C.dim }}>
+                  {l.sign} {l.text}
+                </div>))}
+            </div>))}
+    </div>
+  );
+}
 
 function StepLine({ s }: { s: PairStep }) {
+  if (s.kind === "said") {
+    return s.role === "developer"
+      ? <span data-testid="pair-asked" style={{ color: C.text }}>asked: “{s.text}”</span>
+      : <span data-testid="pair-agent-said" style={{ color: C.mut, whiteSpace: "pre-wrap" }}>{s.text}</span>;
+  }
   if (s.kind === "task") {
     return <span style={{ color: C.text }}>asked: “{s.text}”</span>;
   }
@@ -382,6 +437,7 @@ function StepLine({ s }: { s: PairStep }) {
     return (
       <span style={{ color: C.mut }}>
         {VERB[s.tool ?? ""] ?? s.tool} {s.target && <code style={{ color: C.text }}>{s.target}</code>}
+        {s.diff && <Diff d={s.diff} />}
       </span>
     );
   }
@@ -397,10 +453,30 @@ function StepLine({ s }: { s: PairStep }) {
 
 function PairPane({ token }: { token: string }) {
   const qc = useQueryClient();
-  const feed = useQuery({ queryKey: ["pair", token], queryFn: () => api.pairFeed(token), refetchInterval: 2000, retry: false });
+  // the first look (who, what session, the last steps), then live: the stream
+  // brings each step, the notes and the hold as they happen
+  const feed = useQuery({ queryKey: ["pair", token], queryFn: () => api.pairFeed(token), refetchInterval: 30000, retry: false });
+  const [liveSteps, setLiveSteps] = useState<PairStep[]>([]);
+  const [liveNotes, setLiveNotes] = useState<PairNote[] | null>(null);
+  const [livePair, setLivePair] = useState<{ paused: boolean; stopped: boolean; desired_version: number; confirmed: boolean } | null>(null);
+  const [liveControls, setLiveControls] = useState<PairControl[]>([]);
+  const opened = feed.data !== undefined;
+  useEffect(() => {
+    if (!opened) return;
+    setLiveSteps([]);
+    return streamPair(token, feed.data?.cursor ?? 0, {
+      step: (st) => setLiveSteps((cur) => (cur.some((x) => x.id === st.id) ? cur : [...cur, st])),
+      notes: setLiveNotes,
+      pair: setLivePair,
+      control: (c) => setLiveControls((cur) => [...cur, c]),
+      ended: () => void qc.invalidateQueries({ queryKey: ["pair", token] }),
+    });
+    // the stream opens once, from the first look's cursor
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [token, opened]);
   const [text, setText] = useState("");
   const send = useMutation({
-    mutationFn: () => api.sendNote(token, text.trim()),
+    mutationFn: () => api.sendNote(token, text.trim(), feed.data?.pair.you === "teammate" ? feed.data.pair.node_id : undefined),
     onSuccess: () => { setText(""); void qc.invalidateQueries({ queryKey: ["pair", token] }); },
   });
   const command = useMutation({
@@ -412,11 +488,37 @@ function PairPane({ token }: { token: string }) {
     onSuccess: () => navigate("pair"),
   });
   const box = useRef<HTMLDivElement>(null);
+  const seen = new Set((feed.data?.steps ?? []).map((st) => st.id));
+  const steps = [...(feed.data?.steps ?? []), ...liveSteps.filter((st) => !seen.has(st.id))];
   const items: Item[] = [
-    ...(feed.data?.steps ?? []).filter((s) => s.kind !== "tool_result" || s.failed || s.check)
+    ...steps.filter((s) => s.kind !== "tool_result" || s.failed || s.check)
       .map((s) => ({ ts: s.ts, step: s })),
-    ...(feed.data?.notes ?? []).map((n) => ({ ts: n.ts, note: n })),
+    // a note sits where the agent was given it; until then, where it was sent
+    ...(liveNotes ?? feed.data?.notes ?? []).map((n) => ({ ts: n.delivered_ts ?? n.ts, note: n })),
+    ...[...new Map([...(feed.data?.controls ?? []), ...liveControls]
+      .map((c) => [`${c.ts}|${c.act}`, c] as const)).values()].map((c) => ({ ts: c.ts, control: c })),
   ].sort((a, b) => a.ts.localeCompare(b.ts));
+  // a turn (one run of the agent) starts where the run changes
+  let prevRun: string | undefined;
+  for (const it of items) {
+    if (!it.step?.run) continue;
+    it.newTurn = prevRun !== undefined && it.step.run !== prevRun;
+    prevRun = it.step.run;
+  }
+  // what the agent is working on: the developer's latest request
+  const asked = [...steps].reverse().find((st) => st.kind === "said" && st.role === "developer")?.text;
+  // an answer right after a check that failed — said beside the answer
+  const contradicted = new Set<number>();
+  let lastCheckFailed = false;
+  for (const st of steps) {
+    if (st.check) lastCheckFailed = !st.check.passed;
+    else if (st.kind === "said" && st.role === "developer") lastCheckFailed = false;
+    else if (st.kind === "claim" && lastCheckFailed) contradicted.add(st.id);
+  }
+  const decide = useMutation({
+    mutationFn: ({ id, send: ok }: { id: number; send: boolean }) =>
+      api.decideAgentMessage(feed.data!.pair.node_id, id, ok),
+  });
   useEffect(() => {
     if (box.current) box.current.scrollTop = box.current.scrollHeight;
   }, [items.length]);
@@ -445,7 +547,7 @@ function PairPane({ token }: { token: string }) {
     );
   }
   if (!feed.data) return <div style={{ fontFamily: MONO, fontSize: 12, color: C.dim }}>loading…</div>;
-  const f = feed.data;
+  const f = livePair ? { ...feed.data, pair: { ...feed.data.pair, ...livePair } } : feed.data;
   const teammate = f.pair.you === "teammate";
   return (
     <section data-testid="pair-pane" style={{ ...panel, display: "flex", flexDirection: "column", minWidth: 0 }}>
@@ -456,10 +558,17 @@ function PairPane({ token }: { token: string }) {
           {f.pair.title && <span data-testid="pair-title" style={{ fontSize: 13, color: C.text }}>“{f.pair.title}”</span>}
           <span style={{ fontFamily: MONO, fontSize: 11, color: C.dim }}>{short(f.pair.node_id)}</span>
           <span style={{ flex: 1 }} />
-          {f.pair.paused && <span style={{ fontFamily: MONO, fontSize: 11, color: C.amber }}>held</span>}
+          <span data-testid="pair-state" style={{ fontFamily: MONO, fontSize: 11,
+            color: f.pair.stopped ? C.red : f.pair.paused ? C.amber : f.pair.confirmed === false ? C.dim : C.green }}>
+            {command.isPending ? (f.pair.paused ? "resuming…" : "pausing…")
+              : f.pair.stopped ? "stopped"
+              : f.pair.paused
+                ? (f.pair.confirmed === false ? "paused — waiting for the agent to stop" : "paused — the agent is waiting")
+                : (f.pair.confirmed === false ? "resumed — waiting for the agent" : "running")}
+          </span>
           {teammate && f.pair.yours !== false && !f.pair.stopped && (
             <button onClick={() => command.mutate(f)} disabled={command.isPending} data-testid="pair-hold"
-              style={btn({ fontSize: 10.5, padding: "3px 9px" })}>{f.pair.paused ? "let it continue" : "hold the agent"}</button>
+              style={btn({ fontSize: 10.5, padding: "3px 9px" })}>{f.pair.paused ? "resume the agent" : "pause the agent"}</button>
           )}
           {teammate && f.pair.yours !== false && <CopyLink token={token} />}
           {teammate && f.pair.yours !== false && <button onClick={() => end.mutate()} style={{ ...link, color: C.mut }}>end pairing</button>}
@@ -467,29 +576,68 @@ function PairPane({ token }: { token: string }) {
         <div data-testid="pair-who" style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim, marginTop: 4, lineHeight: 1.6 }}>
           {f.pair.yours === false
             ? `${f.pair.created_by}'s session · you're here at their invitation`
-            : <>{f.pair.created_by ? `your session · ` : ""}{teammate ? "only you hold the agent" : "you're here as a guest from outside the team"}</>}
+            : <>{f.pair.created_by ? `your session · ` : ""}{teammate ? "only you can pause or stop it" : "you're here as a guest from outside the team"}</>}
           {f.pair.joined?.length ? ` · watching: ${f.pair.joined.join(", ")}` : ""}
           {f.pair.guests.length ? ` · from outside: ${f.pair.guests.join(", ")}` : f.pair.outside ? " · open to outside the team" : " · team only"}
-          {` · until ${clock(f.pair.expires_ts)}`}
+          {` · link open until ${clock(f.pair.expires_ts)}`}
         </div>
+        {(asked || f.pair.title) && (
+          <div data-testid="pair-task" style={{ fontSize: 13, color: C.text, marginTop: 6, lineHeight: 1.5 }}>
+            <span style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim }}>working on </span>“{asked ?? f.pair.title}”
+          </div>
+        )}
       </div>
 
       <div ref={box} data-testid="pair-feed" className="px-4 py-3" style={{ height: 420, overflowY: "auto", fontSize: 12.5, lineHeight: 1.55 }}>
         {items.length === 0 && <div style={{ color: C.dim, fontFamily: MONO, fontSize: 11.5 }}>nothing yet — steps appear here as the agent works</div>}
-        {items.map((it) => it.step ? (
-          <div key={`s${it.step.id}`} className="flex gap-3" style={{ padding: "3px 0" }}>
+        {items.map((it) => it.control ? (
+          <div key={`c${it.control.ts}${it.control.act}`} data-testid="pair-control" className="my-1"
+            style={{ fontFamily: MONO, fontSize: 10.5, color: C.amber, borderTop: `1px dashed ${C.line}`, paddingTop: 3 }}>
+            {clock(it.ts)} · {it.control.act}{it.control.by ? ` by ${it.control.by}` : ""}
+          </div>
+        ) : it.step ? (
+          <div key={`s${it.step.id}`}>
+          {it.newTurn && (
+            <div data-testid="pair-turn" style={{ fontFamily: MONO, fontSize: 10, color: C.dim,
+              borderTop: `1px solid ${C.line}`, margin: "8px 0 4px", paddingTop: 3 }}>new turn · {clock(it.ts)}</div>
+          )}
+          <div className="flex gap-3" style={{ padding: "3px 0" }}>
             <span style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim, width: 60, flexShrink: 0, whiteSpace: "nowrap", paddingTop: 2 }}>{clock(it.ts)}</span>
-            <span style={{ minWidth: 0, overflowWrap: "anywhere" }}><StepLine s={it.step} /></span>
+            <span style={{ minWidth: 0, overflowWrap: "anywhere" }}>
+              <StepLine s={it.step} />
+              {contradicted.has(it.step.id) && (
+                <div data-testid="pair-contradiction" style={{ color: C.red, fontFamily: MONO, fontSize: 10.5 }}>
+                  ⚠ the last check before this answer failed
+                </div>
+              )}
+            </span>
+          </div>
           </div>
         ) : (
-          <div key={`n${it.note!.id}`} data-testid="pair-note" className="my-2 px-3 py-2"
-            style={{ borderLeft: `2px solid ${C.amber}`, background: "rgba(242,163,60,0.06)", borderRadius: "0 6px 6px 0" }}>
+          <div key={`n${it.note!.id}`} data-testid="pair-note" className="my-2"
+            style={{ borderLeft: `2px solid ${C.amber}`, background: "rgba(242,163,60,0.06)", borderRadius: "0 6px 6px 0",
+                     padding: "8px 12px" }}>
             <div style={{ fontFamily: MONO, fontSize: 10.5, color: C.amber, marginBottom: 2 }}>
-              note from {it.note!.by}{it.note!.outside ? " (outside the team)" : ""} · {clock(it.ts)}
+              {it.note!.from_node
+                ? <>agent → agent · {short(it.note!.from_node)} → {short(it.note!.node_id ?? "")}</>
+                : <>note from {it.note!.by}{it.note!.outside ? " (outside the team)" : ""}</>} · {clock(it.ts)}
+              {it.note!.taint && it.note!.taint.length > 0 && (
+                <span data-testid="pair-note-taint"> · carries {it.note!.taint.join(", ")}</span>
+              )}
             </div>
             <div style={{ color: C.text }}>{it.note!.text}</div>
             <div data-testid="pair-note-state" style={{ fontFamily: MONO, fontSize: 10.5, color: it.note!.delivered_ts ? C.green : C.dim, marginTop: 3 }}>
-              {it.note!.delivered_ts
+              {it.note!.held && f.pair.yours !== false && it.note!.node_id === f.pair.node_id ? (
+                <span className="flex gap-2 items-center flex-wrap">
+                  <span style={{ color: C.amber }}>waiting for your OK</span>
+                  <button data-testid="pair-held-send" onClick={() => decide.mutate({ id: it.note!.id, send: true })}
+                    style={btn({ fontSize: 10.5, padding: "1px 8px", color: C.green, borderColor: C.green })}>send to my agent</button>
+                  <button data-testid="pair-held-dismiss" onClick={() => decide.mutate({ id: it.note!.id, send: false })}
+                    style={btn({ fontSize: 10.5, padding: "1px 8px" })}>dismiss</button>
+                </span>
+              ) : it.note!.held ? "waiting for its developer's OK"
+                : it.note!.dismissed_ts ? "dismissed by its developer"
+                : it.note!.delivered_ts
                 ? `given to the agent ${it.note!.delivered_at === "prompt" ? "with the next prompt" : `after ${it.note!.delivered_at}`}, ${clock(it.note!.delivered_ts)}`
                 : "waiting for the agent's next step"}
             </div>

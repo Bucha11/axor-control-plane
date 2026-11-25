@@ -232,6 +232,32 @@ function ForTheReviewer({ field }: { field: React.CSSProperties }) {
   );
 }
 
+/** The trail is a hash chain: an edited row, one removed from the middle or
+ *  one slipped in shows here. The compliance pack carries the head it saw. */
+function TrailCheck() {
+  const [res, setRes] = useState<Awaited<ReturnType<typeof api.verifyTrail>> | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const run = async () => {
+    setErr(null);
+    try { setRes(await api.verifyTrail()); } catch (e) { setErr((e as Error).message); }
+  };
+  const broken = res ? Object.entries(res.chains).find(([, c]) => !c.ok) : undefined;
+  return (
+    <div data-testid="trail-check" className="flex gap-2 items-center flex-wrap" style={{ marginBottom: 6 }}>
+      <button data-testid="trail-verify" onClick={() => void run()}
+        style={btn({ fontSize: 11, padding: "3px 10px" })}>check the trail is untouched</button>
+      {res && (res.ok
+        ? <span data-testid="trail-ok" style={{ color: C.green }}>
+            untouched — {Object.values(res.chains).reduce((n, c) => n + c.rows, 0)} rows chained
+          </span>
+        : <span data-testid="trail-broken" style={{ color: C.red }}>
+            broken at row {broken?.[1].broken_at}: {broken?.[1].reason}
+          </span>)}
+      {err && <span style={{ color: C.red }}>{err}</span>}
+    </div>
+  );
+}
+
 export default function AuditTrail() {
   const [action, setAction] = useState("");
   const [who, setWho] = useState("");
@@ -267,6 +293,7 @@ export default function AuditTrail() {
   }
   return (
     <div data-testid="audit-trail" style={{ fontFamily: MONO, fontSize: 11.5, color: C.mut }}>
+      <TrailCheck />
       <div style={{ color: C.dim, fontSize: 10.5, lineHeight: 1.6, marginBottom: 10 }}>
         Every control acted on in this workspace — who paused, stopped or capped which agent, the team&apos;s
         brake, the rules and their exceptions, skills, the seat limit, pairs and notes, keys — newest first.
