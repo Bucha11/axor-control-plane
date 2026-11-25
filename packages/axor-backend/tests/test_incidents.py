@@ -186,3 +186,24 @@ async def test_a_lie_pinned_automatically_is_still_new(client: httpx.AsyncClient
     status = {i["run_id"]: i["status"] for i in (await _feed(client))["items"]
               if i["kind"] == "made_up"}
     assert status == {"r_auto": "new", "r_kept": "kept_as_test"}
+
+
+async def test_the_same_lie_run_after_run_is_one_item(client: httpx.AsyncClient) -> None:
+    """The payments provider is down: every refund ticket gets "refund issued".
+    Three identical cards buried the other agents' incidents under one outage."""
+    store = client._transport.app.state.store  # type: ignore[attr-defined]
+    case = {"scenario": "live", "deviation": "fabricated_tool_result",
+            "verdict_source": "heuristic", "confidence": 0.8,
+            "observed_reality": {"tool": "issue_refund", "observed": "error", "actual_result": "error"},
+            "agent_claim": "agent claimed issue_refund succeeded",
+            "fault_attribution": [{"fault_mode": "observed_error", "tool_name": "issue_refund",
+                                   "influence": "strong"}]}
+    for n in range(3):
+        await store.upsert_run(f"r{n}", "copilot", "live", f"2026-11-25T00:1{n}:00+00:00")
+        await store.set_evidence(f"r{n}", [case])
+    await store.upsert_run("other", "kb", "live", "2026-11-25T00:09:00+00:00")
+    await store.set_evidence("other", [{**case, "observed_reality": {"tool": "issue_credit"},
+                                        "fault_attribution": [{**case["fault_attribution"][0],
+                                                               "tool_name": "issue_credit"}]}])
+    made = [i for i in (await _feed(client))["items"] if i["kind"] == "made_up"]
+    assert [(i["node_id"], i["count"], i["run_id"]) for i in made] == [("copilot", 3, "r2"), ("kb", 1, "other")]

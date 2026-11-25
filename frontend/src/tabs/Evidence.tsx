@@ -270,8 +270,9 @@ function Item({ item, who }: { item: IncidentItem; who?: string }) {
     item.seq != null ? { seq: item.seq, node: item.anchor_node ?? item.node_id } : undefined);
   // a stop held the calls: nothing failed, the agent answered as if they had run
   const held = (item.case?.fault_attribution ?? []).filter((f) => f.fault_mode === "observed_held");
-  const title = item.kind === "made_up" && held.length ? "answered as if calls it was stopped from had run"
-    : item.kind === "made_up" ? incidentWhat(item.what)
+  const times = item.count > 1 ? ` ×${item.count}` : "";
+  const title = item.kind === "made_up" && held.length ? `answered as if calls it was stopped from had run${times}`
+    : item.kind === "made_up" ? `${incidentWhat(item.what)}${times}`
     : item.kind === "dangerous" ? item.what
       : item.kind === "would_refuse" ? `${item.what} — would have been refused`
         : `${item.what} — refused${item.count > 1 ? ` ×${item.count}` : ""}`;

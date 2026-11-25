@@ -102,12 +102,33 @@ async def incidents(store: Any, scan: int) -> list[dict[str, Any]]:  # noqa: ANN
     items: list[dict[str, Any]] = []
     runs = await store.list_runs()
     scenario = {r["run_id"]: r["scenario"] for r in runs}
-    for run in runs:
+    # The same lie, told again run after run on one day — the payments provider
+    # is down and every refund ticket gets "refund issued" — is one item with a
+    # count, as a refusal retried is: three identical cards in a row buried the
+    # other agents' incidents under one outage. Newest first, so the item is
+    # the latest of its kind and its id is that case's (a new one reads new).
+    from axor_backend.routers.runs import AUTO_PIN
+
+    # kept by a person, not by the automatic must-block pin (see below): a kept
+    # case is its own item, never folded into the ones still to look at
+    kept = {p["run_id"] for p in await store.pinned()
+            if not str(p.get("label") or "").startswith(AUTO_PIN)}
+    made: dict[str, dict[str, Any]] = {}
+    for run in sorted(runs, key=lambda r: str(r.get("created_ts") or ""), reverse=True):
         for i, ev in enumerate(run.get("evidence") or []):
             if not ev.get("deviation"):
                 continue
             anchor = ev.get("anchor") or {}
-            items.append({
+            fault = next(iter(ev.get("fault_attribution") or []), {}) or {}
+            observed = ev.get("observed_reality") if isinstance(ev.get("observed_reality"), dict) else {}
+            key = ":".join(str(x) for x in (
+                run["node_id"], ev["deviation"], fault.get("tool_name", ""), fault.get("fault_mode", ""),
+                observed.get("observed", ""), str(run.get("created_ts") or "")[:10],
+                run["run_id"] in kept))
+            if key in made:
+                made[key]["count"] += 1
+                continue
+            made[key] = {
                 "id": f"ev:{run['run_id']}:{i}", "kind": "made_up", "ts": run["created_ts"],
                 "node_id": run["node_id"], "run_id": run["run_id"],
                 "seq": anchor.get("seq"), "anchor_node": anchor.get("node_id"),
@@ -116,7 +137,8 @@ async def incidents(store: Any, scan: int) -> list[dict[str, Any]]:  # noqa: ANN
                          "agent_claim": ev.get("agent_claim"),
                          "fault_attribution": ev.get("fault_attribution") or [],
                          "index": i},
-            })
+            }
+    items += made.values()
     refused: dict[str, dict[str, Any]] = {}
     for s in step_search.search(await store.recent_tool_lines(scan), limit=10_000):
         # a skill's dry run is a try the developer ran on purpose: its story is
@@ -161,10 +183,6 @@ async def incidents(store: Any, scan: int) -> list[dict[str, Any]]:  # noqa: ANN
     # kept by a person, not by the automatic must-block pin: a lie caught a
     # moment ago read "kept as a test" — not new, not needing a look, hidden
     # from the default list — before anyone had seen it
-    from axor_backend.routers.runs import AUTO_PIN
-
-    kept = {p["run_id"] for p in await store.pinned()
-            if not str(p.get("label") or "").startswith(AUTO_PIN)}
     decided = await store.incident_statuses()
     for item in items:
         item["status"] = decided.get(item["id"]) or (
