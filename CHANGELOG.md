@@ -26,6 +26,12 @@ tag; `deploy/offline` carries the same release to a machine with no network.
   mode change is on the audit trail.
 - Migration `0034`: `pair_notes.from_node`, `taint`, `held`, `dismissed_ts`,
   `told`.
+- **The pair feed is live, both ways.** `GET /v1/pair/{token}/stream` (SSE,
+  resumes from `Last-Event-ID`) pushes each step as the sidecar reports it,
+  the notes whenever one is sent, given or decided, and the hold — the page
+  no longer polls every two seconds. The feed shows the developer's requests,
+  what the agent says on the way, and its edits as diffs (Edit, MultiEdit,
+  Write, Codex's apply_patch), beside the calls, checks and answer it showed.
 
 ### Security
 

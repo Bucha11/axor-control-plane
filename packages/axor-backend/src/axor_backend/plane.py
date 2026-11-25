@@ -391,6 +391,9 @@ async def telemetry(
             topic("run", run_id),
             {"type": "event", "id": event_id, "line": line},
         )
+    if result.rows:
+        # a pair watching this session reads its steps now, not at its next look
+        ctx.broadcast.publish(topic("node", node_id), {"type": "wake"})
     # A chaos test on a live agent streams here, not to /v1/ingest — and only
     # ingest audited a run, so every one of them read "no lie found". So does a
     # coding agent's turn, whose answer is checked against the tests it ran

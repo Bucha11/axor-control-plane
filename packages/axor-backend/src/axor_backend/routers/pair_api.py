@@ -32,7 +32,7 @@ import secrets
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Header, HTTPException, Request
 
 from axor_backend.deps import PrincipalDep, StoreDep
 from axor_backend.tenancy import PUBLIC_ORG, current_org_id, set_current_org
@@ -305,6 +305,30 @@ async def _let_in(token: str, request: Request, store: StoreDep,
     return pair, "guest"
 
 
+_DIFF_MAX = 1500
+
+
+def _diff(tool: str, args: dict) -> dict | None:
+    """An edit as the pair sees it: the text replaced and what replaced it, a
+    file written, or a patch — from the call's own arguments (Claude Code's
+    Edit / MultiEdit / Write, Codex's apply_patch)."""
+    path = str(args.get("file_path") or args.get("path") or "")
+    if isinstance(args.get("old_string"), str) and isinstance(args.get("new_string"), str):
+        return {"path": path, "hunks": [{"old": args["old_string"][:_DIFF_MAX],
+                                         "new": args["new_string"][:_DIFF_MAX]}]}
+    if isinstance(args.get("edits"), list):
+        hunks = [{"old": str(e.get("old_string", ""))[:_DIFF_MAX],
+                  "new": str(e.get("new_string", ""))[:_DIFF_MAX]}
+                 for e in args["edits"][:5] if isinstance(e, dict)]
+        return {"path": path, "hunks": hunks} if hunks else None
+    if tool in ("Write", "write_file") and isinstance(args.get("content"), str):
+        return {"path": path, "hunks": [{"old": "", "new": args["content"][:_DIFF_MAX]}]}
+    patch = args.get("patch") or (args.get("input") if "patch" in tool.lower() else None)
+    if isinstance(patch, str) and patch.strip():
+        return {"path": path, "patch": patch[: _DIFF_MAX * 2]}
+    return None
+
+
 def _step(event_id: int, line: dict) -> dict | None:
     """One recorded line, as the pair view shows it."""
     kind = line.get("kind")
@@ -314,9 +338,11 @@ def _step(event_id: int, line: dict) -> dict | None:
         args = p.get("args") or {}
         target = (args.get("command") or args.get("file_path") or args.get("url")
                   or args.get("pattern") or args.get("path") or args.get("skill") or "")
+        diff = _diff(str(p.get("tool", "")), args) if isinstance(args, dict) else None
         return {**base, "tool": p.get("tool", ""), "target": str(target)[:300],
                 "refused": line.get("verdict") == "deny",
-                "reason": str(p.get("reason") or "")[:300]}
+                "reason": str(p.get("reason") or "")[:300],
+                **({"diff": diff} if diff else {})}
     if kind == "tool_result":
         check = p.get("check") or None
         return {**base, "tool": p.get("tool", ""), "failed": p.get("status") == "error",
@@ -325,6 +351,9 @@ def _step(event_id: int, line: dict) -> dict | None:
                           if check else None)}
     if kind == "claim":
         return {**base, "text": str(p.get("text") or "")[:2000]}
+    if kind == "intent" and p.get("role") in ("developer", "assistant"):
+        # the developer's request, and what the agent says on the way
+        return {**base, "kind": "said", "role": p["role"], "text": str(p.get("text") or "")[:4000]}
     if kind in ("task", "prompt", "intent"):
         return {**base, "kind": "task", "text": str(p.get("text") or p.get("prompt") or "")[:1000]}
     return None
@@ -360,6 +389,82 @@ async def pair_feed(token: str, request: Request, store: StoreDep, principal: Pr
     }
 
 
+# How long the stream sleeps with nothing new before it looks again (a note
+# decided, the pair closed, a plan lapsing for an outside guest).
+STREAM_IDLE = 5.0
+
+
+def wake(request: Request, node_id: str) -> None:
+    """Tell a pair stream on this session that something changed."""
+    from axor_backend.tenancy import topic
+
+    request.app.state.broadcast.publish(topic("node", node_id), {"type": "wake"})
+
+
+@router.get("/v1/pair/{token}/stream")
+async def pair_stream(token: str, request: Request, store: StoreDep, principal: PrincipalDep,
+                      after: int = 0,
+                      last_event_id: str | None = Header(default=None, alias="Last-Event-ID"),
+                      ) -> Any:  # noqa: ANN401
+    """The pair feed, live: ``step`` events as the agent works (its calls, what
+    it says, its edits, its answer; the developer's requests), ``notes`` when
+    a note or an agent message is sent, given or decided, and ``pair`` when the
+    session is held or let go. Replays from ``Last-Event-ID`` (or ``after``)."""
+    import asyncio
+    import json
+
+    from sse_starlette.sse import EventSourceResponse
+
+    from axor_backend.broadcast import OVERFLOW
+    from axor_backend.tenancy import topic
+
+    pair, _you = await _let_in(token, request, store, principal)
+    org, node = pair["org_id"], pair["node_id"]
+    queue = request.app.state.broadcast.subscribe(topic("node", node, org))
+    try:
+        cursor = int(last_event_id) if last_event_id else max(after, 0)
+    except ValueError:
+        cursor = max(after, 0)
+
+    async def stream():  # noqa: ANN202
+        nonlocal cursor
+        last_notes = last_pair = ""
+        try:
+            while True:
+                set_current_org(org)
+                try:
+                    await _let_in(token, request, store, principal)
+                except HTTPException as exc:
+                    yield {"event": "ended", "data": json.dumps({"status": exc.status_code})}
+                    return
+                for event_id, _run, line in await store.node_events_after(node, cursor,
+                                                                          FEED_LIMIT):
+                    cursor = event_id
+                    if (step := _step(event_id, line)) is not None:
+                        yield {"event": "step", "id": str(event_id), "data": json.dumps(step)}
+                notes = json.dumps(await store.pair_notes_of(token))
+                if notes != last_notes:
+                    last_notes = notes
+                    yield {"event": "notes", "id": str(cursor), "data": notes}
+                desired = await store.get_desired(node)
+                state = json.dumps({"paused": bool(desired and desired[1].get("paused")),
+                                    "stopped": bool(desired and desired[1].get("stopped")),
+                                    "desired_version": desired[0] if desired else 0})
+                if state != last_pair:
+                    last_pair = state
+                    yield {"event": "pair", "id": str(cursor), "data": state}
+                try:
+                    message = await asyncio.wait_for(queue.get(), STREAM_IDLE)
+                except TimeoutError:
+                    continue
+                if message.get("type") == OVERFLOW:
+                    return
+        finally:
+            request.app.state.broadcast.unsubscribe(topic("node", node, org), queue)
+
+    return EventSourceResponse(stream())
+
+
 @router.post("/v1/pair/{token}/notes", status_code=201)
 async def send_note(token: str, body: dict, request: Request, store: StoreDep,
                     principal: PrincipalDep) -> dict:
@@ -373,6 +478,7 @@ async def send_note(token: str, body: dict, request: Request, store: StoreDep,
     signed = _signed_note(body, pair["node_id"], text) if you != "guest" else None
     note_id = await store.add_pair_note(token, pair["node_id"], by, text, _now().isoformat(),
                                         outside=you == "guest", signed=signed)
+    wake(request, pair["node_id"])
     from axor_backend.funnel import used
 
     await used(store, "pair_note")
@@ -439,6 +545,7 @@ async def say_to_agent(node_id: str, body: dict, request: Request, store: StoreD
     by = _who(principal) or str(profile.get("developer") or "the developer")
     note_id = await store.add_pair_note("", node_id, by, text, _now().isoformat(),
                                         signed=_signed_note(body, node_id, text))
+    wake(request, node_id)
     from axor_backend.funnel import used
 
     await used(store, "say")
@@ -459,12 +566,13 @@ async def notes_to_agent(node_id: str, store: StoreDep, principal: PrincipalDep)
 
 
 @router.post("/v1/coding/notes/{node_id}/delivered")
-async def notes_delivered(node_id: str, body: dict, store: StoreDep,
+async def notes_delivered(node_id: str, body: dict, request: Request, store: StoreDep,
                           principal: PrincipalDep) -> dict:
     _speaks_for(principal, node_id)
     ids = [int(i) for i in body.get("ids") or [] if isinstance(i, int)]
     n = await store.mark_notes_delivered(node_id, ids, _now().isoformat(),
                                          str(body.get("at") or ""))
+    wake(request, node_id)
     return {"delivered": n}
 
 
@@ -581,6 +689,8 @@ async def agent_send(node_id: str, body: dict, request: Request, store: StoreDep
     by = f"agent:{node_id}" + (f" ({title[:60]})" if title else "")
     note_id = await store.add_pair_note(peer["token"], to, by, text, _now().isoformat(),
                                         from_node=node_id, taint=taint, held=held)
+    wake(request, to)
+    wake(request, node_id)
     from axor_backend.funnel import used
 
     await used(store, "agent_message")
@@ -620,6 +730,7 @@ async def decide_held(node_id: str, note_id: int, body: dict, request: Request,
     send = bool(body.get("send"))
     if not await store.decide_held_note(note_id, send, _now().isoformat()):
         raise HTTPException(409, "this message is not waiting any more")
+    wake(request, node_id)
     from axor_backend import audit
 
     await audit.record(store, request, "agent_message_sent" if send else

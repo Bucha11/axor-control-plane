@@ -270,6 +270,22 @@ test.describe("coding agents: their menu, and trying a skill", () => {
     expect(ids.length).toBeGreaterThan(0);
     await request.post(`${B}/v1/coding/notes/${claude}/delivered`, { data: { ids, at: "Bash" } });
     await expect(note.getByTestId("pair-note-state")).toContainText("given to the agent after Bash");
+    // live, without a reload: the developer's request, what the agent says on
+    // the way, and its edit as a diff — the page looks again only every 30 s
+    const now = new Date().toISOString();
+    const line = (seq: number, kind: string, payload: Record<string, unknown>) => ({
+      schema_version: "1.0", seq, node_id: claude, kind, ts: now, causal_root: null, gate: null,
+      verdict: kind === "tool_call" ? "pass" : null, payload });
+    await request.post(`${B}/v1/plane/${claude}/telemetry`, { data: { run_id: `${claude}-live`, events: [
+      line(9001, "intent", { role: "developer", text: "rename email to address" }),
+      line(9002, "intent", { role: "assistant", text: "Starting with models.py." }),
+      line(9003, "tool_call", { tool: "Edit", args: { file_path: "models.py",
+        old_string: "email = Column()", new_string: "address = Column()" } }),
+    ] } });
+    await expect(feed.getByTestId("pair-asked").last()).toContainText("rename email to address", { timeout: 5000 });
+    await expect(feed.getByTestId("pair-agent-said").last()).toContainText("Starting with models.py.");
+    await expect(feed.getByTestId("pair-diff").last()).toContainText("- email = Column()");
+    await expect(feed.getByTestId("pair-diff").last()).toContainText("+ address = Column()");
     // hold the agent, and let it go again
     await pane.getByTestId("pair-hold").click();
     await expect(pane.getByTestId("pair-hold")).toHaveText("let it continue");

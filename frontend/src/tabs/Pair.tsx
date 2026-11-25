@@ -9,7 +9,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Check, Copy } from "lucide-react";
-import { api, PairFeed, PairNote, PairStep } from "../api";
+import { api, PairFeed, PairNote, PairStep, streamPair } from "../api";
 import { navigate } from "../router";
 import { C, MONO, btn } from "../theme";
 import { HowItWorks } from "../components/MachineCommand";
@@ -366,7 +366,30 @@ const VERB: Record<string, string> = {
 
 type Item = { ts: string; step?: PairStep; note?: PairNote };
 
+function Diff({ d }: { d: NonNullable<PairStep["diff"]> }) {
+  const line = (prefix: string, text: string, color: string) =>
+    text.split("\n").map((t, i) => <div key={`${prefix}${i}`} style={{ color }}>{prefix}{t}</div>);
+  return (
+    <div data-testid="pair-diff" style={{ fontFamily: MONO, fontSize: 11, background: C.bg, border: `1px solid ${C.line}`,
+      borderRadius: 5, padding: "4px 8px", margin: "3px 0 2px", maxHeight: 220, overflow: "auto", whiteSpace: "pre-wrap" }}>
+      {d.patch
+        ? d.patch.split("\n").map((t, i) => (
+            <div key={i} style={{ color: t.startsWith("+") ? C.green : t.startsWith("-") ? C.red : C.dim }}>{t}</div>))
+        : (d.hunks ?? []).map((h, i) => (
+            <div key={i} style={{ marginBottom: 4 }}>
+              {h.old && line("- ", h.old, C.red)}
+              {line("+ ", h.new, C.green)}
+            </div>))}
+    </div>
+  );
+}
+
 function StepLine({ s }: { s: PairStep }) {
+  if (s.kind === "said") {
+    return s.role === "developer"
+      ? <span data-testid="pair-asked" style={{ color: C.text }}>asked: “{s.text}”</span>
+      : <span data-testid="pair-agent-said" style={{ color: C.mut, whiteSpace: "pre-wrap" }}>{s.text}</span>;
+  }
   if (s.kind === "task") {
     return <span style={{ color: C.text }}>asked: “{s.text}”</span>;
   }
@@ -380,6 +403,7 @@ function StepLine({ s }: { s: PairStep }) {
     return (
       <span style={{ color: C.mut }}>
         {VERB[s.tool ?? ""] ?? s.tool} {s.target && <code style={{ color: C.text }}>{s.target}</code>}
+        {s.diff && <Diff d={s.diff} />}
       </span>
     );
   }
@@ -395,7 +419,25 @@ function StepLine({ s }: { s: PairStep }) {
 
 function PairPane({ token }: { token: string }) {
   const qc = useQueryClient();
-  const feed = useQuery({ queryKey: ["pair", token], queryFn: () => api.pairFeed(token), refetchInterval: 2000, retry: false });
+  // the first look (who, what session, the last steps), then live: the stream
+  // brings each step, the notes and the hold as they happen
+  const feed = useQuery({ queryKey: ["pair", token], queryFn: () => api.pairFeed(token), refetchInterval: 30000, retry: false });
+  const [liveSteps, setLiveSteps] = useState<PairStep[]>([]);
+  const [liveNotes, setLiveNotes] = useState<PairNote[] | null>(null);
+  const [livePair, setLivePair] = useState<{ paused: boolean; stopped: boolean; desired_version: number } | null>(null);
+  const opened = feed.data !== undefined;
+  useEffect(() => {
+    if (!opened) return;
+    setLiveSteps([]);
+    return streamPair(token, feed.data?.cursor ?? 0, {
+      step: (st) => setLiveSteps((cur) => (cur.some((x) => x.id === st.id) ? cur : [...cur, st])),
+      notes: setLiveNotes,
+      pair: setLivePair,
+      ended: () => void qc.invalidateQueries({ queryKey: ["pair", token] }),
+    });
+    // the stream opens once, from the first look's cursor
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [token, opened]);
   const [text, setText] = useState("");
   const send = useMutation({
     mutationFn: () => api.sendNote(token, text.trim(), feed.data?.pair.you === "teammate" ? feed.data.pair.node_id : undefined),
@@ -410,10 +452,12 @@ function PairPane({ token }: { token: string }) {
     onSuccess: () => navigate("pair"),
   });
   const box = useRef<HTMLDivElement>(null);
+  const seen = new Set((feed.data?.steps ?? []).map((st) => st.id));
+  const steps = [...(feed.data?.steps ?? []), ...liveSteps.filter((st) => !seen.has(st.id))];
   const items: Item[] = [
-    ...(feed.data?.steps ?? []).filter((s) => s.kind !== "tool_result" || s.failed || s.check)
+    ...steps.filter((s) => s.kind !== "tool_result" || s.failed || s.check)
       .map((s) => ({ ts: s.ts, step: s })),
-    ...(feed.data?.notes ?? []).map((n) => ({ ts: n.ts, note: n })),
+    ...(liveNotes ?? feed.data?.notes ?? []).map((n) => ({ ts: n.ts, note: n })),
   ].sort((a, b) => a.ts.localeCompare(b.ts));
   useEffect(() => {
     if (box.current) box.current.scrollTop = box.current.scrollHeight;
@@ -443,7 +487,7 @@ function PairPane({ token }: { token: string }) {
     );
   }
   if (!feed.data) return <div style={{ fontFamily: MONO, fontSize: 12, color: C.dim }}>loading…</div>;
-  const f = feed.data;
+  const f = livePair ? { ...feed.data, pair: { ...feed.data.pair, ...livePair } } : feed.data;
   const teammate = f.pair.you === "teammate";
   return (
     <section data-testid="pair-pane" style={{ ...panel, display: "flex", flexDirection: "column", minWidth: 0 }}>

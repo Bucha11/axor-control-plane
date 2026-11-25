@@ -71,6 +71,7 @@ EXPECTED: dict[tuple[str, str], str] = {
     ("GET", "/v1/pair"): "read",
     ("DELETE", "/v1/pair/{token}"): "read",
     ("GET", "/v1/pair/{token}/feed"): "read",
+    ("GET", "/v1/pair/{token}/stream"): "read",
     ("POST", "/v1/pair/{token}/notes"): "read",
     ("GET", "/v1/pair/requests"): "read",
     ("POST", "/v1/pair/requests"): "read",

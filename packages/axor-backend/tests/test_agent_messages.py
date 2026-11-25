@@ -197,3 +197,28 @@ async def test_a_bound_key_sends_only_as_its_own_session(client: httpx.AsyncClie
     no = await client.post("/v1/coding/notes/cc-ada-2/send", headers=bound,
                            json={"to": "cc-ada-1", "text": "hi"})
     assert no.status_code == 403
+
+
+def test_the_feed_shows_requests_what_the_agent_says_and_its_edits() -> None:
+    from axor_backend.routers.pair_api import _step
+
+    said = _step(1, {"kind": "intent", "ts": "t",
+                     "payload": {"role": "developer", "text": "rename the field"}})
+    assert said == {"id": 1, "ts": "t", "kind": "said", "role": "developer",
+                    "text": "rename the field"}
+    edit = _step(2, {"kind": "tool_call", "payload": {"tool": "Edit", "args": {
+        "file_path": "models.py", "old_string": "email", "new_string": "address"}}})
+    assert edit["diff"] == {"path": "models.py", "hunks": [{"old": "email", "new": "address"}]}
+    multi = _step(3, {"kind": "tool_call", "payload": {"tool": "MultiEdit", "args": {
+        "file_path": "a.py", "edits": [{"old_string": "x", "new_string": "y"}]}}})
+    assert multi["diff"]["hunks"] == [{"old": "x", "new": "y"}]
+    write = _step(4, {"kind": "tool_call", "payload": {"tool": "Write", "args": {
+        "file_path": "b.py", "content": "print(1)"}}})
+    assert write["diff"]["hunks"] == [{"old": "", "new": "print(1)"}]
+    patch = _step(5, {"kind": "tool_call", "payload": {"tool": "apply_patch", "args": {
+        "input": "*** Begin Patch\n*** Update File: c.py\n-a\n+b\n*** End Patch"}}})
+    assert patch["diff"]["patch"].startswith("*** Begin Patch")
+    assert "diff" not in _step(6, {"kind": "tool_call", "payload": {
+        "tool": "Bash", "args": {"command": "ls"}}})
+    # an intent with no role (a production agent's) stays what it was
+    assert _step(7, {"kind": "intent", "payload": {"text": "x"}})["kind"] == "task"

@@ -683,10 +683,14 @@ export interface PairRequest {
   status: "pending" | "accepted" | "declined"; token?: string | null;
 }
 export interface PairStep {
-  id: number; ts: string; kind: "tool_call" | "tool_result" | "claim" | "task";
+  id: number; ts: string; kind: "tool_call" | "tool_result" | "claim" | "task" | "said";
   tool?: string; target?: string; refused?: boolean; reason?: string;
   failed?: boolean; preview?: string; check?: { kind: string; passed: boolean; summary: string } | null;
   text?: string;
+  // "said": who — the developer's request, or the agent on the way
+  role?: "developer" | "assistant";
+  // an edit: the text replaced and what replaced it, or a patch
+  diff?: { path: string; hunks?: { old: string; new: string }[]; patch?: string };
 }
 export interface PairNote {
   id: number; by: string; text: string; ts: string; outside: boolean;
@@ -2262,6 +2266,26 @@ export const api = {
       >(r),
     ),
 };
+
+// A pair session's feed, live: steps as the agent works, the notes when they
+// change, the session held or let go. Returns an unsubscribe fn.
+export function streamPair(
+  token: string,
+  after: number,
+  on: { step: (s: PairStep) => void; notes: (n: PairNote[]) => void;
+        pair: (p: { paused: boolean; stopped: boolean; desired_version: number }) => void;
+        ended: () => void },
+): () => void {
+  const es = new EventSource(withToken(`/v1/pair/${encodeURIComponent(token)}/stream?after=${after}`));
+  const read = <T,>(e: Event, f: (v: T) => void) => {
+    try { f(JSON.parse((e as MessageEvent).data) as T); } catch { /* malformed frame */ }
+  };
+  es.addEventListener("step", (e) => read<PairStep>(e, on.step));
+  es.addEventListener("notes", (e) => read<PairNote[]>(e, on.notes));
+  es.addEventListener("pair", (e) => read(e, on.pair));
+  es.addEventListener("ended", () => { es.close(); on.ended(); });
+  return () => es.close();
+}
 
 // Live audit stream (spec 8): SSE of colour-coded events for a run. Returns an
 // unsubscribe fn. Uses fetch-based EventSource polyfill semantics via the
