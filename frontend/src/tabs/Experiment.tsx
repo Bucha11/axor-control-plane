@@ -442,6 +442,15 @@ export default function Experiment({ runId, autostart }: { runId?: string; autos
                       guard it in production →
                     </button>
                   </>
+                ) : runNode && behindProxy(runNode) && focusRun ? (
+                  <>
+                    {/* already guarded by the proxy: its next step is a test, not the guard */}
+                    <button onClick={() => navigate("chaos")} data-testid="catch-guarded"
+                      style={btn({ color: C.text, borderColor: C.steel, fontSize: 12, padding: "6px 14px" })}>
+                      break a tool on purpose — Chaos tests →
+                    </button>
+                    <span style={{ color: C.dim }}>{focusRun.node_id} is already guarded by the proxy</span>
+                  </>
                 ) : wrapped && focusRun ? (
                   <>
                     {/* wrapped in code it is already guarded: the next step is
