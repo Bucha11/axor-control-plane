@@ -3,6 +3,7 @@
 // established — and the current session focus (last run). It is deliberately
 // small: everything server-derived stays in Query.
 import { create } from "zustand";
+import { guessKlass } from "./policyConfig";
 import { createJSONStorage, persist } from "zustand/middleware";
 
 // The connection model (spec section 2). Depth determines the availability
@@ -107,6 +108,9 @@ export type ToolKlass = "READ" | "WRITE" | "EXPORT" | "EXEC";
 export interface ToolClass {
   klass: ToolKlass;
   outside: boolean;            // brings in outside text (web, email, documents)
+  // which fields of its answer are that outside text (`text`, `messages[].body`);
+  // unset / empty = the whole answer
+  outsideFields?: string[];
   url?: string;                // where it lives, for the proxy
   source?: string;             // where the scanner found it (file:line)
   args_schema?: Record<string, unknown>;
@@ -230,7 +234,7 @@ export const useApp = create<AppState>()(
       toolPolicy: {},
       setToolClass: (name, patch) =>
         set((s) => ({ toolPolicy: { ...s.toolPolicy,
-          [name]: { ...({ klass: "READ", outside: false } as ToolClass), ...s.toolPolicy[name], ...patch } } })),
+          [name]: { ...({ klass: guessKlass(name), outside: false } as ToolClass), ...s.toolPolicy[name], ...patch } } })),
       tourStep: null,
       tourSide: "production",
       connect: (mode, tools) =>

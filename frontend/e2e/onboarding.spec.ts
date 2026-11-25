@@ -2,7 +2,7 @@
 // agent at the proxied URLs → prove the plumbing. The depth toggle sells the
 // adapter's extra surfaces honestly.
 import { expect, test } from "@playwright/test";
-import { goHash } from "./helpers";
+import { goHash, resetPolicy } from "./helpers";
 
 test.describe("onboarding", () => {
   test("pasting an MCP config discovers and registers the server's tools", async ({ page }) => {
@@ -37,8 +37,11 @@ test.describe("onboarding", () => {
     }
     await page.getByRole("button", { name: /Continue/ }).click();
 
-    // Step 2: the proxied base URLs are shown, ready to copy.
-    await expect(page.getByRole("heading", { name: "Point your agent at the proxy." })).toBeVisible();
+    // Step 2: how to start the proxy with these tools (it can only forward to
+    // tools it was started with), then the proxied base URLs, ready to copy.
+    await expect(page.getByRole("heading", { name: /Start the proxy with your tools/ })).toBeVisible();
+    await expect(page.getByTestId("test-run-start-proxy")).toContainText("tools.json");
+    await expect(page.getByText(/axor-proxy --config tools.json --backend-url/)).toBeVisible();
     await expect(page.getByText("http://127.0.0.1:8401/t/web_search/")).toBeVisible();
     await page.getByRole("button", { name: /Continue/ }).click();
 
@@ -48,7 +51,8 @@ test.describe("onboarding", () => {
     await expect(page.getByTestId("adapter-onboarding")).toBeVisible();
   });
 
-  test("the proxy as a guard: two files, the command, the addresses", async ({ page }) => {
+  test("the proxy as a guard: two files, the command, the addresses", async ({ page, request }) => {
+    await resetPolicy(request);
     await goHash(page, "connect?for=production");
     await page.getByTestId("prod-way-proxy").click();
     await page.getByTestId("guard-example").click();
@@ -64,6 +68,10 @@ test.describe("onboarding", () => {
       .toContainText("axor-proxy --guard --config tools.json --manifests axor.manifests.json --node-id agent-1");
     await expect(page.getByTestId("guard-urls")).toContainText("http://localhost:8401/t/web_search/");
     await expect(page.getByTestId("guard-live")).toContainText("waiting for agent-1");
+    // another port: the command and the addresses follow it
+    await page.getByLabel("proxy port").fill("8411");
+    await expect(page.getByTestId("guard-run")).toContainText("--node-id agent-1 --port 8411");
+    await expect(page.getByTestId("guard-urls")).toContainText("http://localhost:8411/t/web_search/");
   });
 
   test("wrapping in code: the snippet checks the tools the scanner found", async ({ page }) => {
@@ -95,7 +103,13 @@ test.describe("onboarding", () => {
     // Plain Python: a toolset and the gate, with the same tools.
     await page.getByRole("button", { name: "Plain Python" }).click();
     await expect(snippet).toContainText("WrappedToolset(");
-    await expect(snippet).toContainText("node.gate(toolset)");
+    await expect(snippet).toContainText("node.gate(WrappedToolset(");
+    // each run reaches the plane with its answer, so a claimed success that failed is caught
+    await expect(snippet).toContainText("task=request");
+    await expect(snippet).toContainText("node.post_ingest(toolset.run_lines(answer)");
+    // a synchronous agent: the node runs in the background, its calls go through submit()
+    await expect(snippet).toContainText(".start()   # live, in the background");
+    await expect(snippet).toContainText("node.submit(node.post_health_check(body))");
     // Claude: its own tools run on axor-core — no scan step.
     await page.getByRole("button", { name: /Claude Agent/ }).click();
     await expect(snippet).toContainText("session = axor_claude.make_session()");

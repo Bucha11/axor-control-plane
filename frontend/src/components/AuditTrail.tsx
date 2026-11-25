@@ -11,6 +11,11 @@ import { errorWords } from "../refusal";
 // an act, as a person says it
 const WORDS: Record<string, string> = {
   pause: "paused", resume: "resumed", stop: "stopped", cascade_stop: "stopped with everything it started",
+  start_again: "let start again", pin_must_block: "kept as an attack that must stay blocked",
+  pin_must_pass: "kept as normal work that must keep passing", unpin: "took out of the release check",
+  share_made: "shared a link to the case", share_revoked: "revoked the shared link to",
+  alert_subscribed: "subscribed alerts to", alert_unsubscribed: "stopped alerts to",
+  policy_saved: "changed what these tools do:",
   budget: "capped the calls of", excise: "cut context from", inject: "injected into",
   replan: "asked to replan", experiment: "armed an experiment on", say: "said to the agent of",
   brake_on: "pulled the team's brake on", brake_off: "released the team's brake on",
@@ -156,7 +161,14 @@ function ForTheReviewer({ field }: { field: React.CSSProperties }) {
   const [error, setError] = useState<string | null>(null);
   // the pack is Enterprise's: below it the holds call says so, and this whole
   // section stays out of the way
-  if (holds.isError) return null;
+  if (holds.isError) {
+    return (
+      <div data-testid="audit-pack-note" style={{ color: C.dim, fontSize: 10.5, marginBottom: 10 }}>
+        a compliance pack for auditors (a period of the trail as one document, with a legal hold) is on{" "}
+        <a href="#/pricing" style={{ color: C.steel }}>Enterprise</a>
+      </div>
+    );
+  }
   const get = async (format: "json" | "html") => {
     setError(null);
     try {
@@ -313,7 +325,12 @@ export default function AuditTrail() {
       {q.data?.window_days && (
         <div data-testid="audit-window" style={{ color: C.dim, fontSize: 10.5, marginBottom: 6 }}>
           the last {q.data.window_days} days — the whole trail and its export are on the{" "}
-          <a href="#/pricing?for=coding" style={{ color: C.steel }}>Business plan</a>
+          <a href="#/pricing" style={{ color: C.steel }}>Business plan</a>
+          {/* where people look for it: on any plan below it, the pack was not named at all */}
+          <div data-testid="audit-pack-note" style={{ marginTop: 2 }}>
+            a compliance pack for auditors (a period of the trail as one document, with a legal hold) is on{" "}
+            <a href="#/pricing" style={{ color: C.steel }}>Enterprise</a>
+          </div>
         </div>
       )}
       {q.data && !q.data.window_days && <KeepAndReport field={field} />}

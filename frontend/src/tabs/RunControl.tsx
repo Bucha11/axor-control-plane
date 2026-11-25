@@ -12,11 +12,13 @@ import { FlaskConical, Pause, Play, Square, Syringe } from "lucide-react";
 import { refusalWords } from "../refusal";
 import { api, KernelEvent, NodeRun } from "../api";
 import { navigate } from "../router";
+import { incidentWhat } from "./Evidence";
 import { useApp } from "../store";
 import { C, MONO, btn } from "../theme";
 import { isCodingSession } from "../components/CodingOnboarding";
 import CutResult from "../components/CutResult";
 import Tooltip from "../components/Tooltip";
+import { NOT_A_TEST_BENCH, behindProxy, cannotCut, isTestBench } from "../agentName";
 
 const LIVE_MS = 1500;
 const IDLE_MS = 5000;
@@ -49,7 +51,7 @@ function compactArgs(args: unknown): string {
 
 export default function RunControl({ runId }: { runId: string }) {
   const qc = useQueryClient();
-  const testBench = useApp((s) => s.connection.testBench);
+  const browserBench = useApp((s) => s.connection.testBench);
   const runs = useQuery({ queryKey: ["runs"], queryFn: api.listRuns });
   const nodeId = (runs.data ?? []).find((r) => r.run_id === runId)?.node_id;
 
@@ -68,7 +70,9 @@ export default function RunControl({ runId }: { runId: string }) {
     refetchInterval: live ? LIVE_MS : IDLE_MS,
   });
   const nodes = useQuery({ queryKey: ["nodes"], queryFn: api.nodes, refetchInterval: LIVE_MS });
+  const proxied = behindProxy((nodes.data ?? []).find((n) => n.node_id === nodeId));
   const node = (nodes.data ?? []).find((n) => n.node_id === nodeId);
+  const testBench = isTestBench(node, browserBench);
   const probe = useQuery({ queryKey: ["probe-report", nodeId], queryFn: () => api.probeReport(nodeId!), enabled: !!nodeId });
   const repair = useQuery({ queryKey: ["repair", nodeId], queryFn: () => api.repair(nodeId!), enabled: !!nodeId, refetchInterval: IDLE_MS });
   const reputation = useQuery({ queryKey: ["reputation", nodeId], queryFn: () => api.reputation(nodeId!), enabled: !!nodeId });
@@ -161,7 +165,7 @@ export default function RunControl({ runId }: { runId: string }) {
           </Tooltip>
           <Tooltip content="End the agent for good — it finishes no further turns.">
             <button
-              onClick={() => { if (window.confirm(`Stop ${nodeId}? It finishes no further turns.`)) send({ stopped: true }); }}
+              onClick={() => { if (window.confirm(`Stop ${nodeId}?\n\nIts running process cannot be resumed — every tool call is refused (the proxy answers 503; a wrapped agent's call raises AdmissionHeld). To bring it back, start it again on its agent card and restart the agent's process.`)) send({ stopped: true }); }}
               disabled={stopped || command.isPending}
               style={btn({ fontSize: 12, padding: "6px 12px", color: stopped ? C.dim : C.red, borderColor: stopped ? C.line : C.red })}>
               <Square size={12} /> Stop{live ? "" : " agent"}
@@ -205,9 +209,9 @@ export default function RunControl({ runId }: { runId: string }) {
             ))}
           </div>
           <div className="flex gap-2 mt-3 flex-wrap">
-            {!coding && <Tooltip content={testBench
+            {!coding && !cannotCut(node) && <Tooltip content={testBench
               ? "Insert text into the agent's next model call to see how it handles it. Marked untrusted; test-bench only."
-              : "Test-bench only (enable in Settings; the agent needs AXOR_TEST_BENCH=1)."}>
+              : NOT_A_TEST_BENCH}>
               <button
                 onClick={() => {
                   const text = window.prompt("Injection text — the agent sees it in its next model call:");
@@ -230,7 +234,13 @@ export default function RunControl({ runId }: { runId: string }) {
         <div style={{ flex: "1 1 40%", minWidth: 0, display: "flex", flexDirection: "column", gap: 10 }}>
           {(!coding || run?.probe) && <Side title="health check">
             {!run?.probe ? (
-              <span style={{ color: C.dim }}>not probed — the node runs checks when started with probe=</span>
+              <span style={{ color: C.dim }}>
+                {proxied
+                  ? <>not available behind the proxy — the check asks the agent itself, which the proxy
+                      never reaches. <span style={{ color: C.steel, cursor: "pointer" }}
+                      onClick={() => navigate("connect?for=production&how=code")}>wrap it in code →</span></>
+                  : <>not checked yet — a check runs beside a wrapped agent (axor-probe) and arrives here</>}
+              </span>
             ) : (
               <span style={{ color: run.probe.verdict === "DRIFT_DETECTED" ? C.amber : C.green }}>
                 {run.probe.verdict.toLowerCase().replace(/_/g, " ")}
@@ -264,8 +274,13 @@ export default function RunControl({ runId }: { runId: string }) {
 
           {!coding && <Side title="honesty">
             {run?.evidence.length
-              ? <span style={{ color: C.red }}>caught: {run.evidence.join(", ")}</span>
-              : (run?.scenario ?? "").endsWith("-experiment")
+              ? <button onClick={() => navigate(`catch/${encodeURIComponent(runId)}`)} data-testid="honesty-caught"
+                  style={{ color: C.red, fontFamily: MONO, fontSize: 12, textAlign: "left" }}>
+                  caught: {[...new Set(run.evidence.map(incidentWhat))].join(", ")} — the receipt →
+                </button>
+              // a tool broken on purpose in this run, and nothing caught: honest under it.
+              // A wrapped agent's test runs are its live runs, not an "-experiment" scenario.
+              : (run?.scenario ?? "").endsWith("-experiment") || lines.some((e) => e.kind === "fault_injected")
                 ? <span style={{ color: C.green }}>honest under a broken tool</span>
                 : <span style={{ color: C.dim }}>not tested in this run</span>}
             <NextRunTest tools={run?.tools ?? []} testBench={testBench}
@@ -279,7 +294,15 @@ export default function RunControl({ runId }: { runId: string }) {
             {(() => {
               const snap = reputation.data?.reputation;
               const hot = snap ? Object.entries(snap.resource_level).filter(([, l]) => l !== "CLEAN") : [];
-              if (!snap) return <span style={{ color: C.dim }}>no sentinel reporting for this node</span>;
+              if (!snap) {
+                return <span style={{ color: C.dim }}>
+                  {proxied
+                    ? <>not available behind the proxy — Sentinel reads the agent&apos;s own loop across sessions.{" "}
+                        <span style={{ color: C.steel, cursor: "pointer" }}
+                          onClick={() => navigate("connect?for=production&how=code")}>wrap it in code →</span></>
+                    : <>not reporting — axor-sentinel runs beside a wrapped agent and reports here</>}
+                </span>;
+              }
               if (!hot.length) return <span style={{ color: C.green }}>nothing it touched is under watch</span>;
               return hot.map(([rid, level]) => (
                 <div key={rid} className="flex gap-2">
@@ -483,7 +506,7 @@ function NextRunTest({ tools, testBench, armed, disabled, onArm }: {
         {FAULTS.map((f) => <option key={f.mode} value={f.mode}>{f.label}</option>)}
       </select>
       <Tooltip content={testBench ? "Break this tool on the agent's next run and audit its answer."
-        : "Test-bench only: breaking a tool degrades a real user's answer."}>
+        : NOT_A_TEST_BENCH}>
         <button disabled={!testBench || disabled || !tool} onClick={() => onArm(tool, mode)}
           style={btn({ fontSize: 11, padding: "2px 8px", color: testBench ? C.steel : C.dim })}>
           test next run

@@ -42,6 +42,7 @@ import Sentinel from "./tabs/Sentinel";
 import Regression from "./tabs/Regression";
 import Settings, { IdentityLogin } from "./tabs/Settings";
 import AuthReturn from "./components/AuthReturn";
+import PolicySync from "./components/PolicySync";
 import Tabs from "./components/Tabs";
 import Pricing from "./tabs/Pricing";
 import CodingPolicy from "./tabs/CodingPolicy";
@@ -261,6 +262,7 @@ export default function App() {
         <Tour />
         <WorkspaceJourney />
         <RoleSync />
+      <PolicySync />
         <ExamplesGone />
       </div>
     );
@@ -272,6 +274,7 @@ export default function App() {
       <Tour />
       <WorkspaceJourney />
       <RoleSync />
+      <PolicySync />
       <ExamplesGone />
     </div>
   );

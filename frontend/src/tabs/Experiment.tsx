@@ -19,8 +19,10 @@ import {
   streamRun,
 } from "../api";
 import { navigate } from "../router";
+import { behindProxy } from "../agentName";
 import { track } from "../funnel";
 import { isConnected, useApp } from "../store";
+import { untrustedFields } from "../policyConfig";
 import { C, MONO, btn, sevColor } from "../theme";
 import EvidenceCase, { deviationHeadline } from "../components/EvidenceCase";
 import TwoTreeContainment from "../components/TwoTreeContainment";
@@ -48,6 +50,13 @@ const linkBtn: CSSProperties = {
 function observedInWords(v: unknown): string {
   if (v && typeof v === "object" && !Array.isArray(v)) {
     const o = v as Record<string, unknown>;
+    // seen in live work: the tool really failed, or the operator held the call
+    if (typeof o.tool === "string" && o.observed === "error") return `${o.tool} returned an error`;
+    if (typeof o.tool === "string" && o.observed === "held") {
+      const more = Array.isArray(o.also_never_ran) && o.also_never_ran.length
+        ? ` (nor did ${(o.also_never_ran as string[]).join(", ")})` : "";
+      return `${o.tool}${more} never ran — ${String(o.actual_result ?? "the operator held it")}`;
+    }
     if (typeof o.tool === "string" && typeof o.injected === "string") {
       const got = o.actual_result === "error" ? "an error" : String(o.actual_result ?? "something else");
       return `${o.tool} returned ${got} — we broke it on purpose`;
@@ -60,7 +69,8 @@ function observedInWords(v: unknown): string {
 function eventLabel(e: KernelEvent): string {
   const p = e.payload as Record<string, unknown>;
   switch (e.kind) {
-    case "tool_call": return `${p.tool ?? ""} — ${e.verdict === "deny" ? "DENIED" : "call"}`;
+    case "tool_call": return `${p.tool ?? ""} — ${e.verdict === "deny" ? "DENIED"
+      : p.would_deny ? "call · policy would refuse it" : "call"}`;
     case "tool_result": return `${p.tool ?? ""} → ${p.faulted ? "faulted result" : `status ${p.status}`}`;
     case "fault_injected": return `⚡ injected fault: ${p.mode} on ${p.tool}`;
     case "claim": return `claim submitted`;
@@ -96,14 +106,24 @@ export default function Experiment({ runId, autostart }: { runId?: string; autos
         && !q.state.data?.some((r) => r.run_id === activeRun)
         ? 2000 : false,
   });
+  // The run as the proxy holds it while the user's agent works: the plane's
+  // stream has nothing until the answer is submitted and the run uploaded.
+  const landed = Boolean(activeRun && runs.data?.some((r) => r.run_id === activeRun));
+  const proxyRun = useQuery({
+    queryKey: ["proxy-run", activeRun],
+    queryFn: () => api.proxyRun(activeRun!),
+    enabled: mode !== "demo" && Boolean(activeRun) && !landed,
+    refetchInterval: 1500,
+  });
   const wanted = activeRun ?? runId ?? lastRunId;
   // A run armed in this view is never stood in for by an older one: until it
   // lands, there is no receipt — not someone else's.
   const focusRun: RunSummary | undefined = activeRun
     ? runs.data?.find((r) => r.run_id === activeRun)
     : runs.data?.find((r) => r.run_id === wanted) ??
-      runs.data?.find((r) => r.evidence.some((c) => c.deviation)) ??
-      runs.data?.[0];
+      // a receipt, or nothing: the newest run of any kind put a live
+      // production run ("Run in progress.") under the test form
+      runs.data?.find((r) => r.evidence.some((c) => c.deviation));
 
   // The run landed: the live stream has nothing more to say.
   useEffect(() => {
@@ -117,15 +137,25 @@ export default function Experiment({ runId, autostart }: { runId?: string; autos
     return () => unsub.current?.();
   }, []);
 
-  const toolChoices = mode === "demo" || tools.length === 0
+  // The agent's tools: the connection's, else the ones its policy describes —
+  // a connection switched to "adapter" carries none, and the test then offered
+  // the demo's web_search / mcp for an agent that has neither.
+  const policy = useApp((s) => s.toolPolicy);
+  const agentTools = tools.length
+    ? tools
+    : Object.entries(policy).map(([name, c]) => ({ name, url: c.url ?? "" }));
+  const toolChoices = mode === "demo" || agentTools.length === 0
     ? ["web_search", "mcp"]
-    : tools.map((t) => t.name);
+    : agentTools.map((t) => t.name);
+  // The select shows the first choice when the state names a tool that is not
+  // among them — and the run was then armed on the hidden one ("web_search"),
+  // breaking a tool the agent never calls while the screen named another.
+  const armedTool = toolChoices.includes(tool) ? tool : toolChoices[0];
 
   // what each tool does (store.toolPolicy, written on Connect and in Policy):
   // a test run on the person's own agent is armed with it, so it also says
   // which calls policy would have refused
-  const policy = useApp((s) => s.toolPolicy);
-  const classified = mode === "demo" ? [] : tools.filter((t) => policy[t.name]);
+  const classified = mode === "demo" ? [] : agentTools.filter((t) => policy[t.name]);
   const start = useMutation({
     mutationFn: async () => {
       let manifests: Record<string, unknown>[] | undefined;
@@ -137,7 +167,7 @@ export default function Experiment({ runId, autostart }: { runId?: string; autos
               id: t.name, source: c.source ?? t.url, description: "",
               args_schema: c.args_schema ?? { type: "object" },
               effect: { default_class: c.klass, driving_args: c.driving ?? [],
-                        untrusted_fields: c.klass === "READ" && c.outside ? ["result.*"] : [] },
+                        untrusted_fields: untrustedFields(c) },
             };
           }));
           manifests = bundle.manifests;
@@ -145,7 +175,7 @@ export default function Experiment({ runId, autostart }: { runId?: string; autos
           manifests = undefined;   // no engine: the test still runs, without verdicts
         }
       }
-      return api.startRun("tool-deprivation", [{ tool, mode: faultMode }], "proxy", manifests);
+      return api.startRun("tool-deprivation", [{ tool: armedTool, mode: faultMode }], "proxy", manifests);
     },
     onSuccess: (r: StartRunResult) => {
       setActiveRun(r.run_id);
@@ -198,7 +228,14 @@ export default function Experiment({ runId, autostart }: { runId?: string; autos
     if (caughtHere && activeRun && focusRun?.run_id === activeRun) track("lie_caught");
   }, [caughtHere, activeRun, focusRun?.run_id]);
 
-  if (!isConnected(mode)) {
+  // a link to a receipt opens it whoever follows it; connecting is for running tests
+  // (above the early return: hooks run unconditionally)
+  const runEventsQ = useQuery({
+    queryKey: ["run-events", focusRun?.run_id], queryFn: () => api.runEvents(focusRun!.run_id),
+    enabled: Boolean(focusRun?.run_id && (runId || focusRun.evidence.some((c) => c.deviation))),
+  });
+  const nodesQ = useQuery({ queryKey: ["nodes"], queryFn: api.nodes });
+  if (!isConnected(mode) && !runId) {
     return (
       <Center>
         <div style={{ fontFamily: MONO, fontSize: 12.5, color: C.mut }}>
@@ -212,11 +249,29 @@ export default function Experiment({ runId, autostart }: { runId?: string; autos
   }
 
   const running = start.isPending || simulate.isPending;
+  const proxyEvents = proxyRun.data?.events ?? [];
+  const shownEvents = proxyEvents.length >= liveEvents.length ? proxyEvents : liveEvents;
+  const calledTools = [...new Set(shownEvents
+    .filter((e) => e.kind === "tool_call")
+    .map((e) => String((e.payload as Record<string, unknown>).tool ?? "")).filter(Boolean))];
   const caught = focusRun?.evidence.find((c) => c.deviation) ?? null;
   // Only when that run was opened by link: the landing view still offers the
   // proxy configurator, whatever the latest caught run happens to be.
-  const nodeExperiment = Boolean(runId) && (focusRun?.scenario ?? "").endsWith("-experiment");
+  // an agent wrapped in code (not the proxy, not the example): its tools break
+  // inside it, armed from its own page — the proxy's test form is another thing
+  const runNode = (nodesQ.data ?? []).find((n) => n.node_id === focusRun?.node_id);
+  const wrapped = runNode?.profile?.kind === "agent" && !behindProxy(runNode) && !runNode.example;
+  // a node's own honesty test: an adapter that names its scenario so, or a
+  // wrapped agent's run with a tool broken in it (its live scenario)
+  const nodeExperiment = Boolean(runId) && ((focusRun?.scenario ?? "").endsWith("-experiment")
+    || (wrapped && (runEventsQ.data ?? []).some((e) => e.kind === "fault_injected")));
   const caseIndex = caught ? focusRun!.evidence.indexOf(caught) : 0;
+  // the agent's own words (its recorded answer), not the audit's reading of them
+  const said = (() => {
+    const claim = [...(runEventsQ.data ?? [])].reverse().find((e) => e.kind === "claim");
+    const text = (claim?.payload as { text?: unknown } | undefined)?.text;
+    return typeof text === "string" ? text.trim() : "";
+  })();
 
   return (
     <div style={{ maxWidth: 640, margin: "0 auto" }}>
@@ -241,14 +296,14 @@ export default function Experiment({ runId, autostart }: { runId?: string; autos
             run another from the agent →
           </span>
         </div>
-      ) : (
+      ) : !isConnected(mode) ? null : (
       <div data-tour="eval-config" className="p-4 mb-4" style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 8 }}>
         <div style={{ fontSize: 10, fontFamily: MONO, color: C.dim, letterSpacing: "0.1em", marginBottom: 10 }}>
           BREAK A TOOL ON PURPOSE
         </div>
         <div className="flex items-center gap-2 flex-wrap mb-3">
           <span style={{ fontFamily: MONO, fontSize: 12, color: C.mut }}>break</span>
-          <select value={tool} onChange={(e) => setTool(e.target.value)} style={select()}>
+          <select value={armedTool} onChange={(e) => setTool(e.target.value)} style={select()}>
             {toolChoices.map((t) => <option key={t} value={t}>{t}</option>)}
           </select>
           <span style={{ fontFamily: MONO, fontSize: 12, color: C.mut }}>by</span>
@@ -304,9 +359,11 @@ export default function Experiment({ runId, autostart }: { runId?: string; autos
       {mode !== "demo" && activeRun && !focusRun && (
         <div className="p-4 mb-4" style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 8 }}>
           <div style={{ fontFamily: MONO, fontSize: 11, color: C.mut, marginBottom: 8 }}>
-            live · point your agent at the proxy — waiting for events…
+            {shownEvents.length
+              ? <>live · {activeRun} · {shownEvents.filter((e) => e.kind === "tool_call").length} calls so far</>
+              : <>live · point your agent at the proxy — waiting for its first call…</>}
           </div>
-          {liveEvents.map((e, i) => (
+          {shownEvents.map((e, i) => (
             <div key={i} className="flex items-center gap-2 py-1">
               <Circle size={7} fill={sevColor(e.verdict, e.kind)} color={sevColor(e.verdict, e.kind)} />
               <span style={{ fontFamily: MONO, fontSize: 11.5, color: e.verdict === "deny" ? C.text : C.mut }}>
@@ -315,6 +372,11 @@ export default function Experiment({ runId, autostart }: { runId?: string; autos
             </div>
           ))}
         </div>
+      )}
+
+      {mode !== "demo" && activeRun && !focusRun && (
+        <FinishTest runId={activeRun} calledTools={calledTools}
+          onDone={() => { setLastRun(activeRun); void qc.invalidateQueries({ queryKey: ["runs"] }); }} />
       )}
 
       {/* The receipt */}
@@ -326,8 +388,14 @@ export default function Experiment({ runId, autostart }: { runId?: string; autos
           </div>
           <h1 style={{ fontSize: 22, fontWeight: 650, lineHeight: 1.3, margin: "0 0 20px" }}>
             {caught
-              ? <>Your agent <span style={{ color: C.red }}>{deviationHeadline(caught)}</span>
-                  {caught.fault_attribution[0] ? ` when ${caught.fault_attribution[0].tool_name} was broken on purpose.` : "."}</>
+              ? <>{mode === "demo" ? "The example agent" : "Your agent"} <span style={{ color: C.red }}>{deviationHeadline(caught)}</span>
+                  {caught.fault_attribution[0]
+                    ? (caught.fault_attribution[0].fault_mode === "observed_held"
+                      ? ` — ${caught.fault_attribution.map((f) => f.tool_name).join(", ")} never ran: the agent had been held.`
+                      : caught.fault_attribution[0].fault_mode === "observed_error"
+                        ? ` when ${caught.fault_attribution[0].tool_name} failed.`
+                        : ` when ${caught.fault_attribution[0].tool_name} was broken on purpose.`)
+                    : "."}</>
               : focusRun.completed
                 ? <>No discrepancies caught in this run.</>
                 : <>Run in progress.</>}
@@ -346,8 +414,13 @@ export default function Experiment({ runId, autostart }: { runId?: string; autos
                   <div style={{ flex: "1 1 220px" }}>
                     <div style={{ fontFamily: MONO, fontSize: 10, color: C.dim, letterSpacing: "0.1em", marginBottom: 4 }}>YOUR AGENT SAID</div>
                     <div style={{ fontSize: 14, color: C.text }}>
-                      {typeof caught.agent_claim === "string" ? caught.agent_claim : JSON.stringify(caught.agent_claim)}
+                      {said ? <>“{said}”</> : typeof caught.agent_claim === "string" ? caught.agent_claim : JSON.stringify(caught.agent_claim)}
                     </div>
+                    {said && (
+                      <div style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim, marginTop: 4 }}>
+                        read as: {typeof caught.agent_claim === "string" ? caught.agent_claim : JSON.stringify(caught.agent_claim)}
+                      </div>
+                    )}
                   </div>
                 </div>
                 <div style={{ fontFamily: MONO, fontSize: 11, color: C.mut, marginTop: 10, lineHeight: 1.6 }}>
@@ -355,7 +428,7 @@ export default function Experiment({ runId, autostart }: { runId?: string; autos
                   and it can become a test.
                 </div>
               </div>
-              <EvidenceCase runId={focusRun.run_id} caseIndex={caseIndex} c={caught}
+              <EvidenceCase runId={focusRun.run_id} caseIndex={caseIndex} c={caught} said={said}
                 replayStep={caught.anchor?.seq} replayNode={caught.anchor?.node_id} />
               <div data-testid="catch-next" className="mt-4 flex gap-3 flex-wrap items-center"
                 style={{ fontFamily: MONO, fontSize: 11.5 }}>
@@ -368,6 +441,27 @@ export default function Experiment({ runId, autostart }: { runId?: string; autos
                     <button onClick={() => navigate("connect?for=production")} style={linkBtn}>
                       guard it in production →
                     </button>
+                  </>
+                ) : runNode && behindProxy(runNode) && focusRun ? (
+                  <>
+                    {/* already guarded by the proxy: its next step is a test, not the guard */}
+                    <button onClick={() => navigate("chaos")} data-testid="catch-guarded"
+                      style={btn({ color: C.text, borderColor: C.steel, fontSize: 12, padding: "6px 14px" })}>
+                      break a tool on purpose — Chaos tests →
+                    </button>
+                    <span style={{ color: C.dim }}>{focusRun.node_id} is already guarded by the proxy</span>
+                  </>
+                ) : wrapped && focusRun ? (
+                  <>
+                    {/* wrapped in code it is already guarded: the next step is
+                        another test on it, from its own page */}
+                    <button onClick={() => navigate(`control/${encodeURIComponent(focusRun.node_id)}`)}
+                      data-testid="catch-agent"
+                      style={btn({ color: C.text, borderColor: C.steel, fontSize: 12, padding: "6px 14px" })}>
+                      break another tool on its next run →
+                    </button>
+                    <span style={{ color: C.dim }}>or break it on a schedule, so a fix has to hold ·</span>
+                    <button onClick={() => navigate("chaos")} style={linkBtn}>Chaos tests →</button>
                   </>
                 ) : (
                   <>
@@ -411,7 +505,9 @@ function WouldRefuse({ runId }: { runId: string }) {
   const calls = (events.data ?? []).filter((e) => e.kind === "tool_call");
   const governed = calls.filter((e) => (e.payload.governance as { governed?: boolean } | undefined)?.governed);
   if (governed.length === 0) return null;
-  const refused = governed.filter((e) => e.verdict === "deny");
+  // a test run only watches: what policy says rides as `would_deny` (older
+  // runs recorded it as the verdict itself)
+  const refused = governed.filter((e) => e.verdict === "deny" || Boolean(e.payload.would_deny));
   const names = [...new Set(refused.map((e) => String(e.payload.tool ?? "")))].filter(Boolean);
   return (
     <div data-testid="would-refuse" className="mb-4 p-3" style={{ background: C.panel, borderRadius: 8,
@@ -440,4 +536,62 @@ function select(): React.CSSProperties {
 
 function Center({ children }: { children: React.ReactNode }) {
   return <div style={{ maxWidth: 640, margin: "0 auto" }}>{children}</div>;
+}
+
+// The last step of a test on the person's own agent: the answer it gave. The
+// proxy routes tool traffic and nothing else, so what the agent SAID never
+// passes through it — without this step a test run ended at "waiting for
+// events…" and no receipt, whatever the agent claimed.
+function FinishTest({ runId, calledTools, onDone }: {
+  runId: string; calledTools: string[]; onDone: () => void;
+}) {
+  const [text, setText] = useState("");
+  const [said, setSaid] = useState<string[]>([]);
+  const submit = useMutation({
+    mutationFn: () => api.submitClaim(runId, text, said, calledTools),
+    onSuccess: () => onDone(),
+  });
+  const base = (import.meta.env.VITE_PROXY_PUBLIC_URL ?? "http://127.0.0.1:8401").replace(/\/$/, "");
+  const snippet = `curl -X POST ${base}/axor/runs/${runId}/claim \\\n  -H 'content-type: application/json' \\\n  -d '{"text": "<the agent's answer>", "claims": {"tools_succeeded": ["<tool it says worked>"]}}'`;
+  const toggle = (t: string) => setSaid((s) => s.includes(t) ? s.filter((x) => x !== t) : [...s, t]);
+  return (
+    <div data-testid="finish-test" className="p-4 mb-4" style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 8 }}>
+      <div style={{ fontSize: 10, fontFamily: MONO, color: C.dim, letterSpacing: "0.1em", marginBottom: 6 }}>
+        THEN — WHAT DID YOUR AGENT SAY?
+      </div>
+      <div style={{ fontSize: 12.5, color: C.mut, lineHeight: 1.55, marginBottom: 10 }}>
+        The proxy sees the tool calls, not the answer. Paste the agent's final answer and tick the tools it says worked —
+        that is what the run is checked against.
+      </div>
+      <textarea value={text} onChange={(e) => setText(e.target.value)} rows={3}
+        placeholder="e.g. Refund of $49.00 issued for order A-1001. The customer has been notified."
+        style={{ width: "100%", background: C.bg, color: C.text, border: `1px solid ${C.line}`, borderRadius: 6,
+                 padding: 8, fontFamily: MONO, fontSize: 12 }} />
+      <div className="flex items-center gap-3 flex-wrap mt-2 mb-3" style={{ fontFamily: MONO, fontSize: 11.5, color: C.mut }}>
+        <span>it says these worked:</span>
+        {calledTools.length === 0 && <span style={{ color: C.dim }}>— run the agent first; its tools appear here</span>}
+        {calledTools.map((t) => (
+          <label key={t} className="flex items-center gap-1" style={{ cursor: "pointer", color: said.includes(t) ? C.text : C.mut }}>
+            <input type="checkbox" checked={said.includes(t)} onChange={() => toggle(t)} /> {t}
+          </label>
+        ))}
+      </div>
+      <button onClick={() => submit.mutate()} disabled={!text.trim() || submit.isPending}
+        style={btn({ color: C.bg, background: C.green, border: `1px solid ${C.green}`, fontSize: 12, fontWeight: 700, padding: "6px 14px" })}>
+        {submit.isPending ? <Loader2 size={13} className="animate-spin" /> : null} Check the answer
+      </button>
+      {submit.isError && (
+        <div className="mt-2" style={{ fontFamily: MONO, fontSize: 11, color: C.red }}>{(submit.error as Error).message}</div>
+      )}
+      {submit.data && submit.data.upload && !submit.data.upload.uploaded && (
+        <div className="mt-2" style={{ fontFamily: MONO, fontSize: 11, color: C.amber }}>
+          checked, but the proxy could not upload the run ({submit.data.upload.detail ?? "upload failed"})
+        </div>
+      )}
+      <details className="mt-3" style={{ fontFamily: MONO, fontSize: 11, color: C.dim }}>
+        <summary style={{ cursor: "pointer" }}>or have the agent send it itself</summary>
+        <pre style={{ whiteSpace: "pre-wrap", marginTop: 6, color: C.mut }}>{snippet}</pre>
+      </details>
+    </div>
+  );
 }

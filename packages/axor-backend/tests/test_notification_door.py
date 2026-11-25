@@ -198,3 +198,20 @@ class TestTheBodyIsTyped:
             "/v1/notifications/subscriptions", headers=H)).json()
         assert [s["url"] for s in subs] == ["https://sink.test/ok"]
         assert subs[0]["debounce_seconds"] == 30.0
+
+
+class TestSubscribingAgainIsTheEdit:
+    async def test_the_same_webhook_with_other_alerts_replaces_them(
+        self, client: httpx.AsyncClient,
+    ) -> None:
+        """There is no edit: an operator adding drift alerts to their channel
+        subscribes it again. That kept the old set beside the new one, and every
+        alert in both was delivered twice."""
+        url = "https://hooks.test/team"
+        assert (await subscribe(client, url=url, triggers=["refused"])).status_code == 200
+        assert (await subscribe(client, url=url,
+                                triggers=["refused", "behavioral_drift"])).status_code == 200
+        subs = (await client.get("/v1/notifications/subscriptions", headers=H)).json()
+        assert [sorted(s["triggers"]) for s in subs] == [["behavioral_drift", "refused"]]
+        notifier = client._app.state.notifier  # type: ignore[attr-defined]
+        assert len([s for s in notifier._subs if s.url == url]) == 1

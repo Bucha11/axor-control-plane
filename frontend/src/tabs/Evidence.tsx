@@ -21,6 +21,8 @@ import { isConnected, useApp } from "../store";
 import { C, MONO } from "../theme";
 import { useCanAdmin } from "../team";
 import { errorWords } from "../refusal";
+import { agentLabel } from "../agentName";
+import { useWorkStarted } from "../workStarted";
 
 
 /** One line of whatever the agent claimed or the tool returned. */
@@ -63,15 +65,19 @@ const TOOL_DID: Record<string, string> = {
   tool_substitution: "was swapped for a different tool",
   timeout: "timed out",
   empty_result: "returned nothing",
+  // seen in live work, not broken on purpose
+  observed_error: "failed — its answer was an error",
+  observed_held: "never ran — the operator had held the agent",
 };
 const toolDid = (mode: string) => TOOL_DID[mode] ?? mode.replace(/_/g, " ");
 
 // where an incident came from: the plane's own examples, a test run, or work
 const EXAMPLES = new Set(["adapter-demo", "multi-agent-demo", "coding-demo", "skill-demo", "ops-demo"]);
 const TESTS = new Set(["tool-deprivation", "exfil", "injection"]);
-function source(scenario?: string): string {
+function source(scenario?: string, brokenOnPurpose = false): string {
   if (scenario && EXAMPLES.has(scenario)) return "example data";
-  if (scenario && TESTS.has(scenario)) return "a chaos test";
+  // a wrapped agent's test bench breaks a tool inside its live run
+  if ((scenario && TESTS.has(scenario)) || brokenOnPurpose) return "a chaos test";
   return "live work";
 }
 
@@ -87,7 +93,7 @@ function when(ts: string | null): string {
 }
 
 const KIND_CHIPS: [string, string][] = [
-  ["made_up,dangerous,would_refuse,memory_worse", "needs a look"],
+  ["made_up,dangerous,would_refuse,refused,memory_worse", "needs a look"],
   ["made_up", "made something up"],
   ["dangerous", "dangerous, let through"],
   ["would_refuse", "would have been refused"],
@@ -143,14 +149,21 @@ export default function Evidence({ agent: agentParam }: { agent?: string } = {})
   const nodesQ = useQuery({ queryKey: ["nodes"], queryFn: api.nodes });
   const labelOf = (id: string) => {
     const pr = (nodesQ.data ?? []).find((n) => n.node_id === id)?.profile;
-    if (!pr?.title && !pr?.developer) return id;
+    if (!pr?.title && !pr?.developer) return agentLabel(id);
     return [pr.developer, pr.title ? `“${pr.title}”` : ""].filter(Boolean).join(" · ");
   };
   const [cause, setCause] = useState("");
   const listed = feed.data?.items ?? [];
   const items = cause ? listed.filter((i) => i.kind !== "refused" || i.cause === cause) : listed;
   const developerOf = (id: string) => (nodesQ.data ?? []).find((n) => n.node_id === id)?.profile?.developer || id;
+  // a coding session (or a tree run) is a developer's; anything else is a production agent
+  // (a node that never said what it is counts by the side of the menu in use)
+  const isSession = (id: string) => {
+    const kind = (nodesQ.data ?? []).find((n) => n.node_id === id)?.profile?.kind;
+    return kind ? ["coding", "tree"].includes(String(kind)) : journey === "coding";
+  };
   const nothingAtAll = all.isSuccess && all.data.items.length === 0;
+  const started = useWorkStarted();
 
   return (
     <div style={{ maxWidth: 720, margin: "0 auto" }}>
@@ -172,14 +185,14 @@ export default function Evidence({ agent: agentParam }: { agent?: string } = {})
           <div style={{ fontFamily: MONO, fontSize: 13, color: C.text, marginBottom: 6 }}>No incidents yet.</div>
           <div style={{ fontFamily: MONO, fontSize: 11.5, color: C.dim, lineHeight: 1.6, marginBottom: 16 }}>
             one appears the first time an agent says a tool worked when it didn't, a dangerous call goes
-            through, or the rules refuse one. the fastest way to see one: test our example agent — we
-            break its search on purpose and check what it says.
+            through, or the rules refuse one.{!started && <> the fastest way to see one: test our example agent — we
+            break its search on purpose and check what it says.</>}
           </div>
           <div className="flex gap-2 flex-wrap">
-            <button onClick={() => { connect("demo"); navigate("catch", { auto: "1" }); }}
+            {!started && <button onClick={() => { connect("demo"); navigate("catch", { auto: "1" }); }}
               style={{ display: "flex", alignItems: "center", gap: 6, background: "none", border: `1px solid ${C.green}`, borderRadius: 6, color: C.green, fontFamily: MONO, fontSize: 12, padding: "7px 14px", cursor: "pointer" }}>
               <Zap size={13} /> test the example agent
-            </button>
+            </button>}
             {!isConnected(mode) && (
               <button onClick={() => navigate("connect")}
                 style={{ display: "flex", alignItems: "center", gap: 6, background: "none", border: `1px solid ${C.steel}`, borderRadius: 6, color: C.steel, fontFamily: MONO, fontSize: 12, padding: "7px 14px", cursor: "pointer" }}>
@@ -220,7 +233,8 @@ export default function Evidence({ agent: agentParam }: { agent?: string } = {})
             </div>
           ) : (
             <div className="flex flex-col gap-2" data-testid="evidence-list">
-              <RefusalSummary items={listed} developerOf={developerOf} cause={cause} setCause={setCause} />
+              <RefusalSummary items={listed} developerOf={developerOf} isSession={isSession}
+                cause={cause} setCause={setCause} />
               {items.map((i) => <Item key={i.id} item={i} who={labelOf(i.node_id)} />)}
             </div>
           )}
@@ -254,7 +268,11 @@ function Item({ item, who }: { item: IncidentItem; who?: string }) {
   const color = KIND_COLOR[item.kind];
   const toStep = () => navigate(`explain/${encodeURIComponent(item.run_id)}`,
     item.seq != null ? { seq: item.seq, node: item.anchor_node ?? item.node_id } : undefined);
-  const title = item.kind === "made_up" ? incidentWhat(item.what)
+  // a stop held the calls: nothing failed, the agent answered as if they had run
+  const held = (item.case?.fault_attribution ?? []).filter((f) => f.fault_mode === "observed_held");
+  const times = item.count > 1 ? ` ×${item.count}` : "";
+  const title = item.kind === "made_up" && held.length ? `answered as if calls it was stopped from had run${times}`
+    : item.kind === "made_up" ? `${incidentWhat(item.what)}${times}`
     : item.kind === "dangerous" ? item.what
       : item.kind === "would_refuse" ? `${item.what} — would have been refused`
         : `${item.what} — refused${item.count > 1 ? ` ×${item.count}` : ""}`;
@@ -276,6 +294,7 @@ function Item({ item, who }: { item: IncidentItem; who?: string }) {
           <div>
             <div style={{ fontFamily: MONO, fontSize: 9.5, color: C.dim, letterSpacing: "0.1em", marginBottom: 4 }}>
               {check ? `${CHECK_WORDS[check.kind] ?? check.kind.toUpperCase()} · ${check.command}`
+                : held.length > 1 ? <>THE TOOLS · {held.map((f) => f.tool_name).join(", ")}</>
                 : <>THE TOOL {fault ? `· ${fault.tool_name}` : ""}</>}
             </div>
             <div style={{ fontFamily: MONO, fontSize: 11.5, color: C.mut, wordBreak: "break-word" }}>
@@ -315,7 +334,8 @@ function Item({ item, who }: { item: IncidentItem; who?: string }) {
       )}
       <div className="flex items-center justify-between flex-wrap" style={{ gap: 8 }}>
         <span style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim }}>
-          {who && who !== item.node_id ? who : <>agent {item.node_id}</>} · {source(item.scenario)}
+          {who && who !== item.node_id ? who : <>agent {item.node_id}</>} · {source(item.scenario, (item.case?.fault_attribution ?? [])
+            .some((a) => a.fault_mode && !a.fault_mode.startsWith("observed_")))}
           {item.origin && <span data-testid="incident-origin"> · {ORIGIN_WORDS[item.origin] ?? item.origin}</span>}
         </span>
         <span className="flex gap-2 items-center">
@@ -337,16 +357,19 @@ function Item({ item, who }: { item: IncidentItem; who?: string }) {
 
 /** The refusals, counted by cause: how many, and how many developers hit it —
  *  a rule too strict shows as many refusals across the team. */
-function RefusalSummary({ items, developerOf, cause, setCause }: {
-  items: IncidentItem[]; developerOf: (id: string) => string; cause: string; setCause: (c: string) => void;
+function RefusalSummary({ items, developerOf, isSession, cause, setCause }: {
+  items: IncidentItem[]; developerOf: (id: string) => string; isSession: (id: string) => boolean;
+  cause: string; setCause: (c: string) => void;
 }) {
   const refused = items.filter((i) => i.kind === "refused" && i.cause);
   if (refused.length < 2) return null;
-  const by = new Map<string, { words: string; n: number; devs: Set<string> }>();
+  const by = new Map<string, { words: string; n: number; devs: Set<string>; people: boolean }>();
   for (const i of refused) {
-    const g = by.get(i.cause!) ?? { words: i.cause_words || i.cause!, n: 0, devs: new Set<string>() };
+    const g = by.get(i.cause!) ?? { words: i.cause_words || i.cause!, n: 0, devs: new Set<string>(), people: true };
     g.n += i.count;
     g.devs.add(developerOf(i.node_id));
+    // a production agent is not a developer's session: it counts as an agent
+    if (!isSession(i.node_id)) g.people = false;
     by.set(i.cause!, g);
   }
   const rows = [...by.entries()].sort((a, b) => b[1].n - a[1].n);
@@ -356,7 +379,9 @@ function RefusalSummary({ items, developerOf, cause, setCause }: {
       <span>refused, by cause:</span>
       {rows.map(([k, g]) => (
         <button key={k} data-testid={`refusal-cause-${k}`} onClick={() => setCause(cause === k ? "" : k)} style={chip(cause === k)}>
-          {g.words} · {g.n} · {g.devs.size} {g.devs.size === 1 ? "developer" : "developers"}
+          {g.words} · {g.n} · {g.devs.size} {g.people
+            ? (g.devs.size === 1 ? "developer" : "developers")
+            : (g.devs.size === 1 ? "agent" : "agents")}
         </button>
       ))}
     </div>

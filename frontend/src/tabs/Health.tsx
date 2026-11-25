@@ -23,15 +23,18 @@
 //     task content, so cutting them has collateral) need a second, explicit
 //     confirmation, and axor-probe refuses the request without one.
 import { useEffect, useState } from "react";
-import { useRoute } from "../router";
+import { navigate, useRoute } from "../router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { RefreshCw, HeartPulse, Check, Circle, MinusCircle } from "lucide-react";
 import { api, type HealAttempt, type ProbeFamily, type ProbeHealth } from "../api";
 import { C, MONO, btn } from "../theme";
 import Coach from "../components/Coach";
 import Tooltip from "../components/Tooltip";
+import { NO_TOOLSET_CUT, behindProxy, cannotCut } from "../agentName";
+import { useWorkStarted } from "../workStarted";
 
-// The node shown until one is picked (the demo battery posts for it).
+// The demo battery's node: shown only when it is actually listed — it used to
+// be the default and was mixed into every workspace's agents as if it were one.
 const HEALTH_NODE = "banking-assistant";
 /** The example fleet's scraper (backend demo.FLEET_PROBE_NODE): it has no
  * runtime of its own, so its re-probe is played on request. */
@@ -67,10 +70,15 @@ export default function Health() {
   const qc = useQueryClient();
   const route = useRoute();
   // `#/health?node=X` (the Agents list links here) opens on that node.
-  const [node, setNode] = useState(route.query.node || HEALTH_NODE);
+  const [node, setNode] = useState(route.query.node || "");
   const [chosen, setChosen] = useState(Boolean(route.query.node));
   const nodes = useQuery({ queryKey: ["nodes"], queryFn: api.nodes });
-  const nodeIds = Array.from(new Set([node, ...(nodes.data ?? []).map((n) => n.node_id)]));
+  const started = useWorkStarted();
+  // the examples hide once the workspace's own agents report, as on every
+  // screen — unless one was opened on purpose ("see an example")
+  const own = (nodes.data ?? []).filter((n) => !n.example_hidden);
+  const nodeIds = Array.from(new Set([node, ...own.map((n) => n.node_id)])).filter(Boolean);
+  const shownNode = (nodes.data ?? []).find((n) => n.node_id === node);
   const [phase, setPhase] = useState<Phase>("idle");
   const [reason, setReason] = useState("");
   const [healError, setHealError] = useState<string | null>(null);
@@ -79,9 +87,13 @@ export default function Health() {
   // re-probe ends the wait (the stale list still holds the previous outcome).
   const [awaitAfterId, setAwaitAfterId] = useState(-1);
 
+  // a check lands after every run: a page left open must show the new one,
+  // not "same as before" beside an agent that has drifted since
   const report = useQuery({
     queryKey: ["probe-report", node],
     queryFn: () => api.probeReport(node),
+    enabled: Boolean(node),
+    refetchInterval: 10_000,
   });
   // Opened on the default node with nothing to show while the example fleet IS
   // loaded: show the node that has a check, not an empty panel.
@@ -96,10 +108,11 @@ export default function Health() {
   // first, then any node that has posted one. Never an empty default panel
   // beside a node with a proposed cut waiting.
   useEffect(() => {
-    if (chosen || !nodes.data?.length) return;
-    const drifting = nodes.data.find((n) => n.probe?.verdict === "DRIFT_DETECTED");
-    const checked = nodes.data.find((n) => n.probe);
-    const pick = drifting ?? checked;
+    if (chosen || !own.length) return;
+    const drifting = own.find((n) => n.probe?.verdict === "DRIFT_DETECTED");
+    const checked = own.find((n) => n.probe);
+    // ...else the workspace's first agent, never a made-up default
+    const pick = drifting ?? checked ?? (node ? undefined : own[0]);
     if (pick && pick.node_id !== node) setNode(pick.node_id);
   }, [chosen, nodes.data]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
@@ -108,6 +121,13 @@ export default function Health() {
       setNode(EXAMPLE_PROBE_NODE);
     }
   }, [node, report.isSuccess, report.data, listed.join(",")]); // eslint-disable-line react-hooks/exhaustive-deps
+  // A production agent's drift check, on example data: the example fleet posts
+  // one, but once the workspace's own agents report the lists hide examples,
+  // so it was out of reach exactly when someone wanted to see what they'd get.
+  const showExample = useMutation({
+    mutationFn: async () => { await api.seedFleet(); },
+    onSuccess: () => pickNode(EXAMPLE_PROBE_NODE),
+  });
   const reprobe = useMutation({
     mutationFn: api.fleetReprobe,
     onSuccess: () => {
@@ -119,6 +139,9 @@ export default function Health() {
   const repair = useQuery({
     queryKey: ["repair", node],
     queryFn: () => api.repair(node),
+    // no node chosen yet: there is nothing to ask (it was GET /v1/plane//repair)
+    enabled: Boolean(node),
+    refetchInterval: 10_000,
   });
 
   // The heal is the excision itself: axor-probe shapes the cut from the node's
@@ -197,18 +220,34 @@ export default function Health() {
     </div>
   );
 
+  // what the page is for, in Learn mode — on the empty page too, which is
+  // where someone new to it lands
+  const coach = (
+    <Coach id="health" title="Health — does the agent still answer the way it used to?">
+      A set of test questions — about giving out data, going beyond the task, following
+      instructions — is asked again and compared with how the agent answered before. When it
+      answers differently, the check traces which piece of its context changed it, and you can
+      remove that piece. Nothing is removed without you.
+    </Coach>
+  );
+
+  if (!node) {
+    return (
+      <div style={{ maxWidth: 560, margin: "0 auto" }}>
+        {coach}
+        <div style={{ fontFamily: MONO, fontSize: 11.5, color: C.mut }}>
+          No agent has reported yet — a health check is about an agent that runs.
+        </div>
+      </div>
+    );
+  }
   if (report.isLoading) {
     return <div style={{ fontFamily: MONO, fontSize: 11, color: C.dim }}>loading…</div>;
   }
 
   return (
     <div style={{ maxWidth: 560, margin: "0 auto" }}>
-      <Coach id="health" title="Health — does the agent still answer the way it used to?">
-        A set of test questions — about giving out data, going beyond the task, following
-        instructions — is asked again and compared with how the agent answered before. When it
-        answers differently, the check traces which piece of its context changed it, and you can
-        remove that piece. Nothing is removed without you.
-      </Coach>
+      {coach}
 
       {picker}
 
@@ -218,17 +257,56 @@ export default function Health() {
         </div>
       ) : latest === null ? (
         <div style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 8, padding: 20 }}>
-          <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 8 }}>No health check yet.</div>
-          <div style={{ fontFamily: MONO, fontSize: 11, color: C.mut, lineHeight: 1.7 }}>
-            This agent has not sent a check, so nothing here is green either.
-            <br /><br />
-            Checks run beside the agent (axor-probe) and are sent to{" "}
-            <span style={{ color: C.text }}>POST /v1/plane/{node}/probe-report</span>.
-            The plane never starts your agent itself.
-          </div>
+          {behindProxy(shownNode) ? (
+            <div data-testid="health-proxy">
+              <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 8 }}>Not available behind the proxy.</div>
+              <div style={{ fontFamily: MONO, fontSize: 11, color: C.mut, lineHeight: 1.7 }}>
+                {node} is guarded by the proxy, which sees its tool calls and never its model — and a
+                health check asks the agent itself test questions. Wrap the agent in code and the
+                check runs beside it; the proxy's guard keeps working the same way.
+                <br /><br />
+                <button onClick={() => navigate("connect?for=production&how=code")} data-testid="health-to-wrap"
+                  style={btn({ color: C.text, borderColor: C.steel, fontSize: 11, padding: "4px 10px" })}>
+                  wrap it in code →
+                </button>
+              </div>
+              {!started && <div className="mt-3">
+                <button onClick={() => showExample.mutate()} disabled={showExample.isPending}
+                  data-testid="health-example"
+                  style={{ background: "none", border: "none", padding: 0, cursor: "pointer",
+                           fontFamily: MONO, fontSize: 11, color: C.steel }}>
+                  {showExample.isPending ? "loading…" : "see what a drift check looks like (example) →"}
+                </button>
+              </div>}
+            </div>
+          ) : (
+            <>
+              <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 8 }}>No health check yet.</div>
+              <div style={{ fontFamily: MONO, fontSize: 11, color: C.mut, lineHeight: 1.7 }}>
+                This agent has not sent a check, so nothing here is green either.
+                <br /><br />
+                A check runs beside a wrapped agent: axor-probe asks it test questions and the
+                agent&apos;s plane link sends the result here (axor-probe README, “Reporting to the
+                Control Plane”). The plane never starts your agent itself.
+              </div>
+              {!started && <div className="mt-3">
+                <button onClick={() => showExample.mutate()} disabled={showExample.isPending}
+                  data-testid="health-example"
+                  style={{ background: "none", border: "none", padding: 0, cursor: "pointer",
+                           fontFamily: MONO, fontSize: 11, color: C.steel }}>
+                  {showExample.isPending ? "loading…" : "see what a drift check looks like (example) →"}
+                </button>
+              </div>}
+            </>
+          )}
         </div>
       ) : (
         <>
+          {node === EXAMPLE_PROBE_NODE && (
+            <div data-testid="health-example-badge" style={{ fontFamily: MONO, fontSize: 11, color: C.amber, marginBottom: 6 }}>
+              example — a production agent&apos;s drift check, on example data
+            </div>
+          )}
           <h1 style={{ fontSize: 22, fontWeight: 650, margin: "0 0 4px" }}>
             {VERDICT_LINE[latest.overall_verdict]}
           </h1>
@@ -271,7 +349,15 @@ export default function Health() {
                           ? " The check did not trace it to a piece of its context, so there is nothing to remove yet."
                           : " The pieces of context that came from outside are not what changed it — removing them would not help."}
                     </span>
-                    {canCut && (
+                    {canCut && cannotCut(shownNode) && (
+                      <span data-testid="no-cut" style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim, maxWidth: 360 }}>
+                        {/* a wrapped agent's own loop: nothing here can cut it, so say
+                            what it was, and where the fix is — at its source */}
+                        the piece: <span style={{ color: C.text }}>{(proposal!.auto_excise.length ? proposal!.auto_excise : escalated).join(", ")}</span>.{" "}
+                        {NO_TOOLSET_CUT}
+                      </span>
+                    )}
+                    {canCut && !cannotCut(shownNode) && (
                       <Tooltip content={`Remove ${(proposal!.auto_excise.length ? proposal!.auto_excise : escalated).join(", ")} from the agent's context at its next turn; it is checked again afterwards.`}>
                         <button onClick={() => setPhase("reason")}
                           style={{ display: "flex", alignItems: "center", gap: 6, background: "none", border: `1px solid ${C.steel}`, borderRadius: 5, color: C.steel, fontFamily: MONO, fontSize: 11, padding: "5px 12px", cursor: "pointer", whiteSpace: "nowrap" }}>

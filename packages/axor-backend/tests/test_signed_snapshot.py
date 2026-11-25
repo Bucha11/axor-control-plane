@@ -135,6 +135,24 @@ class TestAnUnsignedWriteDoesNotBorrowASignature:
         assert "pending_injection" not in snap["state"]
         assert snap["commands"] == []
 
+    async def test_the_node_hears_the_version_the_ack_made(
+        self, client: httpx.AsyncClient,
+    ) -> None:
+        """Clearing a one-shot bumps the version with no command behind it. A
+        node that heard nothing kept the old version until it reconnected, and
+        the screens said a command was on its way to it all that time."""
+        from axor_backend.tenancy import topic
+
+        await _command(client, "n1", 1, {"pending_injection": {"id": "i1", "text": "x"}})
+        bus = client._app.state.broadcast  # type: ignore[attr-defined]
+        q = bus.subscribe(topic("plane", "n1"))
+        await client.post("/v1/plane/n1/consumed", json={"key": "pending_injection"})
+        msg = q.get_nowait()
+        snap = await _snapshot(client, "n1")
+        assert msg["type"] == "snapshot"
+        assert msg["version"] == snap["version"] > 1
+        assert msg["state"] == snap["state"] and msg["commands"] == []
+
     async def test_an_open_deployment_records_nothing(
         self, tmp_path: pathlib.Path,
     ) -> None:

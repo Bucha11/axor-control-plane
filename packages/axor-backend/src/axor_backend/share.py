@@ -91,6 +91,9 @@ HEADLINE: dict[str, str] = {
     "behavioral_drift": "The agent's behaviour drifted from what it was checked to do.",
 }
 TOOL_DID: dict[str, str] = {
+    # seen in live work (axor-eval's observed-failure audit), not broken on purpose
+    "observed_error": "failed — its answer was an error",
+    "observed_held": "never ran — the operator had held the agent",
     "silent_fail": "returned an error",
     "corrupt_retrieval": "returned corrupted results",
     "instruction_injection": "returned text with a hidden instruction in it",
@@ -101,13 +104,18 @@ TOOL_DID: dict[str, str] = {
 _KEY_WORDS: dict[str, str] = {
     "driving_value": "what it carried", "provenance": "where that came from",
     "actual_result": "what the tool did", "injected": "broken on purpose",
+    "observed": "seen in the run", "also_never_ran": "nor did these run",
     "tool_name": "tool",
 }
 _EXAMPLE_SCENARIOS = frozenset({"adapter-demo", "multi-agent-demo", "coding-demo", "skill-demo",
                                 "ops-demo"})
 
 
-def headline(deviation: str) -> str:
+def headline(deviation: str, case: dict[str, Any] | None = None) -> str:
+    faults = (case or {}).get("fault_attribution") or []
+    # a stop held the calls: nothing failed, the agent answered as if they ran
+    if faults and all(isinstance(f, dict) and f.get("fault_mode") == "observed_held" for f in faults):
+        return "The agent answered as if calls had run. It had been stopped."
     return HEADLINE.get(deviation) or (deviation.replace("_", " ").capitalize() + "."
                                        if deviation else "Something did not add up.")
 
@@ -137,14 +145,14 @@ def _observed_rows(value: Any) -> list[tuple[str, str]]:  # noqa: ANN401
 
 def evidence_receipt_html(
     run_id: str, case: dict[str, Any], scenario: str = "", *,
-    node_id: str = "", ts: str = "",
+    node_id: str = "", ts: str = "", said: str = "", as_link: bool = True,
 ) -> str:
     """A self-contained HTML receipt — the caught discrepancy, legible to
     someone outside the team, on a phone too; no external assets,
     observations only."""
     c, removed = _scrub(case)
     deviation = str(c.get("deviation") or "")
-    title = headline(deviation)
+    title = headline(deviation, c)
     rows = "".join(
         f'<div class="kv"><span class="k">{html.escape(k)}</span>'
         f'<span class="v">{html.escape(v)}</span></div>' if k else
@@ -152,6 +160,13 @@ def evidence_receipt_html(
         for k, v in _observed_rows(c.get("observed_reality")))
     claim = c.get("agent_claim")
     claim_text = claim if isinstance(claim, str) else _render(claim)
+    # The agent's own words, when its answer was recorded: "Refund of $49
+    # issued", not the audit's reading of it ("agent claimed issue_refund
+    # succeeded") — what the customer saw is what the reader needs.
+    read_as = ""
+    if said.strip():
+        read_as = f'<div class="small">read as: {html.escape(claim_text)}</div>'
+        claim_text = said.strip()
     faults = c.get("fault_attribution") or []
     def did(mode: object) -> str:
         return TOOL_DID.get(str(mode), str(mode).replace("_", " "))
@@ -166,12 +181,18 @@ def evidence_receipt_html(
         + html.escape(", ".join(removed)) + "</p>"
     ) if removed else ""
     when = html.escape(ts[:16].replace("T", " ")) if ts else ""
-    meta = " · ".join(x for x in (html.escape(node_id), when) if x)
+    # the plane's own test-run proxy is not an agent: say what it is
+    who = "a test run (through the proxy)" if node_id == "proxy" else node_id
+    meta = " · ".join(x for x in (html.escape(who), when) if x)
     example = ('<span class="tag">example data</span>'
                if scenario in _EXAMPLE_SCENARIOS else "")
     return _TEMPLATE.format(
         title=html.escape(title), meta=meta, example=example, rows=rows,
-        claim=html.escape(claim_text), how=html.escape(
+        claim=html.escape(claim_text), read_as=read_as,
+        who=("This link shows only what was observed — no request or response contents. "
+             "Whoever shared it can withdraw it." if as_link else
+             "This file shows only what was observed — no request or response contents."),
+        how=html.escape(
             how_we_know(str(c.get("verdict_source", "")), c.get("confidence"))),
         why=why_block, withheld=withheld, ref=html.escape(run_id),
     )
@@ -228,12 +249,13 @@ def _winansi(line: str) -> tuple[str, int]:
     return "".join(out), dropped
 
 
-def _receipt_lines(run_id: str, case: dict[str, Any], scenario: str) -> list[str]:
+def _receipt_lines(run_id: str, case: dict[str, Any], scenario: str,
+                   said: str = "") -> list[str]:
     c, removed = _scrub(case)
     deviation = str(c.get("deviation") or "no deviation").replace("_", " ").upper()
     lines = [
         "AXOR — CAUGHT",
-        headline(str(c.get("deviation") or "")),
+        headline(str(c.get("deviation") or ""), c),
         f"ref {run_id}  ·  {scenario}",
         "",
         f"VERDICT: {deviation}",
@@ -241,11 +263,17 @@ def _receipt_lines(run_id: str, case: dict[str, Any], scenario: str) -> list[str
         "",
         "WHAT ACTUALLY HAPPENED",
     ]
-    for raw in _render(c.get("observed_reality")).splitlines() or [""]:
-        lines += textwrap.wrap(raw, 92) or [""]
+    # the same words the HTML receipt uses — this printed raw JSON
+    for k, v in _observed_rows(c.get("observed_reality")):
+        for raw in (f"{k}: {v}" if k else v).splitlines() or [""]:
+            lines += textwrap.wrap(raw, 92) or [""]
     lines += ["", "WHAT THE AGENT SAID"]
-    for raw in _render(c.get("agent_claim")).splitlines() or [""]:
+    claim = c.get("agent_claim")
+    claim_text = claim if isinstance(claim, str) else _render(claim)
+    for raw in (f"\u201c{said.strip()}\u201d" if said.strip() else claim_text).splitlines() or [""]:
         lines += textwrap.wrap(raw, 92) or [""]
+    if said.strip():
+        lines += textwrap.wrap(f"read as: {claim_text}", 92)
     lines += ["", "WHY"]
     faults = c.get("fault_attribution", [])
     if faults:
@@ -279,7 +307,7 @@ def _text_object(lines: list[str]) -> bytes:
 
 
 def evidence_receipt_pdf(
-    run_id: str, case: dict[str, Any], scenario: str = ""
+    run_id: str, case: dict[str, Any], scenario: str = "", said: str = "",
 ) -> bytes:
     """A minimal, valid, dependency-free PDF receipt for one EvidenceCase.
 
@@ -289,7 +317,7 @@ def evidence_receipt_pdf(
     55 — on a 40-observation case that was the whole claim, the fault
     attribution, and the line stating the content rule.
     """
-    lines = [line for line in _receipt_lines(run_id, case, scenario)]
+    lines = [line for line in _receipt_lines(run_id, case, scenario, said)]
     rendered: list[str] = []
     dropped = 0
     for line in lines:
@@ -410,14 +438,13 @@ happened — caught by Axor. Observations only.">
   <div class="panel">
     <div class="row"><div class="label">WHAT ACTUALLY HAPPENED</div>{rows}</div>
     <div class="row"><div class="label">WHAT THE AGENT SAID</div>
-      <div class="said">“{claim}”</div></div>
+      <div class="said">“{claim}”</div>{read_as}</div>
     <div class="how">How we know: {how}</div>
   </div>
   <div class="why">{why}</div>
   {withheld}
   <footer>
-    This link shows only what was observed — no request or response contents. Whoever shared
-    it can withdraw it. <span class="small mono">ref {ref}</span><br><br>
+    {who} <span class="small mono">ref {ref}</span><br><br>
     Caught by <a href="https://axor.dev">Axor</a> — it checks what AI agents do against what
     they say, and stops the dangerous part.
   </footer>

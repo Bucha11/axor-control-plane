@@ -30,12 +30,17 @@ Sessions: ``X-Axor-Session`` names the conversation a call belongs to, so one
 user's untrusted text does not taint another's calls. Without it calls share
 one session, which ends after ``idle_s`` of quiet.
 
-The trace shipped to the plane keeps the proxy's privacy rule: argument names
-with sizes, never their values; no answer previews.
+The trace shipped to the plane is the governor's own record (verdict, which
+argument carried outside text and from which answer), bridged to the plane's
+event schema, so replay re-decides exactly what was decided live. It keeps the
+proxy's privacy rule: argument names with sizes, never their values; no answer
+previews.
 """
 from __future__ import annotations
 
+import asyncio
 import hashlib
+import inspect
 import json
 import logging
 import threading
@@ -48,6 +53,8 @@ from typing import Any
 _log = logging.getLogger("axor.proxy.guard")
 
 DEFAULT_SESSION = "default"
+# how a guarded agent names itself on the plane (node profile `agent`)
+PROXY_AGENT = "axor-proxy"
 
 
 def load_manifests(path: Path) -> list[dict[str, Any]]:
@@ -87,6 +94,52 @@ def answer_text(value: Any) -> str:  # noqa: ANN401 - arbitrary tool JSON
     return "\n".join(leaves)
 
 
+def _field_values(node: Any, path: str) -> list[Any] | None:  # noqa: ANN401
+    """The values at `path` (``text``, ``messages[].body``, ``a.*``) in an
+    answer, or None when the answer has no such field at all."""
+    if path in ("", "*"):
+        return [node]
+    head, _, rest = path.partition(".")
+    if head.endswith("[]"):
+        items = node.get(head[:-2]) if isinstance(node, dict) else None
+        if not isinstance(items, list):
+            return None
+        found = [f for f in (_field_values(item, rest) for item in items) if f is not None]
+        if items and not found:
+            return None          # the items do not carry the field
+        return [v for f in found for v in f]
+    if not isinstance(node, dict) or head not in node:
+        return None
+    return _field_values(node[head], rest)
+
+
+def outside_text(manifest: dict[str, Any] | None, answer: Any) -> str:  # noqa: ANN401
+    """The part of an answer that is outside text, for the ledger.
+
+    ``untrusted_fields`` says which fields of a tool's answer a stranger could
+    have written — the ``text`` of a support ticket, not the ``from`` the mail
+    system stamped on it. Registering the whole answer made every value in it
+    outside text: the customer's own address, which the agent must reply to,
+    was refused like the address the ticket asked it to send data to.
+
+    ``result.*`` (or ``result``) is the whole answer, as before. A field the
+    answer does not carry falls back to the whole answer: a changed shape must
+    not quietly turn outside text clean.
+    """
+    patterns = [str(p) for p in (manifest or {}).get("untrusted_fields", []) or []]
+    stripped = [p[len("result."):] if p.startswith("result.") else ("" if p == "result" else p)
+                for p in patterns]
+    if not stripped or any(p in ("", "*") for p in stripped) or not isinstance(answer, (dict, list)):
+        return answer_text(answer)
+    parts: list[Any] = []
+    for path in stripped:
+        values = _field_values(answer, path)
+        if values is None:
+            return answer_text(answer)
+        parts.extend(values)
+    return "\n".join(t for t in (answer_text(v) for v in parts) if t)
+
+
 def _redacted(args: dict[str, Any]) -> dict[str, str]:
     out = {}
     for k, v in args.items():
@@ -103,6 +156,10 @@ class _Session:
     last_used: float = field(default_factory=time.time)
     calls: int = 0
     seq: int = 0
+    results: int = 0
+    # what the agent asked for this conversation: what ran, and what the
+    # operator held — the tools its answer is read against (answer())
+    asked: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -132,6 +189,8 @@ class Guard:
         self.node_id = node_id
         self.idle_s = idle_s
         self.tools = sorted(str(m.get("id")) for m in manifests)
+        self._by_tool = {str(m.get("id")): m for m in manifests}
+        self._post_lock: asyncio.Lock | None = None
         self._lock = threading.Lock()
         self._sessions: dict[str, _Session] = {}
         self.link = link
@@ -143,6 +202,19 @@ class Guard:
             except Exception as exc:  # noqa: BLE001 - enforcement is local
                 _log.warning("axor guard: no Control-Plane link (%s) — still "
                              "enforcing the manifests, without pause / stop", exc)
+        if self.link is not None:
+            self._say_what_it_is()
+
+    def _say_what_it_is(self) -> None:
+        """Tell the plane this production agent is behind the guard proxy. The
+        proxy sees the agent's tool calls, not its model: a drift check and
+        Sentinel's reputation need the agent wrapped in code, and the plane
+        says so for this node instead of showing an empty "not probed"."""
+        link = self.link
+        try:
+            link.submit(lambda: link.connector.post_profile("agent", agent=PROXY_AGENT))
+        except Exception:  # noqa: BLE001 - a plane hiccup must not fail the guard
+            _log.debug("axor guard: profile not sent", exc_info=True)
 
     # ── sessions ──────────────────────────────────────────────────────────────
 
@@ -185,13 +257,19 @@ class Guard:
         """(decision, refusal). A refusal means: do not call the upstream."""
         refusal = self.posture_refusal(s)
         if refusal is not None:
-            self._ship(s, tool, args, None, gate=refusal.category, denied=True)
+            # Held by the operator (pause / stop / budget), not judged by the
+            # governor: there is no kernel record of it, so the line is ours.
+            # `control` marks it as held by the operator's own control, so it
+            # is not listed among what the rules refused (step_search "held")
+            s.asked.append(tool)
+            self._ship(s, [{"kind": "tool_call", "verdict": "deny",
+                            "gate": refusal.category or "capability",
+                            "payload": {"tool": tool, "args": args,
+                                        "control": refusal.error, "reason": refusal.detail}}])
             return None, refusal
         decision = s.governor.evaluate(tool, args)
         if not decision.allowed:
-            from axor_core.governor import gate_of
-
-            self._ship(s, tool, args, None, gate=gate_of(decision.category), denied=True)
+            self._ship_kernel(s)
             return decision, Refusal(403, "denied_by_policy", decision.reason, decision.category)
         s.calls += 1
         return decision, None
@@ -202,33 +280,119 @@ class Guard:
              status: int | None) -> None:
         """Fold an executed call's answer into the session's ledger."""
         ok = status is not None and status < 400
+        s.asked.append(tool)
         if ok and decision is not None:
-            s.governor.register_output(decision, answer_text(answer))
-        self._ship(s, tool, args, "ok" if ok else "error", gate="", denied=False)
+            s.governor.register_output(decision, outside_text(self._by_tool.get(tool), answer))
+        # The governor records an answer only when it taints (that is the source
+        # replay folds); a clean or failed answer still closes the call on the
+        # timeline, under the ref the next call's lines can name.
+        self._ship_kernel(s, closing={"tool": tool, "status": "ok" if ok else "error"})
+
+    # ── the agent's answer ───────────────────────────────────────────────────
+
+    def answer(self, key: str | None, text: str) -> dict[str, Any] | None:
+        """The agent's answer to this conversation (X-Axor-Session), read
+        against what its tools did.
+
+        The proxy sees the tool calls, never what the agent then tells the
+        customer: a refund that failed upstream and an answer of "refund
+        issued" went by with nothing to audit, and the run stayed "running".
+        Sent here, the answer goes to the plane as the run's ``claim`` — the
+        plane audits it as it audits a wrapped agent's, and the run closes.
+        The conversation ends with it: the next call starts a new run.
+        None when there is no such conversation (nothing called yet, or it
+        idled out)."""
+        from axor_proxy.run_cli import reconstruct_claim
+
+        key = (key or DEFAULT_SESSION)[:120]
+        with self._lock:
+            s = self._sessions.pop(key, None)
+        if s is None:
+            return None
+        claims = reconstruct_claim(list(dict.fromkeys(s.asked)), text)
+        self._ship(s, [{"kind": "claim",
+                        "payload": {"text": text[:4000], "structured": True, "claims": claims}}])
+        return {"run_id": s.run_id, "claims": claims}
 
     # ── the plane trace (no values: the proxy's privacy rule) ─────────────────
 
-    def _ship(self, s: _Session, tool: str, args: dict[str, Any], status: str | None,
-              *, gate: str, denied: bool) -> None:
+    def _ship_kernel(self, s: _Session, closing: dict[str, Any] | None = None) -> None:
+        """Ship what the governor itself recorded for this call.
+
+        The kernel already records, per call, the verdict, which arguments carry
+        outside text and from which earlier answer (``arg_provenance``,
+        ``arg_refs``), the driving root, and — for a tainting answer — the
+        source with its root. That record is what replay re-gates and what
+        "Safe to ship?" checks a corpus against. Writing a hand-made line with
+        only the tool name and a verdict lost all of it: replay saw a clean call,
+        re-decided it as allowed, and reported that a refused exfiltration
+        "now gets through" under the very rules that refused it.
+        """
+        events = s.governor.drain_trace_events()
+        try:
+            from axor_wrap.plane.bridge import trace_to_kernel
+
+            kernel = trace_to_kernel(events, self.node_id)
+        except Exception:  # noqa: BLE001 - a trace must never fail a call
+            _log.debug("axor guard: trace not bridged", exc_info=True)
+            kernel = []
+        lines: list[dict[str, Any]] = []
+        for e in kernel:
+            line: dict[str, Any] = {"kind": e.kind.value, "payload": dict(e.payload)}
+            if e.verdict is not None:
+                line["verdict"] = e.verdict.value
+            if e.gate:
+                line["gate"] = e.gate
+            if e.causal_root:
+                line["causal_root"] = e.causal_root
+            lines.append(line)
+        if closing is not None:
+            results = [ln for ln in lines if ln["kind"] == "tool_result"]
+            if results:
+                results[-1]["payload"].setdefault("status", closing["status"])
+            else:
+                s.results += 1
+                ref = f"{self.node_id}:r{s.results}"
+                lines.append({"kind": "tool_result", "causal_root": ref,
+                              "payload": {**closing, "value_ref": ref}})
+        self._ship(s, lines)
+
+    def _ship(self, s: _Session, lines: list[dict[str, Any]]) -> None:
         link = self.link
-        if link is None:
+        if link is None or not lines:
             return
-        s.seq += 1
-        call_id = f"g{s.seq}"
-        call: dict[str, Any] = {"kind": "tool_call",
-                                "payload": {"tool": tool, "args": _redacted(args),
-                                            "tool_call_id": call_id}}
-        lines = [call]
-        if denied:
-            call.update(verdict="deny", gate=gate or "capability")
-        else:
-            lines.append({"kind": "tool_result", "causal_root": call_id,
-                          "payload": {"tool": tool, "status": status, "value_ref": call_id}})
+        for line in lines:
+            payload = line.get("payload") or {}
+            if isinstance(payload.get("args"), dict):
+                payload["args"] = _redacted(payload["args"])
+            # the timeline pairs a call with its answer by this id
+            if line["kind"] == "tool_call":
+                s.seq += 1
+                payload.setdefault("tool_call_id", f"g{s.seq}")
         run_id = s.run_id
         try:
-            link.submit(lambda: link.connector.post_trace(lines, run_id))
+            link.submit(lambda: self._in_order(link.connector.post_trace(lines, run_id)))
         except Exception:  # noqa: BLE001 - a plane hiccup must not fail a call
             _log.debug("axor guard: trace not shipped", exc_info=True)
+
+    def _in_order(self, posted: Any) -> Any:  # noqa: ANN401 - a coroutine, or a test's None
+        """Post batches one after another, in the order the calls happened.
+
+        Each batch was its own request on the link's loop, and concurrent
+        requests reach the plane in whatever order they finish: the plane keeps
+        arrival order, so a run read back with the refund before the ticket it
+        was for. A lock on the link's loop queues them FIFO.
+        """
+        if not inspect.isawaitable(posted):
+            return posted
+
+        async def ordered() -> None:
+            if self._post_lock is None:
+                self._post_lock = asyncio.Lock()
+            async with self._post_lock:
+                await posted
+
+        return ordered()
 
     def describe(self) -> dict[str, Any]:
         return {"node_id": self.node_id, "tools": self.tools,

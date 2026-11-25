@@ -17,6 +17,7 @@ import { refusalWords } from "../refusal";
 import { C, MONO, btn } from "../theme";
 import { SkillsOffPanel, TeamSkillsPanel } from "../components/SkillsOff";
 import { HowItWorks, MachineCommand } from "../components/MachineCommand";
+import { useWorkStarted } from "../workStarted";
 const TRY_PREFIX = "skill-try.";
 
 // An example skill to check without having one at hand: what a helpful-looking
@@ -112,6 +113,7 @@ export default function Skills() {
 // ── 1 · what it asks ─────────────────────────────────────────────────────────
 
 function CheckSkill() {
+  const started = useWorkStarted();
   const files = useRef<HTMLInputElement>(null);
   const folder = useRef<HTMLInputElement | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -141,10 +143,11 @@ function CheckSkill() {
           {check.isPending ? <Loader2 size={13} className="animate-spin" /> : <Upload size={13} />} Check a skill folder
         </button>
         <button onClick={() => files.current?.click()} style={link}>or pick its files</button>
+        {!started && <>
         <span style={{ color: C.dim, fontFamily: MONO, fontSize: 11.5 }}>·</span>
         <button onClick={() => check.mutate(EXAMPLE_SKILL)} data-testid="skill-example" style={link}>
           check an example skill
-        </button>
+        </button></>}
       </div>
       <div style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim, marginTop: 6 }}>
         read, not run — SKILL.md and the scripts beside it
@@ -286,6 +289,7 @@ function DryRuns() {
   const nodes = useQuery({ queryKey: ["nodes"], queryFn: api.nodes, refetchInterval: 5000 });
   const tries = (nodes.data ?? []).filter((n) => n.node_id.startsWith(TRY_PREFIX));
   const [open, setOpen] = useState<string | null>(null);
+  const started = useWorkStarted();
   const example = useMutation({
     mutationFn: api.seedSkillTry,
     onSuccess: (r) => { void qc.invalidateQueries({ queryKey: ["nodes"] }); setOpen(r.node); },
@@ -295,10 +299,10 @@ function DryRuns() {
       <div style={label}>3 · DRY RUNS</div>
       {tries.length === 0 ? (
         <div style={{ fontFamily: MONO, fontSize: 12, color: C.mut }}>
-          none yet — run the command above, or{" "}
+          none yet — run the command above{started ? "." : <>, or{" "}
           <button onClick={() => example.mutate()} data-testid="skill-try-example" style={link}>
             {example.isPending ? "loading…" : "see an example dry run →"}
-          </button>
+          </button></>}
         </div>
       ) : (
         <div style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 8 }}>

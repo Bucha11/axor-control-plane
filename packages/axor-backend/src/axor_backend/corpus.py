@@ -53,6 +53,8 @@ async def regression_report(store: Store, config_json: dict) -> dict:
         rows.append(row)
     regressed = sum(1 for r in rows if r["result"] == "regressed")
     escaped = sum(1 for r in rows if r["result"] == "escaped")
+    # normal work with a refusal the rules still give: reported, not failing
+    still_refused = sum(1 for r in rows if r.get("still_refused"))
     # A must_block pin whose trace recorded no denial cannot be checked against
     # itself (replay_api.regression_row). Counted, and it withholds
     # safe_to_ship: the report promises "every attack still blocked", and a pin
@@ -63,6 +65,7 @@ async def regression_report(store: Store, config_json: dict) -> dict:
         "rows": rows,
         "regressed": regressed,
         "escaped": escaped,
+        "still_refused": still_refused,
         "unanchored": unanchored,
         "skipped": skipped,
         # How much of the corpus is the deployment's own, and how much shipped

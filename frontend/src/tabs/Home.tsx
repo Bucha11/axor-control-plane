@@ -140,19 +140,23 @@ function FirstVisit() {
             </button>
           </div>
           <div style={{ fontFamily: MONO, fontSize: 11, color: C.dim, marginBottom: 24 }}>
-            1 production agent free · Team from $299 / month ·{" "}
+            1 production agent free · Team Workspace from $299 / month ·{" "}
             <button onClick={() => navigate("pricing?for=production")} style={{ ...link, fontFamily: MONO, fontSize: 11 }}>pricing →</button>
           </div>
         </>
       )}
       {err && <div style={{ fontFamily: MONO, fontSize: 11, color: C.red, marginBottom: 8 }}>{err}</div>}
 
+      {/* a recorded demo is for someone deciding; once their own agents report,
+          the plane is theirs and it is out of the way */}
+      {!started && <>
       <div style={{ fontFamily: MONO, fontSize: 11.5, color: C.mut, marginBottom: 10 }}>
         watch it happen — 25 seconds:
       </div>
       {side === "coding"
         ? <CodingStage key="coding" autoplay />
         : <DemoStage key="production" autoplay cta={false} onTry={() => navigate("connect?for=production")} />}
+      </>}
       {side === "coding" && (
         <div data-testid="home-coding-more" style={{ fontSize: 13, color: C.mut, lineHeight: 1.7, marginTop: 14 }}>
           Also: every tool call checked before it runs · trees of agents — a planner, parallel readers,
@@ -168,7 +172,7 @@ function FirstVisit() {
         <button onClick={() => startTour(side)} style={{ background: "none", border: "none", padding: 0, color: C.steel, cursor: "pointer", fontFamily: MONO, fontSize: 11 }}>
           Take the tour
         </button>{" "}
-        — a minute through it on example data
+        — {started ? "a minute through the screens" : "a minute through it on example data"}
       </div>
     </div>
   );

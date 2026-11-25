@@ -67,3 +67,15 @@ async def test_a_demo_plane_keeps_its_examples(tmp_path: pathlib.Path) -> None:
         await app.state.store.upsert_reported("support-bot", applied_version=0, level="NORMAL",
                                               budget_remaining=None, ts=now())
         assert {"ex_block", "ex_pass"} <= {r["run_id"] for r in (await c.get("/v1/runs")).json()}
+
+
+async def test_the_topology_says_which_nodes_are_examples(tmp_path: pathlib.Path) -> None:
+    """"Data across sessions" drew the example fleet's reputation with no mark —
+    "crm:customers · flagged" read as the workspace's own data."""
+    app = create_app(database_url=f"sqlite+aiosqlite:///{tmp_path}/t.db",
+                     operator_keys={}, allow_unsigned=True)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app),
+                                 base_url="http://cp.test") as c, app.router.lifespan_context(app):
+        assert (await c.post("/v1/demo/seed-fleet")).status_code == 200
+        nodes = {n["node_id"]: n for n in (await c.get("/v1/plane/topology")).json()["nodes"]}
+        assert nodes[demo.TREE_RESEARCH]["example"] is True

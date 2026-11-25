@@ -35,6 +35,8 @@ const TRIGGERS: { id: string; label: string; for: Journey[] }[] = [
     for: ["coding", "production", "both"] },
   { id: "would_refuse", label: "a call the rules would refuse went through, because enforcement is off (observe mode)",
     for: ["coding", "production", "both"] },
+  { id: "refused", label: "the rules refused a call — an attack stopped, or normal work a rule blocks",
+    for: ["coding", "production", "both"] },
   { id: "memory_worse", label: "agents did worse after the team memory changed", for: ["coding", "both"] },
   { id: "setup_health_worse", label: "a context health check came out worse than the last one", for: ["coding", "both"] },
   { id: "level_transition_up", label: "an agent was restricted further (its level went up)", for: ["production", "both"] },
@@ -1084,6 +1086,7 @@ export default function Settings({ tab = "workspace" }: { tab?: string } = {}) {
       }),
     onSuccess: () => void qc.invalidateQueries({ queryKey: ["subscriptions"] }),
   });
+  const testAlert = useMutation({ mutationFn: (target: string) => api.testNotification(target) });
   const unsubscribe = useMutation({
     mutationFn: (target: string) => api.unsubscribeNotifications(target),
     onSuccess: () => void qc.invalidateQueries({ queryKey: ["subscriptions"] }),
@@ -1402,7 +1405,9 @@ export default function Settings({ tab = "workspace" }: { tab?: string } = {}) {
           style={btn({ color: C.steel, fontSize: 12 })}
         >
           {subscribe.isPending ? <Loader2 size={13} className="animate-spin" /> : subscribe.isSuccess ? <Check size={13} /> : null}
-          {subscribe.isSuccess ? "subscribed" : "Subscribe"}
+          {subscribe.isSuccess ? "subscribed"
+            : (subscriptions.data ?? []).some((x) => x.url === url && x.node_pattern === (nodePattern || "*"))
+              ? "Update its alerts" : "Subscribe"}
         </button>
         {subscribe.isError && (
           <div className="mt-2" style={{ fontFamily: MONO, fontSize: 11, color: C.red }}>
@@ -1422,6 +1427,11 @@ export default function Settings({ tab = "workspace" }: { tab?: string } = {}) {
                     .map((id) => TRIGGERS.find((t) => t.id === id)?.label.split(" — ")[0] ?? id).join("; ")}
                   {s.node_pattern !== "*" ? ` · nodes: ${s.node_pattern}` : ""}
                 </span>
+                <button aria-label={`send a test alert to ${s.url}`} onClick={() => testAlert.mutate(s.url)}
+                  disabled={testAlert.isPending}
+                  style={btn({ color: C.steel, fontSize: 10, padding: "1px 7px" })}>
+                  {testAlert.isSuccess && testAlert.variables === s.url ? "test sent ✓" : "send a test alert"}
+                </button>
                 <button
                   aria-label={`unsubscribe ${s.url}`}
                   onClick={() => unsubscribe.mutate(s.url)}
@@ -1432,6 +1442,16 @@ export default function Settings({ tab = "workspace" }: { tab?: string } = {}) {
                 </button>
               </div>
             ))}
+            {testAlert.isError && (
+              <div className="mt-2" style={{ fontFamily: MONO, fontSize: 11, color: C.red }}>
+                test alert refused: {(testAlert.error as Error).message}
+              </div>
+            )}
+            {testAlert.isSuccess && (
+              <div className="mt-2" style={{ fontFamily: MONO, fontSize: 11, color: C.dim }}>
+                sent — if it does not arrive, it lands under "could not be delivered" below after its retries
+              </div>
+            )}
             {unsubscribe.isError && (
               <div className="mt-2" style={{ fontFamily: MONO, fontSize: 11, color: C.red }}>
                 unsubscribe failed: {(unsubscribe.error as Error).message}
@@ -1462,6 +1482,9 @@ export default function Settings({ tab = "workspace" }: { tab?: string } = {}) {
         <>
           <Section title="HOW THIS PLANE IS PROTECTED">
             <SecurityPosture />
+          </Section>
+          <Section title="LINKS SHARED OUTSIDE THE WORKSPACE">
+            <SharedLinks />
           </Section>
           <FederationVault />
         </>
@@ -2067,7 +2090,10 @@ function Connections({ coding, prod }: { coding: boolean; prod: boolean }) {
   const admin = authStatus.data?.auth_enabled === true && (authStatus.data?.scopes ?? []).includes("admin");
   const keys = useQuery({ queryKey: ["api-keys"], queryFn: api.listKeys, enabled: admin, retry: false });
   const bound = new Set((keys.data ?? []).map((k) => k.node_id).filter(Boolean));
-  const all = (nodes.data ?? []).filter((n) => !/example/.test(n.node_id) && !n.profile?.developer?.startsWith("dev-example-"));
+  // what is reporting is the workspace's own: the product's example nodes
+  // (the tree-* fleet among them) never were, and are hidden once it has its own
+  const all = (nodes.data ?? []).filter((n) => !n.example_hidden && !/example/.test(n.node_id)
+    && !n.profile?.developer?.startsWith("dev-example-"));
   const agents = all.filter((n) => !n.profile || n.profile.kind === "agent");
   // coding agents per developer this month, from the seat meter (activity, not
   // heartbeats — a session that never heartbeat is still a developer's)
@@ -2378,5 +2404,35 @@ function FunnelPanel() {
         )}
       </div>
     </Section>
+  );
+}
+
+
+// Every receipt link handed out: each opens a case without an account. A link
+// was revocable only from the page that made it — after a reload, not at all.
+function SharedLinks() {
+  const qc = useQueryClient();
+  const links = useQuery({ queryKey: ["share-links", "all"], queryFn: () => api.shareLinks(), retry: false });
+  const revoke = useMutation({
+    mutationFn: (token: string) => api.revokeShare(token),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ["share-links"] }),
+  });
+  const open = (links.data?.links ?? []).filter((l) => !l.revoked);
+  if (links.isError) {
+    return <div style={{ fontFamily: MONO, fontSize: 11.5, color: C.dim }}>only an operator sees the shared links</div>;
+  }
+  return (
+    <div data-testid="shared-links" style={{ fontFamily: MONO, fontSize: 11.5, color: C.mut }}>
+      {open.length === 0 ? <span style={{ color: C.dim }}>none open — no receipt can be opened from outside</span>
+        : open.map((l) => (
+          <div key={l.token} className="flex items-center gap-2 py-1">
+            <span style={{ color: C.text, cursor: "pointer" }}
+              onClick={() => navigate(`catch/${encodeURIComponent(l.run_id)}`)}>{l.run_id}</span>
+            <span style={{ color: C.dim }}>case {l.case_index} · shared {l.created_ts.slice(0, 16).replace("T", " ")}</span>
+            <button onClick={() => revoke.mutate(l.token)} disabled={revoke.isPending}
+              style={btn({ color: C.mut, fontSize: 10.5, padding: "2px 8px" })}>revoke</button>
+          </div>
+        ))}
+    </div>
   );
 }

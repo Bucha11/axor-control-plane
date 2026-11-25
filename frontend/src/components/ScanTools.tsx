@@ -31,13 +31,14 @@ export default function ScanTools({ onFound, label = "find them in your code", t
           continue;
         }
         setToolClass(t.id, {
-          klass: t.guess.default_class === "UNKNOWN" ? "READ" : t.guess.default_class,
+          // unsure is "changes something", not "reads"
+          klass: t.guess.default_class === "UNKNOWN" ? "WRITE" : t.guess.default_class,
           outside: t.guess.untrusted_fields.length > 0,
           source: t.source, args_schema: t.args_schema, driving: t.guess.driving_args,
         });
       }
       setNote(res.tools.length ? `found ${res.tools.length} tool${res.tools.length === 1 ? "" : "s"} — check what each does`
-                               : "no tools found in those files");
+                               : "no tools found in those files — the scanner finds LangChain @tool / Tool(...), FastMCP @mcp.tool(), {name, description, input_schema} tool lists, and a plain-Python dict of your tool functions (TOOLS = {name: function}). Tools your agent calls over HTTP by URL are not in code it can see: add each one by hand below");
       onFound?.(res.tools);
     } catch (e) {
       const msg = (e as Error).message;
@@ -51,7 +52,7 @@ export default function ScanTools({ onFound, label = "find them in your code", t
       <label style={btn({ color: C.steel, borderColor: C.steel, fontSize: 11.5, padding: "5px 12px", cursor: "pointer" })}>
         <Upload size={12} /> {busy ? "reading…" : label}
         <input type="file" multiple accept=".py" data-testid={testId} style={{ display: "none" }}
-          onChange={(e) => void scan(e.target.files)} />
+          onChange={(e) => { const input = e.currentTarget; void scan(input.files).finally(() => { input.value = ""; }); }} />
       </label>
       {note && <span style={{ fontFamily: MONO, fontSize: 10.5, color: C.mut }}>{note}</span>}
     </span>

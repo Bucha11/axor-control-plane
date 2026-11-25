@@ -1,3 +1,4 @@
+import type { ToolClass } from "./store";
 import { canonicalize } from "./jcs";
 import * as opKey from "./opKey";
 import { IDENTITY_BASE, refresh } from "./identity";
@@ -289,6 +290,8 @@ export interface NodeInfo {
     kind: "coding" | "agent" | "tree"; agent: string; developer: string; title?: string;
     // a subagent (Claude Code's Agent tool): the session that started it
     parent?: string;
+    // a production agent started as a test bench (no real users behind it)
+    test_bench?: boolean;
   } | null;
 }
 
@@ -423,6 +426,8 @@ export interface TopologyNode {
   desired?: { version: number; state: Record<string, unknown> } | null;
   reported?: NodeInfo["reported"];
   reputation?: ReputationSummary | null;
+  // the product's own example data (demo seeds), not the workspace's work
+  example?: boolean;
 }
 
 export interface TopologyEdge {
@@ -451,6 +456,10 @@ export interface RegressionRow {
   new_denial: { seq: number; reason: string; category: string } | null;
   pinned_denials: number;
   escaped_denials: { node_id: string; seq: number; tool: string; gate: string | null }[];
+  // normal work: steps refused when it was kept, and still refused under these rules
+  still_refused?: { node_id: string; seq: number; tool: string; gate: string | null }[];
+  // refusals recorded without the value that drove them: not re-checkable
+  unverifiable?: { node_id: string; seq: number; tool: string; gate: string | null }[];
   // A pin on one of the canned demo runs, seeded by /v1/demo/*.
   demo: boolean;
 }
@@ -470,6 +479,8 @@ export interface RegressionReport {
   rows: RegressionRow[];
   regressed: number;
   escaped: number;
+  // normal flows with a refusal still given (not a regression, not a clean pass)
+  still_refused?: number;
   unanchored: number;
   skipped: SkippedPin[];
   // How much of the corpus is this deployment's own evidence, and how much
@@ -1522,6 +1533,17 @@ export const api = {
   },
   // `mustRefuse` names the calls a must_block pin holds — needed when the run
   // was recorded ungoverned and refused nothing (else it can't be checked)
+  // the workspace's tool policy (what each tool does) — one for everyone
+  getPolicy: () =>
+    af("/v1/policy").then((r) => j<{ tools: Record<string, ToolClass>; updated_ts: string | null }>(r)),
+  putPolicy: (tools: Record<string, ToolClass>) =>
+    af("/v1/policy", { method: "PUT", headers: { "content-type": "application/json" },
+                       body: JSON.stringify({ tools }) })
+      .then((r) => j<{ tools: Record<string, ToolClass>; changed: string[] }>(r)),
+  // take a case out of the check (Safe to ship?)
+  unpin: (runId: string) =>
+    af(`/v1/pins/${encodeURIComponent(runId)}`, { method: "DELETE" })
+      .then((r) => j<{ unpinned: string }>(r)),
   pin: (runId: string, side: "must_block" | "must_pass", label: string,
         mustRefuse?: { node_id: string; seq: number }[]) =>
     af(`/v1/pins/${encodeURIComponent(runId)}`, {
@@ -1583,6 +1605,21 @@ export const api = {
       // what policy would have said — the run still only watches
       body: JSON.stringify({ scenario, faults, node_id: nodeId, ...(manifests ? { manifests } : {}) }),
     }).then((r) => j<StartRunResult>(r)),
+  // A test run as the proxy holds it, before it reaches the plane: the plane
+  // gets the run when the agent's answer is submitted, so this is the only
+  // view of it while the agent works (sizes and hashes, never values).
+  proxyRun: (runId: string) =>
+    af(`/axor/runs/${encodeURIComponent(runId)}`).then((r) =>
+      j<{ run_id: string; armed: boolean; completed: boolean; events: KernelEvent[] }>(r)),
+  // The agent's answer — what the audit compares the run against. `tools_succeeded`
+  // is the deterministic form: free text alone is matched only when it names the
+  // tool, which an agent's answer to a customer never does.
+  submitClaim: (runId: string, text: string, toolsSucceeded: string[], toolsUsed: string[]) =>
+    af(`/axor/runs/${encodeURIComponent(runId)}/claim`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ text, claims: { tools_succeeded: toolsSucceeded, tools_used: toolsUsed } }),
+    }).then((r) => j<{ run_id: string; deviations: number; upload: { uploaded?: boolean; detail?: string } | null }>(r)),
   simulate: (runId: string, body: Record<string, unknown> = {}) =>
     af(`/axor/runs/${encodeURIComponent(runId)}/simulate`, {
       method: "POST",
@@ -1866,6 +1903,11 @@ export const api = {
     af(`/v1/runs/${encodeURIComponent(runId)}/cases/${caseIndex}/share`, { method: "POST" }).then(
       (r) => j<{ token: string; url: string }>(r),
     ),
+  // the links handed out (one run's, when named) — each opens a case without an account
+  shareLinks: (runId?: string) =>
+    af(`/v1/share-links${runId ? `?run_id=${encodeURIComponent(runId)}` : ""}`).then((r) =>
+      j<{ links: { token: string; run_id: string; case_index: number; revoked: boolean;
+                   created_ts: string; url: string }[] }>(r)),
   revokeShare: (token: string) =>
     af(`/v1/share/${encodeURIComponent(token)}`, { method: "DELETE" }).then((r) => j<{ revoked: string }>(r)),
   // Fetch the export with header auth (so an expired token refreshes like any
@@ -1896,6 +1938,10 @@ export const api = {
   // A registered webhook used to fire forever: there was no way to remove one
   // short of editing the database, while the body it receives carries node
   // ids, levels, a permalink, and for license_expiring the licensed org.
+  // one test alert to a subscribed channel, now
+  testNotification: (url: string) =>
+    af("/v1/notifications/test", { method: "POST", headers: { "content-type": "application/json" },
+                                   body: JSON.stringify({ url }) }).then((r) => j<{ sent: string }>(r)),
   unsubscribeNotifications: (url: string) =>
     af("/v1/notifications/unsubscribe", {
       method: "POST",

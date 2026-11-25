@@ -135,10 +135,59 @@ TRIGGERS = frozenset({
     # said; one the rules would have refused, let through only because
     # enforcement was off.
     "dangerous_let_through", "would_refuse",
+    # ...and what the rules DID refuse: an attack stopped is the thing a
+    # security lead asks to hear about. An operator's own pause / stop / budget
+    # is a hold, not a refusal, and never pages.
+    "refused",
     # Coding agents: agents did significantly worse after the team's memory
     # changed (memory.compare); a setup health check got worse.
     "memory_worse", "setup_health_worse",
 })
+
+
+# What a chat webhook shows. Slack's incoming webhooks take `text` and refuse a
+# body without it; Discord's take `content`. The alert used to be the bare
+# fields — {"trigger": "evidence_run", "node_id": "proxy", "cases": 1, …} —
+# which Slack rejects while the page promised "Slack, Discord or PagerDuty
+# take one". The fields stay for whoever reads them.
+_CHAT = {
+    "evidence_run": "made something up",
+    "refused": "a call was refused",
+    "would_refuse": "a call the rules would refuse went through (observe mode)",
+    "dangerous_let_through": "a dangerous call went through",
+    "level_transition_up": "was restricted further",
+    "node_stale": "stopped reporting",
+    "behavioral_drift": "behaviour drifted",
+    "heat_threshold": "something it touched is getting suspicious",
+    "regression_failed": "a policy change breaks a case you kept",
+    "memory_worse": "agents did worse after the team memory changed",
+    "setup_health_worse": "a context health check got worse",
+    "license_expiring": "the license is expiring",
+    "test": "a test alert — this channel works",
+}
+
+
+def public_link(path: str, base: str | None) -> str:
+    """An absolute link into the app when the deployment says where it is
+    (AppConfig.public_url, AXOR_PUBLIC_URL), else the path as is."""
+    base = (base or "").strip().rstrip("/")
+    return f"{base}{path}" if base and path.startswith("/") else path
+
+
+def with_chat_text(body: dict[str, Any], base: str | None = None) -> dict[str, Any]:
+    trigger = str(body.get("trigger", ""))
+    node = str(body.get("node_id", ""))
+    who = "a test run (through the proxy)" if node == "proxy" else node
+    line = f"Axor · {who}: {_CHAT.get(trigger, trigger.replace('_', ' '))}"
+    facts = [str(body[k]) for k in ("tool", "what", "reason") if body.get(k)]
+    if facts:
+        line += " — " + " · ".join(f[:200] for f in facts)
+    link = body.get("permalink")
+    if isinstance(link, str) and link:
+        link = public_link(link, base)
+        body = {**body, "permalink": link}
+        line += f"\n{link}"
+    return {**body, "text": line, "content": line}
 
 
 @dataclass
@@ -214,9 +263,11 @@ class Notifier:
         block_private: bool = False,
         clock: Callable[[], float] | None = None,
         mailer: Mailer | None = None,
+        public_url: str | None = None,
     ) -> None:
         # mailto: subscriptions go out through this; None refuses them
         self._mailer = mailer
+        self._public_url = public_url
         # Whether registering a webhook crosses a privilege boundary in THIS
         # deployment — see check_webhook_url. The app turns it on for any
         # multi-tenant (identity-configured) server.
@@ -283,7 +334,7 @@ class Notifier:
                 return
         self._subs.append(fresh)
 
-    def unsubscribe(self, url: str, org: str | None = None) -> int:
+    def unsubscribe(self, url: str, org: str | None = None, node_pattern: str | None = None) -> int:
         """Stop delivering to `url` for this tenant. Returns how many went.
 
         There was no way to do this at all: a webhook registered once fired
@@ -294,7 +345,8 @@ class Notifier:
         scope = org if org is not None else current_org_id()
         before = len(self._subs)
         self._subs = [
-            s for s in self._subs if not (s.url == url and s.org == scope)
+            s for s in self._subs if not (s.url == url and s.org == scope
+                                          and node_pattern in (None, s.node_pattern))
         ]
         return before - len(self._subs)
 
@@ -337,7 +389,7 @@ class Notifier:
         scope = org if org is not None else current_org_id()
         now = self._now()
         scheduled = 0
-        body = {"trigger": trigger, "node_id": node_id, **payload}
+        body = with_chat_text({"trigger": trigger, "node_id": node_id, **payload}, self._public_url)
         for sub in self._subs:
             if sub.org != scope:
                 continue
@@ -350,6 +402,10 @@ class Notifier:
             self._schedule(sub.url, body, sub.org)
             scheduled += 1
         return scheduled
+
+    def send_test(self, url: str, org: str = PUBLIC_ORG) -> None:
+        """One test alert through the same delivery (retries, dead-letter)."""
+        self._schedule(url, with_chat_text({"trigger": "test", "node_id": "axor"}, self._public_url), org)
 
     def _schedule(self, url: str, body: dict[str, Any], org: str) -> None:
         """Hand one delivery to the event loop, or dead-letter it now.

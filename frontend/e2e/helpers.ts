@@ -118,3 +118,11 @@ export async function seedNode(
   });
   expect(r.ok(), "node heartbeat should be accepted").toBeTruthy();
 }
+
+
+// The tool policy is the workspace's (/v1/policy), and specs share one backend:
+// a spec that reads "the tools in your policy" starts from an empty one.
+export async function resetPolicy(request: APIRequestContext): Promise<void> {
+  const r = await request.put(`${BACKEND}/v1/policy`, { data: { tools: {} } });
+  if (!r.ok()) throw new Error(`policy reset failed: ${r.status()}`);
+}

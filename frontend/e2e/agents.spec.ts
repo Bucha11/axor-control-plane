@@ -52,3 +52,19 @@ test("what an agent did that needs a look: on its row, in its panel, in Incident
   await look.click();
   await expect(page).toHaveURL(new RegExp(`#/evidence\\?agent=${CODER}`));
 });
+
+test("a refusal asks for a look: the fleet is not 'all healthy' a minute after an attack", async ({ page }) => {
+  await page.addInitScript(() => window.localStorage.setItem("axor-app", JSON.stringify({
+    state: { connection: { mode: "adapter", tools: [], testBench: false }, journey: "production" }, version: 0 })));
+  await page.route("**/v1/plane/nodes", (r) => r.fulfill({ json: [node(PROD, null)] }));
+  await page.route("**/v1/incidents**", (r) => r.fulfill({ json: {
+    items: [{ id: `refused:${PROD}:send_email:x`, kind: "refused", ts: new Date().toISOString(),
+              node_id: PROD, run_id: "r2", seq: 7, what: "send_email", detail: "<31 chars sha256:118cba43>",
+              count: 2, status: "new" }],
+    new: { made_up: 0, dangerous: 0, would_refuse: 0, refused: 1 }, needs_a_look: 1 } }));
+  await goHash(page, "govern");
+  await expect(page.getByRole("heading", { name: "One agent needs attention." })).toBeVisible();
+  await page.getByTestId(`agent-row-${PROD}`).click();
+  await expect(page.getByTestId("agent-panel").getByTestId("agent-needs-a-look"))
+    .toContainText("send_email — refused ×2");
+});

@@ -450,6 +450,10 @@ async def _alert_steps(ctx: Any, node_id: str, run_id: str,  # noqa: ANN401
             await notifier.emit("would_refuse", node_id, {
                 "run_id": run_id, "seq": step["seq"], "tool": step["tool"],
                 "what": step["what"], "reason": step["reason"], "permalink": link})
+        elif step["outcome"] == "refused":
+            await notifier.emit("refused", node_id, {
+                "run_id": run_id, "seq": step["seq"], "tool": step["tool"],
+                "what": step["what"], "reason": step["reason"], "permalink": link})
         elif step["outcome"] == "let_through" and (why := incidents.dangerous(step)):
             await notifier.emit("dangerous_let_through", node_id, {
                 "run_id": run_id, "seq": step["seq"], "tool": step["tool"],
@@ -552,7 +556,8 @@ async def _fold_reported(
         await notifier.emit(
             "level_transition_up", node_id,
             {"from": from_level, "to": to_level,
-             "permalink": f"/v1/plane/nodes#{node_id}"},
+             # the agent in the app (the API row stays under `api`)
+             "permalink": f"/#/govern/{node_id}", "api": f"/v1/plane/nodes#{node_id}"},
         )
 
 
@@ -704,7 +709,8 @@ async def append_fact(node_id: str, body: dict, request: Request) -> dict:
             {"score": float(fact["score"]),
              "threshold": float(fact.get("threshold", 1.0)),
              "resource_id": fact.get("resource_id", ""),
-             "permalink": f"/v1/plane/nodes#{node_id}"},
+             # the agent in the app (the API row stays under `api`)
+             "permalink": f"/#/govern/{node_id}", "api": f"/v1/plane/nodes#{node_id}"},
         )
     return {"appended": True}
 
@@ -750,6 +756,17 @@ async def consumed(node_id: str, body: dict, request: Request) -> dict:
         raise HTTPException(
             400, "key must be pending_injection|pending_excision|pending_experiment")
     await ctx.store.clear_desired_key(node_id, key)
+    # Clearing the one-shot bumps the version with no command behind it. The
+    # node took that version only from a snapshot, which it got only on a
+    # reconnect: until then the screens said "a command is on its way" about a
+    # test the agent had already run. A snapshot now; the node takes a
+    # snapshot's version without a new signature (removing a key forges nothing).
+    current = await ctx.store.get_desired(node_id)
+    if current is not None:
+        ctx.broadcast.publish(topic("plane", node_id), {
+            "type": "snapshot", "node_id": node_id, "version": current[0],
+            "state": current[1], "commands": await ctx.store.desired_commands(node_id),
+        })
     return {"cleared": key}
 
 
@@ -822,6 +839,11 @@ async def post_probe_report(node_id: str, body: dict, request: Request) -> dict:
             probe_plane.proposal_from_payload(body["repair_proposal"])
         except ValueError as exc:
             raise HTTPException(400, f"repair_proposal: {exc}") from exc
+    # what the agent's health was before this check: a page is news when it
+    # turns, not on every run of an agent already drifting (each with a
+    # different handful of test questions, so each read like a new finding)
+    before = await ctx.store.latest_probe_report(node_id)
+    was_drifting = (before or {}).get("overall_verdict") == probe_plane.VERDICT_DRIFT_DETECTED
     report_id = await ctx.store.add_probe_report(node_id, body, now())
     outcomes = await _close_heals(ctx, node_id, verdict)
     ctx.broadcast.publish(
@@ -829,7 +851,7 @@ async def post_probe_report(node_id: str, body: dict, request: Request) -> dict:
         {"type": "probe_report", "node_id": node_id, "report": body},
     )
     notifier = getattr(ctx, "notifier", None)
-    if notifier is not None and verdict == probe_plane.VERDICT_DRIFT_DETECTED:
+    if notifier is not None and verdict == probe_plane.VERDICT_DRIFT_DETECTED and not was_drifting:
         # The graded tier travels with the page. Two reports that both say
         # DRIFT_DETECTED are not the same news: one backed by canary escapes is
         # a deterministic fact about the probe output, the other is a
@@ -844,7 +866,11 @@ async def post_probe_report(node_id: str, body: dict, request: Request) -> dict:
                           if f.get("state") == "escaped"],
              "verdict_source": graded.get("verdict_source"),
              "confidence": graded.get("confidence"),
-             "permalink": f"/v1/plane/nodes#{node_id}"},
+             # what changed, for the line a chat shows
+             "what": ", ".join(f["family"].replace("_", " ") for f in families
+                               if f.get("state") == "escaped"),
+             # its health check in the app, where the cause can be removed
+             "permalink": f"/#/health?node={node_id}", "api": f"/v1/plane/nodes#{node_id}"},
         )
     return {"stored": True, "id": report_id, "heals_verified": outcomes}
 
@@ -1262,9 +1288,11 @@ async def post_profile(node_id: str, body: dict, request: Request) -> dict:
                    or not all(c.isalnum() or c in "-_.:" for c in parent)):
         raise HTTPException(400, "parent is the node id of the coding session that "
                                  "started this subagent")
+    # a production agent's own word that no real user is behind it
+    test_bench = kind == "agent" and body.get("test_bench") is True
     await ctx.store.put_node_profile(node_id, kind, agent, developer, now(),
                                      repo=repo, repo_label=label if repo else "",
-                                     parent=parent)
+                                     parent=parent, test_bench=test_bench)
     # past the free plan, the session is kept but not shown or operated: the
     # answer says so, and the sidecar tells the developer in their own agent
     from axor_backend.ee.entitlements import (
@@ -1344,7 +1372,8 @@ async def post_reputation(node_id: str, body: dict, request: Request) -> dict:
             "heat_threshold", node_id,
             {"flagged": flagged, "version": snapshot.version,
              "facts": {rid: snapshot.verdict_facts.get(rid, []) for rid in flagged},
-             "permalink": f"/v1/plane/nodes#{node_id}"},
+             # the agent in the app (the API row stays under `api`)
+             "permalink": f"/#/govern/{node_id}", "api": f"/v1/plane/nodes#{node_id}"},
         )
     return {"stored": True, "version": snapshot.version, "flagged": len(flagged)}
 
@@ -1462,6 +1491,9 @@ async def topology(request: Request) -> dict:
         # look; `GET /{node}/reputation` is where the resources and the facts
         # behind each verdict are.
         n["reputation"] = _reputation_summary(reputation_by_node.get(n["node_id"]))
+        # the product's own example data says so: shown beside a workspace's
+        # agents it read as theirs ("crm:customers · flagged")
+        n["example"] = is_example_node(n["node_id"])
     return {
         "nodes": sorted(nodes.values(), key=lambda n: n["node_id"]),
         "edges": sorted(edges.values(), key=lambda e: (e["from"], e["to"], e["kind"])),

@@ -30,8 +30,11 @@ from axor_backend import step_search
 
 KINDS = ("made_up", "dangerous", "would_refuse", "refused", "memory_worse")
 STATUSES = ("new", "looked_at", "kept_as_test", "rule_made", "not_a_problem")
-# kinds that ask for a look (the menu's count); refusals are the rules working
-NEEDS_A_LOOK = ("made_up", "dangerous", "would_refuse", "memory_worse")
+# kinds that ask for a look (the menu's count). Refusals too: the rules worked,
+# but an attack stopped is still something the operator should see — the fleet
+# read "all agents healthy" a minute after one. An operator's own pause / stop /
+# budget is a hold, not a refusal, and is not listed at all.
+NEEDS_A_LOOK = ("made_up", "dangerous", "would_refuse", "refused", "memory_worse")
 
 
 def dangerous(step: dict[str, Any]) -> str | None:
@@ -99,12 +102,33 @@ async def incidents(store: Any, scan: int) -> list[dict[str, Any]]:  # noqa: ANN
     items: list[dict[str, Any]] = []
     runs = await store.list_runs()
     scenario = {r["run_id"]: r["scenario"] for r in runs}
-    for run in runs:
+    # The same lie, told again run after run on one day — the payments provider
+    # is down and every refund ticket gets "refund issued" — is one item with a
+    # count, as a refusal retried is: three identical cards in a row buried the
+    # other agents' incidents under one outage. Newest first, so the item is
+    # the latest of its kind and its id is that case's (a new one reads new).
+    from axor_backend.routers.runs import AUTO_PIN
+
+    # kept by a person, not by the automatic must-block pin (see below): a kept
+    # case is its own item, never folded into the ones still to look at
+    kept = {p["run_id"] for p in await store.pinned()
+            if not str(p.get("label") or "").startswith(AUTO_PIN)}
+    made: dict[str, dict[str, Any]] = {}
+    for run in sorted(runs, key=lambda r: str(r.get("created_ts") or ""), reverse=True):
         for i, ev in enumerate(run.get("evidence") or []):
             if not ev.get("deviation"):
                 continue
             anchor = ev.get("anchor") or {}
-            items.append({
+            fault = next(iter(ev.get("fault_attribution") or []), {}) or {}
+            observed = ev.get("observed_reality") if isinstance(ev.get("observed_reality"), dict) else {}
+            key = ":".join(str(x) for x in (
+                run["node_id"], ev["deviation"], fault.get("tool_name", ""), fault.get("fault_mode", ""),
+                observed.get("observed", ""), str(run.get("created_ts") or "")[:10],
+                run["run_id"] in kept))
+            if key in made:
+                made[key]["count"] += 1
+                continue
+            made[key] = {
                 "id": f"ev:{run['run_id']}:{i}", "kind": "made_up", "ts": run["created_ts"],
                 "node_id": run["node_id"], "run_id": run["run_id"],
                 "seq": anchor.get("seq"), "anchor_node": anchor.get("node_id"),
@@ -113,7 +137,8 @@ async def incidents(store: Any, scan: int) -> list[dict[str, Any]]:  # noqa: ANN
                          "agent_claim": ev.get("agent_claim"),
                          "fault_attribution": ev.get("fault_attribution") or [],
                          "index": i},
-            })
+            }
+    items += made.values()
     refused: dict[str, dict[str, Any]] = {}
     for s in step_search.search(await store.recent_tool_lines(scan), limit=10_000):
         # a skill's dry run is a try the developer ran on purpose: its story is
@@ -132,9 +157,13 @@ async def incidents(store: Any, scan: int) -> list[dict[str, Any]]:  # noqa: ANN
         elif s["outcome"] == "refused":
             day = str(s["ts"] or "")[:10]
             # an agent retrying the same refused call is one item; a different
-            # reason (sending .env out vs a command from a web page) is another
+            # reason (sending .env out vs a command from a web page) is another,
+            # and so is a send to a different destination: a reply refused to the
+            # customer and an export refused to a stranger's address were one
+            # "send_email ×6", the attack hidden among the false positives
             cause = str(s["reason"] or "").removeprefix("axor: ").split(" — ")[0][:80]
-            key = f"refused:{s['node_id']}:{s['tool']}:{day}:{cause}"
+            dest = s.get("dest") or ""
+            key = f"refused:{s['node_id']}:{s['tool']}:{day}:{cause}" + (f":{dest}" if dest else "")
             group = refused.get(key)
             if group is None:   # newest first: the first seen is the latest
                 cause_key, cause_words = cause_of(s["reason"])
@@ -151,7 +180,9 @@ async def incidents(store: Any, scan: int) -> list[dict[str, Any]]:  # noqa: ANN
         items = [i for i in items if not muted(i, mutes)]
     for item in items:
         item.setdefault("scenario", scenario.get(item["run_id"], ""))
-    kept = {p["run_id"] for p in await store.pinned()}
+    # kept by a person, not by the automatic must-block pin: a lie caught a
+    # moment ago read "kept as a test" — not new, not needing a look, hidden
+    # from the default list — before anyone had seen it
     decided = await store.incident_statuses()
     for item in items:
         item["status"] = decided.get(item["id"]) or (

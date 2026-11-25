@@ -14,6 +14,7 @@ import { ConnectionMode, useApp, type ToolKlass } from "../store";
 import { C, MONO, btn } from "../theme";
 import Coach from "../components/Coach";
 import Tooltip from "../components/Tooltip";
+import { useWorkStarted } from "../workStarted";
 
 interface Tool {
   name: string;
@@ -204,7 +205,7 @@ function ProductionOnboarding({ initial, proxyMode }: { initial?: ProdWay; proxy
     ["pause, stop, call budget — live", <>{yes} — the whole agent</>, <>{yes} — its tool calls; the agent still talks</>],
     ["sees the model: cut a bad item from its context", <>{yes} (LangChain, Claude)</>, no],
     ["tools inside the agent (functions, files, shell)", yes, <>{no} — only calls over HTTP or MCP</>],
-    ["catches a made-up answer", <>{yes} (opt-in)</>, <>{yes} — in test runs, it breaks a tool on purpose</>],
+    ["catches a made-up answer", <>{yes} (opt-in)</>, <>{yes} — when the agent sends its answer (one call), and in test runs</>],
     ["works with", "Python: LangChain, Claude Agent, tool functions", "any language or platform"],
   ];
   return (
@@ -246,7 +247,7 @@ function ProductionOnboarding({ initial, proxyMode }: { initial?: ProdWay; proxy
         </tbody>
       </table>
       <div style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim, marginTop: 12 }}>
-        1 production agent free · Team $299 / month: 10 agents ·{" "}
+        1 production agent free · Team Workspace $299 / month: 10 agents ·{" "}
         <span style={{ color: C.steel, cursor: "pointer" }} onClick={() => navigate("pricing?for=production")}>pricing →</span>
       </div>
     </div>
@@ -374,6 +375,7 @@ function ProxyOnboarding({ onWrap }: { onWrap: () => void }) {
   // is armed with it, so it says which calls policy would have refused
   const policy = useApp((s) => s.toolPolicy);
   const setToolClass = useApp((s) => s.setToolClass);
+  const started = useWorkStarted();
   const loadExample = (set: Tool[]) => {
     setTools(set);
     for (const t of set) setToolClass(t.name, { url: t.url, ...(TOOL_CLASSES[t.name] ?? {}) });
@@ -460,23 +462,25 @@ function ProxyOnboarding({ onWrap }: { onWrap: () => void }) {
 
           {tools.length === 0 ? (
             <div className="p-8 flex flex-col items-center gap-3" style={{ background: C.panel, border: `1px dashed ${C.line}`, borderRadius: 8 }}>
-              <Tooltip content="Fills in a realistic 3-tool sample (search / report / query) so you can walk the flow without typing endpoints.">
+              {!started && <Tooltip content="Fills in a realistic 3-tool sample (search / report / query) so you can walk the flow without typing endpoints.">
                 <button onClick={() => loadExample(TOOLS)} style={btn({ color: C.steel, borderColor: C.steel, fontSize: 12 })}>
                   <Plug size={13} /> Load example tools
                 </button>
-              </Tooltip>
+              </Tooltip>}
               <ScanTools testId="proxy-scan" onFound={(found) => setTools((prev) => [
                 ...prev, ...found.filter((f) => !prev.some((t) => t.name === f.id))
                   .map((f) => ({ name: f.id, url: policy[f.id]?.url ?? "" }))])} />
               <span style={{ fontFamily: MONO, fontSize: 11, color: C.dim }}>
-                loads a sample set · or find them in your agent's code · or add each tool by hand below · or paste an MCP config further down · or{" "}
+                {started
+                  ? "find them in your agent's code · or add each tool by hand below · or paste an MCP config further down"
+                  : <>loads a sample set · or find them in your agent's code · or add each tool by hand below · or paste an MCP config further down · or{" "}
                 <span
                   role="button"
                   onClick={() => loadExample(MOCK_TOOLS)}
                   style={{ color: C.steel, cursor: "pointer" }}
                 >
                   use our mock tools (zero creds)
-                </span>
+                </span></>}
               </span>
               <div className="w-full">{addRow}</div>
             </div>
@@ -507,14 +511,12 @@ function ProxyOnboarding({ onWrap }: { onWrap: () => void }) {
                                  fontFamily: MONO, fontSize: 11, padding: "3px 6px" }}>
                         {KLASS_LABEL.map((k) => <option key={k.id} value={k.id}>{k.label}</option>)}
                       </select>
-                      {(policy[t.name]?.klass ?? "READ") === "READ" && (
-                        <label title="its answers come from outside (web, email, files): they cannot drive a send, write or run"
+                                              <label title="its answers come from outside (web, email, files): they cannot drive a send, write or run"
                           style={{ fontFamily: MONO, fontSize: 10.5, color: C.mut, display: "flex", alignItems: "center", gap: 4, cursor: "pointer" }}>
                           <input type="checkbox" checked={policy[t.name]?.outside ?? false}
                             onChange={(e) => setToolClass(t.name, { outside: e.target.checked })} />
                           outside text
                         </label>
-                      )}
                       {mcpTools[t.name] && (
                         <span style={{ fontFamily: MONO, fontSize: 10, color: C.steel }}>MCP</span>
                       )}
@@ -575,8 +577,33 @@ function ProxyOnboarding({ onWrap }: { onWrap: () => void }) {
 
       {step === 2 && (
         <>
-          <h1 style={{ fontSize: 22, fontWeight: 650, margin: "0 0 4px" }}>Point your agent at the proxy.</h1>
-          <div style={{ fontFamily: MONO, fontSize: 11.5, color: C.mut, marginBottom: 20 }}>In your agent's config, replace each tool's address with these. Nothing else changes.</div>
+          <h1 style={{ fontSize: 22, fontWeight: 650, margin: "0 0 4px" }}>Start the proxy with your tools, then point your agent at it.</h1>
+          {/* The proxy can only forward to tools it was started with. This step
+              used to say nothing of it, and step 3 answered "not registered on
+              the proxy" for every tool — the first the person heard of it. */}
+          <div data-testid="test-run-start-proxy" style={{ fontFamily: MONO, fontSize: 11.5, color: C.mut, margin: "6px 0 8px" }}>
+            1 · the proxy needs to know where each tool lives:{" "}
+            <button onClick={() => {
+              const a = document.createElement("a");
+              a.href = URL.createObjectURL(new Blob([JSON.stringify(
+                { tools: Object.fromEntries(tools.filter((t) => t.url).map((t) => [t.name, t.url])) }, null, 2)],
+                { type: "application/json" }));
+              a.download = "tools.json";
+              a.click();
+            }} style={btn({ color: C.steel, borderColor: C.steel, fontSize: 11, padding: "3px 10px" })}>
+              tools.json
+            </button>
+          </div>
+          <pre style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 8, padding: "10px 14px",
+                        fontFamily: MONO, fontSize: 11.5, color: C.text, whiteSpace: "pre-wrap", margin: "0 0 6px" }}>
+{`uv tool install axor-proxy        # or: pipx install axor-proxy
+axor-proxy --config tools.json --backend-url ${window.location.origin}`}
+          </pre>
+          <div style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim, marginBottom: 18 }}>
+            running the whole stack with docker compose? its proxy is this one — set AXOR_PROXY_CONFIG to the mounted
+            tools.json and AXOR_PROXY_DEMO=0 (see docker-compose.yml), then restart it
+          </div>
+          <div style={{ fontFamily: MONO, fontSize: 11.5, color: C.mut, marginBottom: 10 }}>2 · in your agent's config, replace each tool's address with these. Nothing else changes.</div>
           <div style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 8 }}>
             {tools.map((t, i) => {
               const proxied = `${PROXY_PUBLIC_URL}/t/${t.name}/`;

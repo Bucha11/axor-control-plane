@@ -5,6 +5,7 @@
 // axor.config.json from the classified sinks, and tool-manifest/v1 files via
 // POST /v1/wrap/manifests (both Blob + anchor click). A backend without the
 // wrap extra answers 501 → an honest "engine not installed" panel.
+import { untrustedFields } from "../policyConfig";
 import { useRef, useState } from "react";
 import { Plus, ChevronDown, ChevronRight, Download, Check, X, ArrowRight, Upload, FileCode, Terminal, AlertTriangle } from "lucide-react";
 import { api, WrapTool } from "../api";
@@ -17,6 +18,7 @@ import { C, MONO, btn } from "../theme";
 import Coach from "../components/Coach";
 import Tooltip from "../components/Tooltip";
 import ConfigText from "../components/ConfigText";
+import { agentLabel } from "../agentName";
 
 const TYPES = ["READ", "WRITE", "EXPORT", "EXEC"] as const;
 type ToolType = (typeof TYPES)[number];
@@ -41,6 +43,8 @@ interface Sink {
   // brings in outside text (web, email, documents): what it returns is what
   // a later send / write / run is checked against
   outside: boolean;
+  // which fields of its answer are that outside text; empty = all of it
+  outsideFields?: string[];
   // The scanner's effect guess (shown under the name): heuristic, never final.
   guess?: { confidence: string; reason: string };
 }
@@ -71,8 +75,9 @@ export function plainGuess(reason: string, confidence: string): string {
   const arg = /carrier arg '([^']+)'/.exec(reason)?.[1];
   const said = name
     ? `guessed from '${name}' in the name${arg ? `, '${arg}' says where it goes` : ""}`
-    : `guessed: ${reason.replace(/\s*→\s*[A-Z?]+\s*$/, "")}`;
-  return confidence === "low" ? `${said} — unsure, check it` : said;
+    : `guessed: ${reason.replace(/\s*→\s*[A-Z?]+\s*$/, "")
+        .replace(/\s*—\s*classify manually in the config builder/, "")}`;
+  return confidence === "low" ? `${said} — unsure: set what it does` : said;
 }
 
 const TYPE_COLOR: Record<SinkType, string> = {
@@ -112,12 +117,14 @@ const toSink = (t: WrapTool): Sink => ({
 // becomes a row with everything decided about it.
 const fromPolicy = (name: string, c: ToolClass, src?: string): Sink => ({
   name, src: src ?? c.source ?? c.url, type: c.klass, critical: false, outside: c.outside,
+  outsideFields: c.outsideFields,
   args: (c.driving ?? []).map((a) => ({ arg: a, set: c.trusted?.[a] ?? [] })),
   consequence: c.consequence,
 });
 
 // what the store keeps of a row
 const toPolicy = (s: Sink): Partial<ToolClass> => ({
+  outsideFields: s.outsideFields,
   driving: s.args.map((a) => a.arg),
   trusted: Object.fromEntries(s.args.filter((a) => a.set.length).map((a) => [a.arg, a.set])),
   consequence: s.consequence,
@@ -147,6 +154,49 @@ const CONSEQUENCE: [Consequence | undefined, string, string][] = [
 function argCandidates(sink: Sink, schema?: Record<string, unknown>): string[] {
   const props = (schema?.properties ?? {}) as Record<string, unknown>;
   return [...new Set([...Object.keys(props), ...sink.args.map((a) => a.arg)])];
+}
+
+// Which fields of a tool's answer a stranger could have written. A support
+// ticket's `text` is the customer's; its `from` is stamped by the mail system
+// — and is the address a reply must go to. With the whole answer outside text,
+// that reply is refused like the address the ticket asked data to be sent to.
+function OutsideFieldsEditor({ sink, update }: { sink: Sink; update: (p: Partial<Sink>) => void }) {
+  const [draft, setDraft] = useState("");
+  const fields = sink.outsideFields ?? [];
+  const add = () => {
+    const f = draft.trim().replace(/^result\./, "");
+    if (f && !fields.includes(f)) update({ outsideFields: [...fields, f] });
+    setDraft("");
+  };
+  return (
+    <div className="flex flex-col gap-2" data-testid={`outside-fields-${sink.name}`}>
+      <div style={{ fontFamily: MONO, fontSize: 10, color: C.dim, letterSpacing: "0.08em" }}>WHICH PARTS OF ITS ANSWER ARE OUTSIDE TEXT</div>
+      <div style={{ fontFamily: MONO, fontSize: 11, color: C.mut, lineHeight: 1.6 }}>
+        The fields a stranger could have written — for a ticket, <span style={{ color: C.text }}>text</span>,
+        not the <span style={{ color: C.text }}>from</span> your mail system stamps on it. Nested:{" "}
+        <span style={{ color: C.text }}>messages[].body</span>.
+      </div>
+      <div className="flex items-center gap-1.5 flex-wrap">
+        {fields.map((f) => (
+          <span key={f} className="flex items-center gap-1 px-2 py-0.5"
+            style={{ background: C.panel2, border: `1px solid ${C.line}`, borderRadius: 10, fontFamily: MONO, fontSize: 11, color: C.amber }}>
+            {f}
+            <X size={10} color={C.dim} style={{ cursor: "pointer" }}
+              onClick={() => update({ outsideFields: fields.filter((x) => x !== f) })} />
+          </span>
+        ))}
+        <input value={draft} onChange={(e) => setDraft(e.target.value)} onKeyDown={(e) => e.key === "Enter" && add()}
+          placeholder="+ field ⏎" aria-label={`add an outside-text field to ${sink.name}`}
+          style={{ width: 110, background: "none", border: "none", borderBottom: `1px solid ${C.line}`, color: C.text,
+                   fontFamily: MONO, fontSize: 11, padding: "2px 4px", outline: "none" }} />
+      </div>
+      <div style={{ fontFamily: MONO, fontSize: 10.5, color: fields.length ? C.mut : C.dim }}>
+        {fields.length === 0
+          ? "None named — the whole answer is outside text (the safe default)."
+          : <>Only {fields.join(", ")} is outside text; the rest of the answer is not. If an answer lacks these fields, all of it is.</>}
+      </div>
+    </div>
+  );
 }
 
 function DecidesEditor({ sink, schema, update }: {
@@ -331,7 +381,7 @@ function FromAgent({ onTools }: { onTools: (t: ReturnType<typeof toolsFromSteps>
       <select aria-label="agent" value={pick} onChange={(e) => setAgent(e.target.value)}
         style={{ background: C.panel2, border: `1px solid ${C.line}`, borderRadius: 5, color: C.text,
                  fontFamily: MONO, fontSize: 11.5, padding: "3px 6px" }}>
-        {agents.map((a) => <option key={a} value={a}>{a}</option>)}
+        {agents.map((a) => <option key={a} value={a}>{agentLabel(a)}</option>)}
       </select>
       used
       <button onClick={() => load.mutate()} disabled={load.isPending}
@@ -504,7 +554,11 @@ export default function ConfigBuilder() {
               // the allowlist editor's argument keys are the carrier args the
               // gate checks — exactly the manifest's driving_args
               driving_args: s.args.map((a) => a.arg),
-              untrusted_fields: s.outside ? (t?.guess.untrusted_fields.length ? t.guess.untrusted_fields : ["result.*"]) : [],
+              untrusted_fields: s.outside
+                ? (s.outsideFields?.length
+                  ? untrustedFields(s)
+                  : t?.guess.untrusted_fields.length ? t.guess.untrusted_fields : ["result.*"])
+                : [],
             },
           };
         }),
@@ -762,6 +816,7 @@ export default function ConfigBuilder() {
                       {s.critical ? "a refusal here is shown first and puts the agent on a shorter leash at once" : "nothing extra"}
                     </span>
                   </div>
+                  {s.outside && <OutsideFieldsEditor sink={s} update={(p) => patch(i, p)} />}
                   <DecidesEditor sink={s} update={(p) => patch(i, p)}
                     schema={(wrapTools.find((w) => w.id === s.name)?.args_schema ?? policy[s.name]?.args_schema) as Record<string, unknown> | undefined} />
                   <ConsequencePicker sink={s} update={(p) => patch(i, p)} />
@@ -913,7 +968,11 @@ export default function ConfigBuilder() {
   const sayTool = (x: Sink): React.ReactNode => {
     const name = <b style={{ color: C.text }}>{x.name}</b>;
     const crit = x.critical ? <span style={{ color: C.red }}> Critical: a refusal here is shown first.</span> : null;
-    const marks = x.outside ? <> What it returns is marked as outside text.</> : null;
+    const marks = x.outside
+      ? (x.outsideFields?.length
+        ? <> Its {x.outsideFields.join(", ")} is marked as outside text.</>
+        : <> What it returns is marked as outside text.</>)
+      : null;
     if (x.type === "READ") return <>{name} — allowed.{only(x)}{worst(x)}{marks}{crit}</>;
     if (x.type === "EXPORT") return <>{name} — refused if {drivenBy(x, "what it sends")} came from outside text.{only(x)}{worst(x)}{marks}{crit}</>;
     if (x.type === "WRITE") return <>{name} — refused if {drivenBy(x, "what it writes")} came from outside text.{only(x)}{worst(x)}{marks}{crit}</>;

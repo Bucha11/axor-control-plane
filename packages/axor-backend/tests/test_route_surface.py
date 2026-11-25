@@ -168,7 +168,12 @@ EXPECTED: dict[tuple[str, str], str] = {
     ("GET", "/v1/lab/deploys"): "read",
     # ── regression corpus ────────────────────────────────────────────────────
     ("POST", "/v1/pins/{run_id}"): "ingest",
+    # taking a case out of the check is an operator's, not an agent key's
+    ("DELETE", "/v1/pins/{run_id}"): "operate",
     ("GET", "/v1/pins"): "read",
+    # ── the workspace's tool policy ──────────────────────────────────────────
+    ("GET", "/v1/policy"): "read",
+    ("PUT", "/v1/policy"): "operate",
     ("POST", "/v1/regression"): "read",
     ("GET", "/v1/regression/history"): "read",
     ("GET", "/v1/regression/schedule"): "read",
@@ -179,11 +184,14 @@ EXPECTED: dict[tuple[str, str], str] = {
     # ── notifications ────────────────────────────────────────────────────────
     ("POST", "/v1/notifications/subscribe"): "operate",
     ("POST", "/v1/notifications/unsubscribe"): "operate",
+    ("POST", "/v1/notifications/test"): "operate",
     ("GET", "/v1/notifications/subscriptions"): "read",
     ("GET", "/v1/notifications/dead-letters"): "read",
     # ── share & export ───────────────────────────────────────────────────────
     ("POST", "/v1/runs/{run_id}/cases/{case_index}/share"): "operate",
     ("DELETE", "/v1/share/{token}"): "operate",
+    # the links handed out: each opens a case without an account
+    ("GET", "/v1/share-links"): "operate",
     ("GET", "/v1/runs/{run_id}/cases/{case_index}/export"): "read",
     # ── licensing: /verify WRITES the deployment's entitlement ───────────────
     ("POST", "/v1/license/verify"): "admin",

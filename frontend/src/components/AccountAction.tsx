@@ -4,7 +4,7 @@
 // their guest work comes along); anyone else just gets the action. Sign-up is
 // asked for at the moment it pays off, not by a banner.
 import { useState } from "react";
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { api } from "../api";
 import { navigate } from "../router";
 import { isGuestToken, useApp } from "../store";
@@ -28,6 +28,22 @@ const link = (color: string) => ({
 export function KeepAsTest({ runId, testId = "keep-as-test" }: { runId: string; testId?: string }) {
   const guest = useGuest();
   const pin = useMutation({ mutationFn: () => api.pin(runId, "must_block", "kept from an incident") });
+  // "must stay blocked" re-checks the refusal the run made. A run that refused
+  // nothing — a made-up answer caught with every call let through — gives the
+  // rules nothing to check: kept anyway, it read "can't be checked" ever after
+  // and held every release at "not safe" though no rule had changed.
+  const events = useQuery({ queryKey: ["run-events", runId], queryFn: () => api.runEvents(runId),
+                            enabled: !guest && !runId.startsWith("ex_") });
+  const refusedNothing = events.data !== undefined
+    && !events.data.some((e) => e.kind === "tool_call" && e.verdict === "deny");
+  if (refusedNothing && !pin.isSuccess) {
+    return (
+      <span data-testid={testId} style={{ fontFamily: MONO, fontSize: 11, color: C.dim }}>
+        nothing here for the rules to re-check — it refused no call ·{" "}
+        <button onClick={() => navigate("chaos")} style={link(C.steel)}>re-test it by breaking the tool again →</button>
+      </span>
+    );
+  }
   if (pin.isSuccess) {
     return (
       <span data-testid={testId} style={{ fontFamily: MONO, fontSize: 11, color: C.green }}>

@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api";
 import { C, MONO, btn } from "../theme";
 import Tooltip from "./Tooltip";
+import { NO_CUT, cannotCut } from "../agentName";
 
 // Cut this tool result from the agent's context — the same signed command the
 // Health panel's self-heal sends, aimed at the result you are looking at. The
@@ -23,6 +24,10 @@ export default function CutResult({ runId, valueRef, excised, nodeId: nodeProp }
     onSuccess: () => void qc.invalidateQueries({ queryKey: ["nodes"] }),
   });
   if (!nodeId || !node) return null;   // not a live node's run: nothing to command
+  // a cut it cannot apply would sit "sent" forever
+  if (cannotCut(node)) {
+    return <div className="mt-2" style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim }}>{NO_CUT}</div>;
+  }
   const queued = pending?.target_refs?.includes(valueRef);
   return (
     <div className="mt-3 flex items-center gap-2 flex-wrap" style={{ fontFamily: MONO, fontSize: 11 }}>

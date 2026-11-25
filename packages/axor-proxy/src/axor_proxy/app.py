@@ -88,6 +88,11 @@ def _gate(category: str) -> str:
     return gate_of(category)
 
 
+# the kernel's per-call provenance (axor_core governor call_payload), no values
+_PROVENANCE = ("arg_provenance", "arg_refs", "driving_args", "driving_root",
+               "driving_carried", "floor_active", "roles", "integrity_default")
+
+
 def _govern(
     run: Run, tool: str, args: dict[str, Any] | None, payload: dict[str, Any],
 ) -> tuple[object | None, str | None, Verdict | None]:
@@ -113,11 +118,26 @@ def _govern(
         return None, None, None
     decision = run.governor.evaluate(tool, args)  # type: ignore[attr-defined]
     payload["governance"] = {"governed": True, "enforcement": "off"}
+    # What the governor judged the call on — which argument carried outside
+    # text, from which earlier answer — from its own trace record, values
+    # left out. Without it a "would refuse" cannot be re-checked under other
+    # rules (Safe to ship? read such a run as "can't be checked").
+    for event in run.governor.drain_trace_events():  # type: ignore[attr-defined]
+        recorded = dict(getattr(event, "payload", None) or {})
+        if recorded.get("tool") == tool and "driving_root" in recorded:
+            for key in _PROVENANCE:
+                if key in recorded:
+                    payload[key] = recorded[key]
     if decision.allowed:
         return decision, None, Verdict.PASS
-    payload["reason"] = decision.reason
-    payload["category"] = decision.category
-    return decision, _gate(decision.category), Verdict.DENY
+    # The call goes through (the proxy only watches here), so the recorded
+    # verdict is what HAPPENED: pass. What the rules say rides as
+    # `would_deny` — the form every reader already takes for "would have been
+    # refused". A `deny` here read as a refusal that never happened: a
+    # "refused" incident, a must-block pin on a run that refused nothing.
+    payload["would_deny"] = {"reason": decision.reason, "category": decision.category,
+                             "gate": _gate(decision.category)}
+    return decision, None, Verdict.PASS
 
 
 def hasher_hex(raw: bytes) -> str:
@@ -161,11 +181,14 @@ def _register(run: Run, decision: object | None, output: object) -> dict[str, An
         return {}
     if decision is None:
         return {"registered": False, "reason": "call was not governed"}
-    from axor_proxy.guard import answer_text
+    from axor_proxy.guard import outside_text
 
     # as text: the ledger matches fragments inside a string and takes any
-    # other object whole (axor_proxy.guard explains the case)
-    run.governor.register_output(decision, answer_text(output))  # type: ignore[attr-defined]
+    # other object whole — and only the fields the manifest names as outside
+    # text (axor_proxy.guard explains both)
+    tool = getattr(getattr(decision, "_normalized", None), "tool", None)
+    manifest = next((m for m in run.manifests if m.get("id") == tool), None)
+    run.governor.register_output(decision, outside_text(manifest, output))  # type: ignore[attr-defined]
     for event in run.governor.drain_trace_events():  # type: ignore[attr-defined]
         ref = (getattr(event, "payload", None) or {}).get("value_ref")
         if ref:
@@ -845,6 +868,11 @@ def create_app(state: ProxyState) -> Starlette:
             "call_counts": run.call_counts,
             "trace_path": str(run.recorder.path),
             "evidence": [evidence_to_dict(c) for c in run.evidence],
+            # The run as it happens. A test run reaches the plane only once the
+            # agent's answer is submitted, so the plane's live stream has
+            # nothing to show while the agent works; this is the same recorded
+            # trace (sizes and hashes, never values), readable before then.
+            "events": await run.recorder.lines(),
         })
 
     async def preflight(request: Request) -> Response:
@@ -1013,6 +1041,29 @@ def create_app(state: ProxyState) -> Starlette:
             "tools": info["tools"],
         })
 
+    async def agent_answer(request: Request) -> Response:
+        """Guard mode: the agent's answer for its conversation (X-Axor-Session),
+        so the plane can audit it against what the tools did (Guard.answer).
+        Agent traffic, like /t/…: the agent sends it, not an operator."""
+        if state.guard is None:
+            return JSONResponse({"error": "not_guarding",
+                                 "detail": "the answer is read in guard mode (--guard)"}, status_code=404)
+        try:
+            body = await request.json()
+        except ValueError:
+            body = None
+        text = body.get("text") if isinstance(body, dict) else None
+        if not isinstance(text, str):
+            return JSONResponse({"error": "bad_request",
+                                 "detail": 'send {"text": "<what the agent answered>"}'}, status_code=400)
+        out = state.guard.answer(request.headers.get("x-axor-session"), text)
+        if out is None:
+            return JSONResponse({"error": "no_conversation",
+                                 "detail": "no tool call was made under this X-Axor-Session "
+                                           "(or it idled out): nothing to read the answer against"},
+                                status_code=404)
+        return JSONResponse(out)
+
     async def healthz(request: Request) -> Response:
         out: dict[str, Any] = {"ok": True, "armed": state.runs.active is not None}
         if state.guard is not None:
@@ -1031,6 +1082,7 @@ def create_app(state: ProxyState) -> Starlette:
         # healthz stays open: it is what a container's health check calls, and
         # it reveals only liveness plus whether a run is armed.
         Route("/axor/healthz", healthz),
+        Route("/axor/answer", agent_answer, methods=["POST"]),
         Route("/axor/preflight", guarded(preflight)),
         Route("/axor/mcp/discover", guarded(mcp_discover), methods=["POST"]),
         Route("/axor/governed/spawn", guarded(spawn_governed), methods=["POST"]),

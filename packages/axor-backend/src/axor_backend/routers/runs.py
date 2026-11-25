@@ -27,6 +27,11 @@ from axor_backend.examples import without_examples
 from axor_backend.limits import check_batch
 from axor_backend.tenancy import current_org_id, topic
 
+# The label an automatic must-block pin carries. Kept apart from a person's
+# "keep it as a test": an automatic pin is not someone having looked, so the
+# incident it came from stays new (incidents.py).
+AUTO_PIN = "caught automatically"
+
 router = APIRouter(prefix="/v1", tags=["runs"])
 
 
@@ -66,6 +71,16 @@ async def ingest(
         derived = len(cases)
         if cases:
             await store_evidence(store, notifier, run_id, node_id, scenario, cases)
+    # A refused call pages the same whichever way the run came in: only the
+    # telemetry route (the proxy's) did, so a wrapped agent posting its finished
+    # run here refused an exfiltration and nobody was told.
+    if not result.replayed:
+        from types import SimpleNamespace
+
+        from axor_backend.plane import _alert_steps
+
+        await _alert_steps(SimpleNamespace(store=store, notifier=notifier), node_id, run_id,
+                           events)
     return {"stored": len(result.rows), "evidence": derived}
 
 
@@ -103,14 +118,19 @@ async def store_evidence(
         # not become a regression test that cannot run.
         pinned = await store.has_recorded_denial(run_id)  # type: ignore[attr-defined]
         if pinned:
-            await store.pin(run_id, "must_block", scenario)  # type: ignore[attr-defined]
+            await store.pin(run_id, "must_block", f"{AUTO_PIN} · {scenario}")  # type: ignore[attr-defined]
         await notifier.emit(  # type: ignore[attr-defined]
             "evidence_run",
             node_id,
             {
                 "run_id": run_id,
                 "cases": len(deviations),
-                "permalink": f"/v1/runs/{run_id}",
+                # the receipt in the app, not the API path it is built from
+                "permalink": f"/#/catch/{run_id}",
+                "api": f"/v1/runs/{run_id}",
+                "what": str(deviations[0].get("deviation", "")).replace("_", " "),
+                "tool": next((str(a.get("tool_name")) for a in deviations[0].get("fault_attribution") or []
+                              if isinstance(a, dict) and a.get("tool_name")), ""),
             },
         )
     return {"ok": True, "notified": bool(deviations), "pinned": pinned}

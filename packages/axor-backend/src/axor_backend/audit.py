@@ -47,6 +47,9 @@ def command_acts(delta: dict) -> list[tuple[str, dict[str, Any]]]:
     acts: list[tuple[str, dict[str, Any]]] = []
     if delta.get("stopped"):
         acts.append(("cascade_stop" if delta.get("cascade") else "stop", {}))
+    elif "stopped" in delta:
+        # "Start it again": a stopped agent's next session may run
+        acts.append(("start_again", {}))
     elif "paused" in delta:
         acts.append(("pause" if delta["paused"] else "resume", {}))
     for key, act in _DELTA_ACTS:

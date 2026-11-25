@@ -4,15 +4,17 @@
 // what this screen builds: the tools, what each one does, and which bring in
 // outside text (axor.manifests.json, compiled by the same engine as the
 // Config Builder's), plus tools.json for where each tool really lives.
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Check, Copy, Download, Plug } from "lucide-react";
 import { api } from "../api";
 import { navigate } from "../router";
 import { isGuestToken, useApp, type ToolKlass } from "../store";
+import { untrustedFields } from "../policyConfig";
 import ScanTools from "./ScanTools";
 import { C, MONO, btn } from "../theme";
 import { IdentityLogin } from "../tabs/Settings";
+import { useWorkStarted } from "../workStarted";
 
 type Klass = ToolKlass;
 interface GuardTool { name: string; url: string; klass: Klass; outside: boolean }
@@ -30,7 +32,6 @@ const EXAMPLE: GuardTool[] = [
   { name: "run_query", url: "https://db.internal.example/query", klass: "READ", outside: false },
 ];
 
-const LOCAL_PROXY = "http://localhost:8401";
 
 function save(name: string, data: unknown): void {
   const a = document.createElement("a");
@@ -65,6 +66,7 @@ function Block({ text, id }: { text: string; id: string }) {
 }
 
 export default function GuardOnboarding() {
+  const started = useWorkStarted();
   // the shared record of the agent's tools (store.toolPolicy): what was
   // classified here shows in Policy and in a test run, and the other way round
   const policy = useApp((s) => s.toolPolicy);
@@ -73,7 +75,13 @@ export default function GuardOnboarding() {
     ({ name, url: c.url ?? "", klass: c.klass, outside: c.outside }));
   const [draft, setDraft] = useState({ name: "", url: "" });
   const [savedManifests, setSavedManifests] = useState(false);
-  const [nodeId, setNodeId] = useState("agent-1");
+  // remembered: coming back here from Policy to put new rules to work must not
+  // quietly start a second agent under "agent-1"
+  const [nodeId, setNodeId] = useState(() => localStorage.getItem("axor-guard-node") || "agent-1");
+  const [port, setPort] = useState(() => localStorage.getItem("axor-guard-port") || "8401");
+  useEffect(() => { localStorage.setItem("axor-guard-node", nodeId); }, [nodeId]);
+  useEffect(() => { localStorage.setItem("axor-guard-port", port); }, [port]);
+  const proxyBase = `http://localhost:${/^\d+$/.test(port) ? port : "8401"}`;
   const [key, setKey] = useState<string | null>(null);
   const connect = useApp((s) => s.connect);
   const email = useApp((s) => s.identityEmail);
@@ -96,7 +104,7 @@ export default function GuardOnboarding() {
       // with no named driving argument every argument can drive — the safe
       // reading at an HTTP boundary; a scanned tool keeps the ones it found
       effect: { default_class: t.klass, driving_args: policy[t.name]?.driving ?? [],
-                untrusted_fields: t.klass === "READ" && t.outside ? ["result.*"] : [] },
+                untrusted_fields: untrustedFields(policy[t.name] ?? t) },
     }))),
     onSuccess: (bundle) => { save("axor.manifests.json", bundle); setSavedManifests(true); },
   });
@@ -121,9 +129,13 @@ export default function GuardOnboarding() {
     "",
     `export AXOR_PLANE_URL=${window.location.origin}`,
     needsKey ? `export AXOR_INGEST_KEY=${key ?? "<create the key above>"}` : null,
-    `axor-proxy --guard --config tools.json --manifests axor.manifests.json --node-id ${nodeId || "agent-1"}`,
+    `axor-proxy --guard --config tools.json --manifests axor.manifests.json --node-id ${nodeId || "agent-1"}`
+      + (port && port !== "8401" ? ` --port ${port}` : ""),
   ].filter((l) => l !== null).join("\n");
-  const urls = (tools.length ? tools : EXAMPLE).map((t) => `${t.name}  →  ${LOCAL_PROXY}/t/${t.name}/`).join("\n");
+  // no tools yet: no addresses — the example's read as if they were already added
+  const urls = tools.length
+    ? tools.map((t) => `${t.name}  →  ${proxyBase}/t/${t.name}/`).join("\n")
+    : "add your agent's tools in step 1 — each one's address through the proxy appears here";
 
   return (
     <div data-testid="guard-onboarding">
@@ -137,7 +149,7 @@ export default function GuardOnboarding() {
       {step(1, "YOUR AGENT'S TOOLS — AND WHAT EACH ONE DOES")}
       <div className="flex gap-2 flex-wrap items-center" style={{ marginBottom: 8 }}>
         <ScanTools testId="guard-scan" />
-        {tools.length === 0 && (
+        {tools.length === 0 && !started && (
           <button onClick={() => { for (const t of EXAMPLE) setToolClass(t.name, t); setSavedManifests(false); }}
             data-testid="guard-example"
             style={btn({ color: C.steel, borderColor: C.line, fontSize: 11.5, padding: "5px 12px" })}>
@@ -162,12 +174,10 @@ export default function GuardOnboarding() {
               aria-label={`what ${t.name} does`} style={{ ...input, fontSize: 11, padding: "3px 6px" }}>
               {CLASSES.map((c) => <option key={c.id} value={c.id}>{c.label}</option>)}
             </select>
-            {t.klass === "READ" && (
-              <label title="its answers come from outside (web, email, files): they cannot drive a send, write or run" style={{ color: C.mut, display: "flex", alignItems: "center", gap: 5, cursor: "pointer" }}>
-                <input type="checkbox" checked={t.outside} onChange={(e) => patch(i, { outside: e.target.checked })} />
-                brings in outside text
-              </label>
-            )}
+            <label title="its answers come from outside (web, email, files): they cannot drive a send, write or run" style={{ color: C.mut, display: "flex", alignItems: "center", gap: 5, cursor: "pointer" }}>
+              <input type="checkbox" checked={t.outside} onChange={(e) => patch(i, { outside: e.target.checked })} />
+              brings in outside text
+            </label>
           </div>
         ))}
         <div className="px-3 py-2 flex items-center gap-2" style={{ borderTop: tools.length ? `1px solid ${C.line}` : "none" }}>
@@ -216,6 +226,9 @@ export default function GuardOnboarding() {
           <span style={{ ...hint, color: C.mut, fontSize: 11 }}>agent name</span>
           <input value={nodeId} onChange={(e) => { setNodeId(e.target.value); setKey(null); }}
             aria-label="agent name" style={{ ...input, width: 160 }} />
+          <span style={{ ...hint, color: C.mut, fontSize: 11 }}>port</span>
+          <input value={port} onChange={(e) => setPort(e.target.value.replace(/[^\d]/g, "").slice(0, 5))}
+            aria-label="proxy port" style={{ ...input, width: 64 }} />
           {needsKey && !key && (
             <button onClick={() => mint.mutate()} disabled={!nodeId.trim() || mint.isPending} data-testid="guard-mint"
               style={btn({ color: C.steel, borderColor: C.steel, fontSize: 11, padding: "4px 10px" })}>
@@ -230,6 +243,10 @@ export default function GuardOnboarding() {
 
       {step(4, "RUN THE PROXY BESIDE YOUR AGENT")}
       <Block id="guard-run" text={run} />
+      <div style={{ ...hint, marginTop: 6 }}>
+        changed the rules later (in Policy)? download axor.manifests.json again and restart the proxy — a running
+        proxy keeps the rules it started with
+      </div>
 
       {step(5, "POINT YOUR AGENT AT IT")}
       <Block id="guard-urls" text={urls} />
@@ -238,6 +255,13 @@ export default function GuardOnboarding() {
         conversation's outside text out of another's. A refused call answers 403 (MCP: a JSON-RPC error);
         while paused, 503.
       </div>
+      <div style={{ ...hint, marginTop: 10 }}>
+        and when it has answered, one more line — the proxy sees the tool calls, not what your agent tells
+        the customer; with this, an answer that says a failed or held call worked is caught, and the run closes:
+      </div>
+      <Block id="guard-answer" text={`POST http://localhost:${port}/axor/answer
+X-Axor-Session: <the same conversation id>
+{"text": "<what your agent answered>"}`} />
 
       {step(6, "RUN IT")}
       <div data-testid="guard-live" className="p-3" style={{ background: C.panel, borderRadius: 8, fontFamily: MONO, fontSize: 11.5,
@@ -247,7 +271,12 @@ export default function GuardOnboarding() {
           : <span style={{ color: C.mut }}>waiting for <span style={{ color: C.text }}>{nodeId || "agent-1"}</span> to report in — start the proxy…</span>}
       </div>
       {live && (
-        <button onClick={() => { connect("adapter", []); navigate(`govern/${encodeURIComponent(nodeId)}`); }}
+        <button onClick={() => {
+          // the agent's tools stay on the connection: a chaos test on this
+          // agent offers them, not the demo's web_search / mcp
+          connect("adapter", tools.map((t) => ({ name: t.name, url: t.url })));
+          navigate(`govern/${encodeURIComponent(nodeId)}`);
+        }}
           className="mt-4" style={btn({ color: C.text, borderColor: C.green, fontSize: 12, padding: "7px 16px" })}>
           See it in Agents →
         </button>

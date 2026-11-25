@@ -5,12 +5,13 @@
 // report in. The tool classes are what lets a call be refused: a value from a
 // tool that brings in outside text, driving a tool that sends something out, is
 // denied. Without them the wrap only pauses and stops.
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Check, Copy, Download, Upload } from "lucide-react";
 import { api, type WrapTool } from "../api";
 import { navigate } from "../router";
 import { isGuestToken, useApp } from "../store";
+import { untrustedFields } from "../policyConfig";
 import { C, MONO, btn } from "../theme";
 import { IdentityLogin } from "../tabs/Settings";
 import { filesFromList, plainGuess } from "../tabs/ConfigBuilder";
@@ -41,6 +42,7 @@ const FRAMEWORKS: { id: Framework; label: string; points: string[] }[] = [
     points: [
       "your tool functions are checked before every call — one fed by outside text cannot send it out",
       "pause and stop from the plane hold its tool calls",
+      "each run posted with its answer: a claimed refund that failed shows as a caught lie",
       "cutting context needs the agent loop in axor-core — use LangChain or the Claude adapter for that",
     ],
   },
@@ -103,23 +105,49 @@ checked = wrap_callables(${dict}, manifests)
 agent = create_agent(model, [tool(f) for f in checked.values()],
                      middleware=[AxorMiddleware()])   # pause / stop / budget from the plane`;
   }
+  const last = names[names.length - 1];
   return `pip install 'axor-wrap[plane]'
 
 ${env}
 
-${imports}, asyncio, os
+${imports}, os, uuid
 from axor_wrap.runtime import WrappedToolset
 from axor_wrap.connect import PlaneConnector
+from axor_wrap.observe import Experiment
 
 ${load}
-toolset = WrappedToolset(${dict}, manifests)
-
 node = PlaneConnector(os.environ["AXOR_PLANE_URL"], os.environ["AXOR_NODE_ID"],
-                      ingest_key=os.environ.get("AXOR_INGEST_KEY")).connect()
-node.gate(toolset)                  # pause / stop from the plane hold its tool calls
-asyncio.create_task(node.run())     # keeps it live on the plane (inside your event loop)
+                      ingest_key=os.environ.get("AXOR_INGEST_KEY"),
+                      test_bench=os.environ.get("AXOR_TEST_BENCH") == "1").start()   # live, in the background
+node.submit(node.post_profile("agent", agent="axor-wrap"))   # what it is, test bench or not
+# (an async app: asyncio.create_task(node.run()) instead of start(), and await what submit() runs)
 
-toolset.call("${names[names.length - 1]}", {...})   # or hand toolset.callables() to your loop`;
+def handle(request: str) -> str:
+    run_id = f"{node.session.node_id}-{uuid.uuid4().hex[:10]}"
+    # a tool the plane asked to break on this run — only on a test bench (AXOR_TEST_BENCH=1,
+    # a copy with no real users; pip install axor-eval)
+    test = node.session.take_pending_experiment()
+    # one toolset per request: the task is what the user asked, so values from it are trusted
+    toolset = node.gate(WrappedToolset(${dict}, manifests,
+                                       node_id=node.session.node_id, task=request,
+                                       experiment=Experiment(test["faults"], seed=run_id) if test else None))
+    out = toolset.call("${last}", {...})   # or hand toolset.callables() to your loop
+    answer = ...                           # what your agent tells the user
+    # the run on the plane: every call, its verdict, and the answer it is audited against
+    node.submit(node.post_ingest(toolset.run_lines(answer), run_id))
+    return answer
+
+# optional — drift: a health check after a run (pip install axor-probe; costs model calls)
+# from axor_wrap.observe import HealthCheck
+# health = HealthCheck(probes=2)
+#   in handle(), after post_ingest — infer(messages) -> {"text", "tool_calls"} is your model call;
+#   name each tool result by its tool, so the health page can say which one changed the agent:
+#   body = node.submit(health.run(infer=infer, infer_sync=infer_sync, system_text=SYSTEM,
+#                                 window=messages[-6:],
+#                                 fragments=[(f"{tool}#{i}", brings_outside_text, message), ...],
+#                                 node_id=node.session.node_id, run_id=run_id))
+#   if body: node.submit(node.post_health_check(body))
+# optional — reputation across runs (pip install axor-sentinel): ReputationBook, node.post_reputation`;
 }
 
 const step = (n: number, text: string) => (
@@ -141,7 +169,7 @@ export default function AdapterOnboarding() {
           id, source: c.source ?? "", description: "", args_schema: c.args_schema ?? { type: "object" },
           framework: "", schema_confidence: "",
           guess: { default_class: c.klass, driving_args: c.driving ?? [],
-                   untrusted_fields: c.outside ? ["result.*"] : [], confidence: "high", reason: "" },
+                   untrusted_fields: untrustedFields(c), confidence: "high", reason: "" },
         },
         klass: c.klass,
         outside: c.outside,
@@ -163,7 +191,14 @@ export default function AdapterOnboarding() {
   const authOn = auth.data?.auth_enabled ?? null;
   const signedIn = !!email || (!!token && !isGuestToken(token));
   const nodes = useQuery({ queryKey: ["nodes"], queryFn: api.nodes, refetchInterval: 3000 });
-  const live = (nodes.data ?? []).some((n) => n.node_id === nodeId.trim());
+  // the agents already on the plane when this page opened: a name among them is
+  // another agent's, and "reported in" for it would be that agent reporting
+  const [takenAtOpen, setTakenAtOpen] = useState<Set<string> | null>(null);
+  useEffect(() => {
+    if (takenAtOpen === null && nodes.data) setTakenAtOpen(new Set(nodes.data.map((n) => n.node_id)));
+  }, [nodes.data, takenAtOpen]);
+  const taken = takenAtOpen?.has(nodeId.trim()) ?? false;
+  const live = !taken && (nodes.data ?? []).some((n) => n.node_id === nodeId.trim());
 
   const mint = useMutation({
     mutationFn: () => api.createKey(["ingest"], `node ${nodeId}`, nodeId),
@@ -177,7 +212,7 @@ export default function AdapterOnboarding() {
       effect: {
         default_class: r.klass,
         driving_args: r.tool.guess.driving_args,
-        untrusted_fields: r.klass === "READ" && r.outside ? ["result.*"] : [],
+        untrusted_fields: untrustedFields({ outside: r.outside, outsideFields: policy[r.tool.id]?.outsideFields }),
       },
     }))),
     onSuccess: (bundle) => {
@@ -200,15 +235,22 @@ export default function AdapterOnboarding() {
       const next = res.tools.map((t) => ({
         tool: t,
         // a tool already classified (here, in Policy, for the proxy) keeps that call
-        klass: policy[t.id]?.klass ?? (t.guess.default_class === "UNKNOWN" ? "READ" : t.guess.default_class),
+        // unsure is "changes something", not "reads": a wrong "reads" lets outside text drive it
+        klass: policy[t.id]?.klass ?? (t.guess.default_class === "UNKNOWN" ? "WRITE" : t.guess.default_class),
         outside: policy[t.id]?.outside ?? t.guess.untrusted_fields.length > 0,
       }));
       setRows(next);
+      // the agent's name from its file, unless one was typed that no agent has yet
+      const stem = picked[0]?.path.split("/").pop()?.replace(/\.py$/, "").replace(/[^a-zA-Z0-9]+/g, "-").toLowerCase();
+      if (stem && stem !== "main" && stem !== "agent" && (nodeId === "agent-1" || takenAtOpen?.has(nodeId.trim()))) {
+        setNodeId(stem);
+        setKey(null);
+      }
       for (const r of next) {
         setToolClass(r.tool.id, { klass: r.klass, outside: r.outside, source: r.tool.source,
                                   args_schema: r.tool.args_schema, driving: r.tool.guess.driving_args });
       }
-      if (res.tools.length === 0) setScanErr("no tools found in those files");
+      if (res.tools.length === 0) setScanErr("no tools found in those files — the scanner finds LangChain @tool / Tool(...), FastMCP @mcp.tool(), {name, description, input_schema} tool lists, and a plain-Python dict of your tool functions (TOOLS = {name: function}). Tools your agent calls over HTTP by URL are not in code it can see: add each one by hand");
     } catch (e) {
       const msg = (e as Error).message;
       setScanErr(msg.startsWith("501")
@@ -266,7 +308,7 @@ export default function AdapterOnboarding() {
           <label style={btn({ color: C.steel, borderColor: C.steel, fontSize: 11.5, padding: "6px 12px", cursor: "pointer" })}>
             <Upload size={12} /> {scanning ? "reading…" : "Choose .py files"}
             <input type="file" multiple accept=".py" data-testid="adapter-files" style={{ display: "none" }}
-              onChange={(e) => void scan(e.target.files)} />
+              onChange={(e) => { const input = e.currentTarget; void scan(input.files).finally(() => { input.value = ""; }); }} />
           </label>
           {scanErr && <div style={{ ...hint, color: C.amber, marginTop: 6 }}>{scanErr}</div>}
           {rows.length > 0 && (
@@ -282,12 +324,10 @@ export default function AdapterOnboarding() {
                                fontFamily: MONO, fontSize: 11, padding: "3px 6px" }}>
                       {CLASSES.map((c) => <option key={c.id} value={c.id}>{c.label}</option>)}
                     </select>
-                    {r.klass === "READ" && (
-                      <label title="its answers come from outside (web, email, files): they cannot drive a send, write or run" style={{ color: C.mut, display: "flex", alignItems: "center", gap: 5, cursor: "pointer" }}>
-                        <input type="checkbox" checked={r.outside} onChange={(e) => patch(i, { outside: e.target.checked })} />
-                        brings in outside text
-                      </label>
-                    )}
+                    <label title="its answers come from outside (web, email, files): they cannot drive a send, write or run" style={{ color: C.mut, display: "flex", alignItems: "center", gap: 5, cursor: "pointer" }}>
+                      <input type="checkbox" checked={r.outside} onChange={(e) => patch(i, { outside: e.target.checked })} />
+                      brings in outside text
+                    </label>
                   </div>
                   <div style={{ ...hint, marginTop: 2 }}>{r.tool.guess.reason ? plainGuess(r.tool.guess.reason, r.tool.guess.confidence) : "from Policy"} · {r.tool.source}</div>
                 </div>
@@ -352,6 +392,11 @@ export default function AdapterOnboarding() {
         border: `1px solid ${live ? C.green : C.line}` }}>
         {live
           ? <span style={{ color: C.green }}>● {nodeId} reported in — it is on the plane</span>
+          : taken
+          ? <span data-testid="adapter-name-taken" style={{ color: C.amber }}>
+              {nodeId} is already on this plane — if this is that agent, its new manifests take effect on restart;
+              a different agent needs its own name, or their runs mix
+            </span>
           : <span style={{ color: C.mut }}>waiting for <span style={{ color: C.text }}>{nodeId || "agent-1"}</span> to report in — run your agent…</span>}
       </div>
       <div className="flex gap-3 mt-4 items-center">

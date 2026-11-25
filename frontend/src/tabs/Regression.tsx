@@ -13,6 +13,7 @@ import Coach from "../components/Coach";
 import { useApp } from "../store";
 import { LAB_SHIPPED } from "../flags";
 import Tooltip from "../components/Tooltip";
+import { useWorkStarted } from "../workStarted";
 
 // The example corpus's runs (backend demo.DEMO_RUN_IDS) and what each one is,
 // in words: their pins all carry the scenario as label, which tells two apart
@@ -289,6 +290,10 @@ export default function Regression({ rules: rulesParam }: { rules?: string } = {
   const corpus = useQuery({ queryKey: ["pins"], queryFn: api.getPins });
   const pins = corpus.data?.pins ?? [];
   const ownPins = pins.filter((p) => !(p.run_id in DEMO_CASES));
+  // once the workspace's own agents report, the example's rules are not
+  // offered — unless its cases were kept here before, and need them
+  const started = useWorkStarted();
+  const offerExample = !started || pins.some((p) => p.run_id in DEMO_CASES);
 
   // `?rules=policy` — arriving from Replay's "make it a rule"
   const [chosen, setChosen] = useState<RulesFrom | null>(
@@ -296,7 +301,7 @@ export default function Regression({ rules: rulesParam }: { rules?: string } = {
   // until the person picks: their own cases are checked against their Policy;
   // the example's cases against the example's rules
   const rulesFrom: RulesFrom = chosen
-    ?? (ownPins.length > 0 ? "policy"
+    ?? (ownPins.length > 0 || !offerExample ? "policy"
       : pins.length > 0 || policyTools.length === 0 ? "example" : "policy");
   const [variant, setVariant] = useState<Variant>("as-is");
   const [raw, setRaw] = useState("");
@@ -415,9 +420,9 @@ export default function Regression({ rules: rulesParam }: { rules?: string } = {
           disabled={policyTools.length === 0}>
           from Policy{policyTools.length ? ` (${plural(policyTools.length, "tool", "tools")})` : " — none yet"}
         </button>
-        <button data-testid="rules-example" onClick={() => pick("example")} style={chip(rulesFrom === "example")}>
+        {offerExample && <button data-testid="rules-example" onClick={() => pick("example")} style={chip(rulesFrom === "example")}>
           the example's
-        </button>
+        </button>}
         <button data-testid="rules-json" onClick={() => pick("json")} style={chip(rulesFrom === "json")}>
           edit as JSON
         </button>
@@ -472,7 +477,7 @@ export default function Regression({ rules: rulesParam }: { rules?: string } = {
         )}
       </div>
 
-      {report && <Report report={report} open={open} setOpen={setOpen} />}
+      {report && <Report report={report} open={open} setOpen={setOpen} onRemoved={run} />}
 
       <div style={{ marginTop: 28 }}>
         <Fold label="run this check on a schedule (Team)">
@@ -497,9 +502,17 @@ function Fold({ label, children }: { label: string; children: React.ReactNode })
   );
 }
 
-function Report({ report, open, setOpen }: {
+function Report({ report, open, setOpen, onRemoved }: {
   report: RegressionReport; open: string | null; setOpen: (v: string | null) => void;
+  onRemoved: () => void;
 }) {
+  const qc = useQueryClient();
+  // A case nothing can be checked against (or one kept by mistake) held every
+  // release at "not safe" with no way to take it out.
+  const unpin = useMutation({
+    mutationFn: (runId: string) => api.unpin(runId),
+    onSuccess: () => { void qc.invalidateQueries({ queryKey: ["pins"] }); onRemoved(); },
+  });
   const broken: string[] = [];
   if (report.escaped) broken.push(`${plural(report.escaped, "attack", "attacks")} now ${report.escaped === 1 ? "gets" : "get"} through`);
   if (report.regressed) broken.push(`${plural(report.regressed, "normal flow is", "normal flows are")} now refused`);
@@ -519,6 +532,12 @@ function Report({ report, open, setOpen }: {
           <><span style={{ color: C.green }}>The example holds:</span> its attack is still blocked, its normal flow still passes.</>
         ) : (
           <><span style={{ color: C.green }}>Safe to ship:</span> every attack still blocked, every normal flow still passes.</>
+        )}
+        {broken.length === 0 && (report.still_refused ?? 0) > 0 && (
+          <div style={{ fontFamily: MONO, fontSize: 11.5, fontWeight: 400, color: C.amber, marginTop: 4 }}>
+            {plural(report.still_refused!, "normal flow was", "normal flows were")} kept with a refused step, and these
+            rules still refuse it — nothing got worse, but nothing got fixed
+          </div>
         )}
       </div>
       {onlyExample && (
@@ -543,8 +562,13 @@ function Report({ report, open, setOpen }: {
 
       <div className="mt-3" style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 8 }}>
         {report.rows.map((r, i) => {
-          const st = STATUS[r.result];
-          const hot = r.result !== "held" && r.result !== "passed";
+          const knownRefusal = r.result === "passed" && (r.still_refused?.length ?? 0) > 0;
+          const unverified = r.side !== "must_block" && (r.unverifiable?.length ?? 0) > 0;
+          const st = unverified ? { text: "can't be fully checked", color: C.amber }
+            : knownRefusal ? { text: `passes as kept · ${r.still_refused!.length} refused`, color: C.amber }
+            : STATUS[r.result];
+          const hot = (r.result !== "held" && r.result !== "passed")
+            || (r.side !== "must_block" && ((r.unverifiable?.length ?? 0) > 0 || (r.still_refused?.length ?? 0) > 0));
           const isOpen = open === r.run_id;
           return (
             <div key={r.run_id} data-testid={`case-${r.run_id}`} style={{ borderTop: i ? `1px solid ${C.line}` : "none" }}>
@@ -568,6 +592,24 @@ function Report({ report, open, setOpen }: {
                         was refused at {r.escaped_denials.map((d) => `${d.tool || "a step"} (step ${d.seq})`).join(", ")} —
                         these rules let it through
                       </span>
+                    ) : r.side !== "must_block" && (r.unverifiable?.length ?? 0) > 0 ? (
+                      <span style={{ color: C.amber }}>
+                        refused at {r.unverifiable!.map((d) => `${d.tool || "a step"} (step ${d.seq})`).join(", ")} when it
+                        was kept, but recorded without what drove the refusal — whether these rules still refuse
+                        it can't be checked. Keep a newer run of this case
+                      </span>
+                    ) : r.side !== "must_block" && (r.still_refused?.length ?? 0) > 0 ? (
+                      <span style={{ color: C.amber }}>
+                        goes as when it was kept — including the refusal at{" "}
+                        {r.still_refused!.map((d) => `${d.tool || "a step"} (step ${d.seq})`).join(", ")}.
+                        If that refusal is wrong, these rules have not fixed it
+                      </span>
+                    ) : r.result === "unanchored" && (r.unverifiable?.length ?? 0) > 0 ? (
+                      <span style={{ color: C.amber }}>
+                        refused at {r.unverifiable!.map((d) => `${d.tool || "a step"} (step ${d.seq})`).join(", ")}, but
+                        this run was recorded without what drove the refusal, so other rules can't be checked
+                        against it — keep a newer run of this case
+                      </span>
                     ) : r.result === "unanchored" ? (
                       <span style={{ color: C.amber }}>
                         nothing was refused in this run, so there is nothing to check — keep a run where
@@ -588,12 +630,23 @@ function Report({ report, open, setOpen }: {
                   <div>
                     <button
                       onClick={() => navigate(`explain/${r.run_id}`, {
-                        seq: r.escaped_denials[0]?.seq ?? r.new_denial?.seq ?? r.first_divergence ?? undefined,
+                        seq: r.escaped_denials[0]?.seq ?? r.still_refused?.[0]?.seq ?? r.new_denial?.seq ?? r.first_divergence ?? undefined,
                         node: r.escaped_denials[0]?.node_id,
                       })}
                       style={btn({ color: C.steel, fontSize: 11, padding: "5px 10px" })}>
                       <Play size={11} /> show where
                     </button>
+                    {!r.demo && (
+                      <button data-testid={`unpin-${r.run_id}`} disabled={unpin.isPending}
+                        onClick={() => {
+                          if (window.confirm("Take this case out of the check? Releases will no longer be checked against it.")) {
+                            unpin.mutate(r.run_id);
+                          }
+                        }}
+                        style={btn({ color: C.mut, fontSize: 11, padding: "5px 10px", marginLeft: 8 })}>
+                        take it out of the check
+                      </button>
+                    )}
                   </div>
                 </div>
               )}

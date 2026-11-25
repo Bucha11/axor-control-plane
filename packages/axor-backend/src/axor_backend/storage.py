@@ -36,6 +36,7 @@ from sqlalchemy import (
 )
 from sqlalchemy import text as sa_text
 from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy import false as sa_false
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
@@ -417,6 +418,10 @@ node_profiles = Table(
     # a subagent (Claude Code's Agent tool) names the session that started it;
     # its type ("Explore") is its agent
     Column("parent", String(200), nullable=False, server_default=""),
+    # the agent says it is a test bench (a staging copy, no real users): the
+    # plane may then break its tools on purpose. Unlike the kind, the last word
+    # wins — the same node restarted for real users is a test bench no longer.
+    Column("test_bench", Boolean, nullable=False, default=False, server_default=sa_false()),
 )
 
 # Agent tree runs (axor-wrap `tree run`): the latest snapshot of each run —
@@ -723,6 +728,30 @@ async def init_db(engine: AsyncEngine) -> None:
         await conn.run_sync(_run_migrations)
 
 
+
+def node_seq_order(lines: list[Any]) -> list[Any]:
+    """Arrival order across nodes, each node's own ``seq`` order within it.
+
+    The positions a node's events arrived in are kept (so cross-node causality
+    — a message received after the one that sent it — is untouched); the
+    events in those positions are that node's, sorted by the seq it stamped.
+    A line without an integer seq stays where it arrived.
+    """
+    def parsed(line: Any) -> dict[str, Any]:  # noqa: ANN401
+        return line if isinstance(line, dict) else json.loads(line)
+
+    slots: dict[str, list[int]] = {}
+    for i, line in enumerate(lines):
+        d = parsed(line)
+        if isinstance(d.get("seq"), int):
+            slots.setdefault(str(d.get("node_id", "")), []).append(i)
+    out = list(lines)
+    for positions in slots.values():
+        ordered = sorted((lines[i] for i in positions), key=lambda ln: parsed(ln)["seq"])
+        for pos, line in zip(positions, ordered, strict=True):
+            out[pos] = line
+    return out
+
 class Store:
     def __init__(self, engine: AsyncEngine) -> None:
         self.engine = engine
@@ -900,7 +929,12 @@ class Store:
         reproduces what was recorded.
 
         ``events.id`` is the order the events arrived in, which is the order
-        they happened in.
+        they happened in — across nodes. Within one node it need not be: a
+        producer that posts batches concurrently (the guard proxy did) lands
+        them in whatever order the requests finished, and the run read back
+        "refund issued" before "ticket read". ``node_seq_order`` keeps each
+        node's slots where they arrived and fills them in that node's ``seq``
+        order, which the node itself assigned.
         """
         async with self.engine.connect() as conn:
             rows = (await conn.execute(
@@ -919,7 +953,7 @@ class Store:
         # string on (`traces._kernel_trace`, because `event_from_json_line` takes
         # one and Rule 0 says we do not rebuild its reader) serialises there,
         # inside the thread, rather than here on the event loop.
-        return [r.line for r in rows]
+        return node_seq_order([r.line for r in rows])
 
     # ── sign-up funnel ────────────────────────────────────────────────────
 
@@ -2274,7 +2308,8 @@ class Store:
 
     async def put_node_profile(self, node_id: str, kind: str, agent: str,
                                developer: str, ts: str, repo: str = "",
-                               repo_label: str = "", parent: str = "") -> None:
+                               repo_label: str = "", parent: str = "",
+                               test_bench: bool = False) -> None:
         """First word wins: a node is what it said it was when it first
         reported, so a later profile cannot move it out of the fleet count.
         The repository is the exception — it is not metered, and a session
@@ -2284,14 +2319,15 @@ class Store:
         for attempt in (1, 2):
             try:
                 await self._put_node_profile(node_id, kind, agent, developer, ts, repo, repo_label,
-                                             parent)
+                                             parent, test_bench)
                 return
             except IntegrityError:
                 if attempt == 2:
                     raise
 
     async def _put_node_profile(self, node_id: str, kind: str, agent: str, developer: str,
-                                ts: str, repo: str, repo_label: str, parent: str = "") -> None:
+                                ts: str, repo: str, repo_label: str, parent: str = "",
+                                test_bench: bool = False) -> None:
         org = current_org_id()
         async with self.engine.begin() as conn:
             held = (await conn.execute(select(node_profiles.c.node_id, node_profiles.c.repo,
@@ -2303,16 +2339,17 @@ class Store:
                 await conn.execute(update(node_profiles).where(
                     node_profiles.c.org_id == org, node_profiles.c.node_id == node_id,
                 ).values(kind=kind, agent=agent, developer=developer, first_ts=ts,
-                         repo=repo, repo_label=repo_label, parent=parent))
+                         repo=repo, repo_label=repo_label, parent=parent, test_bench=test_bench))
             elif held is None:
                 await conn.execute(node_profiles.insert().values(
                     org_id=org, node_id=node_id, kind=kind, agent=agent,
                     developer=developer, first_ts=ts, repo=repo, repo_label=repo_label,
-                    parent=parent))
-            elif repo and not held.repo:
+                    parent=parent, test_bench=test_bench))
+            else:
+                late = {"repo": repo, "repo_label": repo_label} if repo and not held.repo else {}
                 await conn.execute(update(node_profiles).where(
                     node_profiles.c.org_id == org, node_profiles.c.node_id == node_id,
-                ).values(repo=repo, repo_label=repo_label))
+                ).values(test_bench=test_bench, **late))
 
     async def node_kinds(self) -> dict[str, dict[str, str]]:
         """Every profiled node. A session reported under a machine's opaque
@@ -2329,7 +2366,8 @@ class Store:
                             "developer": bound.get(r.developer, r.developer),
                             **({"developer_id": r.developer} if r.developer in bound else {}),
                             "repo": r.repo, "repo_label": r.repo_label, "title": r.title,
-                            **({"parent": r.parent} if r.parent else {})}
+                            **({"parent": r.parent} if r.parent else {}),
+                            **({"test_bench": True} if r.test_bench else {})}
                 for r in rows}
 
     async def set_node_title(self, node_id: str, title: str) -> bool:
@@ -2640,6 +2678,13 @@ class Store:
         except IntegrityError:
             await self._pin(run_id, side, label, anchors)  # the row now exists: update it
 
+    async def unpin(self, run_id: str) -> bool:
+        """Take a run out of the corpus. True when there was a pin to remove."""
+        async with self.engine.begin() as conn:
+            result = await conn.execute(delete(pins).where(
+                pins.c.run_id == run_id, pins.c.org_id == current_org_id()))
+        return bool(result.rowcount)
+
     async def _pin(self, run_id: str, side: str, label: str, anchors: str | None) -> None:
         async with self.engine.begin() as conn:
             dup = (await conn.execute(
@@ -2766,6 +2811,16 @@ class Store:
             )
         return bool(result.rowcount)
 
+    async def share_links_of(self, run_id: str | None) -> list[dict[str, Any]]:
+        """This workspace's links, newest first (one run's, when named)."""
+        q = select(share_links).where(share_links.c.org_id == current_org_id())
+        if run_id is not None:
+            q = q.where(share_links.c.run_id == run_id)
+        async with self.engine.connect() as conn:
+            rows = (await conn.execute(q.order_by(share_links.c.created_ts.desc()))).all()
+        return [{"token": r.token, "run_id": r.run_id, "case_index": r.case_index,
+                 "revoked": bool(r.revoked), "created_ts": r.created_ts} for r in rows]
+
     async def list_share_links(self) -> list[dict[str, Any]]:
         """Every link, across tenants — this feeds the boot rehydrate, which
         runs before any request and must repopulate the whole registry. Each
@@ -2821,7 +2876,7 @@ class Store:
                 label=label, node_pattern=node_pattern, org_id=current_org_id(),
             ))
 
-    async def remove_subscriptions(self, url: str) -> int:
+    async def remove_subscriptions(self, url: str, node_pattern: str | None = None) -> int:
         """Drop this tenant's subscriptions for `url`. Returns how many went.
 
         Scoped by org like every other read here: one tenant unsubscribing must
@@ -2832,6 +2887,8 @@ class Store:
                 delete(notification_subs).where(
                     notification_subs.c.url == url,
                     notification_subs.c.org_id == current_org_id(),
+                    *([notification_subs.c.node_pattern == node_pattern]
+                      if node_pattern is not None else []),
                 )
             )
         return int(result.rowcount or 0)

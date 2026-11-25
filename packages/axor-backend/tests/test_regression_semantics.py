@@ -252,6 +252,51 @@ class TestMustPassRegressesOnANewDenial:
         assert row["result"] == "passed"
 
 
+class TestATaintRefusalWithoutProvenanceIsNotAnEscape:
+    """A guard trace written before it carried the kernel's provenance records a
+    taint refusal as a bare ``verdict: deny`` — no driving root, no argument
+    refs. Replay folds that as a clean call and re-decides it as allowed, so the
+    report said "1 attack now gets through" under the very rules that refused
+    it. Nothing in the trace can tell the rules apart: withheld, not escaped."""
+
+    def _bare_taint_deny(self) -> list:
+        deny = _call(1, "send_email", "deny")
+        deny["gate"] = "taint_floor"
+        deny["payload"] = {"tool": "send_email", "args": {"to": "<20 chars sha256:x>"}}
+        return _trace(_call(0, "read_ticket", "pass"), deny)
+
+    def test_it_is_unanchored_and_named(self) -> None:
+        config = kernel_config_from_json({"sinks": {
+            "read_ticket": {"consequence_class": "READ"},
+            "send_email": {"consequence_class": "EXPORT"}}})
+        row = regression_row("r", "must_block", "attack", self._bare_taint_deny(), config)
+        assert row["result"] == "unanchored"
+        assert row["escaped_denials"] == []
+        assert [d["seq"] for d in row["unverifiable"]] == [1]
+
+    def test_a_refusal_with_provenance_is_still_judged(self) -> None:
+        deny = _call(1, "send_email", "deny")
+        deny["gate"] = "taint_floor"   # arg_refs present: re-derivable
+        row = regression_row("r", "must_block", "attack",
+                             _trace(_call(0, "read_ticket", "pass"), deny),
+                             kernel_config_from_json({"sinks": {
+                                 "read_ticket": {"consequence_class": "READ"},
+                                 "send_email": {"consequence_class": "EXPORT"}}}))
+        assert row["unverifiable"] == []
+        assert row["result"] in ("held", "escaped")
+
+
+class TestNormalWorkNamesTheRefusalItStillHits:
+    def test_a_recorded_refusal_still_given_is_listed(self) -> None:
+        """Not a regression and not a clean pass: the row says which step is
+        still refused, so "still passes" is not shown for a flow that does not."""
+        events = _trace(_call(0, "lookup", "pass"), _call(1, "send_email", "deny"))
+        row = regression_row("r", "must_pass", "normal", events,
+                             kernel_config_from_json({"allowed_tools": ["lookup"]}))
+        assert row["result"] == "passed"
+        assert [(d["tool"], d["seq"]) for d in row["still_refused"]] == [("send_email", 1)]
+
+
 # ── the config parser: 400, never a coerced 200 ───────────────────────────────
 
 class TestAMalformedConfigIsRefusedNotCoerced:
@@ -328,3 +373,48 @@ class TestTheTwoConfigShapesCarryTheSameKeys:
         with pytest.raises(ConfigInvalid) as exc:
             kernel_config_from_json({"sinks": {"s": {"consequence_class": "export"}}})
         assert "READ|WRITE|EXPORT|EXEC" in str(exc.value)
+
+
+def test_a_nodes_events_read_back_in_its_own_seq_order() -> None:
+    """Batches posted concurrently arrive out of order; a run read back in
+    arrival order had a refund before the ticket it was for. Within a node the
+    seq it stamped decides; across nodes, the arrival positions stay."""
+    from axor_backend.storage import node_seq_order
+
+    arrived = [
+        {"node_id": "a", "seq": 2, "kind": "tool_call"},      # a's refund, early
+        {"node_id": "b", "seq": 0, "kind": "message_received"},
+        {"node_id": "a", "seq": 0, "kind": "tool_call"},      # a's ticket read
+        {"node_id": "a", "seq": 1, "kind": "tool_result"},
+    ]
+    out = node_seq_order(arrived)
+    assert [(e["node_id"], e["seq"]) for e in out] == [("a", 0), ("b", 0), ("a", 1), ("a", 2)]
+
+
+class TestARunThatOnlyWatchedHoldsWhatItWouldHaveRefused:
+    """A test run (enforcement off) lets every call through and records what
+    the rules say as `would_deny`. Recorded as `deny` it read as a refusal that
+    never happened; recorded as pass it must still be checkable."""
+
+    def _watched(self) -> list:
+        read = _call(0, "read_ticket", "pass")
+        result = {"schema_version": SCHEMA_VERSION, "seq": 1, "node_id": "n0", "kind": "tool_result",
+                  "ts": "t", "causal_root": "v1", "gate": None, "verdict": None,
+                  "payload": {"tool": "read_ticket", "value_ref": "v1",
+                              "root": {"sources": ["web"], "sensitive": False}}}
+        send = _call(2, "send_email", "pass")
+        send["payload"].update(arg_refs={"to": "v1"},
+                               would_deny={"reason": "tainted", "category": "taint_enforcement",
+                                           "gate": "taint_floor"})
+        return _trace(read, result, send)
+
+    def test_the_would_deny_calls_are_the_boundary(self) -> None:
+        sinks = {"read_ticket": {"consequence_class": "READ"},
+                 "send_email": {"consequence_class": "EXPORT"}}
+        row = regression_row("r", "must_block", "attack", self._watched(),
+                             kernel_config_from_json({"sinks": sinks}))
+        assert row["pinned_denials"] == 1
+        assert row["result"] == "held"
+        # under rules that no longer refuse it, it is an escape — not "unchecked"
+        loose = kernel_config_from_json({"allowed_tools": ["read_ticket", "send_email"]})
+        assert regression_row("r", "must_block", "attack", self._watched(), loose)["result"] == "escaped"

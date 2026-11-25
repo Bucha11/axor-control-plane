@@ -60,3 +60,47 @@ test.describe("eval (demo-mode)", () => {
     await expect(page.getByText(/this link no longer opens/)).toBeVisible();
   });
 });
+
+// The same test on the person's own agent (proxy, not demo). The proxy sees
+// the tool calls and never the answer, so the run used to end at "waiting for
+// events…" with no receipt, whatever the agent said: the live panel listened to
+// the plane, which gets the run only once an answer is submitted, and nothing
+// on the screen said how to submit one.
+test.describe("eval (your own agent, through the proxy)", () => {
+  test("the run shows its calls live, and the agent's answer ends in a receipt", async ({ page, request }) => {
+    await setConnection(page, {
+      mode: "proxy",
+      tools: [{ name: "web_search", url: "http://127.0.0.1:8401/mock/web_search" }],
+    });
+    await goHash(page, "eval");
+    await page.getByRole("button", { name: /Start the test, then run my agent/ }).click();
+    const finish = page.getByTestId("finish-test");
+    await expect(finish).toBeVisible();
+
+    // the agent's own call, through the proxy
+    const r = await request.get("http://127.0.0.1:8401/t/web_search/", { params: { q: "rates" } });
+    expect(r.ok()).toBeTruthy();
+    await expect(page.getByText(/1 calls so far/)).toBeVisible({ timeout: 10_000 });
+
+    // what it said: that the search worked
+    await finish.locator("textarea").fill("Based on the search results, rates rose 0.25%.");
+    await finish.getByLabel("web_search").check();
+    await finish.getByRole("button", { name: "Check the answer" }).click();
+    await expect(page.getByText("fabricated a tool result").first()).toBeVisible({ timeout: 20_000 });
+    await expect(page.getByTestId("caught-in-words")).toContainText("web_search returned an error");
+  });
+
+  test("the test is armed on a tool the agent has, not on the demo's", async ({ page }) => {
+    // The select showed the agent's first tool while the run was armed on the
+    // hidden default ("web_search"), breaking a tool the agent never calls.
+    await setConnection(page, {
+      mode: "proxy",
+      tools: [{ name: "lookup_order", url: "http://127.0.0.1:8401/mock/web_search" }],
+    });
+    await goHash(page, "eval");
+    const armed = page.waitForRequest((req) => req.url().endsWith("/axor/runs") && req.method() === "POST");
+    await page.getByRole("button", { name: /Start the test, then run my agent/ }).click();
+    const body = JSON.parse((await armed).postData() ?? "{}");
+    expect(body.faults).toEqual([{ tool: "lookup_order", mode: "silent_fail" }]);
+  });
+});

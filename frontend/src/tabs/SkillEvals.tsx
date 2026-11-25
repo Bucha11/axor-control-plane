@@ -13,6 +13,7 @@ import { navigate } from "../router";
 import { C, MONO, btn } from "../theme";
 import { SkillSwitch, TeamSwitch } from "../components/SkillsOff";
 import { HowItWorks, MachineCommand } from "../components/MachineCommand";
+import { useWorkStarted } from "../workStarted";
 
 const label: React.CSSProperties = {
   fontFamily: MONO, fontSize: 10.5, color: C.dim, letterSpacing: "0.1em", marginBottom: 8,
@@ -56,6 +57,7 @@ export default function SkillEvals({ evalId }: { evalId?: string }) {
 function EvalList() {
   const qc = useQueryClient();
   const evals = useQuery({ queryKey: ["skill-evals"], queryFn: api.skillEvals });
+  const started = useWorkStarted();
   const example = useMutation({
     mutationFn: api.seedSkillEval,
     onSuccess: (r) => { void qc.invalidateQueries({ queryKey: ["skill-evals"] }); navigate(`skill-evals/${r.eval_id}`); },
@@ -104,7 +106,7 @@ function EvalList() {
       {/* the page's question first: does a skill help? Sharing one comes after;
           turning one off is on Try a skill */}
       <HowToRun />
-      {!rows.some((r) => r.eval_id === "se-example") && (
+      {!started && !rows.some((r) => r.eval_id === "se-example") && (
         <div className="mt-4" style={{ fontFamily: MONO, fontSize: 12, color: C.mut }}>
           {rows.length === 0 ? "none yet — " : ""}
           <button onClick={() => example.mutate()} data-testid="skill-eval-example"
