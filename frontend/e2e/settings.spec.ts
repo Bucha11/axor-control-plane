@@ -123,7 +123,38 @@ test.describe("settings", () => {
     await expect(page.getByText(/usage not reported/)).toBeVisible();
   });
 
-  test("tabs follow the journey: a coding team sees no security tab, plain alerts, keys with the lines to use them", async ({ page }) => {
+  test("license and billing words that do not contradict themselves (QA-035)", async ({ page }) => {
+    // "no license active" sat beside "auto-renewal configured (AXOR_LICENSE_RENEWAL_URL)";
+    // the paid-plan estimate called Team's $299 base "so far this month" with nothing used
+    await page.route("**/v1/license/status", (r) => r.fulfill({ status: 200, contentType: "application/json",
+      body: JSON.stringify({ active: false, vendor_key_configured: true, licensed_to: "Acme",
+                             auto_renewal: true, usage_reporting: false, hosted: true }) }));
+    await page.route("**/v1/license/billing", (r) => r.fulfill({ status: 200, contentType: "application/json",
+      body: JSON.stringify({
+        plan: { tier: "community", licensed: false, organization: null, expires_at: null, base: "$0.00",
+                base_cents: 0, per_node_cents: 0, seat: "$0.00", seat_cents: 0, included_nodes: 1,
+                included_developers: 1, priced: true },
+        current: null, history: [], forecast: null,
+        if_paid: [{
+          tier: "team", month: "2026-11", workspace_tier: "team", base: "$299.00", base_cents: 29900,
+          included_nodes: 10, peak_nodes: 0, peak_day: null, billable_nodes: 0, overage: "$0.00",
+          overage_cents: 0, included_developers: 0, active_developers: 0, billable_developers: 0,
+          seats: "$0.00", seat_cents: 0, total: "$299.00", total_cents: 29900, provisional: true,
+          priced: true, note: "", computed_on: "2026-11-27", developers: [] }],
+      }) }));
+    await goHash(page, "settings");
+    const fold = page.getByTestId("license-fold");
+    await fold.locator("summary").click();
+    await expect(fold).toContainText("no license active on this deployment");
+    await expect(fold).toContainText("a license applied here will renew itself before it expires");
+    await expect(fold).not.toContainText("AXOR_");
+    await page.getByTestId("settings-tab-billing").click();
+    const team = page.getByTestId("if-paid-team");
+    await expect(team).toContainText("the plan's price alone — nothing used yet");
+    await expect(team).not.toContainText("so far this month");
+  });
+
+  test("tabs follow the journey:a coding team sees no security tab, plain alerts, keys with the lines to use them", async ({ page }) => {
     await page.addInitScript(() => {
       const raw = localStorage.getItem("axor-app");
       const data = raw ? JSON.parse(raw) : { state: {}, version: 0 };

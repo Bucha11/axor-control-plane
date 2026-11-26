@@ -1240,8 +1240,12 @@ export default function Settings({ tab = "workspace" }: { tab?: string } = {}) {
               <div style={{ color: C.dim }}>no license active on this deployment</div>
             )}
             <div style={{ color: C.dim, fontSize: 10, marginTop: 3 }}>
+              {/* beside "no license active" it read as a contradiction, and named
+                  a deployment variable a workspace cannot set (QA-035) */}
               {licenseStatus.data.auto_renewal
-                ? "auto-renewal configured (AXOR_LICENSE_RENEWAL_URL)"
+                ? licenseStatus.data.active
+                  ? "renews itself before it expires"
+                  : "a license applied here will renew itself before it expires"
                 : "no auto-renewal — a new license has to be pasted here each term"}
               {" · "}
               {licenseStatus.data.usage_reporting
@@ -1600,7 +1604,11 @@ const TIER_NAME: Record<string, string> = {
 
 /** One month's money, line by line: the plan, developers past what it
  * includes, governed nodes past what it includes. */
-function StatementLines({ st, coding, prod }: { st: BillingStatement; coding: boolean; prod: boolean }) {
+function StatementLines({ st, coding, prod, estimate = false }: {
+  st: BillingStatement; coding: boolean; prod: boolean;
+  // what a plan not held would cost: nothing has accrued on it
+  estimate?: boolean;
+}) {
   const row = (what: React.ReactNode, amount: string, testid?: string) => (
     <div data-testid={testid} className="flex gap-3" style={{ fontFamily: MONO, fontSize: 11.5, padding: "3px 0", borderTop: `1px solid ${C.line}` }}>
       <span style={{ flex: 1, color: C.mut }}>{what}</span>
@@ -1623,7 +1631,13 @@ function StatementLines({ st, coding, prod }: { st: BillingStatement; coding: bo
         st.workspace_tier === "coding" && st.billable_nodes > 0 ? "on Team and up"
           : st.priced ? st.overage : "—", "bill-nodes")}
       <div className="flex gap-3" style={{ fontFamily: MONO, fontSize: 12.5, padding: "6px 0 0", borderTop: `1px solid ${C.line}` }}>
-        <span style={{ flex: 1, color: C.text }}>{st.provisional ? "so far this month" : "total"}</span>
+        <span style={{ flex: 1, color: C.text }}>
+          {/* an estimate is not a charge "so far": with nothing used it is the
+              plan's own price, and says so (QA-035) */}
+          {estimate
+            ? devs === 0 && st.peak_nodes === 0 ? "the plan's price alone — nothing used yet" : "on this plan, this month so far"
+            : st.provisional ? "so far this month" : "total"}
+        </span>
         <span data-testid="bill-total" style={{ color: C.text, fontWeight: 700 }}>{st.priced ? st.total : "per contract"}</span>
       </div>
       {st.provisional && (
@@ -1694,7 +1708,7 @@ function Billing({ coding, prod }: { coding: boolean; prod: boolean }) {
             {rungs.map((e) => (
               <div key={e.tier} data-testid={`if-paid-${e.tier}`}>
                 <div style={{ fontFamily: MONO, fontSize: 11.5, color: C.text, marginBottom: 4 }}>{TIER_NAME[e.tier ?? ""] ?? e.tier}</div>
-                <StatementLines st={e} coding={coding} prod={prod} />
+                <StatementLines st={e} coding={coding} prod={prod} estimate />
               </div>
             ))}
             <div style={{ fontFamily: MONO, fontSize: 10, color: C.dim }}>
