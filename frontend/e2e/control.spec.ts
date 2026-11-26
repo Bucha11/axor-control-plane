@@ -92,6 +92,43 @@ test.describe("control", () => {
     await expect(page.getByText(/can only lower the cap/)).toBeVisible();
   });
 
+  test("the example fleet tells one time, and its chips say why they overlap (QA-039)", async ({ page, request }) => {
+    // the example fleet, then the canned tree on top of it — as a visitor
+    // clicking both ways in does. The canned tree kept its fixture's date
+    // ("Mon, Jul 6") in the feed while its run said "now".
+    await request.post(`${BACKEND}/v1/demo/seed-fleet`);
+    await request.post(`${BACKEND}/v1/demo/seed-tree-run`);
+    await setConnection(page, { mode: "adapter" });
+    await goHash(page, "control");
+    const rows = page.getByTestId("fleet-activity").getByTestId("feed-row").filter({ hasText: "tree-orch" });
+    await expect(rows.first()).toBeVisible();
+    await expect(rows.first()).toContainText(/\d\d:\d\d:\d\d/);
+    await expect(rows.first()).not.toContainText(/\b(Mon|Tue|Wed|Thu|Fri|Sat|Sun)\b/);
+    // "needs you" is on top of a state: the chips say so
+    await expect(page.getByTestId("chips-overlap")).toContainText("counted in its state too");
+  });
+
+  test("a cap error goes once the value is fixed, and a number too big says so (QA-034)", async ({ page, request }) => {
+    const node = uniqueNode("gov-capfix");
+    await seedNode(request, node);
+    await setConnection(page, { mode: "adapter" });
+    await goHash(page, "control");
+    await page.getByTestId(`agent-row-${node}`).click();
+    const input = page.getByPlaceholder("set / lower");
+
+    await input.fill("-5");
+    await page.getByRole("button", { name: /apply/ }).click();
+    await expect(page.getByText("cap must be a non-negative integer")).toBeVisible();
+    await input.fill("5");
+    await expect(page.getByText("cap must be a non-negative integer")).toHaveCount(0);
+
+    // 1e309 is no number an input can hold: apply is off, and it says why
+    await input.fill("");
+    await input.pressSequentially("1e309");
+    await expect(page.getByRole("button", { name: /apply/ })).toBeDisabled();
+    await expect(page.getByText(/cap must be a whole number/)).toBeVisible();
+  });
+
   test("a stop is confirmed, and a stopped agent can be started again", async ({ page, request }) => {
     // A stop and a spent cap were dead ends: no Resume, the cap only lowered,
     // and restarting the agent re-applied both from desired state. The running

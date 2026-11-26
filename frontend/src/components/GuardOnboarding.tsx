@@ -51,12 +51,32 @@ const input = {
   fontFamily: MONO, fontSize: 11.5, padding: "5px 8px", outline: "none",
 } as const;
 
+/** Why a tool cannot be added as typed, or null when it can. A second tool
+ *  under a name already listed was dropped without a word, and anything was
+ *  taken for an address — the proxy forwards to http(s) only (QA-015). */
+export function toolDraftError(name: string, url: string, names: string[]): string | null {
+  if (names.includes(name)) return `${name} is already listed — give this tool another name`;
+  let protocol = "";
+  try { protocol = new URL(url).protocol; } catch { /* not a URL at all */ }
+  if (protocol !== "http:" && protocol !== "https:")
+    return `${url} is not an http:// or https:// address — the proxy forwards to those only`;
+  return null;
+}
+
+/** A tool's address through the proxy. The name is a path segment: a space
+ *  or a slash in it would print an address that goes elsewhere (QA-015). */
+export const proxiedUrl = (base: string, name: string) => `${base}/t/${encodeURIComponent(name)}/`;
+
+// A long name or address wraps inside its block: unbroken, it widened the page
+// and pushed the copy button off-screen (QA-015).
+export const wrapAnywhere = { minWidth: 0, overflowWrap: "anywhere" } as const;
+
 function Block({ text, id }: { text: string; id: string }) {
   const [copied, setCopied] = useState(false);
   return (
     <div className="flex items-start gap-2" style={{ background: C.bg, border: `1px solid ${C.line}`, borderRadius: 6, padding: "8px 10px" }}>
       <pre data-testid={id} style={{ margin: 0, flex: 1, fontFamily: MONO, fontSize: 11.5, color: C.text,
-                                     whiteSpace: "pre-wrap", lineHeight: 1.6 }}>{text}</pre>
+                                     whiteSpace: "pre-wrap", lineHeight: 1.6, ...wrapAnywhere }}>{text}</pre>
       <button aria-label="copy" onClick={() => { void navigator.clipboard?.writeText(text); setCopied(true); setTimeout(() => setCopied(false), 1200); }}
         style={btn({ color: C.mut, fontSize: 10, padding: "2px 6px" })}>
         {copied ? <Check size={11} /> : <Copy size={11} />}
@@ -74,6 +94,9 @@ export default function GuardOnboarding() {
   const tools: GuardTool[] = Object.entries(policy).map(([name, c]) =>
     ({ name, url: c.url ?? "", klass: c.klass, outside: c.outside }));
   const [draft, setDraft] = useState({ name: "", url: "" });
+  const [draftError, setDraftError] = useState<string | null>(null);
+  // a found tool's address, refused as typed: the same http(s) rule as the add row
+  const [urlError, setUrlError] = useState<{ name: string; error: string } | null>(null);
   const [savedManifests, setSavedManifests] = useState(false);
   // remembered: coming back here from Policy to put new rules to work must not
   // quietly start a second agent under "agent-1"
@@ -112,7 +135,10 @@ export default function GuardOnboarding() {
   const add = () => {
     const name = draft.name.trim();
     const url = draft.url.trim();
-    if (!name || !url || tools.some((t) => t.name === name)) return;
+    if (!name || !url) return;
+    const why = toolDraftError(name, url, tools.map((t) => t.name));
+    setDraftError(why);
+    if (why) return;
     setToolClass(name, { url });
     setDraft({ name: "", url: "" });
     setSavedManifests(false);
@@ -122,6 +148,14 @@ export default function GuardOnboarding() {
     setToolClass(name, rest);
     setSavedManifests(false);
   };
+  const setUrl = (i: number, name: string, raw: string) => {
+    const url = raw.trim();
+    if (!url) return;
+    const error = toolDraftError(name, url, []);
+    setUrlError(error ? { name, error } : null);
+    if (!error) patch(i, { url });
+  };
+
   const missingUrl = tools.filter((t) => !t.url).map((t) => t.name);
 
   const run = [
@@ -134,7 +168,7 @@ export default function GuardOnboarding() {
   ].filter((l) => l !== null).join("\n");
   // no tools yet: no addresses — the example's read as if they were already added
   const urls = tools.length
-    ? tools.map((t) => `${t.name}  →  ${proxyBase}/t/${t.name}/`).join("\n")
+    ? tools.map((t) => `${t.name}  →  ${proxiedUrl(proxyBase, t.name)}`).join("\n")
     : "add your agent's tools in step 1 — each one's address through the proxy appears here";
 
   return (
@@ -161,14 +195,18 @@ export default function GuardOnboarding() {
         {tools.map((t, i) => (
           <div key={t.name} className="px-3 py-2 flex items-center gap-3 flex-wrap" data-testid={`guard-tool-${t.name}`}
             style={{ borderTop: i ? `1px solid ${C.line}` : "none", fontFamily: MONO, fontSize: 11.5 }}>
-            <span style={{ color: C.text, minWidth: 110 }}>{t.name}</span>
+            <span style={{ color: C.text, ...wrapAnywhere, minWidth: 110 }}>{t.name}</span>
             {t.url ? (
-              <span style={{ color: C.dim, flex: 1, minWidth: 160, overflow: "hidden", textOverflow: "ellipsis" }}>{t.url}</span>
+              <span style={{ color: C.dim, flex: 1, ...wrapAnywhere, minWidth: 160 }}>{t.url}</span>
             ) : (
               <input placeholder="where it lives: https://… ⏎" aria-label={`where ${t.name} lives`}
-                onKeyDown={(e) => { if (e.key === "Enter" && e.currentTarget.value.trim()) patch(i, { url: e.currentTarget.value.trim() }); }}
-                onBlur={(e) => { if (e.currentTarget.value.trim()) patch(i, { url: e.currentTarget.value.trim() }); }}
+                onKeyDown={(e) => { if (e.key === "Enter") setUrl(i, t.name, e.currentTarget.value); }}
+                onBlur={(e) => setUrl(i, t.name, e.currentTarget.value)}
                 style={{ ...input, flex: 1, minWidth: 160, borderColor: C.amber }} />
+            )}
+            {urlError?.name === t.name && (
+              <span data-testid={`guard-tool-url-error-${t.name}`}
+                style={{ color: C.red, flexBasis: "100%", ...wrapAnywhere }}>{urlError.error}</span>
             )}
             <select value={t.klass} onChange={(e) => patch(i, { klass: e.target.value as Klass })}
               aria-label={`what ${t.name} does`} style={{ ...input, fontSize: 11, padding: "3px 6px" }}>
@@ -181,11 +219,14 @@ export default function GuardOnboarding() {
           </div>
         ))}
         <div className="px-3 py-2 flex items-center gap-2" style={{ borderTop: tools.length ? `1px solid ${C.line}` : "none" }}>
-          <input value={draft.name} onChange={(e) => setDraft({ ...draft, name: e.target.value })}
+          <input value={draft.name} onChange={(e) => { setDraft({ ...draft, name: e.target.value }); setDraftError(null); }}
             onKeyDown={(e) => e.key === "Enter" && add()} placeholder="tool name ⏎" style={{ ...input, width: 130 }} />
-          <input value={draft.url} onChange={(e) => setDraft({ ...draft, url: e.target.value })}
+          <input value={draft.url} onChange={(e) => { setDraft({ ...draft, url: e.target.value }); setDraftError(null); }}
             onKeyDown={(e) => e.key === "Enter" && add()} placeholder="https://where-it-lives ⏎" style={{ ...input, flex: 1 }} />
         </div>
+        {draftError && (
+          <div data-testid="guard-add-error" className="px-3 pb-2" style={{ ...hint, color: C.red, ...wrapAnywhere }}>{draftError}</div>
+        )}
       </div>
       <div style={{ ...hint, marginTop: 6 }}>
         an MCP server is one tool here (its URL); its own tools are named by what the agent calls.

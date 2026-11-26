@@ -84,7 +84,26 @@ def test_private_targets_are_refused_only_where_the_boundary_is_real() -> None:
     check_webhook_url("http://127.0.0.1:9093/alerts", block_private=False)
     with pytest.raises(WebhookRefused) as excinfo:
         check_webhook_url("http://127.0.0.1:9093/alerts", block_private=True)
-    assert "AXOR_WEBHOOK_BLOCK_PRIVATE" in str(excinfo.value)
+    assert str(excinfo.value) == ("127.0.0.1 is an address inside a private network — "
+                                  "this plane sends alerts only to public addresses")
+
+
+@pytest.mark.parametrize(("url", "words"), [
+    ("qa2-alerts@example.com", "a webhook address starts with https:// or http://"),
+    ("ftp://hooks.example/x", "a webhook address starts with https:// or http:// — not ftp:"),
+    ("https:///x", "the webhook address has no host name after https://"),
+    ("http://hook.nowhere.invalid/x",
+     "no such host: hook.nowhere.invalid — check the webhook address"),
+    ("http://169.254.169.254/latest/meta-data/", "169.254.169.254 is a link-local address"),
+])
+def test_a_refused_webhook_is_said_in_words(url: str, words: str) -> None:
+    """QA-018: the person typing the address read a resolver's `[Errno -5]` and
+    the name of a deployment setting they cannot change."""
+    with pytest.raises(WebhookRefused) as excinfo:
+        check_webhook_url(url, block_private=True)
+    said = str(excinfo.value)
+    assert said.startswith(words)
+    assert "Errno" not in said and "AXOR_" not in said
 
 
 async def test_subscribe_refuses_an_internal_target_with_400() -> None:

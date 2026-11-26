@@ -18,7 +18,10 @@ import { C, MONO, btn } from "../theme";
 import { SkillsOffPanel, TeamSkillsPanel } from "../components/SkillsOff";
 import { HowItWorks, MachineCommand } from "../components/MachineCommand";
 import { useWorkStarted } from "../workStarted";
+import { localTime } from "../time";
 const TRY_PREFIX = "skill-try.";
+// the example dry run ("see an example dry run", demo.SKILL_TRY): listed as one
+const EXAMPLE_TRY = "skill-try.claude-code.release-helper.example";
 
 // An example skill to check without having one at hand: what a helpful-looking
 // release skill can ask of an agent.
@@ -317,9 +320,12 @@ function DryRuns() {
                   {isOpen ? <ChevronDown size={13} color={C.dim} /> : <ChevronRight size={13} color={C.dim} />}
                   <span style={{ fontSize: 13.5, color: C.text }}>{t.skill}</span>
                   <span style={{ fontFamily: MONO, fontSize: 11, color: C.dim }}>{t.agent}</span>
+                  {n.node_id === EXAMPLE_TRY && (
+                    <span style={{ fontFamily: MONO, fontSize: 10.5, color: C.amber }}>example · not a run of yours</span>
+                  )}
                   <span style={{ flex: 1 }} />
                   <span style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim }}>
-                    {n.reported?.updated_ts?.slice(0, 16).replace("T", " ") ?? ""}
+                    {localTime(n.reported?.updated_ts)}
                   </span>
                 </button>
                 {isOpen && <DryRun nodeId={n.node_id} />}

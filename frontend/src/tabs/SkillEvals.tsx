@@ -10,10 +10,12 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ChevronDown, ChevronRight, Loader2 } from "lucide-react";
 import { api, SkillEval, SkillEvalArm, SkillEvalCompare, SkillEvalSkill, SkillEvalTask } from "../api";
 import { navigate } from "../router";
+import { isGuestToken, useApp } from "../store";
 import { C, MONO, btn } from "../theme";
 import { SkillSwitch, TeamSwitch } from "../components/SkillsOff";
 import { HowItWorks, MachineCommand } from "../components/MachineCommand";
 import { useWorkStarted } from "../workStarted";
+import { localTime } from "../time";
 
 const label: React.CSSProperties = {
   fontFamily: MONO, fontSize: 10.5, color: C.dim, letterSpacing: "0.1em", marginBottom: 8,
@@ -84,7 +86,7 @@ function EvalList() {
               style={{ background: "none", border: "none", borderTop: i ? `1px solid ${C.line}` : "none",
                        cursor: "pointer", textAlign: "left" }}>
               <span style={{ fontFamily: MONO, fontSize: 11, color: C.dim, width: 120 }}>
-                {r.created_ts.slice(0, 16).replace("T", " ")}
+                {localTime(r.created_ts)}
               </span>
               <span className="flex flex-col" style={{ flex: 1, gap: 2 }}>
                 {r.example && <span style={{ fontFamily: MONO, fontSize: 10.5, color: C.amber }}>example</span>}
@@ -129,7 +131,8 @@ function EvalList() {
 function armWords(arm: string): string {
   if (arm === "none") return "without skills";
   if (arm === "all") return "with the skills";
-  return arm.startsWith("only:") ? `only ${arm.slice(5)}` : arm;
+  if (arm.startsWith("only:")) return `only ${arm.slice(5)}`;
+  return arm.startsWith("without:") ? `without ${arm.slice(8)}` : arm;
 }
 
 function short(v: string): string {
@@ -144,18 +147,24 @@ function HowToRun() {
   const [skill, setSkill] = useState("./.claude/skills/my-skill");
   const [prompt, setPrompt] = useState("fix the failing test in tests/");
   const [checkCmd, setCheckCmd] = useState("python -m pytest -q");
-  const [trials, setTrials] = useState(5);
+  // "times each" as typed: a whole number 1–50, or said not to be (QA-027)
+  const [trialsText, setTrialsText] = useState("5");
+  const trials = /^\d{1,2}$/.test(trialsText.trim()) && Number(trialsText) >= 1 && Number(trialsText) <= 50
+    ? Number(trialsText) : null;
   const [picked, setPicked] = useState("");
-  const machines = useQuery({ queryKey: ["machines"], queryFn: api.machines, refetchInterval: 10_000 });
+  // a guest has no account, so no machine: the plane refuses them the list (QA-042)
+  const guest = isGuestToken(useApp((s) => s.apiToken));
+  const machines = useQuery({ queryKey: ["machines"], queryFn: api.machines, refetchInterval: 10_000,
+                              enabled: !guest });
   const mine = (machines.data?.machines ?? []).filter((m) => m.yours && m.online);
   const machine = mine.find((m) => m.machine_id === picked) ?? mine[0];
   const agent = machine?.agents.includes("claude-code") ? "claude-code" : machine?.agents[0] ?? "claude-code";
   const queue = useMutation({
     mutationFn: () => api.queueSkillEval(machine!.machine_id, {
-      skills: [skill], agent, trials, tasks: [{ name: "task-1", prompt, check: checkCmd }] }),
+      skills: [skill], agent, trials: trials!, tasks: [{ name: "task-1", prompt, check: checkCmd }] }),
     onSuccess: () => void qc.invalidateQueries({ queryKey: ["machine-jobs"] }),
   });
-  const ready = !!machine && skill.trim() && prompt.trim() && checkCmd.trim();
+  const ready = !!machine && trials !== null && skill.trim() && prompt.trim() && checkCmd.trim();
   const field = (labelText: string, value: string, set: (v: string) => void, testId: string) => (
     <label className="flex items-center gap-2" style={{ fontFamily: MONO, fontSize: 11, color: C.mut }}>
       <span style={{ width: 110 }}>{labelText}</span>
@@ -177,13 +186,15 @@ function HowToRun() {
         {field("done when", checkCmd, setCheckCmd, "eval-check")}
         <label className="flex items-center gap-2" style={{ fontFamily: MONO, fontSize: 11, color: C.mut }}>
           <span style={{ width: 110 }}>times each</span>
-          <input type="number" min={1} max={50} value={trials} data-testid="eval-trials"
-            onChange={(ev) => setTrials(Math.max(1, Math.min(50, Number(ev.target.value) || 1)))}
-            style={{ width: 70, background: C.bg, border: `1px solid ${C.line}`, borderRadius: 5, color: C.text,
-                     fontFamily: MONO, fontSize: 11.5, padding: "5px 8px", outline: "none" }} />
-          <span style={{ color: C.dim }}>
-            {trials * 2} agent runs on your tokens · 5 each tells a big difference, a small one needs 20+
-          </span>
+          <input inputMode="numeric" value={trialsText} data-testid="eval-trials"
+            onChange={(ev) => setTrialsText(ev.target.value)}
+            style={{ width: 70, background: C.bg, border: `1px solid ${trials === null ? C.red : C.line}`, borderRadius: 5,
+                     color: C.text, fontFamily: MONO, fontSize: 11.5, padding: "5px 8px", outline: "none" }} />
+          {trials === null
+            ? <span style={{ color: C.red }}>a whole number from 1 to 50</span>
+            : <span style={{ color: C.dim }}>
+                {trials * 2} agent runs on your tokens · 5 each tells a big difference, a small one needs 20+
+              </span>}
         </label>
         {mine.length > 0 && (
           <label className="flex items-center gap-2" style={{ fontFamily: MONO, fontSize: 11, color: C.mut }}>
@@ -218,8 +229,9 @@ function HowToRun() {
             no machine of yours is on line · once, in the repository the eval runs in (it stays open and
             runs what you start here — only yours):
           </div>
+          {/* the same install as Connect and Skills give, with the extra the worker needs */}
           <MachineCommand testId="skill-eval-cmd"
-            cmd={"pip install --upgrade 'axor-wrap[eval]'\naxor-wrap worker"} />
+            cmd={"uv tool install --upgrade 'axor-wrap[plane,eval]'\naxor-wrap worker"} />
         </div>
       )}
       <Jobs />
@@ -232,8 +244,9 @@ const ACTIVE = new Set(["queued", "running"]);
 /** The jobs queued from here: how far along, and where the report is. */
 function Jobs() {
   const qc = useQueryClient();
+  const guest = isGuestToken(useApp((s) => s.apiToken));
   const jobs = useQuery({
-    queryKey: ["machine-jobs"], queryFn: api.machineJobs,
+    queryKey: ["machine-jobs"], queryFn: api.machineJobs, enabled: !guest,
     refetchInterval: (q) => ((q.state.data?.jobs ?? []).some((j) => ACTIVE.has(j.state)) ? 3000 : false),
   });
   const cancel = useMutation({
@@ -301,7 +314,7 @@ function EvalView({ evalId }: { evalId: string }) {
         {e.skills.length} skill{e.skills.length === 1 ? "" : "s"}, {e.per_task.length} task{e.per_task.length === 1 ? "" : "s"}
       </h1>
       <div style={{ fontFamily: MONO, fontSize: 11.5, color: C.dim, marginBottom: 18 }}>
-        {e.agent}{e.model ? ` · ${e.model}` : ""} · {e.arms.length} ways × {trials} times each · {e.created_ts.slice(0, 16).replace("T", " ")}
+        {e.agent}{e.model ? ` · ${e.model}` : ""} · {e.arms.length} ways × {trials} times each · {localTime(e.created_ts)}
         {e.example && <span style={{ color: C.amber }}> · example: a scripted agent, not a real run</span>}
       </div>
 

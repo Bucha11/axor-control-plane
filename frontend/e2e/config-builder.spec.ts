@@ -218,6 +218,42 @@ test.describe("config builder", () => {
     await expect(page.getByRole("button", { name: /add the tools by hand instead/ })).toBeVisible();
   });
 
+  test("max tool calls: an invalid value is said so, never taken as no limit (QA-023)", async ({ page }) => {
+    await goHash(page, "config-builder");
+    await page.getByRole("button", { name: /add the tools by hand instead/ }).click();
+    await page.getByRole("button", { name: "Add tool" }).click();
+    await page.getByPlaceholder("tool name ⏎").fill("read_inbox");
+    await page.getByPlaceholder("tool name ⏎").press("Enter");
+    await page.getByRole("button", { name: /limit tool calls/ }).click();
+    const cap = page.getByPlaceholder("unlimited");
+    const see = page.getByRole("button", { name: /See what gets refused/ });
+    await cap.fill("25");
+    await expect(page.getByText("past this, every call in the run is refused")).toBeVisible();
+    for (const bad of ["0", "-5", "3.7", "999999999999999999999"]) {
+      await cap.fill(bad);
+      await expect(cap).toHaveValue(bad);   // the field keeps what was typed
+      await expect(page.getByText("a whole number from 1 to 1,000,000 — or empty for no limit")).toBeVisible();
+      await expect(see).toBeDisabled();
+    }
+    await cap.fill("");
+    await expect(page.getByText("empty = no limit")).toBeVisible();
+    await expect(see).toBeEnabled();
+  });
+
+  test("a tool name longer than the plane keeps: the field says the limit, the row wraps (QA-024)", async ({ page }) => {
+    await goHash(page, "config-builder");
+    await page.getByRole("button", { name: /add the tools by hand instead/ }).click();
+    await page.getByRole("button", { name: "Add tool" }).click();
+    const name = page.getByPlaceholder("tool name ⏎");
+    await name.fill("t".repeat(5000));
+    expect((await name.inputValue()).length).toBe(200);
+    await expect(page.getByText("at most 200 characters")).toBeVisible();
+    await name.press("Enter");
+    await expect(page.getByTestId(`policy-tool-${"t".repeat(200)}`)).toBeVisible();
+    const wide = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
+    expect(wide).toBeLessThanOrEqual(0);
+  });
+
   test("per tool: which arguments decide, and how bad if it goes wrong", async ({ page }) => {
     await goHash(page, "config-builder");
     await page.getByTestId("wrap-files").setInputFiles([

@@ -8,6 +8,7 @@ import { api, CodingException, CodingRules } from "../api";
 import { C, MONO, btn } from "../theme";
 import { errorWords } from "../refusal";
 import { useCanAdmin, useMay } from "../team";
+import { localTime } from "../time";
 
 export default function CodingPolicy() {
   const qc = useQueryClient();
@@ -99,7 +100,7 @@ export default function CodingPolicy() {
         ) : (
           <span style={{ color: C.dim }}>an owner or admin changes the team's policy</span>
         )}
-        {d?.set && <span style={{ color: C.dim }}>the team's policy · by {d.by || "—"} · {d.ts.slice(0, 16).replace("T", " ")}</span>}
+        {d?.set && <span style={{ color: C.dim }}>the team's policy · by {d.by || "—"} · {localTime(d.ts)}</span>}
         {save.isSuccess && <span style={{ color: C.green }}>saved — every sidecar picks it up within a minute</span>}
         {save.isError && <span style={{ color: C.red }}>{errorWords((save.error as Error).message)}</span>}
       </div>

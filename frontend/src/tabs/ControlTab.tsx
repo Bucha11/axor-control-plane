@@ -182,6 +182,8 @@ function SpawnGoverned({ switchToAdapter }: { switchToAdapter?: boolean }) {
       if (switchToAdapter) connect("adapter");
       await qc.invalidateQueries({ queryKey: ["nodes"] });
       await qc.invalidateQueries({ queryKey: ["topology"] });
+      // the cards' "last active" and the 24h totals read the run just seeded
+      await qc.invalidateQueries({ queryKey: ["fleet"] });
     },
     onError: (e: Error) => setErr(e.message),
   });
@@ -257,7 +259,9 @@ export function ExampleFleet({ compact = false }: { compact?: boolean }) {
   const seed = useMutation({
     mutationFn: api.seedFleet,
     onSuccess: () => {
-      for (const key of ["nodes", "topology", "probe-report", "repair", "reputation"]) {
+      // "fleet" too: until it is read again the cards fell back to the seeding
+      // time and the 24h totals to nothing, beside a feed of the run (QA-039)
+      for (const key of ["nodes", "topology", "probe-report", "repair", "reputation", "fleet"]) {
         void qc.invalidateQueries({ queryKey: [key] });
       }
     },
@@ -960,7 +964,12 @@ function ControlBody({ focusNode, testBench }: { focusNode?: string; testBench: 
               type="number"
               min={0}
               value={budgetInput}
-              onChange={(e) => setBudgetInput(e.target.value)}
+              onChange={(e) => {
+                setBudgetInput(e.target.value);
+                // a fixed value takes the complaint away; one the field cannot
+                // hold (1e309) reads as empty, so say why apply is off (QA-034)
+                setCmdError(e.target.validity.badInput ? "cap must be a whole number of calls, like 50" : null);
+              }}
               placeholder={isCodingNode(node) ? "N more calls" : "set / lower"}
               aria-label="budget"
               disabled={stopped || command.isPending}
@@ -1542,8 +1551,17 @@ function StatusChips({ units, filter, setFilter }: {
   return (
     <div className="flex gap-2 flex-wrap mb-2" data-testid="status-chips">
       {chip("all", "all", units.length, C.text)}
-      {(["needs_you", "running", "paused", "stopped", "idle"] as Status[]).map((s) =>
+      {chip("needs_you", STATUS_LABEL.needs_you, count("needs_you"), STATUS_COLOR.needs_you)}
+      {/* "needs you" is on top of what an agent is doing, so the counts add
+          up to more than all: said, not left to look like a miscount (QA-039) */}
+      <span aria-hidden="true" style={{ borderLeft: `1px solid ${C.line}`, margin: "2px 2px" }} />
+      {(["running", "paused", "stopped", "idle"] as Status[]).map((s) =>
         chip(s, STATUS_LABEL[s], count(s), STATUS_COLOR[s]))}
+      {count("needs_you") > 0 && (
+        <span data-testid="chips-overlap" style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim, alignSelf: "center" }}>
+          an agent that needs you is counted in its state too
+        </span>
+      )}
     </div>
   );
 }

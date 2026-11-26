@@ -67,15 +67,15 @@ class WebhookRefused(BackendError):
 # configured). What is refused UNCONDITIONALLY is the set no deployment has a
 # legitimate reason to webhook: non-HTTP schemes, and the link-local range that
 # carries the cloud metadata services (169.254.169.254 and its v6 equivalent).
-BLOCK_PRIVATE_ENV = "AXOR_WEBHOOK_BLOCK_PRIVATE"
 _ALLOWED_SCHEMES = frozenset({"http", "https"})
 
 
+# The refusals below reach the person typing the address (Settings → alerts),
+# so they say what is wrong with it in words: no resolver errno, and no
+# deployment setting they cannot change (QA-018).
 def _refuse(host: str, address: object, why: str) -> None:
-    raise WebhookRefused(
-        f"webhook host {host!r} resolves to {address} ({why}) — the "
-        f"notification channel must not be usable to reach it."
-    )
+    where = host if host == str(address) else f"{host} points at {address}, which"
+    raise WebhookRefused(f"{where} is {why}")
 
 
 def check_webhook_url(url: str, block_private: bool = False) -> None:
@@ -93,33 +93,30 @@ def check_webhook_url(url: str, block_private: bool = False) -> None:
     """
     parsed = urlparse(url)
     if parsed.scheme not in _ALLOWED_SCHEMES:
-        raise WebhookRefused(f"webhook scheme {parsed.scheme!r} is not http/https")
+        raise WebhookRefused("a webhook address starts with https:// or http://"
+                             + (f" — not {parsed.scheme}:" if parsed.scheme else ""))
     host = parsed.hostname
     if not host:
-        raise WebhookRefused("webhook URL has no host")
+        raise WebhookRefused("the webhook address has no host name after https://")
     try:
         infos = socket.getaddrinfo(host, parsed.port or 0, proto=socket.IPPROTO_TCP)
     except socket.gaierror as exc:
         if block_private:
             raise WebhookRefused(
-                f"webhook host {host!r} does not resolve: {exc}"
+                f"no such host: {host} — check the webhook address"
             ) from exc
         return
     for info in infos:
         address = ipaddress.ip_address(info[4][0])
         if address.is_link_local:
-            _refuse(host, address, "link-local; this range carries the cloud "
-                                   "metadata service")
+            _refuse(host, address, "a link-local address (where a cloud "
+                                   "server's metadata service answers) — alerts "
+                                   "are never sent there")
         if address.is_reserved or address.is_unspecified:
-            _refuse(host, address, "a reserved address")
+            _refuse(host, address, "a reserved address — alerts are never sent there")
         if block_private and (address.is_loopback or address.is_private):
-            raise WebhookRefused(
-                f"webhook host {host!r} resolves to the non-public address "
-                f"{address}. This deployment blocks internal targets because "
-                f"registering a webhook here crosses a privilege boundary. "
-                f"Unset {BLOCK_PRIVATE_ENV} only if every principal that can "
-                f"subscribe is also the infrastructure operator."
-            )
+            _refuse(host, address, "an address inside a private network — this "
+                                   "plane sends alerts only to public addresses")
 
 
 TRIGGERS = frozenset({
@@ -301,8 +298,7 @@ class Notifier:
             # unconfigured: its deliveries then dead-letter where Settings shows
             # them, instead of the subscription vanishing without a word.
             if self._mailer is None and not boot:
-                raise ValueError("this deployment does not send mail (AXOR_SMTP_URL "
-                                 "is unset) — use a webhook")
+                raise ValueError("this plane does not send mail — use a webhook")
             return
         check_webhook_url(url, self._block_private)
 

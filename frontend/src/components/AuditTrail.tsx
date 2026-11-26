@@ -7,6 +7,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, type AuditItem, type Hold } from "../api";
 import { C, MONO, btn } from "../theme";
 import { errorWords } from "../refusal";
+import { localTime } from "../time";
 
 // an act, as a person says it
 const WORDS: Record<string, string> = {
@@ -344,7 +345,7 @@ export default function AuditTrail() {
         {(q.data?.items ?? []).map((it, i) => (
           <div key={it.id} data-testid="audit-row" className="px-3 py-1.5 flex gap-2 flex-wrap"
             style={{ borderTop: i === 0 ? "none" : `1px solid ${C.line}`, fontSize: 11 }}>
-            <span style={{ color: C.dim, width: 128 }}>{it.ts.slice(0, 16).replace("T", " ")}</span>
+            <span style={{ color: C.dim, width: 128 }}>{localTime(it.ts)}</span>
             <span style={{ color: C.text }}>{it.who || "—"}</span>
             <span>{WORDS[it.action] ?? it.action}</span>
             {it.target && (
