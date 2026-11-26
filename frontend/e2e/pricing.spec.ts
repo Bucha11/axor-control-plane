@@ -128,3 +128,20 @@ test("back and forward move the tabs with the URL (QA-009)", async ({ page }) =>
   await page.goForward();
   await expect(page.getByTestId("tier-coding")).toHaveCount(0);
 });
+
+test("the Connect copy and the Enterprise floor quote the same prices as the cards (QA-012)", async ({ page }) => {
+  await goHash(page, "pricing?for=production");
+  // the floor is Security's fleet: 50 nodes, $50 past them — not 10 and $75
+  const floor = page.getByTestId("enterprise-floor");
+  await expect(floor).toContainText("Control Plane for 50 governed nodes");
+  await expect(floor).toContainText("Additional governed nodes: $50 / node / month");
+  await expect(page.getByTestId("tier-security")).toContainText("+$50 / governed node / mo beyond 50");
+  // Team includes no developers: each is a $40 Business seat, as its card says
+  await setConnection(page, { mode: "none" });
+  await page.route("**/v1/plane/nodes", (route) => route.fulfill({ json: [] }));
+  await goHash(page, "connect?for=both");
+  const free = page.getByTestId("coding-free");
+  await expect(free).toContainText("Team Workspace, $299 / month: 10 production agents");
+  await expect(free).toContainText("Business seat on top, $40");
+  await expect(free).not.toContainText("$25");
+});

@@ -15,7 +15,7 @@ import Coach from "../components/Coach";
 import Tabs from "../components/Tabs";
 import { LAB_SHIPPED } from "../flags";
 import { navigate, useRoute } from "../router";
-import { ADDS, quotes, RUNG_NAME, type Rung } from "../quote";
+import { ADDS, CARD, quotes, RUNG_NAME, type Rung } from "../quote";
 import { openCheckout, paddlePrice } from "../paddle";
 import { isGuestToken, useApp } from "../store";
 
@@ -506,7 +506,7 @@ export default function Pricing() {
           team has nothing to read in it. */}
       {journey !== "coding" && (<>
       <div
-        className="mt-6 p-4"
+        className="mt-6 p-4" data-testid="enterprise-floor"
         style={{ background: C.panel2, border: `1px solid ${C.line}`, borderRadius: 10 }}
       >
         <div style={{ fontFamily: MONO, fontSize: 12, fontWeight: 700, color: C.text, marginBottom: 6 }}>
@@ -515,9 +515,10 @@ export default function Pricing() {
         <div style={{ fontFamily: MONO, fontSize: 10.5, color: C.mut, lineHeight: 1.7 }}>
           Security Workspace · up to 10 users · self-hosted / VPC runner · scheduled regression CI ·
           incident-to-regression workflows · approvals + audit history · policy comparison · SSO / RBAC ·
-          compliance exports · Control Plane for 10 governed nodes · standard support.
+          compliance exports · Control Plane for {CARD.security.nodes} governed nodes · standard support.
           <br />
-          Additional governed nodes: $75 / node / month · premium support: +$10k / year · air-gapped: custom.
+          {/* it is Security's fleet: the same nodes and rate as that card (QA-012) */}
+          Additional governed nodes: ${CARD.security.perNode} / node / month · premium support: +$10k / year · air-gapped: custom.
         </div>
       </div>
 
