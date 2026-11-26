@@ -17,7 +17,7 @@ test.describe.serial("governance on the example fleet", () => {
     const fold = page.getByRole("button", { name: "example agents ▾" });
     const load = page.getByRole("button", { name: "Load an example fleet" }).first();
     const tree = page.getByText("tree-orch").first();
-    await expect(fold.or(load).or(tree)).toBeVisible();
+    await expect(fold.or(load).or(tree).first()).toBeVisible();
     if (await fold.isVisible()) await fold.click();
     if (await load.isVisible()) await load.click();
     await page.getByRole("button", { name: "graph", exact: true }).click();
