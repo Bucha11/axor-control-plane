@@ -104,6 +104,28 @@ test.describe("onboarding", () => {
     await resetPolicy(request);
   });
 
+  test("a found tool's address: the same http(s) rule as the add row (QA-015)", async ({ page, request }) => {
+    await resetPolicy(request);
+    // a tool the scanner found comes without an address
+    await page.addInitScript(() => {
+      const raw = JSON.parse(localStorage.getItem("axor-app") ?? '{"state":{},"version":0}');
+      raw.state.toolPolicy = { found_tool: { klass: "read", outside: false } };
+      localStorage.setItem("axor-app", JSON.stringify(raw));
+    });
+    await goHash(page, "connect?for=production");
+    await page.getByTestId("prod-way-proxy").click();
+    const where = page.getByLabel("where found_tool lives");
+    await where.fill("not a url");
+    await where.press("Enter");
+    await expect(page.getByTestId("guard-tool-url-error-found_tool")).toContainText("not an http:// or https:// address");
+    await expect(where).toBeVisible();
+    await where.fill("https://found.example/api");
+    await where.press("Enter");
+    await expect(page.getByTestId("guard-tool-url-error-found_tool")).toHaveCount(0);
+    await expect(page.getByTestId("guard-tool-found_tool")).toContainText("https://found.example/api");
+    await resetPolicy(request);
+  });
+
   test("a test run's tools: the same checks, the same encoding (QA-015)", async ({ page, request }) => {
     await resetPolicy(request);
     await goHash(page, "get-started");

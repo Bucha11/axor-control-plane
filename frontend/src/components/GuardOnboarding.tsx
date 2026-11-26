@@ -95,6 +95,8 @@ export default function GuardOnboarding() {
     ({ name, url: c.url ?? "", klass: c.klass, outside: c.outside }));
   const [draft, setDraft] = useState({ name: "", url: "" });
   const [draftError, setDraftError] = useState<string | null>(null);
+  // a found tool's address, refused as typed: the same http(s) rule as the add row
+  const [urlError, setUrlError] = useState<{ name: string; error: string } | null>(null);
   const [savedManifests, setSavedManifests] = useState(false);
   // remembered: coming back here from Policy to put new rules to work must not
   // quietly start a second agent under "agent-1"
@@ -146,6 +148,14 @@ export default function GuardOnboarding() {
     setToolClass(name, rest);
     setSavedManifests(false);
   };
+  const setUrl = (i: number, name: string, raw: string) => {
+    const url = raw.trim();
+    if (!url) return;
+    const error = toolDraftError(name, url, []);
+    setUrlError(error ? { name, error } : null);
+    if (!error) patch(i, { url });
+  };
+
   const missingUrl = tools.filter((t) => !t.url).map((t) => t.name);
 
   const run = [
@@ -190,9 +200,13 @@ export default function GuardOnboarding() {
               <span style={{ color: C.dim, flex: 1, ...wrapAnywhere, minWidth: 160 }}>{t.url}</span>
             ) : (
               <input placeholder="where it lives: https://… ⏎" aria-label={`where ${t.name} lives`}
-                onKeyDown={(e) => { if (e.key === "Enter" && e.currentTarget.value.trim()) patch(i, { url: e.currentTarget.value.trim() }); }}
-                onBlur={(e) => { if (e.currentTarget.value.trim()) patch(i, { url: e.currentTarget.value.trim() }); }}
+                onKeyDown={(e) => { if (e.key === "Enter") setUrl(i, t.name, e.currentTarget.value); }}
+                onBlur={(e) => setUrl(i, t.name, e.currentTarget.value)}
                 style={{ ...input, flex: 1, minWidth: 160, borderColor: C.amber }} />
+            )}
+            {urlError?.name === t.name && (
+              <span data-testid={`guard-tool-url-error-${t.name}`}
+                style={{ color: C.red, flexBasis: "100%", ...wrapAnywhere }}>{urlError.error}</span>
             )}
             <select value={t.klass} onChange={(e) => patch(i, { klass: e.target.value as Klass })}
               aria-label={`what ${t.name} does`} style={{ ...input, fontSize: 11, padding: "3px 6px" }}>
