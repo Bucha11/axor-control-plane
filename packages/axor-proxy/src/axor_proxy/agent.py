@@ -41,9 +41,14 @@ def default_claim(faults: list[dict[str, Any]]) -> dict[str, Any]:
 class ScriptedAgent:
     """Drives a run to completion over the proxy's own HTTP surface."""
 
-    def __init__(self, base_url: str, client: httpx.AsyncClient) -> None:
+    def __init__(self, base_url: str, client: httpx.AsyncClient,
+                 control_token: str | None = None) -> None:
         self._base = base_url.rstrip("/")
         self._client = client
+        # The claim goes to this proxy's own control surface (/axor/...), which
+        # a proxy with AXOR_PROXY_TOKEN guards: without the token the claim was
+        # refused and the in-app experiment never finished (QA-002).
+        self._control = {"Authorization": f"Bearer {control_token}"} if control_token else {}
 
     async def run(
         self, run_id: str, script: list[dict], claim: dict[str, Any]
@@ -60,6 +65,6 @@ class ScriptedAgent:
                          "X-Axor-Run": run_id},
             )
         resp = await self._client.post(
-            f"{self._base}/axor/runs/{run_id}/claim", json=claim
+            f"{self._base}/axor/runs/{run_id}/claim", json=claim, headers=self._control,
         )
         return resp.json()

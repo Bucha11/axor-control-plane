@@ -742,6 +742,8 @@ export interface TeamSkill {
             check: { summary: { danger: number; warn: number; info: number };
                      findings: { severity: string; what: string; where: string; snippet: string }[] } | null };
   live: { version: string; by: string; ts: string } | null;
+  // the product's example ("see an example"): never turned on for a team
+  example?: boolean;
 }
 
 /** A coding-agent setup health check, as axor_eval.setup_health posts it. */
@@ -865,8 +867,42 @@ export interface LabDeploySummary {
   source: { bundle_id?: string; condition_id?: string };
 }
 
+/** A request the plane refused, said as a person reads it. The message is the
+ *  plane's own sentence (`detail`), never the raw body: `403 {"detail": …}`
+ *  reached the screen as JSON on many pages (QA run 2026-11-27). `status` and
+ *  `code` (`account_required`, `plan_required`, …) are for code to branch on. */
+export class ApiError extends Error {
+  constructor(readonly status: number, readonly code: string, message: string) {
+    super(message);
+    this.name = "ApiError";
+  }
+}
+
+export function apiError(status: number, text: string): ApiError {
+  let code = "";
+  let words = "";
+  try {
+    const body = JSON.parse(text) as { detail?: unknown; error?: unknown };
+    const d = body.detail;
+    if (typeof body.error === "string") code = body.error;
+    if (typeof d === "string") words = d;
+    else if (Array.isArray(d)) {
+      // a validation error: what was wrong with each field, not the input back
+      words = d.map((x) => (x && typeof x === "object" && "msg" in x ? String((x as { msg: unknown }).msg) : ""))
+        .filter(Boolean).join("; ").replace(/^Value error,\s*/i, "");
+    } else if (d && typeof d === "object") {
+      const o = d as { code?: unknown; error?: unknown; detail?: unknown; message?: unknown };
+      code = String(o.code ?? o.error ?? code ?? "");
+      words = String(o.detail ?? o.message ?? "");
+    }
+    if (!words && typeof body.error === "string") words = body.error.replace(/_/g, " ");
+  } catch { /* not JSON */ }
+  if (!words) words = text.trim().slice(0, 300) || `the request failed (HTTP ${status})`;
+  return new ApiError(status, code, words.length > 600 ? `${words.slice(0, 600)}…` : words);
+}
+
 async function j<T>(resp: Response): Promise<T> {
-  if (!resp.ok) throw new Error(`${resp.status} ${await resp.text()}`);
+  if (!resp.ok) throw apiError(resp.status, await resp.text());
   return resp.json() as Promise<T>;
 }
 
@@ -874,6 +910,37 @@ async function j<T>(resp: Response): Promise<T> {
 // time and sent as the bearer. When auth is off it is empty and omitted.
 function apiToken(): string {
   return useApp.getState().apiToken;
+}
+
+/** Whose workspace a demo node, tree or run the proxy uploads belongs to: the
+ *  page's own sign-in (or guest) token, which the proxy uploads with (QA-001). */
+function uploadAs(): Record<string, string> {
+  return apiToken() ? { "X-Axor-Upload-Token": apiToken() } : {};
+}
+
+async function scopeRefusal(resp: Response): Promise<boolean> {
+  try {
+    return ((await resp.clone().json()) as { error?: unknown }).error === "forbidden";
+  } catch {
+    return false;
+  }
+}
+
+/** A command the plane refused for its signature, said with what to do: the
+ *  raw "no operator keys registered" left an operator nowhere to go (QA-003). */
+function commandRefusal(e: unknown): unknown {
+  if (!(e instanceof ApiError) || e.status !== 403) return e;
+  if (/no operator keys registered/.test(e.message)) {
+    return new ApiError(403, "operator_key_needed",
+      "this workspace signs every command, and it has no operator key yet — an owner or admin "
+      + "makes one for this browser in Settings → workspace → operator keys");
+  }
+  if (/sig_invalid|unknown operator|operator=/.test(e.message)) {
+    return new ApiError(403, "operator_key_unknown",
+      "this browser's operator key is not one the workspace knows — register it in "
+      + "Settings → workspace → operator keys");
+  }
+  return e;
 }
 
 // Authed fetch: merges the Authorization header into any request. When an
@@ -894,11 +961,15 @@ async function af(path: string, init: RequestInit = {}, retried = false): Promis
   if (resp.status === 401 && !retried && token.startsWith("gs_") && (await renewGuest(token))) {
     return af(path, init, true);
   }
-  // Something the user DID was refused: their role may have changed since this
-  // access token was issued (an owner made them a member). The refresh reads
-  // the role afresh; one retry, never for a background read.
+  // Something the user DID was refused for their ROLE: it may have changed
+  // since this access token was issued (an owner made them a member). The
+  // refresh reads the role afresh; one retry, never for a background read.
+  // Only a scope refusal ({"error": "forbidden"}) — any other 403 is the
+  // plane's answer on the merits (a malformed license, no operator key), and
+  // retrying it sent every such request twice (QA-019).
   if (resp.status === 403 && !retried && (init.method ?? "GET").toUpperCase() !== "GET"
-      && useApp.getState().refreshToken && (await refreshSession(null))) {
+      && useApp.getState().refreshToken && (await scopeRefusal(resp))
+      && (await refreshSession(null))) {
     return af(path, init, true);
   }
   // only for something the user DID: a panel's background read that needs an
@@ -912,6 +983,14 @@ async function af(path: string, init: RequestInit = {}, retried = false): Promis
 // ── hosted guest sessions ─────────────────────────────────────────────────────
 
 let renewing: Promise<boolean> | null = null;
+// Seconds the plane asked a refused guest to wait (429 Retry-After), or 0.
+let guestWait = 0;
+
+/** How long the plane asked to wait before the next guest session, after the
+ *  last attempt was refused for too many from this address; 0 when it was not. */
+export function guestRetryAfter(): number {
+  return guestWait;
+}
 
 /** Start a guest session (hosted plane, AXOR_GUEST_SESSIONS). False when the
  * deployment offers none or is full. One at a time. */
@@ -920,6 +999,7 @@ export async function startGuest(stale?: string): Promise<boolean> {
   if (!renewing) {
     renewing = fetch("/v1/auth/guest", { method: "POST" })
       .then(async (r) => {
+        guestWait = r.status === 429 ? Number(r.headers.get("retry-after")) || 60 : 0;
         if (!r.ok) return false;
         const g = (await r.json()) as { token: string; expires_at: string };
         useApp.getState().setGuest(g.token, g.expires_at);
@@ -1482,7 +1562,7 @@ export const api = {
           payload_sha256: string; granted: boolean; ts: string }[]>(r)),
 
   spawnGovernedTree: () =>
-    af("/axor/governed/spawn-tree", { method: "POST" }).then((r) =>
+    af("/axor/governed/spawn-tree", { method: "POST", headers: uploadAs() }).then((r) =>
       j<{ run_id: string; nodes: Record<string, string>; denials: number; events: number }>(r)),
 
   // The canned 4-node tree, straight into the plane — no proxy involved. It is
@@ -1529,7 +1609,8 @@ export const api = {
       body: JSON.stringify({ version, state, operator: signed?.operator ?? "op_ui", timestamp,
                              sig: signed?.sig ?? "" }),
     });
-    return j<{ node_id: string; version: number; state: Record<string, unknown> }>(r);
+    return j<{ node_id: string; version: number; state: Record<string, unknown> }>(r)
+      .catch((e: unknown) => { throw commandRefusal(e); });
   },
   // `mustRefuse` names the calls a must_block pin holds — needed when the run
   // was recorded ungoverned and refused nothing (else it can't be checked)
@@ -2177,7 +2258,7 @@ export const api = {
 
   // ── governed node: a real axor-core IntentLoop wired to the plane ──────────
   spawnGoverned: () =>
-    af("/axor/governed/spawn", { method: "POST" }).then(
+    af("/axor/governed/spawn", { method: "POST", headers: uploadAs() }).then(
       (r) => j<{ node_id: string; run_id: string; events: number; denials: number; ttl_seconds: number }>(r),
     ),
 

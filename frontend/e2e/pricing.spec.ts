@@ -116,3 +116,15 @@ test("a hosted guest is told to sign in, not handed a link that does nothing", a
   await expect(page.getByTestId("tier-coding").getByTestId("card-needs-org"))
     .toContainText("sign up or sign in to pay by card");
 });
+
+test("back and forward move the tabs with the URL (QA-009)", async ({ page }) => {
+  await goHash(page, "pricing?for=coding");
+  await expect(page.getByTestId("tier-coding")).toBeVisible();
+  await goHash(page, "pricing?for=production");
+  await expect(page.getByTestId("tier-coding")).toHaveCount(0);
+  await page.goBack();
+  await expect(page).toHaveURL(/for=coding/);
+  await expect(page.getByTestId("tier-coding")).toBeVisible();
+  await page.goForward();
+  await expect(page.getByTestId("tier-coding")).toHaveCount(0);
+});

@@ -179,3 +179,18 @@ test.describe("one record of what the tools do", () => {
     await expect(page.getByTestId("guard-tool-web_search")).toBeVisible();
   });
 });
+
+test("back and forward move between the ways in with the URL (QA-009)", async ({ page }) => {
+  await goHash(page, "connect?for=coding");
+  await expect(page.getByTestId("journey-chooser")).toHaveCount(0);
+  await goHash(page, "connect");
+  await expect(page.getByTestId("journey-chooser")).toBeVisible();
+  await goHash(page, "connect?for=production");
+  await expect(page.getByTestId("journey-chooser")).toHaveCount(0);
+  await page.goBack();
+  await expect(page).toHaveURL(/#\/connect$/);
+  await expect(page.getByTestId("journey-chooser")).toBeVisible();
+  await page.goBack();
+  await expect(page).toHaveURL(/for=coding/);
+  await expect(page.getByTestId("journey-chooser")).toHaveCount(0);
+});

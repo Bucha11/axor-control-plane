@@ -11,7 +11,7 @@
 import { useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ChevronDown, ChevronRight, Circle, Loader2, Play, Upload } from "lucide-react";
-import { api, KernelEvent, SkillReport } from "../api";
+import { api, ApiError, KernelEvent, SkillReport } from "../api";
 import { navigate } from "../router";
 import { refusalWords } from "../refusal";
 import { C, MONO, btn } from "../theme";
@@ -119,7 +119,7 @@ function CheckSkill() {
   const [err, setErr] = useState<string | null>(null);
   const check = useMutation({
     mutationFn: (picked: { path: string; content: string }[]) => api.skillCheck(picked),
-    onError: (e: Error) => setErr(e.message.startsWith("501")
+    onError: (e: Error) => setErr(e instanceof ApiError && e.status === 501
       ? "this plane's axor-wrap cannot check skills yet — run `axor-wrap skill check ./my-skill` on your machine"
       : e.message),
     onSuccess: () => setErr(null),

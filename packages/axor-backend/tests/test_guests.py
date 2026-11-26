@@ -187,3 +187,15 @@ async def test_a_guest_still_reads_and_exports_its_own_runs(client: httpx.AsyncC
     g = _bearer((await client.post("/v1/auth/guest")).json()["token"])
     assert (await client.get("/v1/runs", headers=g)).status_code == 200
     assert (await client.get("/v1/runs/nope/cases/0/export", headers=g)).status_code != 403
+
+
+async def test_too_many_from_one_address_says_when_to_try_again(client: httpx.AsyncClient) -> None:
+    """The page waits that long and tries again (QA-008) — a 429 with no
+    Retry-After left every screen failing on a missing token."""
+    from axor_backend.guests import PER_IP_PER_MIN
+
+    for _ in range(PER_IP_PER_MIN):
+        assert (await client.post("/v1/auth/guest")).status_code == 201
+    r = await client.post("/v1/auth/guest")
+    assert r.status_code == 429
+    assert 1 <= int(r.headers["retry-after"]) <= 61

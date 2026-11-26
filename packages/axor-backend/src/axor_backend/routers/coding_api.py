@@ -291,7 +291,10 @@ def _team_row(t: dict) -> dict:
             "latest": {k: latest.get(k) for k in ("version", "by", "ts", "check")}
             | {"files": [f["path"] for f in latest["files"]]},
             "live": {k: live.get(k) for k in ("version", "by", "ts")} if live else None,
-            "skill_md": skill_md[:4000]}
+            "skill_md": skill_md[:4000],
+            # the product's example, seeded by "see an example": shown as one,
+            # and never turned on for a team (QA-005)
+            "example": bool(latest.get("example"))}
 
 
 def _by(principal: object) -> str:
@@ -332,6 +335,11 @@ async def _set_team(name: str, on: bool, request: Request, principal: object,
     if shared is None:
         raise HTTPException(404, f"no skill '{name}' was shared — `axor-wrap skill share "
                                  "<folder>` uploads one")
+    if on and shared["latest"].get("example"):
+        # Turning it on would hand the product's example to every developer's
+        # agent in the workspace — a click in a demo changing the real team.
+        raise HTTPException(409, f"'{name}' is the product's example, not a skill of your team's "
+                                 "— share your own with `axor-wrap skill share <folder>`")
     if on and name in await _off(request):
         raise HTTPException(409, f"'{name}' is turned off for the team — turn it back on "
                                  "before sharing it")

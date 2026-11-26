@@ -8,7 +8,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Check, ExternalLink, FlaskConical, Play, Share2 } from "lucide-react";
 import { KeepAsTest } from "./AccountAction";
 import { LAB_SHIPPED } from "../flags";
-import { api, EvidenceCaseDto } from "../api";
+import { api, ApiError, EvidenceCaseDto } from "../api";
 import CausalSubgraph from "./CausalSubgraph";
 import { navigate } from "../router";
 import { C, MONO } from "../theme";
@@ -32,7 +32,8 @@ export function deviationHeadline(c: EvidenceCaseDto): string {
 // decision, not a styling change.
 /** A guest hit an account-only action: the app's sign-up prompt has it. */
 function needsAccount(err: unknown): boolean {
-  return err instanceof Error && err.message.includes("account_required");
+  return err instanceof ApiError ? err.code === "account_required"
+    : err instanceof Error && err.message.includes("account_required");
 }
 
 export function render(value: unknown): string {

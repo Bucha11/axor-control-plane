@@ -173,7 +173,7 @@ function SpawnGoverned({ switchToAdapter }: { switchToAdapter?: boolean }) {
       await qc.invalidateQueries({ queryKey: ["nodes"] });
       await qc.invalidateQueries({ queryKey: ["topology"] });
     },
-    onError: (e: Error) => setErr(`${e.message} — is the proxy running with a backend URL?`),
+    onError: (e: Error) => setErr(e.message),
   });
   const seedTree = useMutation({
     mutationFn: () => api.seedTreeRun(),
@@ -193,7 +193,7 @@ function SpawnGoverned({ switchToAdapter }: { switchToAdapter?: boolean }) {
       await qc.invalidateQueries({ queryKey: ["nodes"] });
       await qc.invalidateQueries({ queryKey: ["topology"] });
     },
-    onError: (e: Error) => setErr(`${e.message} — is the proxy running with a backend URL?`),
+    onError: (e: Error) => setErr(e.message),
   });
   return (
     <div className="mt-3" data-tour="spawn">

@@ -85,3 +85,19 @@ async def test_example_shared_skill(client: httpx.AsyncClient) -> None:
     await client.post("/v1/demo/seed-team-skill")
     team = (await client.get("/v1/coding/skills")).json()["team"]
     assert [t["name"] for t in team] == ["changelog-entries"] and team[0]["live"] is None
+
+
+async def test_the_products_example_is_never_turned_on_for_a_team(
+        client: httpx.AsyncClient) -> None:
+    """'See an example' seeds a shared skill; turning it on would hand the
+    product's example to every developer's agent in the workspace (QA-005)."""
+    assert (await client.post("/v1/demo/seed-team-skill")).status_code == 200
+    team = (await client.get("/v1/coding/skills")).json()["team"]
+    assert [t["example"] for t in team if t["name"] == "changelog-entries"] == [True]
+    r = await client.put("/v1/coding/skills/changelog-entries", json={"team": True})
+    assert r.status_code == 409 and "example" in r.json()["detail"]
+    assert (await _policy(client))["skills_team"] == []
+    # the team's own upload under that name is the team's, and may be turned on
+    await _share(client)
+    r = await client.put("/v1/coding/skills/changelog-entries", json={"team": True})
+    assert r.status_code == 200

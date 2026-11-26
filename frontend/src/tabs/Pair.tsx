@@ -9,7 +9,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Check, Copy } from "lucide-react";
-import { api, PairControl, PairFeed, PairNote, PairStep, streamPair } from "../api";
+import { api, ApiError, PairControl, PairFeed, PairNote, PairStep, streamPair } from "../api";
 import { navigate } from "../router";
 import { C, MONO, btn } from "../theme";
 import { HowItWorks } from "../components/MachineCommand";
@@ -50,6 +50,7 @@ function remember(token: string, labelText: string): void {
 
 /** "403 {"detail": {"code": …, "detail": …}}" → its code and words. */
 function problem(e: unknown): { status: number; code: string; words: string } {
+  if (e instanceof ApiError) return { status: e.status, code: e.code, words: e.message };
   const msg = e instanceof Error ? e.message : String(e);
   const status = Number(msg.slice(0, 3)) || 0;
   try {

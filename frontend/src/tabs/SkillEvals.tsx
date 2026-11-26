@@ -307,7 +307,7 @@ function EvalView({ evalId }: { evalId: string }) {
 
       <div style={label}>PER SKILL</div>
       <div className="flex flex-col gap-3 mb-8">
-        {e.per_skill.map((s) => <SkillCard key={s.skill} s={s} single={e.skills.length === 1} />)}
+        {e.per_skill.map((s) => <SkillCard key={s.skill} s={s} single={e.skills.length === 1} example={!!e.example} />)}
       </div>
 
       {/* nothing solved, with the skill or without: the "done when" command is
@@ -341,7 +341,7 @@ function EvalView({ evalId }: { evalId: string }) {
   );
 }
 
-function SkillCard({ s, single }: { s: SkillEvalSkill; single: boolean }) {
+function SkillCard({ s, single, example = false }: { s: SkillEvalSkill; single: boolean; example?: boolean }) {
   return (
     <div data-testid={`skill-card-${s.skill}`} className="p-4"
       style={{ background: C.panel, border: `1px solid ${C.line}`, borderLeft: `3px solid ${verdictColor(s.verdict)}`, borderRadius: 8 }}>
@@ -349,8 +349,10 @@ function SkillCard({ s, single }: { s: SkillEvalSkill; single: boolean }) {
         <span style={{ fontFamily: MONO, fontSize: 14, color: C.text }}>{s.skill}</span>
         <span style={{ fontSize: 14, fontWeight: 600, color: verdictColor(s.verdict) }}>{s.verdict}</span>
         <span style={{ flex: 1 }} />
-        <TeamSwitch name={s.skill} />
-        <SkillSwitch name={s.skill} />
+        {/* in the example eval these would turn the REAL team's skills on and
+            off — a click in a demo changing the team (QA-005) */}
+        {!example && <TeamSwitch name={s.skill} />}
+        {!example && <SkillSwitch name={s.skill} />}
       </div>
       <div style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim, marginBottom: 8 }}>
         opened {s.opened} · ~{s.carried_tokens} tokens in every context while installed, ~{s.body_tokens} when read
