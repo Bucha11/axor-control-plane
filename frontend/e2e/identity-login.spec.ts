@@ -333,6 +333,23 @@ test.describe("identity login (Settings)", () => {
     await expect(page.getByTestId("who-may")).toBeVisible();
   });
 
+  test("the account menu closes when the URL changes (QA-021)", async ({ page }) => {
+    // in-app links closed it, but a URL typed or pasted (or back/forward) left
+    // it open over the next page
+    await page.route("**/identity/v1/login", jsonRoute(200, SESSION));
+    await goHash(page, "settings");
+    await page.getByLabel("email", { exact: true }).fill("ada@acme.io");
+    await page.getByLabel("password").fill("correct horse");
+    await page.getByRole("button", { name: "log in", exact: true }).click();
+    await goHash(page, "home");
+    await page.getByRole("button", { name: "ada@acme.io" }).click();
+    const menu = page.getByRole("dialog", { name: "account" });
+    await expect(menu).toBeVisible();
+    await page.evaluate(() => { window.location.hash = "#/settings?tab=billing"; });
+    await expect(page).toHaveURL(/tab=billing/);
+    await expect(menu).toHaveCount(0);
+  });
+
   test("an admin changes a teammate's role, or takes them off — never the owner's", async ({ page }) => {
     await page.route("**/identity/v1/login", jsonRoute(200, SESSION));
     await page.route("**/identity/v1/me", jsonRoute(200, {

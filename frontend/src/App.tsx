@@ -655,11 +655,15 @@ function AccountButton() {
       if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
     };
     const esc = (e: KeyboardEvent) => e.key === "Escape" && setOpen(false);
+    // a URL typed, pasted, or back/forward is leaving the page too (QA-021)
+    const away = () => setOpen(false);
     document.addEventListener("mousedown", close);
     document.addEventListener("keydown", esc);
+    window.addEventListener("hashchange", away);
     return () => {
       document.removeEventListener("mousedown", close);
       document.removeEventListener("keydown", esc);
+      window.removeEventListener("hashchange", away);
     };
   }, [open]);
   if (authOn !== true && !email) return null;
