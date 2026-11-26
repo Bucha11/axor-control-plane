@@ -18,6 +18,25 @@ test.describe("settings", () => {
     await expect(page.getByRole("button", { name: "subscribed" })).toBeVisible();
   });
 
+  test("a double-click on Subscribe subscribes once, and the trail has one row", async ({ page, request }) => {
+    // QA-020: one subscription, two "subscribed alerts to" rows on the audit trail
+    let posts = 0;
+    await page.route("**/v1/notifications/subscribe", async (route) => {
+      posts += 1;
+      await new Promise((ok) => setTimeout(ok, 300));
+      await route.continue();
+    });
+    await goHash(page, "settings?tab=alerts");
+    const url = `https://sink.e2e/once-${Date.now()}`;
+    await page.getByPlaceholder(/https:\/\/hooks.example\/…/).fill(url);
+    await page.getByRole("checkbox").first().check();
+    await page.getByRole("button", { name: /Subscribe/ }).dblclick();
+    await expect(page.getByRole("button", { name: "subscribed" })).toBeVisible();
+    expect(posts).toBe(1);
+    const trail = await (await request.get(`${BACKEND}/v1/audit`, { params: { action: "alert_subscribed", target: url } })).json();
+    expect(trail.total).toBe(1);
+  });
+
   test("a subscribed webhook can be unsubscribed", async ({ page }) => {
     // A registered webhook fired forever: removing one meant editing the
     // database, while the body it receives carries node ids, levels and a

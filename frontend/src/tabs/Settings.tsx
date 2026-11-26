@@ -1109,6 +1109,7 @@ export default function Settings({ tab = "workspace" }: { tab?: string } = {}) {
       }),
     onSuccess: () => void qc.invalidateQueries({ queryKey: ["subscriptions"] }),
   });
+  const subscribeOnce = useOneAtATime(subscribe);
   const testAlert = useMutation({ mutationFn: (target: string) => api.testNotification(target) });
   const unsubscribe = useMutation({
     mutationFn: (target: string) => api.unsubscribeNotifications(target),
@@ -1423,7 +1424,7 @@ export default function Settings({ tab = "workspace" }: { tab?: string } = {}) {
           )}
         </div>
         <button
-          onClick={() => subscribe.mutate()}
+          onClick={() => subscribeOnce()}
           disabled={!url || selected.length === 0 || subscribe.isPending}
           style={btn({ color: C.steel, fontSize: 12 })}
         >
