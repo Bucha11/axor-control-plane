@@ -983,6 +983,14 @@ async function af(path: string, init: RequestInit = {}, retried = false): Promis
 // ── hosted guest sessions ─────────────────────────────────────────────────────
 
 let renewing: Promise<boolean> | null = null;
+// Seconds the plane asked a refused guest to wait (429 Retry-After), or 0.
+let guestWait = 0;
+
+/** How long the plane asked to wait before the next guest session, after the
+ *  last attempt was refused for too many from this address; 0 when it was not. */
+export function guestRetryAfter(): number {
+  return guestWait;
+}
 
 /** Start a guest session (hosted plane, AXOR_GUEST_SESSIONS). False when the
  * deployment offers none or is full. One at a time. */
@@ -991,6 +999,7 @@ export async function startGuest(stale?: string): Promise<boolean> {
   if (!renewing) {
     renewing = fetch("/v1/auth/guest", { method: "POST" })
       .then(async (r) => {
+        guestWait = r.status === 429 ? Number(r.headers.get("retry-after")) || 60 : 0;
         if (!r.ok) return false;
         const g = (await r.json()) as { token: string; expires_at: string };
         useApp.getState().setGuest(g.token, g.expires_at);

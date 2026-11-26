@@ -9,7 +9,7 @@
 //   and says what moved.
 import { useEffect, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { api, startGuest } from "../api";
+import { api, guestRetryAfter, startGuest } from "../api";
 import { isGuestToken, useApp } from "../store";
 import { C, MONO, btn } from "../theme";
 import { IdentityLogin } from "../tabs/Settings";
@@ -37,6 +37,10 @@ export default function GuestSession() {
   const [ask, setAsk] = useState<string | null>(null);
   const [askText, setAskText] = useState<{ title?: string; why?: string }>({});
   const [moved, setMoved] = useState<string | null>(null);
+  // the plane refused a guest session for now (too many from this address):
+  // said, and tried again when it allows — not every screen failing silently
+  const [busyFor, setBusyFor] = useState(0);
+  const [attempt, setAttempt] = useState(0);
 
   useEffect(() => {
     track("visit");
@@ -46,16 +50,26 @@ export default function GuestSession() {
   useEffect(() => {
     if (apiToken) return;
     let alive = true;
+    let retry: ReturnType<typeof setTimeout> | undefined;
     void api.authStatus().then((st) => {
       if (!alive || !st.auth_enabled || !st.guest_sessions || st.authenticated) return;
       void startGuest().then((ok) => {
-        if (ok) void qc.invalidateQueries();
+        if (!alive) return;
+        if (ok) {
+          setBusyFor(0);
+          void qc.invalidateQueries();
+          return;
+        }
+        const wait = guestRetryAfter();
+        setBusyFor(wait);
+        if (wait) retry = setTimeout(() => setAttempt((n) => n + 1), wait * 1000);
       });
     }).catch(() => undefined);
     return () => {
       alive = false;
+      if (retry) clearTimeout(retry);
     };
-  }, [apiToken, qc]);
+  }, [apiToken, qc, attempt]);
 
   // signed in with guest work behind: claim all of it
   useEffect(() => {
@@ -92,6 +106,14 @@ export default function GuestSession() {
 
   return (
     <>
+      {busyFor > 0 && !apiToken && (
+        <div data-testid="guest-busy" style={{
+          maxWidth: 1040, margin: "0 auto 12px", fontFamily: MONO, fontSize: 11.5, color: C.amber,
+          border: `1px solid ${C.amber}`, borderRadius: 8, padding: "8px 12px", lineHeight: 1.6 }}>
+          Too many new visitors from your network right now — the examples open in about{" "}
+          {busyFor < 60 ? `${busyFor} s` : "a minute"}, by themselves. Or sign up: an account is not limited.
+        </div>
+      )}
       {moved && (
         <div data-testid="guest-claimed" style={{
           maxWidth: 1040, margin: "0 auto 12px", fontFamily: MONO, fontSize: 11.5, color: C.green,

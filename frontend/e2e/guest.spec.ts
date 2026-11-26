@@ -80,4 +80,23 @@ test.describe("guest", () => {
     await expect(ask).toContainText(/moves into the new workspace/);
     await expect(ask.getByRole("button", { name: /create|sign up/i }).first()).toBeVisible();
   });
+
+  test("too many guests from one network: said, and the session comes by itself (QA-008)", async ({ page }) => {
+    await page.route("**/v1/auth/status", (r) => r.fulfill({ json: {
+      auth_enabled: true, authenticated: false, scopes: [], guest_sessions: true, guest: false } }));
+    let calls = 0;
+    await page.route("**/v1/auth/guest", (r) => {
+      calls += 1;
+      return calls === 1
+        ? r.fulfill({ status: 429, headers: { "retry-after": "2" },
+                      json: { detail: "too many guest sessions from this address — try again in a minute" } })
+        : r.fulfill({ status: 201, json: { token: GUEST, org: "guest_e2e", ttl_seconds: 1800,
+                                           expires_at: new Date(Date.now() + 20 * 60_000).toISOString() } });
+    });
+    await setConnection(page, { mode: "demo" });
+    await goHash(page, "govern");
+    await expect(page.getByTestId("guest-busy")).toContainText("Too many new visitors from your network");
+    await expect(page.getByTestId("guest-busy")).toHaveCount(0, { timeout: 10_000 });
+    expect(calls).toBe(2);
+  });
 });

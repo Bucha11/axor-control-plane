@@ -126,7 +126,8 @@ async def guest_session(request: Request) -> dict:
     try:
         return await guests.issue(address)
     except GuestLimit as exc:
-        raise HTTPException(429, str(exc)) from exc
+        raise HTTPException(429, str(exc),
+                            headers={"Retry-After": str(exc.retry_after)}) from exc
 
 
 @router.post("/auth/claim-guest")

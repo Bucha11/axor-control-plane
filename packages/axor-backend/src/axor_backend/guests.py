@@ -74,6 +74,12 @@ def _iso(t: datetime) -> str:
 class GuestLimit(Exception):
     """Too many guests right now, or too many from one address."""
 
+    def __init__(self, message: str, retry_after: int = 60) -> None:
+        super().__init__(message)
+        # seconds until a session can be had again: the page waits and retries
+        # instead of every screen failing on a missing token (QA-008)
+        self.retry_after = max(1, retry_after)
+
 
 class GuestIssuer:
     """Issues guest tokens: a per-address rate limit and a global cap, and an
@@ -92,7 +98,8 @@ class GuestIssuer:
         while hits and now_m - hits[0] > 60:
             hits.popleft()
         if len(hits) >= PER_IP_PER_MIN:
-            raise GuestLimit("too many guest sessions from this address — try again in a minute")
+            raise GuestLimit("too many guest sessions from this address — try again in a minute",
+                             retry_after=int(60 - (now_m - hits[0])) + 1)
         now = datetime.now(UTC)
         if now_m - self._last_sweep > 60:
             self._last_sweep = now_m
