@@ -129,7 +129,8 @@ function EvalList() {
 function armWords(arm: string): string {
   if (arm === "none") return "without skills";
   if (arm === "all") return "with the skills";
-  return arm.startsWith("only:") ? `only ${arm.slice(5)}` : arm;
+  if (arm.startsWith("only:")) return `only ${arm.slice(5)}`;
+  return arm.startsWith("without:") ? `without ${arm.slice(8)}` : arm;
 }
 
 function short(v: string): string {

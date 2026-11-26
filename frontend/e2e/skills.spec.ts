@@ -126,6 +126,9 @@ test.describe("coding agents: their menu, and trying a skill", () => {
     await expect(page.getByTestId("skill-card-house-style")).toContainText("never opened");
     await expect(page.getByTestId("skill-eval-headline")).toContainText("Fewest tokens per solved task");
     await expect(page.getByTestId("skill-eval-arms").locator("tbody tr")).toHaveCount(8);
+    // every way in words, no internal id (QA-038)
+    await expect(page.getByTestId("skill-eval-arms")).toContainText("without test-first");
+    await expect(page.getByTestId("skill-eval-arms")).not.toContainText("without:");
     // and back to the list, where it is one row with its verdicts
     await page.getByRole("button", { name: /all skill evals/ }).click();
     await expect(page.getByTestId("skill-eval-se-example")).toContainText("changelog-entries · helps");
