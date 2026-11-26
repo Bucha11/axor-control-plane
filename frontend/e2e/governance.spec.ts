@@ -11,10 +11,15 @@ test.describe.serial("governance on the example fleet", () => {
     await setConnection(page, { mode: "demo" });
     await goHash(page, "govern");
     await expect(page.getByText(/needs them wrapped in code/)).toBeVisible();
-    // other specs may have put agents on this plane: then the examples are folded
+    // other specs may have put agents on this plane: then the examples are
+    // folded — and when one of them already loaded the example fleet (its
+    // tree is today's, QA-039), the page offers no second load
     const fold = page.getByRole("button", { name: "example agents ▾" });
+    const load = page.getByRole("button", { name: "Load an example fleet" }).first();
+    const tree = page.getByText("tree-orch").first();
+    await expect(fold.or(load).or(tree)).toBeVisible();
     if (await fold.isVisible()) await fold.click();
-    await page.getByRole("button", { name: "Load an example fleet" }).first().click();
+    if (await load.isVisible()) await load.click();
     await page.getByRole("button", { name: "graph", exact: true }).click();
     for (const n of ["tree-orch", "tree-research", "tree-writer", "tree-scraper"]) {
       await expect(page.getByTestId(`topo-node-${n}`)).toBeVisible();

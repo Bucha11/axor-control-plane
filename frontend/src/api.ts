@@ -2,7 +2,7 @@ import type { ToolClass } from "./store";
 import { canonicalize } from "./jcs";
 import * as opKey from "./opKey";
 import { IDENTITY_BASE, refresh } from "./identity";
-import { useApp } from "./store";
+import { isGuestToken, useApp } from "./store";
 import { track } from "./funnel";
 
 // Backend client. Vite dev-proxies /v1 -> backend :8400 and /axor -> proxy :8401.
@@ -912,6 +912,11 @@ function apiToken(): string {
   return useApp.getState().apiToken;
 }
 
+async function guestHasNone<T>(none: T, ask: () => Promise<T>): Promise<T> {
+  if (!apiToken()) await sessionSettled();
+  return isGuestToken(apiToken()) ? none : ask();
+}
+
 /** Whose workspace a demo node, tree or run the proxy uploads belongs to: the
  *  page's own sign-in (or guest) token, which the proxy uploads with (QA-001). */
 function uploadAs(): Record<string, string> {
@@ -1794,8 +1799,12 @@ export const api = {
     }).then((r) => j<{ skills_off: string[] }>(r)),
   skillEvals: () => af("/v1/skill-evals").then((r) => j<{ evals: SkillEvalRow[] }>(r)),
   // a developer's own `axor-wrap worker`s, and the jobs queued for them
-  machines: () => af("/v1/machines").then((r) => j<{ machines: Machine[] }>(r)),
-  machineJobs: () => af("/v1/machine-jobs?limit=10").then((r) => j<{ jobs: MachineJob[] }>(r)),
+  // a guest has no account, so no machine: not asked once the session turns
+  // out to be a guest's — the page may ask before the token is there (QA-042)
+  machines: () => guestHasNone({ machines: [] as Machine[] },
+    () => af("/v1/machines").then((r) => j<{ machines: Machine[] }>(r))),
+  machineJobs: () => guestHasNone({ jobs: [] as MachineJob[] },
+    () => af("/v1/machine-jobs?limit=10").then((r) => j<{ jobs: MachineJob[] }>(r))),
   queueSkillEval: (machineId: string, spec: SkillEvalSpec) =>
     af("/v1/machine-jobs", {
       method: "POST", headers: { "content-type": "application/json" },
