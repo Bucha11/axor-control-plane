@@ -132,6 +132,10 @@ async def _rules(store: object) -> dict:
 MAX_EXCEPTIONS, MAX_SOURCES = 100, 30
 MAX_EXCEPTION = 300  # characters in one path or command
 _HOST = re.compile(r"^(?:\*\.)?(?:[a-z0-9-]+\.)+[a-z]{2,}$")
+# hosts anyone can write to (issues, gists, raw files of any repository) —
+# and their subdomains: never a trusted source, as the screen says
+_CODE_HOSTS = ("github.com", "githubusercontent.com", "gitlab.com", "bitbucket.org",
+               "codeberg.org")
 
 
 def _exceptions(raw: object, known: set[str]) -> list[dict]:
@@ -167,6 +171,11 @@ def _sources(raw: object) -> list[str]:
     bad = [h for h in hosts if not _HOST.match(h)]
     if bad:
         raise HTTPException(400, f"not a host: {', '.join(bad)} (e.g. pypi.org, *.readthedocs.io)")
+    code = [h for h in hosts if any(h.removeprefix("*.") == c or h.endswith("." + c)
+                                    for c in _CODE_HOSTS)]
+    if code:
+        raise HTTPException(400, f"{', '.join(code)}: a code host is never a trusted source — "
+                                 "anyone can write to it; name the project's docs site")
     return hosts
 
 
