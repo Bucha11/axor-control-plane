@@ -120,9 +120,11 @@ async def incidents(store: Any, scan: int) -> list[dict[str, Any]]:  # noqa: ANN
                 continue
             anchor = ev.get("anchor") or {}
             fault = next(iter(ev.get("fault_attribution") or []), {}) or {}
-            observed = ev.get("observed_reality") if isinstance(ev.get("observed_reality"), dict) else {}
+            observed = (ev.get("observed_reality")
+                        if isinstance(ev.get("observed_reality"), dict) else {})
             key = ":".join(str(x) for x in (
-                run["node_id"], ev["deviation"], fault.get("tool_name", ""), fault.get("fault_mode", ""),
+                run["node_id"], ev["deviation"],
+                fault.get("tool_name", ""), fault.get("fault_mode", ""),
                 observed.get("observed", ""), str(run.get("created_ts") or "")[:10],
                 run["run_id"] in kept))
             if key in made:

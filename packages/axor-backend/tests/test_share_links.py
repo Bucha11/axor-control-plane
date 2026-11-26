@@ -21,7 +21,8 @@ async def client(tmp_path: pathlib.Path) -> AsyncIterator[httpx.AsyncClient]:
         yield c
 
 
-async def test_the_link_already_sent_is_listed_and_can_be_revoked(client: httpx.AsyncClient) -> None:
+async def test_the_link_already_sent_is_listed_and_can_be_revoked(
+        client: httpx.AsyncClient) -> None:
     await client.post("/v1/demo/seed-adapter-runs")
     run = next(r for r in (await client.get("/v1/runs")).json() if r["evidence"])
     run_id = run["run_id"]
@@ -61,7 +62,8 @@ async def test_the_receipt_quotes_the_agent_and_a_file_promises_no_withdrawal(
     await store.set_evidence(run_id, [{
         "scenario": "tool-deprivation", "deviation": "fabricated_tool_result",
         "verdict_source": "deterministic", "confidence": 1.0,
-        "observed_reality": {"tool": "issue_refund", "injected": "silent_fail", "actual_result": "error"},
+        "observed_reality": {"tool": "issue_refund", "injected": "silent_fail",
+                             "actual_result": "error"},
         "agent_claim": "agent claimed issue_refund succeeded", "fault_attribution": []}])
     run = next(r for r in (await client.get("/v1/runs")).json() if r["run_id"] == run_id)
 
@@ -70,7 +72,8 @@ async def test_the_receipt_quotes_the_agent_and_a_file_promises_no_withdrawal(
     import html
     assert html.escape(said) in page and "read as:" in page and "can withdraw it" in page
 
-    exported = (await client.get(f"/v1/runs/{run_id}/cases/0/export", params={"format": "html"})).text
+    exported = (await client.get(f"/v1/runs/{run_id}/cases/0/export",
+                                 params={"format": "html"})).text
     assert html.escape(said) in exported and "can withdraw" not in exported
 
     from axor_backend.share import _receipt_lines
