@@ -181,6 +181,11 @@ _WRITE_POLICY: tuple[tuple[str, str], ...] = (
     ("/v1/trees/", "ingest"),
     # an eval run posts its own report, like a tree run its snapshot
     ("/v1/skill-evals", "ingest"),
+    # a developer's worker: its heartbeat, and claiming / reporting / finishing
+    # the jobs its owner queued (routers/machines_api checks the owner)
+    ("/v1/machines/", "ingest"),
+    # queueing or cancelling a job on your own machine: an operator's act
+    ("/v1/machine-jobs", "operate"),
     ("/v1/setup-health", "ingest"),   # posted by the check, on an ingest key
     # sharing a skill reaches nobody by itself: a developer's key may upload
     ("/v1/coding/skill-bundles", "ingest"),
@@ -269,6 +274,7 @@ _OPEN_ROUTES: tuple[tuple[str, str], ...] = (
 # check had no baseline. Matched before the read table.
 _AGENT_READS: tuple[tuple[str, str], ...] = (
     ("/v1/plane/", "/desired"),        # the node's own desired state (pause/stop/cap)
+    ("/v1/machines/", "/jobs"),        # a worker's own queue (its owner's jobs only)
 )
 _AGENT_READ_PREFIXES: tuple[str, ...] = (
     "/v1/license/entitlements",        # what the plan allows (a mixed tree is paid)
