@@ -72,20 +72,27 @@ function layout(payload: TopologyPayload, members?: Map<string, TreeMember>,
     // spawned by the tree's root, so by edges alone a tree is one wide fan
     const m = members?.get(id);
     if (m) return depth(m.tree.tree_run) + 1 + m.stage;
+    // up the delegation chain, stopping at a node already passed: a cycle in
+    // the traced edges (the canned tree has one) walked to the guard, so every
+    // node landed 32 rows down and the graph was ~3000px of nothing (QA-011)
     let d = 0;
+    const seen = new Set([id]);
     let cur = childOf.get(id);
-    let guard = 0;
-    while (cur && guard++ < 32) {
+    while (cur && !seen.has(cur) && d < 32) {
+      seen.add(cur);
       d += 1;
       cur = childOf.get(cur);
     }
     return d;
   };
-  const rows = new Map<number, string[]>();
+  const byDepth = new Map<number, string[]>();
   for (const n of selfNodes) {
     const d = depth(n.node_id);
-    rows.set(d, [...(rows.get(d) ?? []), n.node_id]);
+    byDepth.set(d, [...(byDepth.get(d) ?? []), n.node_id]);
   }
+  // rows are the depths that have nodes, one after another: no empty bands
+  const rows = new Map<number, string[]>(
+    [...byDepth.keys()].sort((a, b) => a - b).map((d, i) => [i, byDepth.get(d)!]));
   const pos = new Map<string, Pos>();
   const maxDepth = Math.max(0, ...rows.keys());
   const widest = Math.max(1, ...[...rows.values()].map((ids) => ids.length));

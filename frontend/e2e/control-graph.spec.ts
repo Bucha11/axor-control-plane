@@ -34,6 +34,10 @@ test.describe("control graph lens", () => {
     // selection works from the graph
     await page.getByTestId("topo-node-tree-scraper").click();
     await expect(page.getByTestId("topology-graph")).toBeVisible();
+
+    // the graph is as tall as its rows, not ~3000px of empty band (QA-011)
+    const tall = await page.getByTestId("topology-graph").evaluate((svg) => svg.getBoundingClientRect().height);
+    expect(tall).toBeLessThan(900);
   });
 
   test("the canned tree is reachable from the product, not only from a test", async ({ page }) => {
