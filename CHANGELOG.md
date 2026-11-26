@@ -5,7 +5,39 @@ The Control Plane ships as three packages from one tag (`axor-backend`,
 images (`axor-platform`, `axor-frontend`). Self-hosted operators upgrade by
 tag; `deploy/offline` carries the same release to a machine with no network.
 
-## Unreleased
+## 0.6.0 — 2026-11-26
+
+A workspace can pay by card: the ladder is sold through Paddle, and the plane
+does its half of the vendor licensing service (axor-billing) — reports the
+usage it is billed for, renews and hands identity the plan it pays for. Agents
+of a pair can write to each other. Nothing here touches enforcement.
+
+### Added — card payments
+
+- **Checkout in Pricing.** A paid plan opens Paddle checkout naming who the
+  license is for (`licensed_to`: the tenant on hosted, `AXOR_ORG` on an
+  install) and whether this is the vendor's hosted plane (`AXOR_HOSTED`, now
+  in `/v1/license/status`). `VITE_PADDLE_CLIENT_TOKEN`, `VITE_PADDLE_ENV` and
+  `VITE_PADDLE_PRICES` are build arguments the release passes from repository
+  variables; unset keeps the mailto / `VITE_CHECKOUT_URL` link.
+- **Usage report carries developers** (`included_developers`,
+  `active_developers`, `billable_developers`, as the invoice counts them):
+  Coding and Business are billed per developer.
+- **Identity follows a renewal.** A license the plane installs on its own — a
+  renewal, or an operator's for a tenant — is handed to identity's new
+  `POST /v1/orgs/{id}/license/renewal` (no caller; vendor-signed, this
+  workspace, in date, later than the plan in force), so single sign-on and SCIM
+  no longer lapse at the old date. `AXOR_IDENTITY_URL`, defaulting to
+  `AXOR_IDENTITY_JWKS_URL`'s origin.
+- **deploy/prod**: `AXOR_HOSTED`, `AXOR_LICENSE_RENEWAL_URL`,
+  `AXOR_USAGE_REPORTING` for the backend; optional Caddy `sites/*.caddy`;
+  `backup.sh` saves axor-billing's database when it runs on the host.
+
+### Security — card payments
+
+- **The renewal request carries the license in force** (`license_json`), not
+  only its name: a vendor answering a bare organization name would hand any
+  stranger that organization's paid license and bill it on their word.
 
 ### Added — agents of a pair, to each other
 
