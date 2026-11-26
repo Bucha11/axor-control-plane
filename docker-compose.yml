@@ -163,8 +163,15 @@ services:
       context: .
       dockerfile: frontend/Dockerfile
       args:
-        # Stripe payment link for the Pricing CTA; empty = mailto fallback.
+        # payment link for the Pricing CTA; empty = mailto fallback.
         VITE_CHECKOUT_URL: ${VITE_CHECKOUT_URL:-}
+        # card checkout through Paddle (frontend/Dockerfile says which is what).
+        # No value: taken from the environment when set there, otherwise not
+        # passed at all, so the Dockerfile's defaults hold — `${X:-}` would
+        # pass an empty string and override them.
+        VITE_PADDLE_CLIENT_TOKEN:
+        VITE_PADDLE_ENV:
+        VITE_PADDLE_PRICES:
     environment:
       # nginx attaches the proxy's control credential on the /axor hop, so the
       # browser never holds it. Must be the SAME value the proxy service gets.

@@ -129,6 +129,14 @@ export default defineConfig({
       url: "http://localhost:5173",
       reuseExistingServer: !process.env.CI,
       timeout: 60_000,
+      // card checkout set up, against a stubbed Paddle.js (e2e/pricing.spec.ts)
+      env: {
+        VITE_PADDLE_CLIENT_TOKEN: "test_e2e_token",
+        VITE_PADDLE_ENV: "sandbox",
+        VITE_PADDLE_PRICES: JSON.stringify({
+          coding: "pri_coding", business: "pri_business", team: "pri_team", security: "pri_security",
+        }),
+      },
     },
   ],
 });

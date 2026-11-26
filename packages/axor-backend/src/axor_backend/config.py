@@ -80,6 +80,16 @@ class AppConfig:
     # reporting is the deployment volunteering something about the customer, and
     # a customer who wanted the first has not thereby agreed to the second.
     usage_reporting: bool = False
+    # The vendor's own hosted plane, as opposed to somebody's install. Read by
+    # Pricing's card checkout: a license bought here is installed on a tenant of
+    # this plane, one bought on an install is mailed to its buyer. A runtime
+    # setting, not a frontend build flag, because hosted and self-hosted run
+    # the very same frontend image.
+    hosted: bool = False
+    # Where axor-identity answers, so a license this plane installs on its own
+    # (a renewal, an operator's) reaches the plan identity gates sign-on on.
+    # Defaults to the origin of AXOR_IDENTITY_JWKS_URL; empty = no identity.
+    identity_url: str = ""
     # ── egress ───────────────────────────────────────────────────────────────
     webhook_block_private: bool = False
     # Alert mail (mail.py): mailto: subscriptions go out through this SMTP URL.
@@ -148,6 +158,8 @@ class AppConfig:
             api_token=api_token,
             identity_jwks=identity_jwks,
             identity_jwks_url=env.text("AXOR_IDENTITY_JWKS_URL") or None,
+            identity_url=(env.text("AXOR_IDENTITY_URL")
+                          or _identity_base(env.text("AXOR_IDENTITY_JWKS_URL"))),
             identity_issuer=(
                 identity_issuer
                 if identity_issuer is not None
@@ -175,6 +187,7 @@ class AppConfig:
                 if usage_reporting is not None
                 else env.flag("AXOR_USAGE_REPORTING")
             ),
+            hosted=env.flag("AXOR_HOSTED"),
             license_renewal_url=(
                 license_renewal_url
                 if license_renewal_url is not None
@@ -199,6 +212,16 @@ class AppConfig:
             mail_from=env.text("AXOR_MAIL_FROM") or None,
             public_url=env.text("AXOR_PUBLIC_URL") or None,
         )
+
+
+JWKS_PATH = "/.well-known/jwks.json"
+
+
+def _identity_base(jwks_url: str) -> str:
+    """``http://identity:8402/.well-known/jwks.json`` -> ``http://identity:8402``.
+    Only the JWKS suffix comes off: an identity served under a path prefix keeps
+    it. A JWKS URL of any other shape says nothing about where identity is."""
+    return jwks_url[: -len(JWKS_PATH)] if jwks_url.endswith(JWKS_PATH) else ""
 
 
 def _identity_jwks() -> dict[str, Any] | None:

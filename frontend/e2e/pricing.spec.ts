@@ -39,3 +39,61 @@ test("only one way in shows no calculator", async ({ page }) => {
   await expect(page.getByTestId("tier-coding")).toBeVisible();
   await expect(page.getByTestId("pricing-calculator")).toHaveCount(0);
 });
+
+// Card checkout: Paddle.js stubbed, so the test sees exactly what would be
+// opened — the rung's price, and the organization a license must name here.
+const PADDLE_STUB = `
+  window.__paddle = [];
+  window.Paddle = {
+    Environment: { set: (e) => window.__paddle.push(["env", e]) },
+    Initialize: (o) => window.__paddle.push(["init", o.token]),
+    Checkout: { open: (o) => window.__paddle.push(["open", o]) },
+  };`;
+
+async function licensedTo(page: import("@playwright/test").Page, org?: string, hosted = false) {
+  await page.route("**/v1/license/status", (route) => route.fulfill({
+    json: { active: false, vendor_key_configured: true, hosted,
+            ...(org ? { licensed_to: org } : {}) },
+  }));
+  await page.route("https://cdn.paddle.com/**", (route) => route.fulfill({
+    contentType: "application/javascript", body: PADDLE_STUB,
+  }));
+}
+
+test("a paid plan opens card checkout naming who the license is for", async ({ page }) => {
+  await licensedTo(page, "Acme Inc");
+  await goHash(page, "pricing?for=coding");
+  await expect(page.getByTestId("card-needs-org")).toHaveCount(0);
+  await page.getByTestId("cta-coding").click();
+  await expect.poll(() => page.evaluate(() => (window as unknown as { __paddle: unknown[] }).__paddle))
+    .toEqual([
+      ["env", "sandbox"],
+      ["init", "test_e2e_token"],
+      ["open", { items: [{ priceId: "pri_coding", quantity: 1 }],
+                 customData: { org: "Acme Inc", hosted: false } }],
+    ]);
+});
+
+test("with nobody to issue a license to, it says what is missing", async ({ page }) => {
+  await licensedTo(page);
+  await goHash(page, "pricing?for=coding");
+  const coding = page.getByTestId("tier-coding");
+  await expect(coding.getByTestId("card-needs-org")).toContainText("set AXOR_ORG");
+  await expect(page.getByTestId("cta-coding")).toHaveAttribute("href", /^mailto:/);
+});
+
+test("on the hosted plane the checkout says so, for the license to be installed here", async ({ page }) => {
+  await licensedTo(page, "org_acme", true);
+  await goHash(page, "pricing?for=coding");
+  await page.getByTestId("cta-coding").click();
+  await expect.poll(() => page.evaluate(() => (window as unknown as { __paddle: unknown[] }).__paddle.at(-1)))
+    .toEqual(["open", { items: [{ priceId: "pri_coding", quantity: 1 }],
+                        customData: { org: "org_acme", hosted: true } }]);
+});
+
+test("on the hosted plane, nobody signed in is told to sign in", async ({ page }) => {
+  await licensedTo(page, undefined, true);
+  await goHash(page, "pricing?for=coding");
+  await expect(page.getByTestId("tier-coding").getByTestId("card-needs-org"))
+    .toContainText("sign in to a workspace");
+});

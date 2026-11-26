@@ -102,6 +102,8 @@ _ELSEWHERE = frozenset({
     "AXOR_PROXY_TOKEN", "AXOR_VAULT_TOOLS", "AXOR_VAULT_ALLOW_REMOTE",
     "AXOR_NODE_SIGNING_SEED", "AXOR_CRED_SEALING_SEED",
     "AXOR_IDENTITY_SIGNING_KEY", "VITE_CHECKOUT_URL", "AXOR_TRACE_DIR",
+    # card checkout through Paddle, baked into the frontend build
+    "VITE_PADDLE_CLIENT_TOKEN", "VITE_PADDLE_ENV", "VITE_PADDLE_PRICES",
     "AXOR_BACKEND_URL",
     # Which images compose runs, for the build-free path. GITHUB_TOKEN used to
     # sit in this list: a build-time credential for private git deps that had

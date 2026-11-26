@@ -1991,6 +1991,8 @@ export const api = {
         // somebody has to remember to paste a new license every term.
         auto_renewal?: boolean;
         usage_reporting?: boolean;
+        // the vendor's own hosted plane (AXOR_HOSTED)
+        hosted?: boolean;
         organization?: string;
         workspace_tier?: string;
         governed_node_ceiling?: number;

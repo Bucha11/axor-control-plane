@@ -45,6 +45,7 @@ services:
       ACME_EMAIL: ${ACME_EMAIL:?set ACME_EMAIL in .env}
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./sites:/etc/caddy/sites:ro   # optional extra hosts (sites/*.caddy)
       - caddy_data:/data        # issued certificates — keep across restarts
       - caddy_config:/config
     depends_on: [frontend, lab-edge]
@@ -85,6 +86,12 @@ services:
       AXOR_ORG: ${AXOR_ORG:-}
       # a licence given here instead of pasted in Settings → Billing
       AXOR_LICENSE: ${AXOR_LICENSE:-}
+      # Card payments (axor-billing on this host, see README "Card payments"):
+      # this is the vendor's hosted plane, it renews each workspace's licence
+      # from axor-billing and reports the usage that licence is billed for.
+      AXOR_HOSTED: ${AXOR_HOSTED:-}
+      AXOR_LICENSE_RENEWAL_URL: ${AXOR_LICENSE_RENEWAL_URL:-}
+      AXOR_USAGE_REPORTING: ${AXOR_USAGE_REPORTING:-}
       AXOR_VAULT_CREDS_TOKEN: ${AXOR_VAULT_CREDS_TOKEN:-}
       AXOR_VAULT_SIGNING_TOKEN: ${AXOR_VAULT_SIGNING_TOKEN:-}
       AXOR_IDENTITY_JWKS_URL: http://identity:8402/.well-known/jwks.json

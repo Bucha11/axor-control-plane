@@ -40,6 +40,7 @@ from __future__ import annotations
 import logging
 from datetime import date, timedelta
 from typing import Any
+from urllib.parse import quote
 
 from fastapi import HTTPException
 
@@ -368,9 +369,12 @@ def renewal_rejection(
 # license's ceiling, but this is a billing document and so is the invoice an
 # operator reads beside it. One fact under two names in two documents a customer
 # compares is the drift this codebase keeps finding in itself.
+# The developer counts are the coding-agent meter, the same three numbers the
+# invoice carries; never a developer id, for the reason above.
 USAGE_REPORT_FIELDS = (
     "month", "workspace_tier", "included_nodes",
     "peak_nodes", "peak_day", "distinct_nodes", "billable_nodes",
+    "included_developers", "active_developers", "billable_developers",
 )
 
 
@@ -396,6 +400,14 @@ async def usage_report(state: Any, org: str) -> dict[str, Any] | None:  # noqa: 
     start, end = billing_month(f"{last_month}-01")
     usage = await state.store.node_usage(start, end)
     peak = int(usage["peak_nodes"])
+    from axor_backend.ee.license import TIER_DEVELOPER_SEATS  # noqa: PLC0415
+    from axor_backend.ee.seats import month_seats  # noqa: PLC0415 - imports this module
+
+    # counted as the invoice counts them: a developer past the seat cap is not
+    # seated, so not billed
+    seats = await month_seats(state.store, last_month, lic.workspace_tier)
+    included_devs = TIER_DEVELOPER_SEATS.get(lic.workspace_tier, 0)
+    active_devs = len(seats["seated"])
     return {
         "month": last_month,
         "workspace_tier": lic.workspace_tier,
@@ -404,6 +416,9 @@ async def usage_report(state: Any, org: str) -> dict[str, Any] | None:  # noqa: 
         "peak_day": usage["peak_day"],
         "distinct_nodes": usage["distinct_nodes"],
         "billable_nodes": max(0, peak - lic.governed_node_ceiling),
+        "included_developers": included_devs,
+        "active_developers": active_devs,
+        "billable_developers": max(0, active_devs - included_devs),
     }
 
 
@@ -423,7 +438,8 @@ async def renew_once(state: Any, org: str, *, fetch: Any = None) -> bool:  # noq
         # fail, and it used to sit OUTSIDE this guard: the docstring said this
         # function never raises and a database hiccup made a liar of it.
         report = await usage_report(state, org)
-        raw = await getter(state.config.license_renewal_url, org, current, report)
+        held = await held_license_json(state, org)
+        raw = await getter(state.config.license_renewal_url, org, current, report, held=held)
     except Exception as exc:  # noqa: BLE001 - an unreachable vendor is not an error here
         log.warning("license renewal fetch failed for org %s: %s", org, exc)
         return False
@@ -449,11 +465,48 @@ async def renew_once(state: Any, org: str, *, fetch: Any = None) -> bool:  # noq
     # forgets is worse than not having renewed.
     state.licenses[org] = new
     log.info("license for org %s renewed through %s", org, new.expires_at)
+    await tell_identity(state.config, org, raw)
     return True
+
+
+async def tell_identity(config: Any, org: str, license_json: str) -> None:  # noqa: ANN401
+    """Hand a license this plane installed on its own to axor-identity, whose
+    plan (what single sign-on and SCIM are gated on) otherwise moves only when
+    a workspace admin pastes one. Best effort and never raises: the license is
+    already in force here, and identity refusing one that is not newer than its
+    own is the normal answer to a repeat."""
+    if not config.identity_url:
+        return
+    try:
+        status = await _post_to_identity(config.identity_url, org, license_json)
+    except Exception as exc:  # noqa: BLE001 - identity down costs the sync, not the renewal
+        log.warning("could not hand the license for org %s to identity: %s", org, exc)
+        return
+    if status not in (200, 409):
+        log.warning("identity refused the license for org %s: HTTP %s", org, status)
+
+
+async def _post_to_identity(base: str, org: str, license_json: str) -> int:
+    import httpx  # noqa: PLC0415
+
+    url = f"{base.rstrip('/')}/v1/orgs/{quote(org, safe='')}/license/renewal"
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        response = await client.post(url, json={"license_json": license_json})
+    return response.status_code
+
+
+async def held_license_json(state: Any, org: str) -> str | None:  # noqa: ANN401
+    """The license file in force for this tenant, as it was signed — where boot
+    reads it from (load_licenses): the operator's env pin for the local tenant,
+    else the tenant's stored one."""
+    if org == PUBLIC_ORG and state.config.env_license:
+        return state.config.env_license
+    return await state.store.get_setting("license_json")
 
 
 async def _fetch_license(
     url: str, org: str, current: Any, report: dict[str, Any] | None = None,  # noqa: ANN401
+    *, held: str | None = None,
 ) -> str | None:
     """Ask the vendor for this deployment's current license.
 
@@ -473,6 +526,11 @@ async def _fetch_license(
         "organization": current.organization if current else None,
         "expires_at": current.expires_at if current else None,
         "org": org,
+        # the signed file itself: the two fields above are only its claim, and
+        # a vendor that answered a bare organization name would hand any
+        # stranger who knows it that organization's paid license — and take
+        # their word for its usage
+        "license_json": held,
     }
     if report is not None:
         payload["usage"] = report
