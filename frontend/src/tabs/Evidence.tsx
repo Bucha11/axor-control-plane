@@ -135,7 +135,9 @@ export default function Evidence({ agent: agentParam }: { agent?: string } = {})
   const { mode } = useApp((s) => s.connection);
   const journey = useApp((s) => s.journey);
   const connect = useApp((s) => s.connect);
-  const [kind, setKind] = useState("made_up,dangerous,would_refuse,memory_worse");
+  // opens on "needs a look" — refusals included, the same kinds the menu's
+  // count counts (it said 2 while this listed 1: QA-040)
+  const [kind, setKind] = useState(KIND_CHIPS[0][0]);
   const [status, setStatus] = useState("new");
   // `?agent=` — arriving from an agent's row in Agents
   const [agent, setAgent] = useState(agentParam ?? "");

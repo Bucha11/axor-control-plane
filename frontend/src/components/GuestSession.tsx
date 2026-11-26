@@ -9,7 +9,7 @@
 //   and says what moved.
 import { useEffect, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { api, guestRetryAfter, startGuest } from "../api";
+import { api, guestRetryAfter, sessionSettled } from "../api";
 import { isGuestToken, useApp } from "../store";
 import { C, MONO, btn } from "../theme";
 import { IdentityLogin } from "../tabs/Settings";
@@ -47,24 +47,22 @@ export default function GuestSession() {
   }, []);
 
   // nothing to authenticate with: start as a guest, if the plane offers it
+  // (sessionSettled does, once for every request waiting on it)
   useEffect(() => {
     if (apiToken) return;
     let alive = true;
     let retry: ReturnType<typeof setTimeout> | undefined;
-    void api.authStatus().then((st) => {
-      if (!alive || !st.auth_enabled || !st.guest_sessions || st.authenticated) return;
-      void startGuest().then((ok) => {
-        if (!alive) return;
-        if (ok) {
-          setBusyFor(0);
-          void qc.invalidateQueries();
-          return;
-        }
-        const wait = guestRetryAfter();
-        setBusyFor(wait);
-        if (wait) retry = setTimeout(() => setAttempt((n) => n + 1), wait * 1000);
-      });
-    }).catch(() => undefined);
+    void sessionSettled(attempt > 0).then(() => {
+      if (!alive) return;
+      if (useApp.getState().apiToken) {
+        setBusyFor(0);
+        void qc.invalidateQueries();
+        return;
+      }
+      const wait = guestRetryAfter();
+      setBusyFor(wait);
+      if (wait) retry = setTimeout(() => setAttempt((n) => n + 1), wait * 1000);
+    });
     return () => {
       alive = false;
       if (retry) clearTimeout(retry);

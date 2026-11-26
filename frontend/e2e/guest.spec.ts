@@ -81,6 +81,34 @@ test.describe("guest", () => {
     await expect(ask.getByRole("button", { name: /create|sign up/i }).first()).toBeVisible();
   });
 
+  test("nothing is asked before the guest session is there: no burst of 401s (QA-042)", async ({ page }) => {
+    // a hosted plane refuses a request with no bearer; every screen used to
+    // fire its reads before the guest token arrived and got a 401 each
+    const refused: string[] = [];
+    await page.route(/\/(v1|identity)\//, (r) => {
+      if (r.request().headers()["authorization"]) return r.fallback();
+      // the funnel beacon is anonymous by design
+      if (r.request().method() === "POST" && r.request().url().endsWith("/v1/funnel")) return r.fulfill({ status: 204 });
+      refused.push(new URL(r.request().url()).pathname);
+      return r.fulfill({ status: 401, json: { detail: "not authenticated" } });
+    });
+    await hosted(page, { minutesLeft: 29 });       // auth/status and the guest route answer
+    await setConnection(page, { mode: "demo" });
+    // each screen loaded fresh, and let settle first: a reload that cuts the
+    // guest start short is the test's doing, not a page's
+    const settled = async () => {
+      await expect(page.getByRole("button", { name: "sign in", exact: true })).toBeVisible();
+      await page.waitForLoadState("networkidle");
+    };
+    for (const screen of ["govern", "evidence", "policy"]) {
+      await goHash(page, screen);
+      await settled();
+      await page.reload();
+      await settled();
+    }
+    expect(refused).toEqual([]);
+  });
+
   test("too many guests from one network: said, and the session comes by itself (QA-008)", async ({ page }) => {
     await page.route("**/v1/auth/status", (r) => r.fulfill({ json: {
       auth_enabled: true, authenticated: false, scopes: [], guest_sessions: true, guest: false } }));

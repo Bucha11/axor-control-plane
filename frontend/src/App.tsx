@@ -678,16 +678,20 @@ function AccountButton({ onSignedUp }: { onSignedUp: () => void }) {
       if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
     };
     const esc = (e: KeyboardEvent) => e.key === "Escape" && setOpen(false);
+    // a URL typed, pasted, or back/forward is leaving the page too (QA-021)
+    const away = () => setOpen(false);
     document.addEventListener("mousedown", close);
     document.addEventListener("keydown", esc);
+    window.addEventListener("hashchange", away);
     return () => {
       document.removeEventListener("mousedown", close);
       document.removeEventListener("keydown", esc);
+      window.removeEventListener("hashchange", away);
     };
   }, [open]);
   if (authOn !== true && !email) return null;
   return (
-    <div ref={ref} style={{ position: "relative" }}>
+    <div ref={ref} style={{ position: "relative", minWidth: 0 }}>
       <button
         onClick={() => {
           if (!open && guest) track("signup_prompt_shown", "header");
@@ -699,7 +703,7 @@ function AccountButton({ onSignedUp }: { onSignedUp: () => void }) {
           fontFamily: MONO, fontSize: 10.5,
           border: `1px solid ${email ? C.line : late ? C.amber : C.steel}`,
           color: email ? C.mut : late ? C.amber : C.steel,
-          maxWidth: guest ? 260 : 180, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+          maxWidth: `min(${guest ? 260 : 180}px, 100%)`, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
         }}
       >
         {email || (late
@@ -712,6 +716,7 @@ function AccountButton({ onSignedUp }: { onSignedUp: () => void }) {
           aria-label={email ? "account" : "sign in"}
           style={{
             position: "absolute", right: 0, top: "calc(100% + 8px)", zIndex: 50, width: 300,
+            maxWidth: "calc(100vw - 40px)",
             // never past the bottom of the screen, whatever the form grows to
             maxHeight: "calc(100vh - 80px)", overflowY: "auto",
             background: C.bg, border: `1px solid ${C.line}`, borderRadius: 8, padding: 14,

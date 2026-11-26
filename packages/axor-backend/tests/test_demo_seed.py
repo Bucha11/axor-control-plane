@@ -143,11 +143,15 @@ class TestReSeedingReplaces:
     async def test_re_seeding_unchanged_is_still_stable(
         self, client: httpx.AsyncClient,
     ) -> None:
+        # the same events; only their stamp moves, to the time of seeding
+        def unstamped(evs: list[dict]) -> list[dict]:
+            return [{k: v for k, v in e.items() if k != "ts"} for e in evs]
+
         await client.post("/v1/demo/seed-tree-run", headers=H)
         first = (await client.get("/v1/runs/ex_tree/events", headers=H)).json()
         await client.post("/v1/demo/seed-tree-run", headers=H)
-        assert (await client.get(
-            "/v1/runs/ex_tree/events", headers=H)).json() == first
+        assert unstamped((await client.get(
+            "/v1/runs/ex_tree/events", headers=H)).json()) == unstamped(first)
 
 
 class TestCannedEvidenceIsNotEvidenceAboutThisDeployment:

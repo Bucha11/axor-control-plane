@@ -58,6 +58,10 @@ html, body { margin: 0; background: #12161A; }  /* C.bg: no white beyond the app
   .hide-narrow { display: none; }
   /* `more…` sits at the right of the nav on a phone: open toward the left */
   .more-menu { left: auto; right: 0; }
+  /* signed in, the e-mail chip is the one thing that gives way: it is cut
+     short with an ellipsis rather than pushing the page past the screen */
+  .app-header { grid-template-columns: auto minmax(0, 1fr); }
+  .app-header-right { min-width: 0; justify-self: end; max-width: 100%; }
 
   /* layouts written for a desktop: side-by-side becomes stacked. `!important`
      because those layouts are inline styles. */

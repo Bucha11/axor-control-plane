@@ -620,6 +620,27 @@ test.describe("the team's policy for coding agents", () => {
   });
 });
 
+// QA-037: Policy, Skills and Team memory cut the stored UTC string and showed
+// it with no label, beside Replay's local time. One convention: local time.
+test.describe("times are the viewer's local time", () => {
+  test.use({ timezoneId: "Asia/Kathmandu" });   // +05:45: never equal to UTC
+
+  test("the team's policy says when it was set, in local time", async ({ page, request }) => {
+    const B = "http://127.0.0.1:8400";
+    await request.put(`${B}/v1/coding/rules`, { data: { allow: [], mode: "enforce" } });
+    await setConnection(page, { mode: "adapter" });
+    await journey(page, "coding");
+    await goHash(page, "policy");
+    const set = page.getByTestId("coding-policy").getByText(/the team's policy · by/);
+    await expect(set).toBeVisible();
+    const shown = (await set.textContent())!.match(/\d{4}-\d\d-\d\d \d\d:\d\d/)![0];
+    const at = (zone: string, back: number) => new Date(Date.now() - back)
+      .toLocaleString("sv-SE", { timeZone: zone }).slice(0, 16);
+    // the minute it was saved: now, or the one before
+    expect([at("Asia/Kathmandu", 0), at("Asia/Kathmandu", 60_000)]).toContain(shown);
+  });
+});
+
 test.describe("session controls for coding agents", () => {
   const B = "http://127.0.0.1:8400";
 

@@ -68,6 +68,25 @@ test.describe("replay", () => {
     await expect(page.getByTestId("search-row").filter({ hasText: "DROP TABLE orders" })).toHaveCount(1);
   });
 
+  // QA-031: scrubbing kept `?seq=4` in the URL, so a reload or a shared link
+  // went back to step 5; a seq the run does not have was ignored silently.
+  test("the URL follows the step, and a step the run does not have is said", async ({ page, request }) => {
+    expect((await request.post(`${BACKEND}/v1/demo/seed-prod-incident`)).ok()).toBeTruthy();
+    await goHash(page, "explain/ex_prod_drop?seq=4&node=support-agent-prod");
+    await expect(page.getByTestId("replay-step")).toContainText("STEP 5 OF 7");
+    await page.getByTestId("step-7").click();
+    await expect(page.getByTestId("replay-step")).toContainText("STEP 7 OF 7");
+    await expect(page).toHaveURL(/cursor=6/);
+    await expect(page).not.toHaveURL(/seq=/);
+    await page.reload();
+    await expect(page.getByTestId("replay-step")).toContainText("STEP 7 OF 7");
+
+    await goHash(page, "explain/ex_prod_drop?seq=999&node=support-agent-prod");
+    await page.reload();
+    await expect(page.getByTestId("replay-seq-missing")).toContainText("999");
+    await expect(page.getByTestId("replay-step")).toContainText("STEP 1 OF 7");
+  });
+
   test("make it a rule: the drop is refused, the agent's normal work still passes", async ({ page, request }) => {
     expect((await request.post(`${BACKEND}/v1/demo/seed-prod-incident`)).ok()).toBeTruthy();
     await goHash(page, "explain/ex_prod_drop?seq=4&node=support-agent-prod");

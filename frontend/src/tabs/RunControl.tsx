@@ -460,13 +460,17 @@ function Step({ e, first, runId, nodeId, refTool, tainted, appliedCuts, pendingC
 }
 
 function CapControl({ cap, disabled, onSet, onError }: {
-  cap: number | null; disabled: boolean; onSet: (n: number) => void; onError: (m: string) => void;
+  cap: number | null; disabled: boolean; onSet: (n: number) => void; onError: (m: string | null) => void;
 }) {
   const [v, setV] = useState("");
   return (
     <span className="flex items-center gap-1" style={{ fontFamily: MONO, fontSize: 11, color: C.mut }}>
       cap
-      <input type="number" min={0} value={v} onChange={(e) => setV(e.target.value)}
+      <input type="number" min={0} value={v} onChange={(e) => {
+        setV(e.target.value);
+        // as on the agent card: a fixed value clears the complaint (QA-034)
+        onError(e.target.validity.badInput ? "cap must be a whole number of calls, like 50" : null);
+      }}
         placeholder={cap != null ? String(cap) : "∞"} aria-label="call cap"
         style={{ width: 58, background: C.bg, border: `1px solid ${C.line}`, borderRadius: 4, color: C.text,
                  fontFamily: MONO, fontSize: 11, padding: "4px 6px", outline: "none" }} />
