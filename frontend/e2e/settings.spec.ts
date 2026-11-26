@@ -96,6 +96,25 @@ test.describe("settings", () => {
     await expect(page.getByLabel(/the license is about to expire/)).toHaveCount(0);
   });
 
+  test("an owner's Settings does not ask for what they cannot have (QA-042)", async ({ page }) => {
+    // every load: GET /v1/funnel (the operator's) → 403, GET /v1/license/invoice
+    // with no license → 404
+    await page.route("**/v1/auth/status", (r) => r.fulfill({ status: 200, contentType: "application/json",
+      body: JSON.stringify({ auth_enabled: true, authenticated: true, scopes: ["read", "ingest", "operate", "admin"],
+                             guest_sessions: false, guest: false, operator: false }) }));
+    const asked: string[] = [];
+    page.on("request", (r) => {
+      const path = new URL(r.url()).pathname;
+      if (r.method() === "GET" && (path === "/v1/funnel" || path === "/v1/license/invoice")) asked.push(path);
+    });
+    await goHash(page, "settings?tab=billing");
+    const usage = page.getByTestId("usage-billing");
+    await expect(usage.getByText(/there is nothing to bill/)).toBeVisible();
+    await page.getByTestId("settings-tab-workspace").click();
+    await expect(page.getByTestId("license-fold")).toBeVisible();
+    expect(asked).toEqual([]);
+  });
+
   test("the meter and the statement drawn from it are visible", async ({ page }) => {
     // Measured, priced, tested — and reachable only by curl, so a customer
     // could not see their own fleet history or their own bill.

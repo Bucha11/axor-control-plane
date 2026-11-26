@@ -1149,7 +1149,9 @@ export default function Settings({ tab = "workspace" }: { tab?: string } = {}) {
   const resetCoach = useApp((s) => s.resetCoach);
   const startTour = useStartTour();
 
-  const funnel = useQuery({ queryKey: ["funnel", 30], queryFn: () => api.funnelReport(30), retry: false });
+  // the operator's alone: anyone else got a 403 for it on every load (QA-042)
+  const funnel = useQuery({ queryKey: ["funnel", 30], queryFn: () => api.funnelReport(30), retry: false,
+                            enabled: authStatus.data?.operator === true });
   const canAdmin = useCanAdmin();
   const prod = !journey || menuAll || journey !== "coding";
   const coding = !journey || menuAll || journey !== "production";

@@ -2349,7 +2349,7 @@ export const api = {
   authStatus: () =>
     af("/v1/auth/status").then((r) =>
       j<{ auth_enabled: boolean; authenticated: boolean; scopes: string[];
-          guest_sessions?: boolean; guest?: boolean }>(r),
+          guest_sessions?: boolean; guest?: boolean; operator?: boolean }>(r),
     ),
   listKeys: () =>
     af("/v1/keys").then((r) =>

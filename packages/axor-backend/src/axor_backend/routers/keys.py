@@ -89,6 +89,7 @@ async def auth_status(request: Request, config: ConfigDep) -> dict:
             "auth_enabled": False,
             "authenticated": True,
             "scopes": sorted(auth_mod.SCOPES),
+            "operator": True,
         }
     principal = await resolve_principal(request)
     if principal is None and _presented_a_token(request):
@@ -109,6 +110,10 @@ async def auth_status(request: Request, config: ConfigDep) -> dict:
         # whether a visitor can start as a guest, and whether this caller is one
         "guest_sessions": getattr(request.app.state, "guests", None) is not None,
         "guest": principal is not None and principal.kind == "guest",
+        # the deployment's operator (the master token): what only they may read,
+        # such as the sign-up funnel, is asked for only then — not tried and
+        # refused with a 403 on every Settings load (QA-042)
+        "operator": principal is not None and principal.kind == "master",
     }
 
 
