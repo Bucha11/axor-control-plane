@@ -93,7 +93,7 @@ test("times each: holds what is typed, only a whole number 1–50 runs (QA-027)"
 test("one way to install axor-wrap: the worker's command is Skills' with the eval extra (QA-028)", async ({ page }) => {
   await machines(page, []);
   await goHash(page, "skill-evals");
-  await expect(page.getByTestId("skill-eval-cmd")).toContainText("uv tool install 'axor-wrap[plane,eval]'");
+  await expect(page.getByTestId("skill-eval-cmd")).toContainText("uv tool install --upgrade 'axor-wrap[plane,eval]'");
   await expect(page.getByTestId("skill-eval-cmd")).not.toContainText("pip install");
   await goHash(page, "skills");
   await expect(page.getByTestId("skill-try-cmd")).toContainText("uv tool install 'axor-wrap[plane]'");

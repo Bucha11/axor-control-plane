@@ -230,7 +230,7 @@ function HowToRun() {
           </div>
           {/* the same install as Connect and Skills give, with the extra the worker needs */}
           <MachineCommand testId="skill-eval-cmd"
-            cmd={"uv tool install 'axor-wrap[plane,eval]'\naxor-wrap worker"} />
+            cmd={"uv tool install --upgrade 'axor-wrap[plane,eval]'\naxor-wrap worker"} />
         </div>
       )}
       <Jobs />

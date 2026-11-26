@@ -94,3 +94,21 @@ async def test_a_code_host_is_never_a_trusted_source(
     r = await client.put("/v1/coding/exceptions", headers=owner,
                          json={"trusted_sources": ["pypi.org", "notgithub.com"]})
     assert r.status_code == 200, r.text
+
+
+async def test_a_code_host_already_trusted_does_not_block_the_list(
+        client: httpx.AsyncClient, priv, monkeypatch) -> None:  # noqa: ANN001, F811
+    """A team that trusted github.com before it was refused still edits its
+    list: the saved host stays until they remove it; a new one is refused."""
+    owner = _bearer(_mint(priv, role="owner"))
+    monkeypatch.setattr("axor_backend.routers.coding_api._CODE_HOSTS", ())
+    r = await client.put("/v1/coding/exceptions", headers=owner,
+                         json={"trusted_sources": ["github.com"]})
+    assert r.status_code == 200, r.text
+    monkeypatch.undo()
+    r = await client.put("/v1/coding/exceptions", headers=owner,
+                         json={"trusted_sources": ["github.com", "pypi.org"]})
+    assert r.status_code == 200, r.text
+    r = await client.put("/v1/coding/exceptions", headers=owner,
+                         json={"trusted_sources": ["github.com", "gitlab.com"]})
+    assert r.status_code == 400 and "gitlab.com" in r.json()["detail"]
