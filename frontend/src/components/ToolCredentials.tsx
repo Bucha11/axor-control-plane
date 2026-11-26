@@ -96,7 +96,6 @@ export default function ToolCredentials() {
       setOpen(false);
       refresh();
     },
-    onError: fail,
   });
   const enrollOnce = useOneAtATime(enroll);
 
@@ -137,7 +136,7 @@ export default function ToolCredentials() {
   const plaintext = enrolled.filter((e) => !e.sealed).length;
 
   return (
-    <div className="p-4 flex-1" style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 8 }} data-testid="tool-credentials">
+    <div className="p-4 flex-1" style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 8, flex: 1, minWidth: 0 }} data-testid="tool-credentials">
       <div style={{ fontSize: 10, fontFamily: MONO, color: C.dim, letterSpacing: "0.1em", marginBottom: 8 }}>
         TOOL CREDENTIALS · the agent never holds them
       </div>
@@ -197,7 +196,7 @@ export default function ToolCredentials() {
         <div style={{ fontFamily: MONO, fontSize: 11, color: C.dim }}>no credentials enrolled</div>
       ) : (
         enrolled.map((e) => (
-          <div key={`${e.tool}-${e.endpoint}`} className="flex items-center gap-2 py-1" style={{ fontFamily: MONO, fontSize: 11 }}>
+          <div key={`${e.tool}-${e.endpoint}`} className="flex items-center gap-2 py-1 flex-wrap" style={{ fontFamily: MONO, fontSize: 11 }}>
             <span style={{ color: e.revoked ? C.dim : C.text, textDecoration: e.revoked ? "line-through" : "none" }}>{e.tool}</span>
             <span style={{ color: C.dim, fontSize: 10 }}>v{e.version}</span>
             <span style={{ color: C.dim, fontSize: 10 }}>scope: {e.scope_nodes.join(", ") || "none"}</span>
@@ -245,7 +244,7 @@ export default function ToolCredentials() {
       </button>
 
       {open && (
-        <div className="mt-2 p-2" style={{ border: `1px solid ${C.line}`, borderRadius: 6 }}>
+        <div className="mt-2 p-2" style={{ border: `1px solid ${C.line}`, borderRadius: 6 }} data-testid="enrol-form">
           <div className="flex gap-2 mb-2">
             <Field name="tool" value={draft.tool} onChange={(v) => setDraft({ ...draft, tool: v })} />
             <Field name="endpoint" value={draft.endpoint} placeholder="https://api.stripe.com" onChange={(v) => setDraft({ ...draft, endpoint: v })} />
@@ -270,6 +269,10 @@ export default function ToolCredentials() {
           >
             {enroll.isPending ? "enrolling…" : "enrol"}
           </button>
+          {/* said under the form it is about, not under PUBLIC KEYS (QA-041) */}
+          {enroll.isError && (
+            <div className="mt-2" style={{ fontFamily: MONO, fontSize: 10, color: C.red }}>{enroll.error.message}</div>
+          )}
         </div>
       )}
 

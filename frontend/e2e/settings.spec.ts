@@ -244,6 +244,8 @@ test.describe("settings", () => {
     await page.getByTestId("key-mint").dblclick();
     await expect(page.getByTestId("key-minted")).toContainText("ak_secret1");
     expect(posts).toBe(1);
+    // QA-041: the "shown once" box had no padding — its text touched the border
+    expect(await page.getByTestId("key-minted").evaluate((el) => getComputedStyle(el).paddingLeft)).toBe("8px");
   });
 
   test("production sees how the plane is protected, wall by wall", async ({ page }) => {
@@ -253,6 +255,29 @@ test.describe("settings", () => {
     await expect(posture.getByTestId("posture-auth")).toContainText("set AXOR_API_TOKEN");
     await expect(posture.getByTestId("posture-command_signing")).toContainText("AXOR_OPERATOR_KEYS");
     await expect(page.getByTestId("federation-vault")).toBeVisible();
+  });
+
+  test("security: the cards stay in the column, the enrol error sits under enrol (QA-041)", async ({ page }) => {
+    // SIGNING COMMANDS stuck out past the column's right edge, and a refused
+    // enrolment was said under PUBLIC KEYS, a section below the form
+    await page.setViewportSize({ width: 1366, height: 900 });
+    await page.route("**/v1/vault/creds/enroll", (r) => r.fulfill({ status: 400, contentType: "application/json",
+      body: JSON.stringify({ detail: "needs at least one node in scope_nodes" }) }));
+    await goHash(page, "settings?tab=security");
+    const row = page.getByTestId("federation-vault");
+    await expect(row).toBeVisible();
+    const right = (await row.boundingBox())!;
+    for (const card of await row.locator(":scope > div").all()) {
+      const box = (await card.boundingBox())!;
+      expect(box.x + box.width).toBeLessThanOrEqual(right.x + right.width + 0.5);
+    }
+    await page.getByRole("button", { name: "enrol a credential" }).click();
+    const form = page.getByTestId("enrol-form");
+    await form.getByLabel("tool", { exact: true }).fill("qa2tool");
+    await form.getByLabel("endpoint").fill("https://api.example.com");
+    await form.getByLabel("secret").fill("s3cret");
+    await form.getByRole("button", { name: "enrol", exact: true }).click();
+    await expect(form).toContainText("needs at least one node in scope_nodes");
   });
 
   test("billing for production: the plan, and what this month would cost on Team and Security", async ({ page }) => {

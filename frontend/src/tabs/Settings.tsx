@@ -2274,7 +2274,9 @@ function FederationVault() {
   return (
     <div className="flex gap-4 mb-4 stack-narrow" data-testid="federation-vault" style={{ alignItems: "stretch" }}>
       <ToolCredentials />
-      <div className="p-4 flex-1" style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 8 }}>
+      {/* `flex-1` is no class in utilities.css: without the inline flex the
+          card was as wide as its widest line, past the column (QA-041) */}
+      <div className="p-4 flex-1" style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 8, flex: 1, minWidth: 0 }}>
         <div style={{ fontSize: 10, fontFamily: MONO, color: C.dim, letterSpacing: "0.1em", marginBottom: 8 }}>
           SIGNING COMMANDS TO AGENTS
         </div>

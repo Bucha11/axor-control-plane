@@ -14,7 +14,7 @@ html, body { margin: 0; background: #12161A; }  /* C.bg: no white beyond the app
 .gap-1 { gap: 4px; } .gap-1\.5 { gap: 6px; } .gap-2 { gap: 8px; }
 .gap-2\.5 { gap: 10px; } .gap-3 { gap: 12px; } .gap-4 { gap: 16px; }
 .gap-6 { gap: 24px; }
-.p-3 { padding: 12px; } .p-4 { padding: 16px; } .p-8 { padding: 32px; }
+.p-2 { padding: 8px; } .p-3 { padding: 12px; } .p-4 { padding: 16px; } .p-8 { padding: 32px; }
 .px-2 { padding-left: 8px; padding-right: 8px; }
 .px-4 { padding-left: 16px; padding-right: 16px; }
 .py-0\.5 { padding-top: 2px; padding-bottom: 2px; }
