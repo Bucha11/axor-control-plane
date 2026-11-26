@@ -398,7 +398,8 @@ class TestARunThatOnlyWatchedHoldsWhatItWouldHaveRefused:
 
     def _watched(self) -> list:
         read = _call(0, "read_ticket", "pass")
-        result = {"schema_version": SCHEMA_VERSION, "seq": 1, "node_id": "n0", "kind": "tool_result",
+        result = {"schema_version": SCHEMA_VERSION, "seq": 1, "node_id": "n0",
+                  "kind": "tool_result",
                   "ts": "t", "causal_root": "v1", "gate": None, "verdict": None,
                   "payload": {"tool": "read_ticket", "value_ref": "v1",
                               "root": {"sources": ["web"], "sensitive": False}}}
@@ -417,4 +418,5 @@ class TestARunThatOnlyWatchedHoldsWhatItWouldHaveRefused:
         assert row["result"] == "held"
         # under rules that no longer refuse it, it is an escape — not "unchecked"
         loose = kernel_config_from_json({"allowed_tools": ["read_ticket", "send_email"]})
-        assert regression_row("r", "must_block", "attack", self._watched(), loose)["result"] == "escaped"
+        row = regression_row("r", "must_block", "attack", self._watched(), loose)
+        assert row["result"] == "escaped"

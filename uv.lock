@@ -197,7 +197,7 @@ requires-dist = [
     { name = "alembic", specifier = ">=1.13" },
     { name = "asyncpg", specifier = ">=0.29" },
     { name = "axor-core", specifier = ">=0.13,<0.14" },
-    { name = "axor-eval", specifier = ">=0.3,<0.4" },
+    { name = "axor-eval", specifier = ">=0.3.3,<0.4" },
     { name = "axor-probe", specifier = ">=0.2.1,<0.3" },
     { name = "axor-sentinel", specifier = ">=0.4,<0.5" },
     { name = "axor-wrap", marker = "extra == 'wrap'", specifier = ">=0.4,<0.5" },
@@ -245,15 +245,15 @@ wheels = [
 
 [[package]]
 name = "axor-eval"
-version = "0.3.2"
+version = "0.3.3"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "axor-core" },
     { name = "axor-wrap" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/b5/89/38d8514d6775e02e779bf1505d3f0eb6dd2a1e1c48f35b2b0d4ef828a53f/axor_eval-0.3.2.tar.gz", hash = "sha256:d7a6e1e1e957e08dc31736d69e6151cff62f08233127e8a3742f820186372883", size = 170376, upload-time = "2026-11-23T22:23:19.798Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/70/b0/59bdda7657674026bdec9e448d51e0dac916030e7eb7e780d461e2f7fc54/axor_eval-0.3.3.tar.gz", hash = "sha256:bb70614a76222e2d42f9f299ae81033af2765847c6bf312080b8cb0475317923", size = 175547, upload-time = "2026-11-26T12:41:58.372Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/d4/3d/60dd708ce591f7ae990872fc11e9697a05f8c166d3001a6b488c0cd1fe64/axor_eval-0.3.2-py3-none-any.whl", hash = "sha256:c91be0d5257a248743fc16157b6a79f12512ff522e5e224dc6b79bc50b072e7b", size = 83332, upload-time = "2026-11-23T22:23:18.619Z" },
+    { url = "https://files.pythonhosted.org/packages/79/c2/e806edfc5b3c264fdc11aad884cdd9629c6ce7deccee51822480634f8662/axor_eval-0.3.3-py3-none-any.whl", hash = "sha256:a0f10d2c6e9978cd23aab140e564bbb09f9c17344a7ea972c093760343665b66", size = 87106, upload-time = "2026-11-26T12:41:57.003Z" },
 ]
 
 [[package]]

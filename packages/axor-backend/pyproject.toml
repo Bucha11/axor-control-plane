@@ -39,8 +39,10 @@ dependencies = [
   # can join them — and the only one that can notice their two copies of the
   # verdict vocabulary diverging.
   # 0.3: setup health with the team's memory — the reports /v1/setup-health
-  # receives name the repository the way the sidecar does.
-  "axor-eval>=0.3,<0.4",
+  # receives name the repository the way the sidecar does. 0.3.3: a made-up
+  # result in live work (a tool that really failed, a call the operator held)
+  # is a case too — what Incidents and the live-work receipt now show.
+  "axor-eval>=0.3.3,<0.4",
   # Attestation semantics — append-only, revocation-as-an-event, same-keyset
   # revocation, the required reason. Imported, not restated: a plane that
   # decided for itself what a valid attestation is would be a second answer to

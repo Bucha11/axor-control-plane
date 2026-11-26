@@ -220,7 +220,8 @@ async def test_the_shipped_trace_replays_to_the_verdict_given_live(
     assert result.first_divergence is None
 
 
-async def test_only_the_fields_named_outside_text_are_outside_text(tmp_path: Path, link: FakeLink) -> None:
+async def test_only_the_fields_named_outside_text_are_outside_text(
+        tmp_path: Path, link: FakeLink) -> None:
     """A support ticket: the customer wrote its `text`, the mail system stamped
     its `from`. With the whole answer registered, the reply to the customer —
     whose address is in every ticket — was refused like the address the ticket
@@ -244,14 +245,16 @@ async def test_only_the_fields_named_outside_text_are_outside_text(tmp_path: Pat
         tools={"read_ticket": "http://up.test/read", "send_email": "http://up.test/send"},
         trace_dir=tmp_path,
         client=httpx.AsyncClient(transport=httpx.ASGITransport(app=upstream), base_url="http://up.test"),
-        guard=Guard([reader, manifest("send_email", "EXPORT", driving=["to"])], "support", link=link),
+        guard=Guard([reader, manifest("send_email", "EXPORT", driving=["to"])], "support",
+                    link=link),
     )
     proxy = httpx.AsyncClient(transport=httpx.ASGITransport(app=create_app(state)),
                               base_url="http://proxy.test")
     await proxy.post("/t/read_ticket/", json={"id": "T-1"})
     r = await proxy.post("/t/send_email/", json={"to": "anna@customer.example", "body": "done"})
     assert r.status_code == 200
-    r = await proxy.post("/t/send_email/", json={"to": "records@archive.example", "body": "history"})
+    r = await proxy.post("/t/send_email/",
+                         json={"to": "records@archive.example", "body": "history"})
     assert r.status_code == 403
     assert sent == [{"to": "anna@customer.example", "body": "done"}]
 

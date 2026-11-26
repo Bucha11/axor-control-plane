@@ -34,9 +34,9 @@ from sqlalchemy import (
     select,
     update,
 )
+from sqlalchemy import false as sa_false
 from sqlalchemy import text as sa_text
 from sqlalchemy.dialects.postgresql import JSONB
-from sqlalchemy import false as sa_false
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
