@@ -43,6 +43,15 @@ export function TeamSwitch({ name }: { name: string }) {
   const [sure, setSure] = useState(false);
   const s = shared.find((t) => t.name === name);
   if (!s || off.has(name)) return null;
+  if (s.example) {
+    // the product's example: turning it on would hand it to every developer's
+    // agent — the plane refuses it, and the page does not offer it (QA-005)
+    return (
+      <span data-testid={`team-example-${name}`} style={{ fontFamily: MONO, fontSize: 11, color: C.amber }}>
+        example · share your own to turn one on for the team
+      </span>
+    );
+  }
   const danger = s.latest.check?.summary.danger ?? 0;
   const newer = s.live && s.live.version !== s.latest.version;
   if (s.live && !newer) {

@@ -182,7 +182,8 @@ def verify_license(license_json: str, vendor_pubkey_hex: str) -> License:
             features=tuple(lic.get("features", ())),
         )
     except (KeyError, TypeError, ValueError) as exc:
-        raise LicenseError(f"malformed license: a field is missing or of the wrong kind ({exc!s})") from exc
+        raise LicenseError("malformed license: a field is missing or of the wrong kind "
+                           f"({exc!s})") from exc
 
 
 def sign_license(lic: dict, vendor_privkey_hex: str) -> str:

@@ -742,6 +742,8 @@ export interface TeamSkill {
             check: { summary: { danger: number; warn: number; info: number };
                      findings: { severity: string; what: string; where: string; snippet: string }[] } | null };
   live: { version: string; by: string; ts: string } | null;
+  // the product's example ("see an example"): never turned on for a team
+  example?: boolean;
 }
 
 /** A coding-agent setup health check, as axor_eval.setup_health posts it. */

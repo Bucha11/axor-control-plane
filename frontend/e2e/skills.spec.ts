@@ -132,18 +132,17 @@ test.describe("coding agents: their menu, and trying a skill", () => {
   });
 
   test("a skill turned off for the team: the switch, the sidecars' policy, back on", async ({ page, request }) => {
-    await request.post("http://127.0.0.1:8400/v1/demo/seed-skill-eval");
-    await goHash(page, "skill-evals/se-example");
-    const card = page.getByTestId("skill-card-test-first");
-    await card.getByTestId("skill-off-test-first").click();
-    await expect(card.getByTestId("skill-is-off-test-first")).toContainText("turned off for the team");
+    // turned off by name where skills are tried — the example eval's own cards
+    // carry no switch: they would change the real team (QA-005)
+    await goHash(page, "skills");
+    const panel = page.getByTestId("skills-off");
+    await panel.getByLabel("skill to turn off").fill("test-first");
+    await panel.getByLabel("skill to turn off").press("Enter");
+    await expect(panel.getByTestId("off-row-test-first")).toBeVisible();
     // what every developer's sidecar fetches
     const policy = await (await request.get("http://127.0.0.1:8400/v1/coding/policy")).json();
     expect(policy.skills_off).toContain("test-first");
     // the list says what it can and cannot do, and turns it back on
-    // turned-off skills are listed where skills are tried
-    await goHash(page, "skills");
-    const panel = page.getByTestId("skills-off");
     await expect(panel).toContainText("No agent on the team can use it");
     // the detail is one click away, not a wall of text
     await expect(panel).not.toContainText("until the skill's folder is deleted");
@@ -199,41 +198,56 @@ test.describe("coding agents: their menu, and trying a skill", () => {
   });
 
   test("a skill that helps, turned on for the team: the policy names it, the sidecars fetch it", async ({ page, request }) => {
+    const B = "http://127.0.0.1:8400";
     await setConnection(page, { mode: "demo" });
-    await request.post("http://127.0.0.1:8400/v1/demo/seed-skill-eval");
+    await request.post(`${B}/v1/demo/seed-skill-eval`);
     // the team's skills are on Skills, with the rest of what is done about skills
     await goHash(page, "skills");
     const panel = page.getByTestId("team-skills");
     await expect(panel.getByTestId("team-share-cmd")).toHaveText("axor-wrap skill share ./.claude/skills/my-skill");
     // no environment variables on the page: the machine's connection is set once
     await expect(page.getByText(/AXOR_[A-Z_]+/)).toHaveCount(0);
+
+    // The product's example is shown as one and never turned on for the team:
+    // that would hand it to every developer's agent (QA-005).
     const example = panel.getByTestId("team-skill-example");
     await page.waitForLoadState("networkidle");   // the list decides whether the example button shows
     if (await example.isVisible()) await example.click();
-    else await request.post("http://127.0.0.1:8400/v1/demo/seed-team-skill");
-    const row = panel.getByTestId("team-row-changelog-entries");
-    await expect(row).toContainText("not on");
-    await row.getByRole("button", { name: "read SKILL.md" }).click();
-    await expect(row.getByTestId("team-md-changelog-entries")).toContainText("## Unreleased");
-    await row.getByTestId("team-on-changelog-entries").click();
-    await expect(row.getByTestId("team-is-on-changelog-entries")).toBeVisible();
-    await expect(row).toContainText("on since");
-    // what every developer's sidecar fetches, and then installs
-    const policy = await (await request.get("http://127.0.0.1:8400/v1/coding/policy")).json();
-    const on = policy.skills_team.find((t: { name: string }) => t.name === "changelog-entries");
-    expect(on.version).toBeTruthy();
-    const bundle = await (await request.get("http://127.0.0.1:8400/v1/coding/skill-bundles/changelog-entries")).json();
-    expect(bundle.files.map((f: { path: string }) => f.path)).toEqual(["SKILL.md", "templates/entry.md"]);
-    // the eval that showed it helps carries the same switch
+    else await request.post(`${B}/v1/demo/seed-team-skill`);
+    const ex = panel.getByTestId("team-row-changelog-entries");
+    await expect(ex.getByTestId("team-example-changelog-entries")).toBeVisible();
+    await expect(ex.getByTestId("team-on-changelog-entries")).toHaveCount(0);
+    expect((await request.put(`${B}/v1/coding/skills/changelog-entries`, { data: { team: true } })).status())
+      .toBe(409);
+    // ...and the example eval has no switches that would change the real team
     await goHash(page, "skill-evals/se-example");
     const card = page.getByTestId("skill-card-changelog-entries");
-    await expect(card.getByTestId("team-is-on-changelog-entries")).toBeVisible();
+    await expect(card).toBeVisible();
+    await expect(card.getByTestId("team-example-changelog-entries")).toHaveCount(0);
     await expect(card.getByTestId("skill-off-changelog-entries")).toHaveCount(0);
-    await card.getByRole("button", { name: "take off the team" }).click();
-    await expect(card.getByTestId("team-on-changelog-entries")).toBeVisible();
-    await expect(card.getByTestId("skill-off-changelog-entries")).toBeVisible();
-    const after = await (await request.get("http://127.0.0.1:8400/v1/coding/policy")).json();
-    expect(after.skills_team.map((t: { name: string }) => t.name)).not.toContain("changelog-entries");
+
+    // A skill of the team's own, shared the way `axor-wrap skill share` shares it
+    const name = `release-notes-${Date.now().toString(36)}`;
+    expect((await request.post(`${B}/v1/coding/skill-bundles`, { data: { name, files: [
+      { path: "SKILL.md", content: `---\nname: ${name}\ndescription: release notes\n---\n\n## Unreleased\nWrite one line.\n` },
+      { path: "templates/entry.md", content: "- {what changed}\n" }] } })).status()).toBe(201);
+    await goHash(page, "skills");
+    const row = panel.getByTestId(`team-row-${name}`);
+    await expect(row).toContainText("not on");
+    await row.getByRole("button", { name: "read SKILL.md" }).click();
+    await expect(row.getByTestId(`team-md-${name}`)).toContainText("## Unreleased");
+    await row.getByTestId(`team-on-${name}`).click();
+    await expect(row.getByTestId(`team-is-on-${name}`)).toBeVisible();
+    await expect(row).toContainText("on since");
+    // what every developer's sidecar fetches, and then installs
+    const policy = await (await request.get(`${B}/v1/coding/policy`)).json();
+    expect(policy.skills_team.find((t: { name: string }) => t.name === name).version).toBeTruthy();
+    const bundle = await (await request.get(`${B}/v1/coding/skill-bundles/${name}`)).json();
+    expect(bundle.files.map((f: { path: string }) => f.path)).toEqual(["SKILL.md", "templates/entry.md"]);
+    await row.getByRole("button", { name: "take off the team" }).click();
+    await expect(row.getByTestId(`team-on-${name}`)).toBeVisible();
+    const after = await (await request.get(`${B}/v1/coding/policy`)).json();
+    expect(after.skills_team.map((t: { name: string }) => t.name)).not.toContain(name);
   });
 
   test("pair sessions: watch a session live, a note reaches the agent, two side by side", async ({ page, request }) => {

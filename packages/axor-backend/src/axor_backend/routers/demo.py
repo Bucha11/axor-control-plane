@@ -302,6 +302,10 @@ async def seed_team_skill(store: StoreDep) -> dict:
                 "there. Use templates/entry.md. Don't touch released sections.\n")},
             {"path": "templates/entry.md", "content": "- {what changed, for whom} ({issue})\n"},
         ]}, store, None)
+        # marked as the example it is: shown as one, never turned on for a team
+        shared = await store.team_skill("changelog-entries")
+        await store.put_team_skill("changelog-entries", {**shared["latest"], "example": True},
+                                   shared["live"])
     return {"name": "changelog-entries"}
 
 
