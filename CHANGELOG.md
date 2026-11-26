@@ -5,6 +5,29 @@ The Control Plane ships as three packages from one tag (`axor-backend`,
 images (`axor-platform`, `axor-frontend`). Self-hosted operators upgrade by
 tag; `deploy/offline` carries the same release to a machine with no network.
 
+## 0.6.2 — 2026-11-26
+
+### Added
+
+- **Run a skill eval from the UI, on your own machine.** Skills → Does a skill
+  help? queues the eval on your `axor-wrap worker` (axor-wrap 0.4.1:
+  `pip install 'axor-wrap[eval]'`, then `axor-wrap worker` in the repository)
+  instead of handing out a script to paste. The page shows how far along it is,
+  cancels it between runs, and opens the report. A job runs only on its
+  owner's machine — it starts a coding agent and a shell command there — and a
+  machine that goes quiet loses its job, which is never re-run on its own.
+  New: `machines`, `machine_jobs` (migration 0040), `/v1/machines…`,
+  `/v1/machine-jobs…`.
+
+### Fixed
+
+- **The account menu** says who is signed in and which workspace, and points
+  to Settings for the team, who may, sign-on and keys — the whole of them in a
+  300px popover ran off the bottom of the screen.
+- **"planned" chips** in Pricing no longer stretch into ovals beside a
+  two-line feature (`items-baseline` was used but never defined), and
+  Control's spawn buttons no longer touch.
+
 ## 0.6.1 — 2026-11-26
 
 Fixes from the first card payment on prod. Nothing touches enforcement.
