@@ -1685,6 +1685,17 @@ export const api = {
       body: JSON.stringify({ off }),
     }).then((r) => j<{ skills_off: string[] }>(r)),
   skillEvals: () => af("/v1/skill-evals").then((r) => j<{ evals: SkillEvalRow[] }>(r)),
+  // a developer's own `axor-wrap worker`s, and the jobs queued for them
+  machines: () => af("/v1/machines").then((r) => j<{ machines: Machine[] }>(r)),
+  machineJobs: () => af("/v1/machine-jobs?limit=10").then((r) => j<{ jobs: MachineJob[] }>(r)),
+  queueSkillEval: (machineId: string, spec: SkillEvalSpec) =>
+    af("/v1/machine-jobs", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ machine_id: machineId, kind: "skill_eval", spec }),
+    }).then((r) => j<MachineJob>(r)),
+  cancelMachineJob: (jobId: string) =>
+    af(`/v1/machine-jobs/${encodeURIComponent(jobId)}/cancel`, { method: "POST" })
+      .then((r) => j<{ job_id: string; state: string; stops: string }>(r)),
   skillEval: (id: string) =>
     af(`/v1/skill-evals/${encodeURIComponent(id)}`).then((r) => j<SkillEval>(r)),
   seedSkillEval: () =>
@@ -2385,4 +2396,22 @@ export function streamRun(
     closed = true;
     source?.close();
   };
+}
+
+export interface Machine {
+  machine_id: string; host: string; repo_label: string; agents: string[];
+  last_seen: string; online: boolean; yours: boolean;
+}
+
+export interface SkillEvalSpec {
+  skills: string[]; agent: string; trials: number;
+  tasks: { name?: string; prompt: string; check: string }[];
+}
+
+export interface MachineJob {
+  job_id: string; machine_id: string; created_by: string; kind: string; spec: SkillEvalSpec;
+  state: "queued" | "running" | "done" | "failed" | "cancelled" | "lost";
+  cancel_requested: boolean; lease_until: string | null;
+  progress: { done?: number; total?: number; solved?: number; current?: string };
+  eval_id: string | null; error: string; created_ts: string; updated_ts: string;
 }

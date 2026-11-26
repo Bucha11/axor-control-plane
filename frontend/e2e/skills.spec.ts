@@ -110,7 +110,9 @@ test.describe("coding agents: their menu, and trying a skill", () => {
 
   test("skill evals: which skills help and what they cost, from an example report", async ({ page }) => {
     await goHash(page, "skill-evals");
-    await expect(page.getByTestId("skill-eval-cmd")).toContainText("python -m axor_eval.skills run skill-eval.json --plane");
+    // no machine of yours on line: the one command that brings one (a run is
+    // started from here once it is)
+    await expect(page.getByTestId("skill-eval-cmd")).toContainText("axor-wrap worker");
     const example = page.getByTestId("skill-eval-example");
     await page.waitForLoadState("networkidle");   // the list decides whether the example button shows
     if (await example.isVisible()) await example.click();

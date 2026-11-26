@@ -620,6 +620,43 @@ skill_evals = Table(
     Column("doc", Text, nullable=False),
 )
 
+# A developer's `axor-wrap worker`, as its personal key reports it (migration
+# 0040): `owner` is that key's minter, set by the plane, never by the machine.
+machines = Table(
+    "machines", metadata,
+    Column("org_id", String(64), primary_key=True),
+    Column("machine_id", String(64), primary_key=True),
+    Column("owner", String(64), nullable=False, server_default=""),
+    Column("key_id", String(64), nullable=False, server_default=""),
+    Column("host", String(120), nullable=False, server_default=""),
+    Column("repo_label", String(200), nullable=False, server_default=""),
+    Column("agents", Text, nullable=False, server_default="[]"),
+    Column("last_seen", String(40), nullable=False),
+)
+
+# Work the owner queued for their own machine (a skill eval). queued → running
+# → done | failed | cancelled | lost; `lease_until` is pushed forward by every
+# progress report, and a lapsed lease is `lost`, never re-run on its own: the
+# runs cost the owner's tokens.
+machine_jobs = Table(
+    "machine_jobs", metadata,
+    Column("org_id", String(64), primary_key=True),
+    Column("job_id", String(64), primary_key=True),
+    Column("machine_id", String(64), nullable=False, index=True),
+    Column("owner", String(64), nullable=False, server_default=""),
+    Column("created_by", String(255), nullable=False, server_default=""),
+    Column("kind", String(40), nullable=False),
+    Column("spec", Text, nullable=False),
+    Column("state", String(20), nullable=False, index=True),
+    Column("cancel_requested", Boolean, nullable=False, server_default=sa_false()),
+    Column("lease_until", String(40), nullable=True),
+    Column("progress", Text, nullable=False, server_default="{}"),
+    Column("eval_id", String(64), nullable=True),
+    Column("error", Text, nullable=False, server_default=""),
+    Column("created_ts", String(40), nullable=False, index=True),
+    Column("updated_ts", String(40), nullable=False),
+)
+
 # A hosted visitor's guest session (no account): a short-lived bearer whose
 # HASH is kept here, mapped to the throwaway org its work lives under. Not
 # tenant data itself — it is what lets that work be claimed into an account
@@ -1421,6 +1458,135 @@ class Store:
         if row is None:
             return None
         return {"eval_id": row.eval_id, "created_ts": row.created_ts, **json.loads(row.doc)}
+
+    # ── machines and the work queued for them (0040) ─────────────────────────
+
+    async def upsert_machine(self, machine_id: str, *, owner: str, key_id: str, host: str,
+                             repo_label: str, agents: list[str], ts: str) -> None:
+        org = current_org_id()
+        values = dict(owner=owner, key_id=key_id, host=host[:120], repo_label=repo_label[:200],
+                      agents=json.dumps(agents), last_seen=ts)
+        async with self.engine.begin() as conn:
+            done = await conn.execute(machines.update().where(
+                machines.c.org_id == org, machines.c.machine_id == machine_id).values(**values))
+            if not done.rowcount:
+                await conn.execute(machines.insert().values(
+                    org_id=org, machine_id=machine_id, **values))
+
+    @staticmethod
+    def _machine(r: Any) -> dict[str, Any]:  # noqa: ANN401 - a result row
+        return {"machine_id": r.machine_id, "owner": r.owner, "key_id": r.key_id,
+                "host": r.host, "repo_label": r.repo_label,
+                "agents": json.loads(r.agents or "[]"), "last_seen": r.last_seen}
+
+    async def get_machine(self, machine_id: str) -> dict[str, Any] | None:
+        async with self.engine.connect() as conn:
+            row = (await conn.execute(select(machines).where(
+                machines.c.org_id == current_org_id(),
+                machines.c.machine_id == machine_id))).first()
+        return None if row is None else self._machine(row)
+
+    async def list_machines(self) -> list[dict[str, Any]]:
+        async with self.engine.connect() as conn:
+            rows = (await conn.execute(select(machines).where(
+                machines.c.org_id == current_org_id())
+                .order_by(machines.c.last_seen.desc()))).all()
+        return [self._machine(r) for r in rows]
+
+    @staticmethod
+    def _job(r: Any) -> dict[str, Any]:  # noqa: ANN401 - a result row
+        return {"job_id": r.job_id, "machine_id": r.machine_id, "owner": r.owner,
+                "created_by": r.created_by, "kind": r.kind, "spec": json.loads(r.spec),
+                "state": r.state, "cancel_requested": bool(r.cancel_requested),
+                "lease_until": r.lease_until, "progress": json.loads(r.progress or "{}"),
+                "eval_id": r.eval_id, "error": r.error, "created_ts": r.created_ts,
+                "updated_ts": r.updated_ts}
+
+    async def create_machine_job(self, job_id: str, *, machine_id: str, owner: str,
+                                 created_by: str, kind: str, spec: dict, ts: str) -> None:
+        async with self.engine.begin() as conn:
+            await conn.execute(machine_jobs.insert().values(
+                org_id=current_org_id(), job_id=job_id, machine_id=machine_id, owner=owner,
+                created_by=created_by[:255], kind=kind, spec=json.dumps(spec), state="queued",
+                created_ts=ts, updated_ts=ts))
+
+    async def get_machine_job(self, job_id: str) -> dict[str, Any] | None:
+        async with self.engine.connect() as conn:
+            row = (await conn.execute(select(machine_jobs).where(
+                machine_jobs.c.org_id == current_org_id(),
+                machine_jobs.c.job_id == job_id))).first()
+        return None if row is None else self._job(row)
+
+    async def list_machine_jobs(self, *, machine_id: str | None = None, owner: str | None = None,
+                                state: str | None = None, limit: int = 50) -> list[dict[str, Any]]:
+        q = select(machine_jobs).where(machine_jobs.c.org_id == current_org_id())
+        if machine_id is not None:
+            q = q.where(machine_jobs.c.machine_id == machine_id)
+        if owner is not None:
+            q = q.where(machine_jobs.c.owner == owner)
+        if state is not None:
+            q = q.where(machine_jobs.c.state == state)
+        async with self.engine.connect() as conn:
+            rows = (await conn.execute(
+                q.order_by(machine_jobs.c.created_ts.desc()).limit(limit))).all()
+        return [self._job(r) for r in rows]
+
+    async def claim_machine_job(self, job_id: str, *, machine_id: str, owner: str,
+                                lease_until: str, ts: str) -> bool:
+        """Take a queued job for this machine — once: two claims, one winner."""
+        async with self.engine.begin() as conn:
+            done = await conn.execute(machine_jobs.update().where(
+                machine_jobs.c.org_id == current_org_id(), machine_jobs.c.job_id == job_id,
+                machine_jobs.c.machine_id == machine_id, machine_jobs.c.owner == owner,
+                machine_jobs.c.state == "queued",
+                machine_jobs.c.cancel_requested == sa_false(),
+            ).values(state="running", lease_until=lease_until, updated_ts=ts))
+        return bool(done.rowcount)
+
+    async def report_machine_job(self, job_id: str, *, machine_id: str, progress: dict,
+                                 lease_until: str, ts: str) -> bool:
+        """A running job's progress, which also extends its lease."""
+        async with self.engine.begin() as conn:
+            done = await conn.execute(machine_jobs.update().where(
+                machine_jobs.c.org_id == current_org_id(), machine_jobs.c.job_id == job_id,
+                machine_jobs.c.machine_id == machine_id, machine_jobs.c.state == "running",
+            ).values(progress=json.dumps(progress), lease_until=lease_until, updated_ts=ts))
+        return bool(done.rowcount)
+
+    async def finish_machine_job(self, job_id: str, *, machine_id: str, state: str,
+                                 eval_id: str | None, error: str, ts: str) -> bool:
+        async with self.engine.begin() as conn:
+            done = await conn.execute(machine_jobs.update().where(
+                machine_jobs.c.org_id == current_org_id(), machine_jobs.c.job_id == job_id,
+                machine_jobs.c.machine_id == machine_id, machine_jobs.c.state == "running",
+            ).values(state=state, eval_id=eval_id, error=error[:4000], lease_until=None,
+                     updated_ts=ts))
+        return bool(done.rowcount)
+
+    async def cancel_machine_job(self, job_id: str, ts: str) -> str | None:
+        """Queued: cancelled at once. Running: asked, and the machine stops
+        between runs. The state after, or None when there is no such job."""
+        org = current_org_id()
+        async with self.engine.begin() as conn:
+            await conn.execute(machine_jobs.update().where(
+                machine_jobs.c.org_id == org, machine_jobs.c.job_id == job_id,
+                machine_jobs.c.state == "queued").values(state="cancelled", updated_ts=ts))
+            await conn.execute(machine_jobs.update().where(
+                machine_jobs.c.org_id == org, machine_jobs.c.job_id == job_id,
+                machine_jobs.c.state == "running").values(cancel_requested=True, updated_ts=ts))
+            row = (await conn.execute(select(machine_jobs.c.state).where(
+                machine_jobs.c.org_id == org, machine_jobs.c.job_id == job_id))).first()
+        return None if row is None else str(row.state)
+
+    async def expire_machine_jobs(self, now_ts: str) -> int:
+        """Running jobs whose lease lapsed — the machine went away — are lost."""
+        async with self.engine.begin() as conn:
+            done = await conn.execute(machine_jobs.update().where(
+                machine_jobs.c.org_id == current_org_id(), machine_jobs.c.state == "running",
+                machine_jobs.c.lease_until < now_ts,
+            ).values(state="lost", lease_until=None, updated_ts=now_ts,
+                     error="the machine stopped reporting before the job finished"))
+        return int(done.rowcount or 0)
 
     async def list_skill_evals(self, limit: int = 50) -> list[dict[str, Any]]:
         async with self.engine.connect() as conn:

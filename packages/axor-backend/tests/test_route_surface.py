@@ -134,6 +134,21 @@ EXPECTED: dict[tuple[str, str], str] = {
     ("PUT", "/v1/coding/say/{node_id}/mode"): "operate",
     ("GET", "/v1/skill-evals"): "read",
     ("GET", "/v1/skill-evals/{eval_id}"): "read",
+    # A developer's own worker (axor-wrap worker), on their personal key: its
+    # heartbeat, its queue, and claiming / reporting / finishing a job. The
+    # owner check — a job runs only on its owner's machine — is the handler's.
+    ("POST", "/v1/machines/heartbeat"): "ingest",
+    ("GET", "/v1/machines/{machine_id}/jobs"): "read|ingest",
+    ("POST", "/v1/machines/{machine_id}/jobs/{job_id}/claim"): "ingest",
+    ("POST", "/v1/machines/{machine_id}/jobs/{job_id}/progress"): "ingest",
+    ("POST", "/v1/machines/{machine_id}/jobs/{job_id}/complete"): "ingest",
+    # ...and the UI's: which machines are on line, queueing a job on your own
+    # machine and cancelling it (it starts a coding agent there: operate).
+    ("GET", "/v1/machines"): "read",
+    ("POST", "/v1/machine-jobs"): "operate",
+    ("GET", "/v1/machine-jobs"): "read",
+    ("GET", "/v1/machine-jobs/{job_id}"): "read",
+    ("POST", "/v1/machine-jobs/{job_id}/cancel"): "operate",
     ("POST", "/v1/demo/fleet-reprobe"): "operate",
     # ── analysis: pure kernel reads, POST or not ─────────────────────────────
     ("GET", "/v1/runs/{run_id}/subgraph"): "read",

@@ -5,7 +5,7 @@
 // passed), and `--plane` posts its report here. This page reads that report as
 // written: per skill, what it does alone and on top of the others, whether the
 // agent opened it at all, and its token cost; per arm, solved and spend.
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ChevronDown, ChevronRight, Loader2 } from "lucide-react";
 import { api, SkillEval, SkillEvalArm, SkillEvalCompare, SkillEvalSkill, SkillEvalTask } from "../api";
@@ -137,17 +137,25 @@ function short(v: string): string {
 }
 
 function HowToRun() {
-  // the file is written here, from four answers — not by hand from a sample
+  // Run from here: the eval runs on the developer's own machine (their
+  // `axor-wrap worker`, in the repository), which takes only jobs its owner
+  // queued — a job starts a coding agent and a shell command there.
+  const qc = useQueryClient();
   const [skill, setSkill] = useState("./.claude/skills/my-skill");
   const [prompt, setPrompt] = useState("fix the failing test in tests/");
   const [checkCmd, setCheckCmd] = useState("python -m pytest -q");
   const [trials, setTrials] = useState(5);
-  const runs = trials * 2;
-  const spec = JSON.stringify({
-    skills: [skill], repo: ".", agent: "claude-code", trials,
-    tasks: [{ name: "task-1", prompt, check: checkCmd }],
-  }, null, 2);
-  const cmd = `pip install --upgrade axor-eval\ncat > skill-eval.json <<'EOF'\n${spec}\nEOF\npython -m axor_eval.skills run skill-eval.json --plane`;
+  const [picked, setPicked] = useState("");
+  const machines = useQuery({ queryKey: ["machines"], queryFn: api.machines, refetchInterval: 10_000 });
+  const mine = (machines.data?.machines ?? []).filter((m) => m.yours && m.online);
+  const machine = mine.find((m) => m.machine_id === picked) ?? mine[0];
+  const agent = machine?.agents.includes("claude-code") ? "claude-code" : machine?.agents[0] ?? "claude-code";
+  const queue = useMutation({
+    mutationFn: () => api.queueSkillEval(machine!.machine_id, {
+      skills: [skill], agent, trials, tasks: [{ name: "task-1", prompt, check: checkCmd }] }),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ["machine-jobs"] }),
+  });
+  const ready = !!machine && skill.trim() && prompt.trim() && checkCmd.trim();
   const field = (labelText: string, value: string, set: (v: string) => void, testId: string) => (
     <label className="flex items-center gap-2" style={{ fontFamily: MONO, fontSize: 11, color: C.mut }}>
       <span style={{ width: 110 }}>{labelText}</span>
@@ -174,13 +182,103 @@ function HowToRun() {
             style={{ width: 70, background: C.bg, border: `1px solid ${C.line}`, borderRadius: 5, color: C.text,
                      fontFamily: MONO, fontSize: 11.5, padding: "5px 8px", outline: "none" }} />
           <span style={{ color: C.dim }}>
-            {runs} agent runs on your tokens · 5 each tells a big difference, a small one needs 20+
+            {trials * 2} agent runs on your tokens · 5 each tells a big difference, a small one needs 20+
           </span>
         </label>
+        {mine.length > 0 && (
+          <label className="flex items-center gap-2" style={{ fontFamily: MONO, fontSize: 11, color: C.mut }}>
+            <span style={{ width: 110 }}>on</span>
+            <select value={machine?.machine_id ?? ""} onChange={(ev) => setPicked(ev.target.value)}
+              data-testid="eval-machine"
+              style={{ flex: 1, background: C.bg, border: `1px solid ${C.line}`, borderRadius: 5, color: C.text,
+                       fontFamily: MONO, fontSize: 11.5, padding: "5px 8px" }}>
+              {mine.map((m) => (
+                <option key={m.machine_id} value={m.machine_id}>
+                  {m.repo_label || "a repository"} · {m.host} · {m.agents.join(", ") || "no agent found"}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
       </div>
-      <div style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim, marginBottom: 6 }}>in the repository, on a machine connected to this plane:</div>
-      <MachineCommand testId="skill-eval-cmd" cmd={cmd} />
+      {mine.length > 0 ? (
+        <div className="flex items-center gap-3 flex-wrap">
+          <button data-testid="eval-run" disabled={!ready || queue.isPending} onClick={() => queue.mutate()}
+            style={btn({ color: C.bg, background: C.green, border: `1px solid ${C.green}`, fontSize: 12,
+                         fontWeight: 700, padding: "7px 16px" })}>
+            {queue.isPending ? "queueing…" : "Run"}
+          </button>
+          {queue.isError && (
+            <span style={{ fontFamily: MONO, fontSize: 11, color: C.red }}>{(queue.error as Error).message}</span>
+          )}
+        </div>
+      ) : (
+        <div data-testid="eval-no-machine">
+          <div style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim, marginBottom: 6, lineHeight: 1.6 }}>
+            no machine of yours is on line · once, in the repository the eval runs in (it stays open and
+            runs what you start here — only yours):
+          </div>
+          <MachineCommand testId="skill-eval-cmd"
+            cmd={"pip install --upgrade 'axor-wrap[eval]'\naxor-wrap worker"} />
+        </div>
+      )}
+      <Jobs />
     </section>
+  );
+}
+
+const ACTIVE = new Set(["queued", "running"]);
+
+/** The jobs queued from here: how far along, and where the report is. */
+function Jobs() {
+  const qc = useQueryClient();
+  const jobs = useQuery({
+    queryKey: ["machine-jobs"], queryFn: api.machineJobs,
+    refetchInterval: (q) => ((q.state.data?.jobs ?? []).some((j) => ACTIVE.has(j.state)) ? 3000 : false),
+  });
+  const cancel = useMutation({
+    mutationFn: api.cancelMachineJob,
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ["machine-jobs"] }),
+  });
+  const list = jobs.data?.jobs ?? [];
+  // a job that finished posted a report: the list above should show it — once
+  // per newly finished job, not on every render
+  const finished = list.filter((j) => j.state === "done").map((j) => j.job_id).join(",");
+  useEffect(() => {
+    if (finished) void qc.invalidateQueries({ queryKey: ["skill-evals"] });
+  }, [finished, qc]);
+  if (!list.length) return null;
+  return (
+    <div data-testid="eval-jobs" className="flex flex-col gap-2" style={{ marginTop: 14 }}>
+      {list.map((j) => {
+        const p = j.progress;
+        const color = j.state === "done" ? C.green : j.state === "running" || j.state === "queued" ? C.steel
+          : j.state === "cancelled" ? C.dim : C.red;
+        return (
+          <div key={j.job_id} data-testid={`eval-job-${j.job_id}`} className="flex items-center gap-3 flex-wrap"
+            style={{ fontFamily: MONO, fontSize: 11, color: C.mut, border: `1px solid ${C.line}`, borderRadius: 6,
+                     padding: "7px 10px" }}>
+            <span style={{ color, minWidth: 70 }}>{j.state === "running" && j.cancel_requested ? "stopping" : j.state}</span>
+            <span style={{ color: C.text }}>{j.spec.skills.join(", ")}</span>
+            {j.state === "queued" && <span>waiting for the machine to take it</span>}
+            {j.state === "running" && (
+              <span>{p.done ?? 0} / {p.total || "…"} runs · {p.solved ?? 0} solved</span>
+            )}
+            {j.error && j.state !== "done" && <span style={{ color: C.dim }}>{j.error}</span>}
+            <span style={{ flex: 1 }} />
+            {ACTIVE.has(j.state) && !j.cancel_requested && (
+              <button data-testid={`eval-job-cancel-${j.job_id}`} onClick={() => cancel.mutate(j.job_id)}
+                style={btn({ color: C.mut, fontSize: 10.5, padding: "3px 10px" })}>cancel</button>
+            )}
+            {j.state === "done" && j.eval_id && (
+              <button data-testid={`eval-job-report-${j.job_id}`} onClick={() => navigate(`skill-evals/${j.eval_id}`)}
+                style={{ background: "none", border: "none", padding: 0, cursor: "pointer", fontFamily: MONO,
+                         fontSize: 11, color: C.steel }}>the report →</button>
+            )}
+          </div>
+        );
+      })}
+    </div>
   );
 }
 
