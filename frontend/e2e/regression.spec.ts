@@ -45,6 +45,34 @@ test.describe("safe to ship", () => {
     await expect(page.getByText(/keep cases of your own to check yours/)).toBeVisible();
   });
 
+  test("a case kept from Replay is not called the example's (QA-032)", async ({ page }) => {
+    // Pinning the canned prod incident from Replay, then checking the example's
+    // rules, said "Not safe to ship: 1 case can't be checked" under "these are
+    // the example's cases" — the third case was not the example's.
+    await page.route("**/v1/regression", (route) =>
+      route.fulfill({
+        json: {
+          rows: [
+            { run_id: "ex_block", side: "must_block", label: "adapter-demo", result: "held",
+              first_divergence: null, new_denial: null, pinned_denials: 1, escaped_denials: [], demo: true },
+            { run_id: "ex_pass", side: "must_pass", label: "adapter-demo", result: "passed",
+              first_divergence: null, new_denial: null, pinned_denials: 0, escaped_denials: [], demo: true },
+            { run_id: "ex_prod_drop", side: "must_block", label: "kept from Replay", result: "unanchored",
+              first_divergence: null, new_denial: null, pinned_denials: 0, escaped_denials: [], demo: true },
+          ],
+          regressed: 0, escaped: 0, unanchored: 1, skipped: [], own_rows: 0, demo_rows: 3, safe_to_ship: false,
+        },
+      }),
+    );
+    await goHash(page, "regression");
+    await page.getByTestId("rules-example").click();
+    await page.getByRole("button", { name: /Check these rules/ }).click();
+    const result = page.getByTestId("check-result");
+    await expect(result).toContainText("Not safe to ship: 1 case can't be checked");
+    await expect(result).not.toContainText("these are the example's cases");
+    await expect(page.getByTestId("not-the-examples")).toContainText("kept from Replay");
+  });
+
   test("a stricter rule breaks the normal flow (the check has teeth)", async ({ page }) => {
     await goHash(page, "regression");
     await page.getByTestId("rules-example").click();

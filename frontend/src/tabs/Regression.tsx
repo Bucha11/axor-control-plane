@@ -477,7 +477,8 @@ export default function Regression({ rules: rulesParam }: { rules?: string } = {
         )}
       </div>
 
-      {report && <Report report={report} open={open} setOpen={setOpen} onRemoved={run} />}
+      {report && <Report report={report} open={open} setOpen={setOpen} onRemoved={run}
+        exampleRules={rulesFrom === "example"} />}
 
       <div style={{ marginTop: 28 }}>
         <Fold label="run this check on a schedule (Team)">
@@ -502,9 +503,9 @@ function Fold({ label, children }: { label: string; children: React.ReactNode })
   );
 }
 
-function Report({ report, open, setOpen, onRemoved }: {
+function Report({ report, open, setOpen, onRemoved, exampleRules }: {
   report: RegressionReport; open: string | null; setOpen: (v: string | null) => void;
-  onRemoved: () => void;
+  onRemoved: () => void; exampleRules: boolean;
 }) {
   const qc = useQueryClient();
   // A case nothing can be checked against (or one kept by mistake) held every
@@ -518,7 +519,10 @@ function Report({ report, open, setOpen, onRemoved }: {
   if (report.regressed) broken.push(`${plural(report.regressed, "normal flow is", "normal flows are")} now refused`);
   if (report.unanchored) broken.push(`${plural(report.unanchored, "case", "cases")} can't be checked`);
   if (report.skipped.length) broken.push(`${plural(report.skipped.length, "case", "cases")} could not be read`);
-  const onlyExample = report.own_rows === 0 && report.demo_rows > 0;
+  // "the example's" cases are the ones its rules were written for: a canned
+  // run kept from Replay counts as demo too, but is not one of them (QA-032)
+  const notExample = report.rows.filter((r) => !(r.run_id in DEMO_CASES));
+  const onlyExample = report.own_rows === 0 && report.demo_rows > 0 && notExample.length === 0;
 
   if (report.rows.length === 0 && report.skipped.length === 0) {
     return <div style={{ fontFamily: MONO, fontSize: 12.5, color: C.mut }}>No cases kept yet — nothing to check.</div>;
@@ -543,6 +547,12 @@ function Report({ report, open, setOpen, onRemoved }: {
       {onlyExample && (
         <div style={{ fontFamily: MONO, fontSize: 11.5, color: C.dim, marginBottom: 14 }}>
           these are the example's cases, not your agent's — keep cases of your own to check yours
+        </div>
+      )}
+      {exampleRules && notExample.length > 0 && notExample.length < report.rows.length && (
+        <div data-testid="not-the-examples" style={{ fontFamily: MONO, fontSize: 11.5, color: C.dim, marginBottom: 14 }}>
+          checked against the example's rules too, though they were not written for{" "}
+          {notExample.length === 1 ? "it" : "them"}: {notExample.map((r) => caseName(r.run_id, r.label)).join(", ")}
         </div>
       )}
 
