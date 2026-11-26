@@ -833,6 +833,41 @@ def create_app(database_url: str | None = None, *,
                         tier=lic.tier, until=lic.expires_at)
         return {"org_id": org_id, "tier": lic.tier, "expires_at": lic.expires_at}
 
+    @app.post("/v1/orgs/{org_id}/license/renewal")
+    async def renew_license(org_id: str, body: LicenseBody) -> dict:
+        """The next license, from the control plane once it renewed one — with
+        no caller at all. The control plane renews on its own schedule and holds
+        no admin's session to paste it with; without this the plan here stays
+        at the old date and single sign-on lapses on a paid workspace.
+
+        Safe without a caller for the reason the plane's own renewal is: the
+        file is vendor-signed, issued to this workspace and in date, and it
+        must end LATER than the plan in force — so the only thing a caller can
+        do is move a workspace forward to a plan the vendor issued it."""
+        if not vendor_pubkey:
+            raise HTTPException(409, "this identity service has no vendor key pinned "
+                                     "(AXOR_VENDOR_PUBKEY) to check a license with")
+        org = await store.get_org(org_id)
+        if org is None:
+            raise HTTPException(404, "no such organization")
+        try:
+            lic = licensing.verify(body.license_json, vendor_pubkey)
+        except licensing.LicenseError as exc:
+            raise HTTPException(403, str(exc)) from exc
+        if lic.organization not in (org_id, org_pin or org_id):
+            raise HTTPException(403, f"this license is issued to {lic.organization!r}, "
+                                     f"not this workspace")
+        if _now_iso()[:10] > lic.expires_at:
+            raise HTTPException(403, f"this license expired on {lic.expires_at}")
+        held = org.get("tier_expires")
+        if held and lic.expires_at <= held:
+            raise HTTPException(409, f"this license ends on {lic.expires_at}, not after "
+                                     f"the plan in force ({held}) — renewal only moves forward")
+        await store.set_org_tier(org_id, lic.tier, lic.expires_at)
+        await _on_trail(org_id, "plan_renewed", lic.tier, who="license renewal",
+                        tier=lic.tier, until=lic.expires_at)
+        return {"org_id": org_id, "tier": lic.tier, "expires_at": lic.expires_at}
+
     def _sso_view(org_id: str, held: dict | None, provable: set[str],
                   plan_ok: bool = True) -> dict:
         base = {"available": bool(public_url), "callback_url": sso_callback,

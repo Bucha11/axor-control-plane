@@ -1,0 +1,11 @@
+# axor-billing (the vendor licensing service), when it runs on this host.
+# Copy to billing.caddy, put the host name below, then
+# `docker compose restart caddy`.
+#
+# The address is permanent: self-hosted customers put
+# https://<this host>/v1/renewal in their AXOR_LICENSE_RENEWAL_URL. Keep the DNS
+# record DNS-only, like the app hosts.
+billing.useaxor.net {
+	import common
+	reverse_proxy axor-billing:8410
+}

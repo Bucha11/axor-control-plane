@@ -164,3 +164,11 @@ jobs:
           push: true
           tags: ${{ steps.meta-frontend.outputs.tags }}
           labels: ${{ steps.meta-frontend.outputs.labels }}
+          # Card checkout through Paddle. Public values (Paddle.js runs in the
+          # browser), so repository VARIABLES, not secrets; unset, the image
+          # keeps the mailto / VITE_CHECKOUT_URL fallback. Baked into the one
+          # image hosted and self-hosted both run.
+          build-args: |
+            VITE_PADDLE_CLIENT_TOKEN=${{ vars.VITE_PADDLE_CLIENT_TOKEN }}
+            VITE_PADDLE_ENV=${{ vars.VITE_PADDLE_ENV }}
+            VITE_PADDLE_PRICES=${{ vars.VITE_PADDLE_PRICES }}

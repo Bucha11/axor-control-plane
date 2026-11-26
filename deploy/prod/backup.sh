@@ -7,6 +7,7 @@
 #   - one pg_dump (custom format) per database: axor, axor_identity, axor_lab.
 #     Postgres is the system of record for all three apps.
 #   - the proxy's traces volume and the Lab's data directory (tar.gz).
+#   - axor-billing's SQLite file, when that service runs on this host.
 # Then it prunes local copies older than BACKUP_KEEP_DAYS, and copies the run
 # off-site with rclone when BACKUP_RCLONE_REMOTE is set. A backup that exists
 # only on the server it protects does not survive losing that server.
@@ -33,6 +34,15 @@ done
 docker compose exec -T proxy tar czf - -C /data traces > "$OUT/proxy-traces.tgz" || \
     echo "warn: no proxy traces yet"
 docker compose exec -T lab tar czf - -C /data . > "$OUT/lab-data.tgz"
+
+# axor-billing, when it runs here (its own compose project, container
+# axor-billing): which subscription is whose and which months were charged.
+# Losing it risks charging a month twice. SQLite's online backup, so a write
+# in flight cannot leave a torn copy.
+if docker ps --format '{{.Names}}' | grep -qx axor-billing; then
+    docker exec axor-billing python -c "import sqlite3; s = sqlite3.connect('/data/billing.db'); d = sqlite3.connect('/data/billing-backup.db'); s.backup(d); d.close()"
+    docker cp axor-billing:/data/billing-backup.db "$OUT/billing.db"
+fi
 
 echo "backup: $OUT ($(du -sh "$OUT" | cut -f1))"
 

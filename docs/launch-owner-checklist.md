@@ -67,27 +67,42 @@ the addresses. Cheapest working setup: Cloudflare Registrar + free Email
 Routing (`security@` and `sales@` → your inbox). Send yourself a test mail
 from outside. Then point GitHub Pages at the domain (step 3).
 
-## 5. Stripe payment link (20 min)
+## 5. Paddle (days — the seller review is not ours to hurry)
 
-1. Stripe → Product: "Axor Team" (subscription, ~$250/mo per environment;
-   quantity = environments, not nodes) → Payment Links → create → copy the URL.
-2. Compose deploy: put `VITE_CHECKOUT_URL=https://buy.stripe.com/…` in
-   `.env`, rebuild: `docker compose build frontend && docker compose up -d`.
-   The build arg is already plumbed; empty keeps the mailto fallback.
-3. Verify: Pricing → "Get Team" opens Stripe checkout. A stranger can pay —
-   launch outcome #2 done.
+1. Paddle Billing seller account: Paddle reviews the seller before live
+   payments — the site with its prices, Terms, Privacy, Refund policy, a
+   verified domain. Until then everything runs in the sandbox
+   (sandbox-vendors.paddle.com, its own keys).
+2. Products and monthly prices from Pricing (`frontend/src/quote.ts`, the same
+   numbers as `ee/pricing.py`): Coding $0, Business $0, Team $299,
+   Security $1,500. Seats and nodes past the allowance are not catalog prices:
+   `axor-billing` charges them in arrears for the closed month.
+3. Approve the site's domain for checkout, a client-side token for Paddle.js,
+   a notification destination pointing at `axor-billing`'s webhook, and the
+   customer portal (cancel, card change).
 
-## 5a. Vendor licensing service — **NOT BUILT, deliberately deferred**
+4. Frontend build args (`frontend/Dockerfile`; compose passes them from the
+   environment): `VITE_PADDLE_CLIENT_TOKEN`, `VITE_PADDLE_ENV` (`sandbox` or
+   empty for live) and `VITE_PADDLE_PRICES` (JSON, rung → price id); the
+   hosted plane's backend sets `AXOR_HOSTED=1`. Token and prices are public:
+   set them as repository **variables** (Settings → Secrets and variables →
+   Actions → Variables) and the release workflow bakes them into the published
+   frontend image, which self-hosted installs run too. Unset, paid plans keep
+   `VITE_CHECKOUT_URL` / mailto.
+5. Verify: Pricing → "Get Coding" opens Paddle checkout naming the workspace
+   (`customData.org`); a self-hosted install without `AXOR_ORG` says to set it.
+
+## 5a. Vendor licensing service — `axor-billing`, being built
 
 The one piece of the money path that is not in this repository, and cannot be:
 it holds the vendor's Ed25519 private key, and `axor-identity` — the obvious
 place to put it — ships to customers in `docker-compose.yml`. Full rationale,
-the wire contract the Control Plane already implements, and what works without
-it: **`docs/vendor-licensing-service.md`**.
+the wire contract the Control Plane already implements, what it does with
+Paddle, what this repository still lacks for it, and what works without it:
+**`docs/vendor-licensing-service.md`**.
 
-Nothing is blocked on it today. Licenses are issued with `axor-license issue`
-on a machine outside the customer stack; only self-hosted AUTO-renewal needs
-the service, and it is one endpoint of about a hundred lines when it is wanted.
+Until it runs, licenses are issued with `axor-license issue` on a machine
+outside the customer stack.
 
 ## 6. VPS dress rehearsal (half a day — the highest-value item)
 

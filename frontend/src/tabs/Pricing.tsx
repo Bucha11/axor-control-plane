@@ -4,16 +4,19 @@
 // both. They used to be a rung plus a separately-licensed add-on, which asked
 // every buyer a question they could not answer before trying the thing — and
 // the entitlement code carried a module flag that was signed, displayed, and
-// decided nothing. Static, no backend. Safety and hobby-scale privacy are free
-// forever; you pay for hosted collaboration, the security workflow, and the
-// size of the governed fleet.
+// decided nothing. Static, but for whom a card checkout names (license
+// status). Safety and hobby-scale privacy are free forever; you pay for hosted
+// collaboration, the security workflow, and the size of the governed fleet.
 import { useState } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { api } from "../api";
 import { C, MONO, btn } from "../theme";
 import Coach from "../components/Coach";
 import Tabs from "../components/Tabs";
 import { LAB_SHIPPED } from "../flags";
 import { navigate, useRoute } from "../router";
 import { ADDS, quotes, RUNG_NAME, type Rung } from "../quote";
+import { openCheckout, paddlePrice } from "../paddle";
 
 // A feature is either shipping today or on the roadmap. We mark the difference
 // explicitly rather than listing aspirational capabilities as if they exist — a
@@ -249,7 +252,7 @@ const TIERS: Tier[] = [
 
 // Checkout capture (launch-readiness §5): until a real checkout exists, the CTA
 // is a mailto that opens a pre-filled order email; VITE_CHECKOUT_URL swaps in a
-// Stripe payment link at build time without a code change.
+// Paddle checkout link at build time without a code change.
 const CHECKOUT_URL: string | undefined =
   (import.meta as unknown as { env?: Record<string, string> }).env?.VITE_CHECKOUT_URL;
 
@@ -262,6 +265,13 @@ function ctaHref(tier: Tier): string {
     "Org:\nGoverned nodes (roughly):\nHosted or self-hosted:\nWhat you want to run:\nAnything else:",
   );
   return `mailto:sales@axor.dev?subject=${subject}&body=${body}`;
+}
+
+// The Paddle price a paid card is sold at here, if card checkout is set up.
+function cardPrice(tier: Tier): string | undefined {
+  if (tier.kind !== "paid") return undefined;
+  const rung = (Object.keys(RUNG_NAME) as Rung[]).find((r) => RUNG_NAME[r] === tier.name);
+  return rung ? paddlePrice(rung) : undefined;
 }
 
 function ctaLabel(tier: Tier): string {
@@ -291,6 +301,10 @@ export default function Pricing() {
   const [devs, setDevs] = useState(5);
   const [agents, setAgents] = useState(1);
   const calc = quotes(devs, agents);
+  // who a license bought here would be issued to — what the checkout names
+  const status = useQuery({ queryKey: ["license-status"], queryFn: api.licenseStatus, retry: false });
+  const org = status.data?.licensed_to;
+  const hosted = status.data?.hosted === true;
   return (
     <div style={{ maxWidth: 1040, margin: "0 auto" }}>
       <Coach id="pricing" title="Pricing — one ladder">
@@ -342,6 +356,8 @@ export default function Pricing() {
             ? RUNG_NAME[calc.best.rung] === t.name
             : t.highlightFor?.includes(journey) ?? false;
           const meta = KIND_META[t.kind];
+          const price = cta ? undefined : cardPrice(t);
+          const card = price && org ? { price, org } : undefined;
           return (
             <div
               key={t.name}
@@ -429,9 +445,25 @@ export default function Pricing() {
               >
                 {t.note}
               </div>
+              {price && !org && (
+                <div data-testid="card-needs-org"
+                  style={{ fontFamily: MONO, fontSize: 9.5, color: C.dim, marginTop: 8, lineHeight: 1.4 }}>
+                  {hosted
+                    ? "sign in to a workspace to pay by card"
+                    : "to pay by card, set AXOR_ORG on this deployment — the license names it"}
+                </div>
+              )}
               <a
                 href={cta ? `#/${cta.route}` : ctaHref(t)}
-                onClick={cta ? (e) => { e.preventDefault(); navigate(cta.route); } : undefined}
+                onClick={cta
+                  ? (e) => { e.preventDefault(); navigate(cta.route); }
+                  : card
+                    ? (e) => {
+                      e.preventDefault();
+                      // Paddle.js unreachable: the order link is still a way to pay
+                      openCheckout(card.price, card.org, hosted).catch(() => { window.location.href = ctaHref(t); });
+                    }
+                    : undefined}
                 data-testid={`cta-${t.name.split(" ")[0].toLowerCase()}`}
                 target={t.kind === "free" && !cta ? "_blank" : undefined}
                 rel="noreferrer"

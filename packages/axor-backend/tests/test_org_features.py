@@ -544,6 +544,7 @@ class TestRenewalIsFetchedAndOnlyMovesForward:
     def _serving(license_json: str | None, seen: list | None = None):  # noqa: ANN205
         async def fetch(
             url: str, org: str, current: object, report: dict | None = None,
+            held: str | None = None,
         ) -> str | None:
             if seen is not None:
                 seen.append(report)
@@ -1130,6 +1131,7 @@ class TestUsageLeavesOnlyWhenItWasAgreedTo:
     def _fetch(seen: list):  # noqa: ANN205
         async def fetch(
             url: str, org: str, current: object, report: dict | None = None,
+            held: str | None = None,
         ) -> str | None:
             seen.append(report)
             return None
@@ -1211,6 +1213,52 @@ class TestUsageLeavesOnlyWhenItWasAgreedTo:
                 assert name not in rendered, rendered
             assert set(seen[0]) == set(USAGE_REPORT_FIELDS)
 
+    async def test_the_request_carries_the_signed_license_not_just_its_name(
+        self, tmp_path: pathlib.Path, vendor: dict,
+    ) -> None:
+        """A vendor that renewed on a bare organization name would give that
+        organization's paid license to anyone who knows the name, and bill it
+        on their word."""
+        from axor_backend.licensing import renew_once
+        from axor_backend.tenancy import PUBLIC_ORG
+
+        async for _client, app in self._app(tmp_path, vendor, reporting=False):
+            got: list = []
+
+            async def fetch(*a: object, held: str | None = None) -> None:
+                got.append(held)
+
+            await renew_once(app.state, PUBLIC_ORG, fetch=fetch)
+            assert got == [_signed(vendor, governed_node_ceiling=10)]
+
+    async def test_it_reports_the_developers_the_invoice_bills(
+        self, tmp_path: pathlib.Path, vendor: dict,
+    ) -> None:
+        """Coding agents are billed per developer, so the vendor needs that
+        meter too: the same counts as the invoice, and never a developer id."""
+        import json as _json
+
+        from axor_backend.licensing import renew_once
+        from axor_backend.tenancy import PUBLIC_ORG
+
+        async for client, app in self._app(tmp_path, vendor, reporting=True):
+            store = app.state.store
+            day = _last_month_day()
+            for i, dev in enumerate(("dev-aaa", "dev-bbb", "dev-aaa")):
+                await store.put_node_profile(f"cc-{i}", "coding", "claude-code", dev,
+                                             f"{day}T10:00:00+00:00")
+                await store.record_node_activity(f"cc-{i}", day)
+            seen: list = []
+            await renew_once(app.state, PUBLIC_ORG, fetch=self._fetch(seen))
+            report = seen[0]
+            assert report["included_developers"] == 0  # team includes no seats
+            assert report["active_developers"] == 2
+            assert report["billable_developers"] == 2
+            invoice = (await client.get(f"/v1/license/invoice?month={day[:7]}")).json()
+            for field in ("included_developers", "active_developers", "billable_developers"):
+                assert report[field] == invoice[field], field
+            assert "dev-aaa" not in _json.dumps(report)
+
     async def test_the_month_still_running_is_never_reported(
         self, tmp_path: pathlib.Path, vendor: dict,
     ) -> None:
@@ -1274,3 +1322,116 @@ def _last_month_day() -> str:
 
     first = datetime.now(UTC).date().replace(day=1)
     return (first - timedelta(days=1)).replace(day=12).isoformat()
+
+
+# ── a license this plane installs on its own reaches identity ─────────────────
+
+class TestIdentityLearnsOfARenewal:
+    """Identity gates single sign-on on its own copy of the plan, which moved
+    only when a workspace admin pasted a license. A renewal the plane fetched by
+    itself left it at the old date: a paying Business workspace lost sign-on."""
+
+    async def _app(self, tmp_path: pathlib.Path, vendor: dict,  # noqa: ANN202
+                   monkeypatch: pytest.MonkeyPatch, sent: list):
+        monkeypatch.setenv("AXOR_IDENTITY_URL", "http://identity.test")
+
+        async def post(base: str, org: str, raw: str) -> int:
+            sent.append((base, org, raw))
+            return 200
+
+        monkeypatch.setattr("axor_backend.licensing._post_to_identity", post)
+        app = create_app(database_url=f"sqlite+aiosqlite:///{tmp_path}/i.db",
+                         license_renewal_url="https://vendor.test/renew")
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://backend.test",
+        ) as c, app.router.lifespan_context(app):
+            await c.post("/v1/license/verify", json={"license_json": _signed(vendor)})
+            yield app
+
+    async def test_a_renewal_is_handed_to_identity(
+        self, tmp_path: pathlib.Path, vendor: dict, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from axor_backend.licensing import renew_once
+        from axor_backend.tenancy import PUBLIC_ORG
+
+        sent: list = []
+        async for app in self._app(tmp_path, vendor, monkeypatch, sent):
+            sent.clear()
+            nxt = _signed(vendor, expires_at="3000-01-01")
+
+            async def fetch(*a: object, **kw: object) -> str:
+                return nxt
+
+            assert await renew_once(app.state, PUBLIC_ORG, fetch=fetch) is True
+            assert sent == [("http://identity.test", PUBLIC_ORG, nxt)]
+
+    async def test_identity_down_does_not_undo_the_renewal(
+        self, tmp_path: pathlib.Path, vendor: dict, monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        from axor_backend.licensing import renew_once, stored_license
+        from axor_backend.tenancy import PUBLIC_ORG
+
+        sent: list = []
+        async for app in self._app(tmp_path, vendor, monkeypatch, sent):
+            async def down(*a: object, **kw: object) -> int:
+                raise httpx.ConnectError("identity is down")
+
+            monkeypatch.setattr("axor_backend.licensing._post_to_identity", down)
+
+            async def fetch(*a: object, **kw: object) -> str:
+                return _signed(vendor, expires_at="3000-01-01")
+
+            assert await renew_once(app.state, PUBLIC_ORG, fetch=fetch) is True
+            assert stored_license(app.state, PUBLIC_ORG).expires_at == "3000-01-01"
+            assert "could not hand the license" in caplog.text
+
+    def test_the_address_comes_from_the_jwks_url(self) -> None:
+        from axor_backend.config import _identity_base
+
+        assert _identity_base("http://identity:8402/.well-known/jwks.json") == \
+            "http://identity:8402"
+        assert _identity_base("https://cp.example.com/identity/.well-known/jwks.json") == \
+            "https://cp.example.com/identity"
+        assert _identity_base("https://elsewhere.example/keys") == ""
+
+    async def test_a_license_the_operator_installs_is_handed_to_identity(
+        self, tmp_path: pathlib.Path, vendor: dict, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """How a paid hosted workspace gets its first license: the billing
+        service installs it as the operator, naming the tenant."""
+        token = "master-secret-xyz"
+        monkeypatch.setenv("AXOR_IDENTITY_URL", "http://identity.test")
+        sent: list = []
+
+        async def post(base: str, org: str, raw: str) -> int:
+            sent.append((org, raw))
+            return 200
+
+        monkeypatch.setattr("axor_backend.licensing._post_to_identity", post)
+        app = create_app(database_url=f"sqlite+aiosqlite:///{tmp_path}/op.db",
+                         api_token=token)
+        raw = _signed(vendor, organization="org_acme")
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://backend.test",
+            headers={"Authorization": f"Bearer {token}"},
+        ) as c, app.router.lifespan_context(app):
+            r = await c.post("/v1/license/verify",
+                             json={"license_json": raw, "org": "org_acme"})
+            assert r.status_code == 200, r.text
+        assert sent == [("org_acme", raw)]
+
+
+async def test_status_says_whether_this_is_the_hosted_plane(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Pricing reads it to tell axor-billing where a card-bought license goes:
+    hosted and self-hosted run the same frontend image, so it cannot be baked
+    into the build."""
+    for flag, want in (("", False), ("1", True)):
+        monkeypatch.setenv("AXOR_HOSTED", flag)
+        app = create_app(database_url=f"sqlite+aiosqlite:///{tmp_path}/h{flag}.db")
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://backend.test",
+        ) as c, app.router.lifespan_context(app):
+            assert (await c.get("/v1/license/status")).json()["hosted"] is want

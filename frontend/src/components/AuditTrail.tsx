@@ -41,7 +41,7 @@ const WORDS: Record<string, string> = {
   scim_group_role: "mapped the provider's group", scim_added: "added", scim_removed: "removed",
   scim_role: "changed the role of", scim_renamed: "changed the address of",
   sessions_limit: "set how long a sign-in lasts:", sessions_ended: "signed out",
-  plan_activated: "activated the plan",
+  plan_activated: "activated the plan", plan_renewed: "renewed the plan",
   hold_placed: "put a legal hold on the trail", hold_released: "lifted the legal hold",
 };
 

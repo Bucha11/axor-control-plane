@@ -28,3 +28,7 @@
 	import common
 	reverse_proxy lab-edge:8080
 }
+
+# Optional hosts, one file each — sites/billing.caddy for axor-billing (see
+# sites/billing.caddy.example). No file, nothing imported.
+import /etc/caddy/sites/*.caddy

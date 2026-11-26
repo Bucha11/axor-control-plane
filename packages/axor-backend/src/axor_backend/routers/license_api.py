@@ -59,6 +59,7 @@ from axor_backend.licensing import (
     expected_org,
     license_payload,
     stored_license,
+    tell_identity,
     today,
 )
 from axor_backend.tenancy import current_org_id, set_current_org
@@ -139,6 +140,10 @@ async def license_verify(
     set_current_org(target)
     await store.set_setting("license_json", body.get("license_json", ""))
     state.licenses[target] = lic
+    # identity keeps its own copy of the plan (sign-on is gated on it); an
+    # operator installing a tenant's license has no admin session to paste it
+    # there with
+    await tell_identity(config, target, body.get("license_json", ""))
     # Node-ceiling telemetry (launch-readiness §5): compare the live fleet
     # against the license and WARN — never block; safety never checks a license
     # (monetization Line 1).
@@ -186,6 +191,9 @@ async def license_status(state: StateDep, config: ConfigDep) -> dict:
         # about the deployment, reporting is the deployment telling the vendor
         # something about the customer.
         "usage_reporting": bool(config.usage_reporting),
+        # the vendor's hosted plane (AXOR_HOSTED): where a card checkout's
+        # license is delivered — installed here, or mailed to an install
+        "hosted": bool(config.hosted),
     }
     if lic is None:
         # An expired license is still held, and saying so is the difference

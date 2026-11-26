@@ -317,3 +317,54 @@ async def test_a_license_the_deployment_was_given_counts(tmp_path, idp, monkeypa
                                                  "org_name": "Acme"})).json()
         org = olga["org"]["org_id"]
         assert (await c.get(f"/v1/orgs/{org}/sso", headers=_h(olga))).json()["plan_ok"] is False
+
+
+async def test_a_renewed_license_moves_the_plan_forward_with_no_caller(tmp_path, idp) -> None:  # noqa: ANN001
+    """The control plane renews on its own schedule and has no admin's session
+    to paste the next license with. It hands it over with no caller at all —
+    which is safe only because nothing but a vendor-signed license for this
+    workspace, in date and ending later than the plan in force, is taken."""
+    from axor_backend.ee.license import sign_license
+    from nacl.signing import SigningKey
+
+    vendor = SigningKey.generate()
+    application = create_app(f"sqlite+aiosqlite:///{tmp_path}/renew.db",
+                             signing_key=load_signing_key(generate_pem(), kid="k"),
+                             providers={}, public_url=PUBLIC, mailer=False,
+                             oauth_transport=httpx.MockTransport(idp),
+                             vendor_pubkey=vendor.verify_key.encode().hex())
+    async with application.router.lifespan_context(application), httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=application), base_url="http://identity") as c:
+        olga = (await c.post("/v1/signup", json={"email": "olga@acme.dev", "password": PW,
+                                                 "org_name": "Acme"})).json()
+        org = olga["org"]["org_id"]
+        store = application.state.store
+        await store.set_org_tier(org, "business", "2998-01-01")
+
+        def lic(**over: object) -> str:
+            return sign_license({"organization": org, "workspace_tier": "business",
+                                 "governed_node_ceiling": 1, "self_hosted_runner": False,
+                                 "expires_at": "2999-01-01", "features": [], **over},
+                                bytes(vendor).hex())
+
+        async def renew(raw: str, to: str = org) -> int:
+            return (await c.post(f"/v1/orgs/{to}/license/renewal",
+                                 json={"license_json": raw})).status_code
+
+        async def plan() -> tuple[str, str]:
+            held = await store.get_org(org)
+            return held["tier"], held["tier_expires"]
+
+        forged = json.loads(lic(workspace_tier="enterprise"))
+        forged["license"]["workspace_tier"] = "security"
+        assert await renew(json.dumps(forged)) == 403                 # not the vendor's
+        assert await renew(lic(organization="org_x")) == 403          # someone else's
+        assert await renew(lic(expires_at="2001-01-01")) == 403       # past its date
+        assert await renew(lic(expires_at="2998-01-01")) == 409       # not later
+        assert await renew(lic(expires_at="2997-01-01",
+                               workspace_tier="coding")) == 409       # a replayed older one
+        assert await renew(lic(), to="org_nobody") == 404
+        assert await plan() == ("business", "2998-01-01")             # none of it moved it
+
+        assert await renew(lic()) == 200
+        assert await plan() == ("business", "2999-01-01")

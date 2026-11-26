@@ -160,6 +160,31 @@ The login service reaches the plane on the compose network
 deactivates loses the keys their machines report with, as well as their
 membership.
 
+## Card payments (axor-billing)
+
+Card payments run through Paddle and **axor-billing**, the vendor licensing
+service (a private repository: `Bucha11/axor-billing`, its own
+`deploy/README.md` has the whole procedure). It holds the vendor's private
+signing key, so it is the vendor's alone; on this host it runs as its own
+compose project next to this one, joined to this project's network.
+
+What this stack needs for it:
+
+- `.env`: `AXOR_HOSTED=1`, `AXOR_ORG` empty (each workspace is its own
+  organization), `AXOR_VENDOR_PUBKEY` = the public half of the vendor key,
+  `AXOR_LICENSE_RENEWAL_URL=http://axor-billing:8410/v1/renewal` and
+  `AXOR_USAGE_REPORTING=1`. Usage is charged when a licence is renewed: without
+  the last two a hosted workspace is licensed and never billed for its seats
+  and nodes.
+- `sites/billing.caddy` (from `sites/billing.caddy.example`) for its public
+  address, a DNS-only A record for it, and `docker compose restart caddy`.
+  Paddle's webhooks and self-hosted installs' renewals arrive there; the
+  address is permanent once a customer has it.
+- `backup.sh` already saves axor-billing's database when the container is
+  running.
+- The frontend image's Paddle settings (`VITE_PADDLE_*`) are build arguments
+  of the release workflow, not of this file.
+
 ## Security checklist
 
 Required values are enforced: compose refuses to start without the API token,
