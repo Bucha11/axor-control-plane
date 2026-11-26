@@ -68,3 +68,29 @@ async def test_an_exception_is_one_thing_never_everything(
     r = await client.put("/v1/coding/rules", headers=owner,
                          json={"allow": [], "trusted_sources": ["com"]})
     assert r.status_code == 400
+
+
+async def test_a_too_long_exception_says_so(
+        client: httpx.AsyncClient, priv) -> None:  # noqa: ANN001, F811
+    """QA-025: a 5000-character path was refused as "not everything (*)"."""
+    owner = _bearer(_mint(priv, role="owner"))
+    r = await client.put("/v1/coding/exceptions", headers=owner,
+                         json={"exceptions": [{"rule": "secrets", "path": "a" * 5000}]})
+    assert r.status_code == 400
+    assert r.json()["detail"] == "an exception is at most 300 characters (this one has 5000)"
+
+
+async def test_a_code_host_is_never_a_trusted_source(
+        client: httpx.AsyncClient, priv) -> None:  # noqa: ANN001, F811
+    """QA-029: github.com was trusted silently, though the screen says never
+    to trust a site anyone can write to."""
+    owner = _bearer(_mint(priv, role="owner"))
+    for host in ("github.com", "gist.github.com", "raw.githubusercontent.com", "*.github.com",
+                 "gitlab.com", "bitbucket.org"):
+        r = await client.put("/v1/coding/exceptions", headers=owner,
+                             json={"trusted_sources": ["pypi.org", host]})
+        assert r.status_code == 400, host
+        assert "a code host is never a trusted source" in r.json()["detail"]
+    r = await client.put("/v1/coding/exceptions", headers=owner,
+                         json={"trusted_sources": ["pypi.org", "notgithub.com"]})
+    assert r.status_code == 200, r.text

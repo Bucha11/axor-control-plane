@@ -2,7 +2,7 @@
 // `axor-wrap worker`): the machine and the queue are stubbed on the wire, the
 // page is the real one.
 import { expect, test, type Page } from "@playwright/test";
-import { goHash } from "./helpers";
+import { goHash, setConnection } from "./helpers";
 
 const MINE = { machine_id: "m-laptop", host: "laptop", repo_label: "acme/api", agents: ["claude-code"],
                last_seen: new Date().toISOString(), online: true, yours: true };
@@ -61,4 +61,66 @@ test("with no machine of yours on line, the one command that brings one", async 
   await expect(page.getByTestId("eval-no-machine")).toContainText("no machine of yours is on line");
   await expect(page.getByTestId("skill-eval-cmd")).toContainText("axor-wrap worker");
   await expect(page.getByTestId("eval-run")).toHaveCount(0);
+});
+
+test("times each: holds what is typed, only a whole number 1–50 runs (QA-027)", async ({ page }) => {
+  await machines(page, [MINE]);
+  await page.route("**/v1/machine-jobs?limit=10", (r) => r.fulfill({ json: { jobs: [] } }));
+  await goHash(page, "skill-evals");
+  const trials = page.getByTestId("eval-trials");
+  const run = page.getByTestId("eval-run");
+  const section = page.locator("label", { hasText: "times each" });
+  // Backspace on 5 leaves it empty, typing 20 gives 20 — not 1, not 120
+  await trials.click();
+  await trials.press("End");
+  await trials.press("Backspace");
+  await expect(trials).toHaveValue("");
+  await trials.pressSequentially("20");
+  await expect(trials).toHaveValue("20");
+  await expect(section).toContainText("40 agent runs");
+  await expect(run).toBeEnabled();
+  for (const bad of ["", "0", "-5", "3.7", "999", "1e3"]) {
+    await trials.fill(bad);
+    await expect(trials).toHaveValue(bad);
+    await expect(section).toContainText("a whole number from 1 to 50");
+    await expect(run).toBeDisabled();
+  }
+  await trials.fill("50");
+  await expect(section).toContainText("100 agent runs");
+  await expect(run).toBeEnabled();
+});
+
+test("one way to install axor-wrap: the worker's command is Skills' with the eval extra (QA-028)", async ({ page }) => {
+  await machines(page, []);
+  await goHash(page, "skill-evals");
+  await expect(page.getByTestId("skill-eval-cmd")).toContainText("uv tool install 'axor-wrap[plane,eval]'");
+  await expect(page.getByTestId("skill-eval-cmd")).not.toContainText("pip install");
+  await goHash(page, "skills");
+  await expect(page.getByTestId("skill-try-cmd")).toContainText("uv tool install 'axor-wrap[plane]'");
+});
+
+test("a guest has no machines: the page does not ask for them (QA-042)", async ({ page }) => {
+  const GUEST = "gs_e2e_guest_token";
+  await page.route("**/v1/auth/status", (r) => r.fulfill({ json: {
+    auth_enabled: true, authenticated: false, scopes: [], guest_sessions: true, guest: false } }));
+  await page.route("**/v1/auth/guest", (r) => r.fulfill({ status: 201, json: {
+    token: GUEST, org: "guest_e2e", ttl_seconds: 1800,
+    expires_at: new Date(Date.now() + 20 * 60_000).toISOString() } }));
+  const asked: string[] = [];
+  let withGuest = 0;
+  page.on("request", (r) => {
+    if (r.headers()["authorization"] !== `Bearer ${GUEST}`) return;
+    withGuest += 1;
+    if (/\/v1\/(machines|machine-jobs)/.test(r.url())) asked.push(r.url());
+  });
+  await setConnection(page, { mode: "demo" });
+  await goHash(page, "skill-evals");
+  await expect(page.getByTestId("skill-eval-cmd")).toBeVisible();
+  // the guest session is in place (the page asks with it); opened again with it
+  await expect.poll(() => withGuest).toBeGreaterThan(0);
+  await page.reload();
+  await expect(page.getByTestId("skill-eval-cmd")).toBeVisible();
+  await page.waitForLoadState("networkidle");
+  await page.waitForTimeout(1000);
+  expect(asked).toEqual([]);
 });

@@ -130,7 +130,12 @@ async def _rules(store: object) -> dict:
 
 
 MAX_EXCEPTIONS, MAX_SOURCES = 100, 30
+MAX_EXCEPTION = 300  # characters in one path or command
 _HOST = re.compile(r"^(?:\*\.)?(?:[a-z0-9-]+\.)+[a-z]{2,}$")
+# hosts anyone can write to (issues, gists, raw files of any repository) —
+# and their subdomains: never a trusted source, as the screen says
+_CODE_HOSTS = ("github.com", "githubusercontent.com", "gitlab.com", "bitbucket.org",
+               "codeberg.org")
 
 
 def _exceptions(raw: object, known: set[str]) -> list[dict]:
@@ -146,8 +151,11 @@ def _exceptions(raw: object, known: set[str]) -> list[dict]:
                 400, "an exception names a rule from the catalog (not agent_config)")
         kind = "path" if e.get("path") else "command" if e.get("command") else None
         value = str(e.get(kind) or "").strip() if kind else ""
-        if not kind or not value or len(value) > 300 or value.strip("*/ ") == "":
+        if not kind or not value or value.strip("*/ ") == "":
             raise HTTPException(400, "an exception is a path or a command — not everything (*)")
+        if len(value) > MAX_EXCEPTION:
+            raise HTTPException(400, f"an exception is at most {MAX_EXCEPTION} characters "
+                                     f"(this one has {len(value)})")
         out.append({"rule": e["rule"], kind: value, "note": str(e.get("note") or "")[:200],
                     "by": str(e.get("by") or ""), "ts": str(e.get("ts") or "")})
     return out
@@ -163,6 +171,11 @@ def _sources(raw: object) -> list[str]:
     bad = [h for h in hosts if not _HOST.match(h)]
     if bad:
         raise HTTPException(400, f"not a host: {', '.join(bad)} (e.g. pypi.org, *.readthedocs.io)")
+    code = [h for h in hosts if any(h.removeprefix("*.") == c or h.endswith("." + c)
+                                    for c in _CODE_HOSTS)]
+    if code:
+        raise HTTPException(400, f"{', '.join(code)}: a code host is never a trusted source — "
+                                 "anyone can write to it; name the project's docs site")
     return hosts
 
 
