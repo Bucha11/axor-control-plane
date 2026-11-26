@@ -39,6 +39,20 @@ test.describe("evidence", () => {
     await expect(page).toHaveURL(/#\/catch\?auto=1/);
   });
 
+  test("the menu's count is what the page lists first (QA-040)", async ({ page, request }) => {
+    // the tree example has a made-up answer and a refused send-out, both new:
+    // the badge counted 2, the default view (refusals left out) listed 1
+    expect((await request.post(`${BACKEND}/v1/demo/seed-tree-run`)).ok()).toBeTruthy();
+    await setConnection(page, { mode: "adapter" });
+    await goHash(page, "evidence");
+    const badge = page.getByTestId("incidents-count");
+    await expect(badge).toBeVisible();
+    const listed = page.getByTestId("evidence-list").locator(":scope > [data-kind]");
+    await expect(listed.first()).toBeVisible();
+    await expect(page.getByTestId("evidence-list").locator(':scope > [data-kind="refused"]').first()).toBeVisible();
+    expect(await listed.count()).toBe(Number(await badge.textContent()));
+  });
+
   test("a dangerous call let through is in the feed; settling it takes it off the new list", async ({ page, request }) => {
     expect((await request.post(`${BACKEND}/v1/demo/seed-prod-incident`)).ok()).toBeTruthy();
     await setConnection(page, { mode: "adapter" });
