@@ -204,6 +204,8 @@ export default function Experiment({ runId, autostart }: { runId?: string; autos
       setLastRun(id);
       void qc.invalidateQueries({ queryKey: ["runs"] });
     },
+    // the run did not finish: say why, not nothing (QA-002)
+    onError: (e: Error) => setSimulateNote(e.message),
   });
 
   // Demo-mode "one click": Home hands off with ?auto=1 → run immediately.

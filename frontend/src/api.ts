@@ -865,8 +865,42 @@ export interface LabDeploySummary {
   source: { bundle_id?: string; condition_id?: string };
 }
 
+/** A request the plane refused, said as a person reads it. The message is the
+ *  plane's own sentence (`detail`), never the raw body: `403 {"detail": …}`
+ *  reached the screen as JSON on many pages (QA run 2026-11-27). `status` and
+ *  `code` (`account_required`, `plan_required`, …) are for code to branch on. */
+export class ApiError extends Error {
+  constructor(readonly status: number, readonly code: string, message: string) {
+    super(message);
+    this.name = "ApiError";
+  }
+}
+
+export function apiError(status: number, text: string): ApiError {
+  let code = "";
+  let words = "";
+  try {
+    const body = JSON.parse(text) as { detail?: unknown; error?: unknown };
+    const d = body.detail;
+    if (typeof body.error === "string") code = body.error;
+    if (typeof d === "string") words = d;
+    else if (Array.isArray(d)) {
+      // a validation error: what was wrong with each field, not the input back
+      words = d.map((x) => (x && typeof x === "object" && "msg" in x ? String((x as { msg: unknown }).msg) : ""))
+        .filter(Boolean).join("; ").replace(/^Value error,\s*/i, "");
+    } else if (d && typeof d === "object") {
+      const o = d as { code?: unknown; error?: unknown; detail?: unknown; message?: unknown };
+      code = String(o.code ?? o.error ?? code ?? "");
+      words = String(o.detail ?? o.message ?? "");
+    }
+    if (!words && typeof body.error === "string") words = body.error.replace(/_/g, " ");
+  } catch { /* not JSON */ }
+  if (!words) words = text.trim().slice(0, 300) || `the request failed (HTTP ${status})`;
+  return new ApiError(status, code, words.length > 600 ? `${words.slice(0, 600)}…` : words);
+}
+
 async function j<T>(resp: Response): Promise<T> {
-  if (!resp.ok) throw new Error(`${resp.status} ${await resp.text()}`);
+  if (!resp.ok) throw apiError(resp.status, await resp.text());
   return resp.json() as Promise<T>;
 }
 
@@ -874,6 +908,12 @@ async function j<T>(resp: Response): Promise<T> {
 // time and sent as the bearer. When auth is off it is empty and omitted.
 function apiToken(): string {
   return useApp.getState().apiToken;
+}
+
+/** Whose workspace a demo node, tree or run the proxy uploads belongs to: the
+ *  page's own sign-in (or guest) token, which the proxy uploads with (QA-001). */
+function uploadAs(): Record<string, string> {
+  return apiToken() ? { "X-Axor-Upload-Token": apiToken() } : {};
 }
 
 // Authed fetch: merges the Authorization header into any request. When an
@@ -1482,7 +1522,7 @@ export const api = {
           payload_sha256: string; granted: boolean; ts: string }[]>(r)),
 
   spawnGovernedTree: () =>
-    af("/axor/governed/spawn-tree", { method: "POST" }).then((r) =>
+    af("/axor/governed/spawn-tree", { method: "POST", headers: uploadAs() }).then((r) =>
       j<{ run_id: string; nodes: Record<string, string>; denials: number; events: number }>(r)),
 
   // The canned 4-node tree, straight into the plane — no proxy involved. It is
@@ -2177,7 +2217,7 @@ export const api = {
 
   // ── governed node: a real axor-core IntentLoop wired to the plane ──────────
   spawnGoverned: () =>
-    af("/axor/governed/spawn", { method: "POST" }).then(
+    af("/axor/governed/spawn", { method: "POST", headers: uploadAs() }).then(
       (r) => j<{ node_id: string; run_id: string; events: number; denials: number; ttl_seconds: number }>(r),
     ),
 

@@ -445,6 +445,28 @@ async def _guarded_call(state: ProxyState, request: Request, tool: str, path: st
     return Response(upstream.content, status_code=upstream.status_code, headers=headers)
 
 
+def _upload_key(state: ProxyState, request: Request) -> str | None:
+    """Whose plane workspace a demo node or run lands in: the caller's own
+    credential (X-Axor-Upload-Token — the page sends its sign-in token), else
+    this proxy's own ingest key. On a hosted plane every workspace is a tenant
+    of its own: with the proxy's key the node went to the key's workspace, and
+    the person who spawned it never saw it (QA-001)."""
+    return request.headers.get("x-axor-upload-token", "").strip() or state.ingest_key
+
+
+def _upload_refused(exc: httpx.HTTPError) -> JSONResponse:
+    """A failed trace upload, said without the plane's internal address: the
+    raw exception carried `http://backend:8400/...` to the page (QA-001)."""
+    if isinstance(exc, httpx.HTTPStatusError):
+        code = exc.response.status_code
+        detail = (f"the Control Plane refused the upload (HTTP {code})"
+                  + (" — sign in again, or check this proxy's AXOR_INGEST_KEY"
+                     if code in (401, 403) else ""))
+    else:
+        detail = "the Control Plane could not be reached from the proxy"
+    return JSONResponse({"error": "backend_upload_failed", "detail": detail}, status_code=502)
+
+
 async def _forward_plain(
     state: ProxyState, request: Request,
     upstream_base: Any,  # noqa: ANN401 - url or StdioMcpServer
@@ -828,11 +850,18 @@ def create_app(state: ProxyState) -> Starlette:
         owns = state.agent_client is None
         client = state.agent_client or httpx.AsyncClient(timeout=30.0)
         try:
-            agent = ScriptedAgent(state.self_base_url, client)
+            agent = ScriptedAgent(state.self_base_url, client, control_token=state.control_token)
             result = await agent.run(run.run_id, script, claim)
         finally:
             if owns:
                 await client.aclose()
+        if isinstance(result, dict) and result.get("error"):
+            # The claim was refused: the run did not finish. Answered as a 200
+            # it read as "ran, just not uploaded" and the page said so (QA-002).
+            return JSONResponse({"error": "claim_refused",
+                                 "detail": "the test could not finish: "
+                                           + str(result.get("detail") or result["error"])},
+                                status_code=502)
         return JSONResponse(result)
 
     async def submit_claim(request: Request) -> Response:
@@ -907,12 +936,9 @@ def create_app(state: ProxyState) -> Starlette:
         from axor_proxy.governed import spawn_governed_tree
 
         try:
-            result = await spawn_governed_tree(state.backend_url, state.ingest_key)
+            result = await spawn_governed_tree(state.backend_url, _upload_key(state, request))
         except httpx.HTTPError as exc:
-            return JSONResponse(
-                {"error": "backend_upload_failed", "detail": str(exc)},
-                status_code=502,
-            )
+            return _upload_refused(exc)
         return JSONResponse(result)
 
     async def spawn_governed(request: Request) -> Response:
@@ -929,13 +955,10 @@ def create_app(state: ProxyState) -> Starlette:
         from axor_proxy.governed import spawn_governed_node
 
         try:
-            result = await spawn_governed_node(state.backend_url, state.ingest_key)
+            result = await spawn_governed_node(state.backend_url, _upload_key(state, request))
         except httpx.HTTPError as exc:
             # The trace upload failed — say so instead of reporting a live node.
-            return JSONResponse(
-                {"error": "backend_upload_failed", "detail": str(exc)},
-                status_code=502,
-            )
+            return _upload_refused(exc)
         task = result.pop("_task")
         node_id = result["node_id"]
         state.governed[node_id] = task
