@@ -854,7 +854,7 @@ function Team({ orgId, isAdmin }: { orgId: string; isAdmin: boolean }) {
               <div style={{ color: C.green, wordBreak: "break-all" }}>{made.link}</div>
             </div>
           )}
-          {invite.isError && <span style={{ color: C.red }}>{(invite.error as Error).message}</span>}
+          {invite.isError && <span style={{ color: C.red, overflowWrap: "anywhere" }}>{(invite.error as Error).message}</span>}
           {(invites.data?.invites ?? []).length > 0 && (
             <div className="mt-2" data-testid="invites-open">
               <div style={{ color: C.dim, fontSize: 10.5 }}>waiting to be accepted</div>

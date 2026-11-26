@@ -398,6 +398,38 @@ test.describe("identity login (Settings)", () => {
     expect(signed).toMatchObject({ email: "sam@acme.io", invite: "tok-abc" });
   });
 
+  test("an invite the plane refuses says why in words and keeps the page's width (QA-010)", async ({ page }) => {
+    await page.route("**/identity/v1/login", jsonRoute(200, SESSION));
+    await page.route("**/identity/v1/me", jsonRoute(200, {
+      user: SESSION.user, active_org: "org_1", role: "owner",
+      memberships: [{ org_id: "org_1", role: "owner", name: "Acme", tier: "business" }],
+    }));
+    await page.route("**/identity/v1/orgs/org_1/members", jsonRoute(200, { members: [
+      { user_id: "usr_1", email: "ada@acme.io", role: "owner", since: "2026-01-01" }] }));
+    const long = "a".repeat(5000) + "@example.com";
+    await page.route("**/identity/v1/orgs/org_1/invites", async (route) => {
+      if (route.request().method() !== "POST") return route.fulfill({ json: { invites: [] } });
+      // what the identity service answers: pydantic's 422, the input echoed back
+      return route.fulfill({ status: 422, json: { detail: [{ type: "value_error", loc: ["body", "email"],
+        msg: "value is not a valid email address: The email address is too long before the @-sign",
+        input: long }] } });
+    });
+    await page.route("**/v1/license/entitlements", jsonRoute(200, {
+      tier: "business", free: false, developers: 1, agent_families: 2, agent_family: null,
+      locked: {}, locked_trees: {}, reasons: {} }));
+    await goHash(page, "settings");
+    await page.getByLabel("email", { exact: true }).fill("ada@acme.io");
+    await page.getByLabel("password").fill("correct horse");
+    await page.getByRole("button", { name: "log in", exact: true }).click();
+    await page.getByLabel("invite role").selectOption("viewer");
+    await page.getByLabel("invite email").fill(long);
+    await page.getByTestId("invite-make").click();
+    await expect(page.getByText("The email address is too long before the @-sign")).toBeVisible();
+    await expect(page.getByText(/"loc"|"input"/)).toHaveCount(0);
+    const width = await page.evaluate(() => document.documentElement.scrollWidth);
+    expect(width).toBeLessThanOrEqual(page.viewportSize()!.width + 1);
+  });
+
   test("on the free plan, inviting a second developer offers the paid plan", async ({ page }) => {
     await page.route("**/identity/v1/login", jsonRoute(200, SESSION));
     await page.route("**/identity/v1/me", jsonRoute(200, {
