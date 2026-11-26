@@ -42,6 +42,8 @@ docker compose exec -T lab tar czf - -C /data . > "$OUT/lab-data.tgz"
 if docker ps --format '{{.Names}}' | grep -qx axor-billing; then
     docker exec axor-billing python -c "import sqlite3; s = sqlite3.connect('/data/billing.db'); d = sqlite3.connect('/data/billing-backup.db'); s.backup(d); d.close()"
     docker cp axor-billing:/data/billing-backup.db "$OUT/billing.db"
+    # docker cp keeps the container's mode and ignores umask
+    chmod 600 "$OUT/billing.db"
 fi
 
 echo "backup: $OUT ($(du -sh "$OUT" | cut -f1))"
