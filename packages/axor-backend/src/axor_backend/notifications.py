@@ -405,7 +405,8 @@ class Notifier:
 
     def send_test(self, url: str, org: str = PUBLIC_ORG) -> None:
         """One test alert through the same delivery (retries, dead-letter)."""
-        self._schedule(url, with_chat_text({"trigger": "test", "node_id": "axor"}, self._public_url), org)
+        self._schedule(url, with_chat_text({"trigger": "test", "node_id": "axor"},
+                                           self._public_url), org)
 
     def _schedule(self, url: str, body: dict[str, Any], org: str) -> None:
         """Hand one delivery to the event loop, or dead-letter it now.

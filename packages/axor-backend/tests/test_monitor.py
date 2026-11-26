@@ -21,7 +21,12 @@ from axor_backend.storage import Store
 
 
 @pytest.fixture
-async def store(tmp_path: pathlib.Path) -> Store:
+async def store(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> Store:
+    # The lifespan starts the real stale monitor, sweeping every 10 s on this
+    # same store. The tests here drive their own sweeps and count what each
+    # one pages; a background sweep landing between them took some of the
+    # pages first (42 of 50 in one run) and the count came up short at random.
+    monkeypatch.setenv("AXOR_STALE_SWEEP_INTERVAL", "3600")
     app = create_app(
         database_url=f"sqlite+aiosqlite:///{tmp_path}/monitor.db",
         operator_keys={}, allow_unsigned=True,

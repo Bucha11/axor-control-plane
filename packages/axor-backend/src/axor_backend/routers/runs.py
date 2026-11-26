@@ -129,7 +129,8 @@ async def store_evidence(
                 "permalink": f"/#/catch/{run_id}",
                 "api": f"/v1/runs/{run_id}",
                 "what": str(deviations[0].get("deviation", "")).replace("_", " "),
-                "tool": next((str(a.get("tool_name")) for a in deviations[0].get("fault_attribution") or []
+                "tool": next((str(a.get("tool_name"))
+                              for a in deviations[0].get("fault_attribution") or []
                               if isinstance(a, dict) and a.get("tool_name")), ""),
             },
         )

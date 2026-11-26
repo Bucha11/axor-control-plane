@@ -38,7 +38,8 @@ async def test_the_policy_is_kept_for_the_workspace_and_audited(client: httpx.As
     assert got["issue_refund"]["klass"] == "WRITE"
     # saving the same policy again is not another act
     assert (await client.put("/v1/policy", json={"tools": POLICY})).json()["changed"] == []
-    acts = [i for i in (await client.get("/v1/audit")).json()["items"] if i["action"] == "policy_saved"]
+    acts = [i for i in (await client.get("/v1/audit")).json()["items"]
+            if i["action"] == "policy_saved"]
     assert len(acts) == 1
 
 

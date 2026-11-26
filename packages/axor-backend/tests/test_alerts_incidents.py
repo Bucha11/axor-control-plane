@@ -119,7 +119,8 @@ async def test_agents_worse_after_a_memory_change_pages_once(
     assert worse[0]["repo"] == "acme/api"
 
 
-async def test_a_refused_attack_pages_and_an_operators_hold_does_not(client: httpx.AsyncClient) -> None:
+async def test_a_refused_attack_pages_and_an_operators_hold_does_not(
+        client: httpx.AsyncClient) -> None:
     """A security lead asks to hear about the attack the rules stopped; there
     was no such trigger. A pause / stop / spent budget is the operator's own
     hold, not a refusal, and must not page."""
@@ -137,7 +138,8 @@ async def test_a_refused_attack_pages_and_an_operators_hold_does_not(client: htt
 async def test_a_wrapped_agents_finished_run_pages_its_refusal(client: httpx.AsyncClient) -> None:
     """A wrapped agent posts its run when it is done (/v1/ingest), not as it
     goes: the refusal it recorded paged nobody, while the proxy's did."""
-    r = await client.post("/v1/ingest/w1", json={"node_id": "copilot", "scenario": "live", "events": [
+    r = await client.post("/v1/ingest/w1", json={
+        "node_id": "copilot", "scenario": "live", "events": [
         _line("copilot", 0, "tool_call", "pass", tool="read_ticket", args={"ticket_id": "T-2"}),
         _line("copilot", 1, "tool_call", "deny", tool="send_email",
               args={"to": "records@archive.example"}, reason="taint enforcement: outside text"),
@@ -156,7 +158,8 @@ def test_a_chat_webhook_gets_text_it_shows() -> None:
                            "tool": "issue_refund", "what": "fabricated tool result",
                            "permalink": "/#/catch/run_1"}, "https://axor.acme.example/")
     assert body["text"] == body["content"]
-    assert "refund-copilot: made something up — issue_refund · fabricated tool result" in body["text"]
+    assert ("refund-copilot: made something up — issue_refund · fabricated tool result"
+            in body["text"])
     assert body["permalink"] == "https://axor.acme.example/#/catch/run_1"
     assert body["text"].endswith("https://axor.acme.example/#/catch/run_1")
     # the plane's own test-run proxy is said as what it is

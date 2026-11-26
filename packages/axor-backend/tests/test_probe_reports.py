@@ -155,7 +155,8 @@ async def test_drift_notifies_with_the_escaped_families(
     # same news, not a second page.
     await client.post("/v1/plane/node-g/probe-report", json=_payload(
         verdict="DRIFT_DETECTED", escape_count=1,
-        families=[{"family": "instruction_conflict", "state": "escaped", "escapes": 1, "probes": 3}]))
+        families=[{"family": "instruction_conflict", "state": "escaped",
+                   "escapes": 1, "probes": 3}]))
     assert len(sent) == 1
 
     # A clean check is not news.

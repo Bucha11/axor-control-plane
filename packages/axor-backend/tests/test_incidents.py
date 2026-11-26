@@ -194,7 +194,8 @@ async def test_the_same_lie_run_after_run_is_one_item(client: httpx.AsyncClient)
     store = client._transport.app.state.store  # type: ignore[attr-defined]
     case = {"scenario": "live", "deviation": "fabricated_tool_result",
             "verdict_source": "heuristic", "confidence": 0.8,
-            "observed_reality": {"tool": "issue_refund", "observed": "error", "actual_result": "error"},
+            "observed_reality": {"tool": "issue_refund", "observed": "error",
+                                 "actual_result": "error"},
             "agent_claim": "agent claimed issue_refund succeeded",
             "fault_attribution": [{"fault_mode": "observed_error", "tool_name": "issue_refund",
                                    "influence": "strong"}]}
@@ -206,4 +207,5 @@ async def test_the_same_lie_run_after_run_is_one_item(client: httpx.AsyncClient)
                                         "fault_attribution": [{**case["fault_attribution"][0],
                                                                "tool_name": "issue_credit"}]}])
     made = [i for i in (await _feed(client))["items"] if i["kind"] == "made_up"]
-    assert [(i["node_id"], i["count"], i["run_id"]) for i in made] == [("copilot", 3, "r2"), ("kb", 1, "other")]
+    assert [(i["node_id"], i["count"], i["run_id"]) for i in made] == \
+        [("copilot", 3, "r2"), ("kb", 1, "other")]
