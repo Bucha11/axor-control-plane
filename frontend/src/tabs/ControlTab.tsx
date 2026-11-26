@@ -197,6 +197,7 @@ function SpawnGoverned({ switchToAdapter }: { switchToAdapter?: boolean }) {
   });
   return (
     <div className="mt-3" data-tour="spawn">
+      <div className="flex flex-wrap items-center gap-2">
       <Tooltip content="Starts a real axor-core governed agent (an IntentLoop) on the proxy and connects it to the plane — so you can watch a live node heartbeat and obey your interventions without wiring your own.">
         <button
           onClick={() => spawn.mutate()}
@@ -210,7 +211,7 @@ function SpawnGoverned({ switchToAdapter }: { switchToAdapter?: boolean }) {
         <button
           onClick={() => spawnTree.mutate()}
           disabled={spawnTree.isPending}
-          style={{ ...btn({ color: C.text, borderColor: C.steel, fontSize: 12, padding: "8px 14px" }), marginTop: 8 }}
+          style={btn({ color: C.text, borderColor: C.steel, fontSize: 12, padding: "8px 14px" })}
         >
           {spawnTree.isPending ? "spawning tree…" : "Spawn a governed demo TREE"}
         </button>
@@ -223,11 +224,12 @@ function SpawnGoverned({ switchToAdapter }: { switchToAdapter?: boolean }) {
         <button
           onClick={() => seedTree.mutate()}
           disabled={seedTree.isPending}
-          style={{ ...btn({ color: C.mut, fontSize: 11.5, padding: "7px 12px" }), marginTop: 8 }}
+          style={btn({ color: C.mut, fontSize: 11.5, padding: "7px 12px" })}
         >
           {seedTree.isPending ? "loading…" : "or load the canned tree (lateral + foreign peer)"}
         </button>
       </Tooltip>
+      </div>
       {err && (
         <div style={{ fontFamily: MONO, fontSize: 11, color: C.red, marginTop: 8 }}>
           {err}

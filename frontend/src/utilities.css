@@ -8,6 +8,7 @@ html, body { margin: 0; background: #12161A; }  /* C.bg: no white beyond the app
 .flex-wrap { flex-wrap: wrap; }
 .items-center { align-items: center; }
 .items-start { align-items: flex-start; }
+.items-baseline { align-items: baseline; }
 .justify-between { justify-content: space-between; }
 .w-full { width: 100%; }
 .gap-1 { gap: 4px; } .gap-1\.5 { gap: 6px; } .gap-2 { gap: 8px; }
