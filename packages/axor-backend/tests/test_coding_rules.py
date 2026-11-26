@@ -68,3 +68,13 @@ async def test_an_exception_is_one_thing_never_everything(
     r = await client.put("/v1/coding/rules", headers=owner,
                          json={"allow": [], "trusted_sources": ["com"]})
     assert r.status_code == 400
+
+
+async def test_a_too_long_exception_says_so(
+        client: httpx.AsyncClient, priv) -> None:  # noqa: ANN001, F811
+    """QA-025: a 5000-character path was refused as "not everything (*)"."""
+    owner = _bearer(_mint(priv, role="owner"))
+    r = await client.put("/v1/coding/exceptions", headers=owner,
+                         json={"exceptions": [{"rule": "secrets", "path": "a" * 5000}]})
+    assert r.status_code == 400
+    assert r.json()["detail"] == "an exception is at most 300 characters (this one has 5000)"
