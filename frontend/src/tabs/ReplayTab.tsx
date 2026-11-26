@@ -193,6 +193,7 @@ export default function ReplayTab({ runId: runIdProp, cursor: cursorProp, seq: s
   useEffect(() => {
     setPinned(null);
     setCf(null);
+    setSeqMissing(null);
     setCursor(cursorProp ? Number(cursorProp) : 0);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [runId]);
@@ -236,6 +237,7 @@ export default function ReplayTab({ runId: runIdProp, cursor: cursorProp, seq: s
     enabled: !!runId && !!seqProp && !!nodeProp,
   });
   const seqLanded = useRef<string | null>(null);
+  const [seqMissing, setSeqMissing] = useState<string | null>(null);
   useEffect(() => {
     if (!seqProp || !runId || !scrubber.data) return;
     if (nodeProp && nodeEvents.isPending) return;
@@ -250,8 +252,24 @@ export default function ReplayTab({ runId: runIdProp, cursor: cursorProp, seq: s
       : -1;
     if (i < 0) i = all.findIndex((x) => x.seq === want);
     if (i >= 0) setCursor(i);
+    // a link to a step the run does not have opens at the start, and says so
+    setSeqMissing(i >= 0 ? null : seqProp);
     seqLanded.current = key;
   }, [seqProp, nodeProp, runId, scrubber.data, nodeEvents.isPending, nodeEvents.data]);
+
+  // The URL follows the step on screen, so a reload or a shared link opens on
+  // it (QA-031). Replaced, not pushed: Back still leaves Replay. A `seq` link
+  // keeps its seq until it has landed.
+  useEffect(() => {
+    if (!runIdProp || !steps.length) return;
+    if (seqProp && seqLanded.current === null) return;
+    const [path, qs] = window.location.hash.split("?");
+    const params = new URLSearchParams(qs ?? "");
+    params.delete("seq");
+    params.set("cursor", String(Math.min(cursor, steps.length - 1)));
+    const next = `${path}?${params}`;
+    if (next !== window.location.hash) window.history.replaceState(null, "", next);
+  }, [cursor, steps.length, runIdProp, seqProp]);
   const firstDiv = active?.first_divergence ?? null;
   // A what-if can only differ from something that was decided. A proxy-depth
   // trace records no verdicts (it watches; it does not decide), so nothing
@@ -370,6 +388,11 @@ export default function ReplayTab({ runId: runIdProp, cursor: cursorProp, seq: s
           {refusedAt >= 0 && <> · <span style={{ color: C.red }}>refused at step {refusedAt + 1}</span></>}
           {incident && claimAt >= 0 && <> · <button data-testid="replay-to-incident" onClick={() => setCursor(claimAt)}
             style={{ ...link, fontSize: 11.5, color: C.red }}>it said so at step {claimAt + 1}</button></>}
+        </div>
+      )}
+      {seqMissing && (
+        <div data-testid="replay-seq-missing" style={{ fontFamily: MONO, fontSize: 11.5, color: C.amber, marginBottom: 12 }}>
+          This run has no step with seq {seqMissing} — opened at the first step.
         </div>
       )}
       {run?.node_id && <SessionMemory nodeId={run.node_id} />}
