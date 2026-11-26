@@ -305,6 +305,7 @@ export default function Pricing() {
   const [devs, setDevs] = useState(5);
   const [agents, setAgents] = useState(1);
   const calc = quotes(devs, agents);
+  const enterprise = isEnterprise(devs, agents);
   // A hosted guest has no workspace a license could be issued to, and the
   // plane refuses them /v1/license (guests.ACCOUNT_ONLY). That 403 left the
   // card button a mailto that did nothing, with no word why: say it instead,
@@ -365,7 +366,7 @@ export default function Pricing() {
           const t: Tier = { ...base, ...over };
           // on Both, the cheapest plan for the numbers above
           const highlight = journey === "both"
-            ? RUNG_NAME[calc.best.rung] === t.name
+            ? enterprise ? t.kind === "contract" : RUNG_NAME[calc.best.rung] === t.name
             : t.highlightFor?.includes(journey) ?? false;
           const meta = KIND_META[t.kind];
           const price = cta ? undefined : cardPrice(t);
@@ -562,6 +563,22 @@ export default function Pricing() {
 }
 
 
+// Past this fleet the list prices quote five- and six-figure months (Security
+// at 100 developers and 200 nodes is $13,000 a month), and a negotiated node
+// band and seats are the honest answer. So the calculator sends the reader to
+// Enterprise instead of quoting a sum nobody would pay (QA-013).
+const ENTERPRISE_DEVS = 100;
+const ENTERPRISE_NODES = 200;
+const isEnterprise = (devs: number, agents: number) => devs > ENTERPRISE_DEVS || agents > ENTERPRISE_NODES;
+
+// The highest count the calculator takes (Enterprise starts far below it).
+const CALC_MAX = 10_000;
+
+// The ladder, low to high: an upsell only ever names a rung above the cheapest
+// one. In card order, Business came after Team and was offered over it,
+// although Team's seats already are Business (QA-013).
+const LADDER: Rung[] = ["community", "coding", "business", "team", "security"];
+
 /** Both ways in: how many developers run coding agents, how many production
  *  agents — what each plan costs a month, and the cheapest. List prices; the
  *  bill itself is drawn from what actually ran (Settings → Billing). */
@@ -571,10 +588,18 @@ function Calculator({ devs, agents, setDevs, setAgents, calc }: {
 }) {
   const field = { background: C.bg, border: `1px solid ${C.line}`, borderRadius: 5, color: C.text,
                   fontFamily: MONO, fontSize: 13, padding: "4px 8px", width: 80 };
-  const num = (v: string) => Math.max(0, Math.min(10_000, Math.floor(Number(v) || 0)));
+  // a number past the cap is held at it, and said so rather than silently (QA-013)
+  const [capped, setCapped] = useState(false);
+  const num = (v: string) => {
+    const n = Math.max(0, Math.floor(Number(v) || 0));
+    setCapped(n > CALC_MAX);
+    return Math.min(CALC_MAX, n);
+  };
   const best = calc.best;
+  const enterprise = isEnterprise(devs, agents);
   // the next rung up that costs more but adds something — the reason to pay it
-  const next = calc.all.find((q) => q.ok && q.total > best.total && ADDS[q.rung as Rung]);
+  const next = calc.all.find((q) => q.ok && q.total > best.total && ADDS[q.rung as Rung]
+    && LADDER.indexOf(q.rung) > LADDER.indexOf(best.rung));
   return (
     <div data-testid="pricing-calculator" className="p-4" style={{ background: C.panel, border: `1px solid ${C.steel}`,
       borderRadius: 10, marginBottom: 24, fontFamily: MONO, fontSize: 12, color: C.mut, lineHeight: 1.7 }}>
@@ -591,9 +616,23 @@ function Calculator({ devs, agents, setDevs, setAgents, calc }: {
         </label>
         <div style={{ flex: 1, minWidth: 220 }} data-testid="calc-best">
           <div style={{ fontSize: 10.5, color: C.dim }}>cheapest</div>
-          <span style={{ color: C.text, fontSize: 15 }}>{RUNG_NAME[best.rung]} — ${best.total.toLocaleString("en-US")} / month</span>
+          <span style={{ color: C.text, fontSize: 15 }}>
+            {enterprise ? "talk to us — Enterprise"
+              : `${RUNG_NAME[best.rung]} — $${best.total.toLocaleString("en-US")} / month`}
+          </span>
         </div>
       </div>
+      {capped && (
+        <div className="mt-2" data-testid="calc-capped" style={{ fontSize: 11, color: C.amber }}>
+          the calculator counts up to {CALC_MAX.toLocaleString("en-US")} — a fleet that size is Enterprise
+        </div>
+      )}
+      {enterprise ? (
+        <div className="mt-3" data-testid="calc-enterprise" style={{ fontSize: 11 }}>
+          more than {ENTERPRISE_DEVS} developers or {ENTERPRISE_NODES} production agents: a negotiated
+          node band and developer seats by contract, not list prices a month
+        </div>
+      ) : (<>
       <div className="mt-3" data-testid="calc-lines" style={{ fontSize: 11 }}>
         {best.lines.length === 0 ? (
           <div>free — one developer with one agent family (Claude Code or Codex), one production agent</div>
@@ -618,6 +657,7 @@ function Calculator({ devs, agents, setDevs, setAgents, calc }: {
         ))}
         <span style={{ color: C.dim }}>Enterprise: by contract</span>
       </div>
+      </>)}
       <div className="mt-2" style={{ fontSize: 10, color: C.dim }}>
         list prices a month. A developer counts once a month when their agents run; a production agent is
         billed on the month&apos;s peak. What gets blocked never depends on the plan.

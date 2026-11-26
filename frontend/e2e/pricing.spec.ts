@@ -34,6 +34,31 @@ test("both ways in: the calculator names the cheapest plan and what the next one
   await expect(page.getByTestId("tier-business")).toContainText("$40 / developer / mo");
 });
 
+test("the upsell only climbs the ladder, the cap is said, a large fleet is Enterprise (QA-013)", async ({ page }) => {
+  await goHash(page, "pricing?for=both");
+  const calc = page.getByTestId("pricing-calculator");
+  const set = async (devs: number | string, agents: number | string) => {
+    await calc.getByTestId("calc-devs").fill(String(devs));
+    await calc.getByTestId("calc-agents").fill(String(agents));
+  };
+  // Team is cheapest; its seats already are Business, so the next rung is Security
+  await set(10, 10);
+  await expect(calc.getByTestId("calc-best")).toContainText("Team Workspace — $699 / month");
+  await expect(calc.getByTestId("calc-next")).toContainText("Security Workspace is $1,201 more");
+  await expect(calc.getByTestId("calc-next")).not.toContainText("Business");
+  // past the threshold: no five-figure month, a contract
+  await set(10, 201);
+  await expect(calc.getByTestId("calc-best")).toContainText("talk to us — Enterprise");
+  await expect(calc.getByTestId("calc-lines")).toHaveCount(0);
+  await set(101, 1);
+  await expect(calc.getByTestId("calc-best")).toContainText("talk to us — Enterprise");
+  // a number past the cap is held at it, and said so
+  await expect(calc.getByTestId("calc-capped")).toHaveCount(0);
+  await set(1, 1_000_000);
+  await expect(calc.getByTestId("calc-agents")).toHaveValue("10000");
+  await expect(calc.getByTestId("calc-capped")).toContainText("counts up to 10,000");
+});
+
 test("only one way in shows no calculator", async ({ page }) => {
   await goHash(page, "pricing?for=coding");
   await expect(page.getByTestId("tier-coding")).toBeVisible();
