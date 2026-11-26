@@ -93,10 +93,12 @@ export default function CausalSubgraph({
       </div>
 
       <div className="flex" style={{ padding: "8px 4px" }}>
-        <svg viewBox={`0 0 150 ${Y(order.length - 1) + 65}`} style={{ width: 150, flexShrink: 0 }}>
+        <svg viewBox={`0 0 150 ${Y(order.length - 1) + 75}`} style={{ width: 150, flexShrink: 0 }}>
           {order.slice(0, -1).map((id, i) => (
             <g key={`e-${id}`}>
-              <path d={`M 70 ${Y(i)} L 70 ${Y(i + 1)}`} stroke={C.amber}
+              {/* from under this node's roles to above the next node's name,
+                  so the dashes never run through a label (QA-033) */}
+              <path d={`M 70 ${Y(i) + 31} L 70 ${Y(i + 1) - 30}`} stroke={C.amber}
                 strokeWidth="1.5" strokeDasharray="4 3" />
               <text x={80} y={(Y(i) + Y(i + 1)) / 2} fill={C.amber} fontSize="7" fontFamily={MONO}>
                 taint→
@@ -104,17 +106,17 @@ export default function CausalSubgraph({
             </g>
           ))}
           {/* the consequence edge below the anchor */}
-          <path d={`M 70 ${Y(order.length - 1)} L 70 ${Y(order.length - 1) + 50}`}
+          <path d={`M 70 ${Y(order.length - 1) + 31} L 70 ${Y(order.length - 1) + 60}`}
             stroke={contained ? C.green : C.red} strokeWidth="1.5"
             strokeDasharray={contained ? "4 3" : "0"} />
           {contained ? (
             <>
-              <circle cx="70" cy={Y(order.length - 1) + 40} r="9" fill={C.panel}
+              <circle cx="70" cy={Y(order.length - 1) + 50} r="9" fill={C.panel}
                 stroke={C.green} strokeWidth="1.3" />
-              <text x="70" y={Y(order.length - 1) + 43} textAnchor="middle" fontSize="9">🛡</text>
+              <text x="70" y={Y(order.length - 1) + 53} textAnchor="middle" fontSize="9">🛡</text>
             </>
           ) : (
-            <text x="82" y={Y(order.length - 1) + 44} fill={C.red} fontSize="7.5" fontFamily={MONO}>
+            <text x="82" y={Y(order.length - 1) + 54} fill={C.red} fontSize="7.5" fontFamily={MONO}>
               escaped
             </text>
           )}
@@ -126,7 +128,7 @@ export default function CausalSubgraph({
                 <circle cx="70" cy={Y(i)} r="14" fill={C.bg} stroke={col} strokeWidth="1.6"
                   style={{ filter: `drop-shadow(0 0 4px ${col})` }} />
                 <text x="70" y={Y(i) - 20} textAnchor="middle" fill={C.text} fontSize="8.5" fontFamily={MONO}>
-                  {id}
+                  <title>{id}</title>{id.length > 26 ? `${id.slice(0, 25)}…` : id}
                 </text>
                 <text x="70" y={Y(i) + 27} textAnchor="middle" fill={col} fontSize="7.5" fontFamily={MONO}>
                   {roles.join(" · ")}

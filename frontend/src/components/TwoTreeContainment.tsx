@@ -79,6 +79,11 @@ export default function TwoTreeContainment({
     const contained = verdict && governed && govHeld;
     const escapedV = verdict && !contained;
     const Y = (i: number) => 40 + i * 70;
+    // as wide as the longest name (8.5px mono is about 5.2 per character), so a
+    // label is never cut at the pane's edge (QA-033); a very long one ends in
+    // "…" with the whole name on hover
+    const label = (id: string) => (id.length > 24 ? `${id.slice(0, 23)}…` : id);
+    const width = Math.max(140, 100 + Math.max(...chain.map((id) => label(id).length)) * 5.2);
     return (
       <div style={{ flex: 1, background: C.panel2, border: `1px solid ${governed ? (contained ? C.green : C.line) : escapedV ? C.red : C.line}`, borderRadius: 10, overflow: "hidden" }}>
         <div className="flex items-center justify-between px-3 py-2" style={{ borderBottom: `1px solid ${C.line}` }}>
@@ -94,7 +99,7 @@ export default function TwoTreeContainment({
             </span>
           )}
         </div>
-        <svg viewBox={`0 0 140 ${Y(chain.length - 1) + 55}`} style={{ width: "100%", display: "block" }}>
+        <svg viewBox={`0 0 ${width} ${Y(chain.length - 1) + 55}`} style={{ width: "100%", display: "block" }}>
           {chain.slice(0, -1).map((id, i) => (
             <line key={id} x1="70" y1={Y(i)} x2="70" y2={Y(i + 1)}
               stroke={step > i ? C.amber : C.line} strokeWidth="1.5" />
@@ -122,7 +127,7 @@ export default function TwoTreeContainment({
               <g key={id}>
                 <circle cx="70" cy={Y(i)} r="15" fill={C.panel2} stroke={ring} strokeWidth="1.5"
                   style={touched && !governed ? { filter: `drop-shadow(0 0 5px ${ring})` } : {}} />
-                <text x="92" y={Y(i) + 4} fill={C.mut} fontSize="8.5" fontFamily={MONO}>{id}</text>
+                <text x="92" y={Y(i) + 4} fill={C.mut} fontSize="8.5" fontFamily={MONO}><title>{id}</title>{label(id)}</text>
               </g>
             );
           })}
