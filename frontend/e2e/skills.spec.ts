@@ -158,6 +158,19 @@ test.describe("coding agents: their menu, and trying a skill", () => {
     await panel.getByTestId("off-row-house-style").getByRole("button", { name: "turn back on" }).click();
   });
 
+  test("turning off a skill by a name that is no plain id: said before anything is sent (QA-026)", async ({ page }) => {
+    const sent: string[] = [];
+    page.on("request", (r) => { if (r.url().includes("/v1/coding/skills/")) sent.push(r.url()); });
+    await goHash(page, "skills");
+    const panel = page.getByTestId("skills-off");
+    await panel.getByLabel("skill to turn off").fill("<b>bad</b>");
+    await panel.getByLabel("skill to turn off").press("Enter");
+    await expect(panel).toContainText("a skill name is a plain id (letters, digits, - _ . :)");
+    await expect(panel.getByRole("button", { name: "turn off", exact: true })).toBeDisabled();
+    await expect(panel).not.toContainText("Not Found");
+    expect(sent).toEqual([]);
+  });
+
   test("context health: the setup got worse, traced to a skill and a CLAUDE.md section", async ({ page, request }) => {
     await setConnection(page, { mode: "demo" });
     await journey(page, "coding");
