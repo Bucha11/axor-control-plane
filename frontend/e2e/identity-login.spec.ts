@@ -705,3 +705,31 @@ test("signed in, one click fills in drift alerts to your own address", async ({ 
   await expect(page.getByPlaceholder(/mailto:you/)).toHaveValue("mailto:ada@acme.io");
   await expect(page.getByLabel("an agent's behaviour drifted (its health check)")).toBeChecked();
 });
+
+test("the header's sign-in panel opens on log in, its buttons one line each (QA-022)", async ({ page }) => {
+  // It opened on "create workspace" when the guest session had arrived before
+  // the click and on "log in" when it had not; at 1366px "log in" wrapped.
+  await page.setViewportSize({ width: 1366, height: 768 });
+  await page.route("**/v1/auth/status", jsonRoute(200, {
+    auth_enabled: true, authenticated: false, scopes: [], guest_sessions: true, guest: false }));
+  await page.route("**/v1/auth/guest", jsonRoute(201, {
+    token: "gs_e2e_guest_token", org: "guest_e2e", ttl_seconds: 1800,
+    expires_at: new Date(Date.now() + 29 * 60_000).toISOString() }));
+  await page.route("**/identity/v1/signup-mode", jsonRoute(200, { mode: "open", signup: true }));
+  await setConnection(page, { mode: "demo" });
+  await goHash(page, "home");
+  // the guest session is in: the case that used to open on "create workspace"
+  await page.waitForFunction(() => (sessionStorage.getItem("axor-app") ?? "").includes("gs_e2e_guest_token"));
+  await page.getByRole("button", { name: "sign in", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "sign in" });
+  await expect(dialog.getByText("SIGN IN", { exact: true })).toBeVisible();
+  await expect(dialog.getByRole("button", { name: "log in", exact: true })).toBeVisible();
+  const oneLine = async () => {
+    for (const b of await dialog.locator("form button").all()) {
+      expect((await b.boundingBox())!.height, await b.innerText()).toBeLessThan(32);
+    }
+  };
+  await oneLine();
+  await dialog.getByRole("button", { name: "new? create a workspace" }).click();
+  await oneLine();
+});

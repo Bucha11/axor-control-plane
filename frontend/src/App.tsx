@@ -701,7 +701,11 @@ function AccountButton() {
               your runs, agents and incidents move into the new workspace.
             </div>
           )}
-          <IdentityLogin initialMode={guest ? "signup" : "login"} onDone={() => setOpen(false)} compact />
+          {/* The panel opens on what its button says: "sign in" → log in,
+              "save your work" → create a workspace. Keyed on `guest` it
+              depended on whether the guest session had arrived yet, so a fresh
+              browser got one or the other by timing (QA-022). */}
+          <IdentityLogin initialMode={late ? "signup" : "login"} onDone={() => setOpen(false)} compact />
         </div>
       )}
     </div>

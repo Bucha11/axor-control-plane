@@ -1032,32 +1032,33 @@ export function IdentityLogin({ onDone, initialMode = "login", compact = false }
           onChange={(e) => setOrgId(e.target.value)} style={INPUT_STYLE} aria-label="organization id" />
       )}
       {error && <div style={{ fontFamily: MONO, fontSize: 11, color: C.red }}>{error}</div>}
-      <div className="flex items-center gap-2">
+      {/* a label on one line: a narrow panel wraps whole buttons, never "log / in" (QA-022) */}
+      <div className="flex items-center gap-2 flex-wrap">
         <button type="submit" disabled={!canSubmit || busy}
-          style={btn({ color: C.steel, borderColor: C.steel, fontSize: 11, padding: "5px 14px" })}>
+          style={btn({ color: C.steel, borderColor: C.steel, fontSize: 11, padding: "5px 14px", whiteSpace: "nowrap" })}>
           {busy ? "…" : mode === "signup" ? "create workspace" : mode === "forgot" ? "send reset link" : "log in"}
         </button>
         {mode === "login" && !ssoFor && (
           <button type="button" data-testid="sso-start" onClick={() => void startSso()}
-            style={btn({ color: C.dim, fontSize: 10.5, padding: "5px 10px" })}>
+            style={btn({ color: C.dim, fontSize: 10.5, padding: "5px 10px", whiteSpace: "nowrap" })}>
             sign in with SSO
           </button>
         )}
         {mode === "login" && canMail && (
           <button type="button" onClick={() => { setError(null); setSent(null); setMode("forgot"); }}
-            style={btn({ color: C.dim, fontSize: 10.5, padding: "5px 10px" })}>
+            style={btn({ color: C.dim, fontSize: 10.5, padding: "5px 10px", whiteSpace: "nowrap" })}>
             forgot password?
           </button>
         )}
         {mode === "forgot" && (
           <button type="button" onClick={() => { setError(null); setMode("login"); }}
-            style={btn({ color: C.dim, fontSize: 10.5, padding: "5px 10px" })}>
+            style={btn({ color: C.dim, fontSize: 10.5, padding: "5px 10px", whiteSpace: "nowrap" })}>
             back to log in
           </button>
         )}
         {mode !== "forgot" && (canSignup !== false || mode === "signup") && (
           <button type="button" onClick={() => { setError(null); setMode(mode === "signup" ? "login" : "signup"); }}
-            style={btn({ color: C.dim, fontSize: 10.5, padding: "5px 10px" })}>
+            style={btn({ color: C.dim, fontSize: 10.5, padding: "5px 10px", whiteSpace: "nowrap" })}>
             {mode === "signup" ? "have an account? log in" : "new? create a workspace"}
           </button>
         )}
