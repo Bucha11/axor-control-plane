@@ -18,6 +18,7 @@ import { C, MONO, btn } from "../theme";
 import { SkillsOffPanel, TeamSkillsPanel } from "../components/SkillsOff";
 import { HowItWorks, MachineCommand } from "../components/MachineCommand";
 import { useWorkStarted } from "../workStarted";
+import { localTime } from "../time";
 const TRY_PREFIX = "skill-try.";
 
 // An example skill to check without having one at hand: what a helpful-looking
@@ -319,7 +320,7 @@ function DryRuns() {
                   <span style={{ fontFamily: MONO, fontSize: 11, color: C.dim }}>{t.agent}</span>
                   <span style={{ flex: 1 }} />
                   <span style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim }}>
-                    {n.reported?.updated_ts?.slice(0, 16).replace("T", " ") ?? ""}
+                    {localTime(n.reported?.updated_ts)}
                   </span>
                 </button>
                 {isOpen && <DryRun nodeId={n.node_id} />}

@@ -14,6 +14,7 @@ import { useApp } from "../store";
 import { LAB_SHIPPED } from "../flags";
 import Tooltip from "../components/Tooltip";
 import { useWorkStarted } from "../workStarted";
+import { localTime } from "../time";
 
 // The example corpus's runs (backend demo.DEMO_RUN_IDS) and what each one is,
 // in words: their pins all carry the scenario as label, which tells two apart
@@ -105,7 +106,7 @@ function ScheduleAndHistory({ parseConfig }: { parseConfig: () => Record<string,
               {schedule.data.enabled
                 ? `on — every ${schedule.data.interval_hours}h`
                 : "off"}
-              {schedule.data.last_run_ts ? ` · last ${schedule.data.last_run_ts.slice(0, 16)}` : ""}
+              {schedule.data.last_run_ts ? ` · last ${localTime(schedule.data.last_run_ts)}` : ""}
             </span>
             <span style={{ fontFamily: MONO, fontSize: 11, color: C.mut }}>every</span>
             <input
@@ -139,7 +140,7 @@ function ScheduleAndHistory({ parseConfig }: { parseConfig: () => Record<string,
                 <div key={i} className="flex items-center gap-3 px-4 py-2"
                   style={{ borderTop: i ? `1px solid ${C.line}` : "none", fontFamily: MONO, fontSize: 11 }}>
                   <Circle size={8} fill={h.safe_to_ship ? C.green : C.red} color={h.safe_to_ship ? C.green : C.red} />
-                  <span style={{ color: C.dim, width: 122 }}>{h.created_ts.slice(0, 16)}</span>
+                  <span style={{ color: C.dim, width: 122 }}>{localTime(h.created_ts)}</span>
                   <span style={{ color: C.dim, width: 72 }}>{h.source}</span>
                   <span style={{ color: h.safe_to_ship ? C.mut : C.text, flex: 1 }}>
                     {h.safe_to_ship
@@ -268,7 +269,7 @@ export function LabDeploys() {
               style={{ borderTop: i ? `1px solid ${C.line}` : "none", fontFamily: MONO, fontSize: 11 }}>
               <FlaskConical size={11} color={C.steel} />
               <span style={{ color: C.text }}>{d.package_id}</span>
-              <span style={{ color: C.dim, width: 122 }}>{d.created_ts.slice(0, 16)}</span>
+              <span style={{ color: C.dim, width: 122 }}>{localTime(d.created_ts)}</span>
               <span style={{ color: C.dim, flex: 1 }}>
                 {d.kernel} · bundle {d.source.bundle_id ?? "?"} · condition {d.source.condition_id ?? "?"}
               </span>

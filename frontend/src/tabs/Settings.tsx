@@ -23,6 +23,7 @@ import UsageAndBilling from "../components/UsageAndBilling";
 import AuditTrail from "../components/AuditTrail";
 import { useStartTour } from "../components/Tour";
 import { errorWords } from "../refusal";
+import { localTime } from "../time";
 
 // Every trigger the backend emits, in words, and for whom. A trigger that fires
 // and cannot be subscribed to is a notification nobody receives — which is how
@@ -341,7 +342,7 @@ function Provisioning({ orgId }: { orgId: string }) {
             SCIM base URL <span data-testid="scim-base" style={{ color: C.text }}>{d.base_url}</span>
             {d.enabled
               ? <span style={{ color: C.dim }}> · token since {d.created_ts?.slice(0, 10)}
-                  {d.last_used_ts ? `, last used ${d.last_used_ts.slice(0, 16).replace("T", " ")}` : ", not used yet"}</span>
+                  {d.last_used_ts ? `, last used ${localTime(d.last_used_ts)}` : ", not used yet"}</span>
               : <span style={{ color: C.dim }}> · no token yet</span>}
           </div>
           <div style={{ color: C.dim, fontSize: 10.5 }}>
@@ -2081,7 +2082,7 @@ function AgentKeys({ journey, menuAll }: { journey: Journey | null; menuAll: boo
                 {(a.scopes ?? []).join(",")}{a.node_id ? ` @${a.node_id}` : ""}
               </span>
               <span style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim, flex: 1, textAlign: "right" }}>
-                by {a.by.id ?? a.by.kind} · {a.ts.slice(0, 19).replace("T", " ")}
+                by {a.by.id ?? a.by.kind} · {localTime(a.ts, true)}
               </span>
             </div>
           ))}
@@ -2445,7 +2446,7 @@ function SharedLinks() {
           <div key={l.token} className="flex items-center gap-2 py-1">
             <span style={{ color: C.text, cursor: "pointer" }}
               onClick={() => navigate(`catch/${encodeURIComponent(l.run_id)}`)}>{l.run_id}</span>
-            <span style={{ color: C.dim }}>case {l.case_index} · shared {l.created_ts.slice(0, 16).replace("T", " ")}</span>
+            <span style={{ color: C.dim }}>case {l.case_index} · shared {localTime(l.created_ts)}</span>
             <button onClick={() => revoke.mutate(l.token)} disabled={revoke.isPending}
               style={btn({ color: C.mut, fontSize: 10.5, padding: "2px 8px" })}>revoke</button>
           </div>

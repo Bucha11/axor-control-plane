@@ -14,6 +14,7 @@ import { C, MONO, btn } from "../theme";
 import { SkillSwitch, TeamSwitch } from "../components/SkillsOff";
 import { HowItWorks, MachineCommand } from "../components/MachineCommand";
 import { useWorkStarted } from "../workStarted";
+import { localTime } from "../time";
 
 const label: React.CSSProperties = {
   fontFamily: MONO, fontSize: 10.5, color: C.dim, letterSpacing: "0.1em", marginBottom: 8,
@@ -84,7 +85,7 @@ function EvalList() {
               style={{ background: "none", border: "none", borderTop: i ? `1px solid ${C.line}` : "none",
                        cursor: "pointer", textAlign: "left" }}>
               <span style={{ fontFamily: MONO, fontSize: 11, color: C.dim, width: 120 }}>
-                {r.created_ts.slice(0, 16).replace("T", " ")}
+                {localTime(r.created_ts)}
               </span>
               <span className="flex flex-col" style={{ flex: 1, gap: 2 }}>
                 {r.example && <span style={{ fontFamily: MONO, fontSize: 10.5, color: C.amber }}>example</span>}
@@ -301,7 +302,7 @@ function EvalView({ evalId }: { evalId: string }) {
         {e.skills.length} skill{e.skills.length === 1 ? "" : "s"}, {e.per_task.length} task{e.per_task.length === 1 ? "" : "s"}
       </h1>
       <div style={{ fontFamily: MONO, fontSize: 11.5, color: C.dim, marginBottom: 18 }}>
-        {e.agent}{e.model ? ` · ${e.model}` : ""} · {e.arms.length} ways × {trials} times each · {e.created_ts.slice(0, 16).replace("T", " ")}
+        {e.agent}{e.model ? ` · ${e.model}` : ""} · {e.arms.length} ways × {trials} times each · {localTime(e.created_ts)}
         {e.example && <span style={{ color: C.amber }}> · example: a scripted agent, not a real run</span>}
       </div>
 

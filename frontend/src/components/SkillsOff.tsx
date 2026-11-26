@@ -9,6 +9,7 @@ import { api, TeamSkill } from "../api";
 import { C, MONO, btn } from "../theme";
 import { HowItWorks, MachineCommand } from "./MachineCommand";
 import { useWorkStarted } from "../workStarted";
+import { localTime } from "../time";
 
 export function useSkillsOff() {
   const qc = useQueryClient();
@@ -26,7 +27,7 @@ export function useSkillsOff() {
            error: (set.error ?? team.error) as Error | null, shared: q.data?.team ?? [], team };
 }
 
-const day = (ts: string) => ts.slice(0, 16).replace("T", " ");
+const day = (ts: string) => localTime(ts);
 
 /** Shared skills waiting for someone's decision: never turned on, or a newer
  * upload than the version on — the menu says how many. */
@@ -239,7 +240,7 @@ export function SkillsOffPanel() {
               style={{ borderTop: i ? `1px solid ${C.line}` : "none", fontFamily: MONO, fontSize: 11.5 }}>
               <span style={{ color: C.text }}>{s.skill}</span>
               <span style={{ color: C.dim }}>
-                since {s.ts.slice(0, 16).replace("T", " ")}{s.by ? ` · by ${s.by}` : ""}
+                since {localTime(s.ts)}{s.by ? ` · by ${s.by}` : ""}
               </span>
               <span style={{ color: attempts[s.skill] ? C.amber : C.dim }}>
                 {attempts[s.skill] ?? 0} refused attempt{attempts[s.skill] === 1 ? "" : "s"}

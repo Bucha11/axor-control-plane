@@ -14,6 +14,7 @@ import { navigate } from "../router";
 import { C, MONO, btn } from "../theme";
 import { HowItWorks } from "../components/MachineCommand";
 import { useWorkStarted } from "../workStarted";
+import { localTime } from "../time";
 
 const label: React.CSSProperties = {
   fontFamily: MONO, fontSize: 10.5, color: C.dim, letterSpacing: "0.1em", marginBottom: 8,
@@ -22,7 +23,7 @@ const panel: React.CSSProperties = { background: C.panel, border: `1px solid ${C
 const link: React.CSSProperties = {
   background: "none", border: "none", padding: 0, cursor: "pointer", fontFamily: MONO, fontSize: 11, color: C.steel,
 };
-const day = (ts: string) => (ts ? ts.slice(0, 16).replace("T", " ") : "");
+const day = (ts: string) => localTime(ts);
 
 const GROUPS: { status: MemoryItem["status"]; title: string; color: string; words: string }[] = [
   { status: "on", title: "ON — GIVEN TO AGENTS", color: C.green, words: "" },
