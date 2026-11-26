@@ -689,6 +689,8 @@ function AccountButton() {
           aria-label={email ? "account" : "sign in"}
           style={{
             position: "absolute", right: 0, top: "calc(100% + 8px)", zIndex: 50, width: 300,
+            // never past the bottom of the screen, whatever the form grows to
+            maxHeight: "calc(100vh - 80px)", overflowY: "auto",
             background: C.bg, border: `1px solid ${C.line}`, borderRadius: 8, padding: 14,
             boxShadow: "0 8px 24px rgba(0,0,0,0.35)",
           }}
@@ -699,7 +701,7 @@ function AccountButton() {
               your runs, agents and incidents move into the new workspace.
             </div>
           )}
-          <IdentityLogin initialMode={guest ? "signup" : "login"} onDone={() => setOpen(false)} />
+          <IdentityLogin initialMode={guest ? "signup" : "login"} onDone={() => setOpen(false)} compact />
         </div>
       )}
     </div>

@@ -285,6 +285,38 @@ test.describe("identity login (Settings)", () => {
     await expect(page.getByTestId("may-skills-members")).toBeChecked();
   });
 
+  test("the header's account menu names the workspace and points to Settings for the rest", async ({ page }) => {
+    // The whole administration (team, who may, sign-on, SCIM, keys) used to
+    // render inside this 300px menu, which then ran off the bottom of the screen.
+    await page.route("**/identity/v1/login", jsonRoute(200, SESSION));
+    await page.route("**/identity/v1/me", jsonRoute(200, {
+      user: SESSION.user, active_org: "org_1", role: "owner",
+      memberships: [{ org_id: "org_1", role: "owner", name: "Acme", tier: "coding" }],
+    }));
+    await page.route("**/identity/v1/orgs/org_1/members", jsonRoute(200, { members: [
+      { user_id: "usr_1", email: "ada@acme.io", role: "owner", since: "2026-01-01" }] }));
+    await page.route("**/identity/v1/orgs/org_1/invites", jsonRoute(200, { invites: [] }));
+    await page.route("**/v1/permissions", jsonRoute(200, {
+      capabilities: { skills: { what: "turn a skill off for the team, or share one with it",
+                                members: true, people: [] } },
+      you: { skills: true } }));
+    await goHash(page, "settings");
+    await page.getByLabel("email", { exact: true }).fill("ada@acme.io");
+    await page.getByLabel("password").fill("correct horse");
+    await page.getByRole("button", { name: "log in", exact: true }).click();
+    await expect(page.getByTestId("who-may")).toBeVisible();          // Settings: all of it
+
+    await goHash(page, "govern");
+    await page.getByRole("button", { name: "ada@acme.io" }).click();
+    const menu = page.getByRole("dialog", { name: "account" });
+    await expect(menu.getByText("signed in as ada@acme.io")).toBeVisible();
+    await expect(menu.getByTestId("workspace-id")).toHaveText("(org_1)");
+    await expect(menu.getByTestId("who-may")).toHaveCount(0);
+    await menu.getByTestId("manage-workspace").click();
+    await expect(menu).toHaveCount(0);
+    await expect(page.getByTestId("who-may")).toBeVisible();
+  });
+
   test("an admin changes a teammate's role, or takes them off — never the owner's", async ({ page }) => {
     await page.route("**/identity/v1/login", jsonRoute(200, SESSION));
     await page.route("**/identity/v1/me", jsonRoute(200, {
