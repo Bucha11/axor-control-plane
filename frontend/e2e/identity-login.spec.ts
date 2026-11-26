@@ -706,6 +706,24 @@ test("signed in, one click fills in drift alerts to your own address", async ({ 
   await expect(page.getByLabel("an agent's behaviour drifted (its health check)")).toBeChecked();
 });
 
+test("a sign-up from the header says so and goes on to Connect (QA-036)", async ({ page }) => {
+  // it closed the panel and left the new user on the marketing Home, nothing said
+  await page.route("**/v1/auth/status", jsonRoute(200, { auth_enabled: true, authenticated: false, scopes: [] }));
+  await page.route("**/identity/v1/signup-mode", jsonRoute(200, { mode: "open", signup: true }));
+  await page.route("**/identity/v1/signup", jsonRoute(201, SESSION));
+  await setConnection(page, { mode: "none" });
+  await goHash(page, "home");
+  await page.getByRole("button", { name: "sign in", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "sign in" });
+  await dialog.getByRole("button", { name: "new? create a workspace" }).click();
+  await dialog.getByLabel("email").fill("ada@acme.io");
+  await dialog.getByLabel("password").fill("correct horse");
+  await dialog.getByLabel("organization name").fill("Acme");
+  await dialog.getByRole("button", { name: "create workspace" }).click();
+  await expect(page.getByTestId("signup-done")).toContainText("your workspace is ready — signed in as ada@acme.io");
+  await expect(page).toHaveURL(/#\/connect/);
+});
+
 test("the header's sign-in panel opens on log in, its buttons one line each (QA-022)", async ({ page }) => {
   // It opened on "create workspace" when the guest session had arrived before
   // the click and on "log in" when it had not; at 1366px "log in" wrapped.

@@ -880,8 +880,10 @@ function Team({ orgId, isAdmin }: { orgId: string; isAdmin: boolean }) {
   );
 }
 
-export function IdentityLogin({ onDone, initialMode = "login", compact = false }: {
+export function IdentityLogin({ onDone, onSignedUp, initialMode = "login", compact = false }: {
   onDone?: () => void; initialMode?: "login" | "signup";
+  // a new workspace was just made (before onDone)
+  onSignedUp?: () => void;
   // the header's account menu: the workspace's name and a way to Settings,
   // not the whole of its administration
   compact?: boolean;
@@ -964,7 +966,7 @@ export function IdentityLogin({ onDone, initialMode = "login", compact = false }
           ? await signup(email, password, orgName)
           : await login(email, password, orgId || undefined);
       setSession(session.access_token, session.refresh_token, session.user.email);
-      if (mode === "signup") track("signup_completed");
+      if (mode === "signup") { track("signup_completed"); onSignedUp?.(); }
       setPassword("");
       // Queries that 401'd before sign-in stay failed otherwise.
       void qc.invalidateQueries();
