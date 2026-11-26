@@ -268,10 +268,13 @@ function ctaHref(tier: Tier): string {
   return `mailto:sales@axor.dev?subject=${subject}&body=${body}`;
 }
 
+const tierRung = (tier: Tier): Rung | undefined =>
+  (Object.keys(RUNG_NAME) as Rung[]).find((r) => RUNG_NAME[r] === tier.name);
+
 // The Paddle price a paid card is sold at here, if card checkout is set up.
 function cardPrice(tier: Tier): string | undefined {
   if (tier.kind !== "paid") return undefined;
-  const rung = (Object.keys(RUNG_NAME) as Rung[]).find((r) => RUNG_NAME[r] === tier.name);
+  const rung = tierRung(tier);
   return rung ? paddlePrice(rung) : undefined;
 }
 
@@ -468,6 +471,14 @@ export default function Pricing() {
                     : "to pay by card, set AXOR_ORG on this deployment — the license names it"}
                 </div>
               )}
+              {/* A per-developer plan has no base price, so its checkout shows
+                  "$0.00 due today" — say why before the reader sees it (QA-014) */}
+              {card && CARD[tierRung(t)!].base === 0 && (
+                <div data-testid="card-billed-later"
+                  style={{ fontFamily: MONO, fontSize: 9.5, color: C.dim, marginTop: 8, lineHeight: 1.4 }}>
+                  nothing is due today: the card is kept on file, and the plan is billed per developer at the end of each month
+                </div>
+              )}
               <a
                 href={cta ? `#/${cta.route}` : ctaHref(t)}
                 onClick={cta
@@ -476,7 +487,7 @@ export default function Pricing() {
                     ? (e) => {
                       e.preventDefault();
                       // Paddle.js unreachable: the order link is still a way to pay
-                      openCheckout(card.price, card.org, hosted).catch(() => { window.location.href = ctaHref(t); });
+                      openCheckout(card.price, card.org, hosted, email || undefined).catch(() => { window.location.href = ctaHref(t); });
                     }
                     : undefined}
                 data-testid={`cta-${t.name.split(" ")[0].toLowerCase()}`}

@@ -99,6 +99,28 @@ test("a paid plan opens card checkout naming who the license is for", async ({ p
     ]);
 });
 
+test("a per-developer checkout says why nothing is due today, and knows who is paying (QA-014)", async ({ page }) => {
+  await licensedTo(page, "Acme Inc");
+  // signed in: who is signed in lives in the session half of the store
+  await page.addInitScript(() => {
+    window.localStorage.setItem("axor-app", JSON.stringify({ state: {}, version: 0 }));
+    window.sessionStorage.setItem("axor-app", JSON.stringify(
+      { state: { identityEmail: "buyer@acme.test" }, version: 0 }));
+  });
+  await goHash(page, "pricing?for=both");
+  // Coding and Business bill per developer later; Team and Security charge today
+  await expect(page.getByTestId("tier-coding").getByTestId("card-billed-later"))
+    .toContainText("billed per developer at the end of each month");
+  await expect(page.getByTestId("tier-business").getByTestId("card-billed-later")).toBeVisible();
+  await expect(page.getByTestId("tier-team").getByTestId("card-billed-later")).toHaveCount(0);
+  await page.getByTestId("cta-business").click();
+  await expect.poll(() => page.evaluate(() =>
+    ((window as unknown as { __paddle?: unknown[] }).__paddle ?? []).at(-1)))
+    .toEqual(["open", { items: [{ priceId: "pri_business", quantity: 1 }],
+                        customData: { org: "Acme Inc", hosted: false },
+                        customer: { email: "buyer@acme.test" } }]);
+});
+
 test("with nobody to issue a license to, it says what is missing", async ({ page }) => {
   await licensedTo(page);
   await goHash(page, "pricing?for=coding");

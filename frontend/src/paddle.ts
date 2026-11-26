@@ -57,10 +57,12 @@ function load(): Promise<PaddleJs> {
   return loading;
 }
 
-export async function openCheckout(priceId: string, org: string, hosted: boolean): Promise<void> {
+export async function openCheckout(priceId: string, org: string, hosted: boolean, email?: string): Promise<void> {
   const paddle = await load();
   paddle.Checkout.open({
     items: [{ priceId, quantity: 1 }],
     customData: { org, hosted },
+    // the signed-in address, so nobody types it again (QA-014)
+    ...(email ? { customer: { email } } : {}),
   });
 }
