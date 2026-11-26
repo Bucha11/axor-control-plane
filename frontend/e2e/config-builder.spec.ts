@@ -240,6 +240,20 @@ test.describe("config builder", () => {
     await expect(see).toBeEnabled();
   });
 
+  test("a tool name longer than the plane keeps: the field says the limit, the row wraps (QA-024)", async ({ page }) => {
+    await goHash(page, "config-builder");
+    await page.getByRole("button", { name: /add the tools by hand instead/ }).click();
+    await page.getByRole("button", { name: "Add tool" }).click();
+    const name = page.getByPlaceholder("tool name ⏎");
+    await name.fill("t".repeat(5000));
+    expect((await name.inputValue()).length).toBe(200);
+    await expect(page.getByText("at most 200 characters")).toBeVisible();
+    await name.press("Enter");
+    await expect(page.getByTestId(`policy-tool-${"t".repeat(200)}`)).toBeVisible();
+    const wide = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
+    expect(wide).toBeLessThanOrEqual(0);
+  });
+
   test("per tool: which arguments decide, and how bad if it goes wrong", async ({ page }) => {
     await goHash(page, "config-builder");
     await page.getByTestId("wrap-files").setInputFiles([

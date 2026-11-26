@@ -22,6 +22,8 @@ const panel: React.CSSProperties = { background: C.panel, border: `1px solid ${C
 const link: React.CSSProperties = {
   background: "none", border: "none", padding: 0, cursor: "pointer", fontFamily: MONO, fontSize: 11, color: C.steel,
 };
+// what the plane takes of a note (memory_api.NOTE_MAX)
+const NOTE_MAX = 400;
 const day = (ts: string) => (ts ? ts.slice(0, 16).replace("T", " ") : "");
 
 const GROUPS: { status: MemoryItem["status"]; title: string; color: string; words: string }[] = [
@@ -55,7 +57,7 @@ export default function TeamMemory() {
   const freshDays = q.data?.fresh_days ?? 30;
   const repo = repos.find((r) => r.repo === pick) ?? repos.find((r) => r.items.length) ?? repos[0];
   return (
-    <div data-testid="team-memory" style={{ maxWidth: 860, margin: "0 auto" }}>
+    <div data-testid="team-memory" style={{ maxWidth: 860, margin: "0 auto", overflowWrap: "anywhere" }}>
       <h1 style={{ fontSize: 22, fontWeight: 650, margin: "0 0 6px" }}>{solo ? "Your memory" : "Team memory"}</h1>
       <div style={{ fontSize: 14, color: C.mut, lineHeight: 1.5, marginBottom: 22 }}>
         {solo
@@ -187,7 +189,7 @@ function RepoMemory({ repo, freshDays }: { repo: MemoryRepo; freshDays: number }
           Something every agent should know in {repo.label}. It reaches every agent here at its next session, as your words — keep it to a line.
         </div>
         <div className="flex gap-2 items-center flex-wrap">
-          <input value={note} onChange={(e) => setNote(e.target.value)} maxLength={400}
+          <input value={note} onChange={(e) => setNote(e.target.value)} maxLength={NOTE_MAX}
             onKeyDown={(e) => e.key === "Enter" && note.trim() && add.mutate()}
             placeholder="e.g. run migrations with --dry-run first" aria-label="note for every agent"
             style={{ flex: 1, minWidth: 260, background: C.bg, border: `1px solid ${C.line}`, borderRadius: 4,
@@ -195,6 +197,11 @@ function RepoMemory({ repo, freshDays }: { repo: MemoryRepo; freshDays: number }
           <button onClick={() => add.mutate()} disabled={!note.trim() || add.isPending}
             style={btn({ color: note.trim() ? C.text : C.dim, fontSize: 11 })}>add the note</button>
         </div>
+        {note.length >= NOTE_MAX && (
+          <div style={{ fontFamily: MONO, fontSize: 11, color: C.amber, marginTop: 6 }}>
+            a note is at most {NOTE_MAX} characters — it goes into every agent's context
+          </div>
+        )}
         {add.error && <div style={{ fontFamily: MONO, fontSize: 11, color: C.red, marginTop: 6 }}>{(add.error as Error).message}</div>}
       </section>
     </>

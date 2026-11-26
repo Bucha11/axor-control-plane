@@ -424,6 +424,37 @@ test.describe("coding agents: their menu, and trying a skill", () => {
     }
   });
 
+  test("a note longer than the plane keeps: the field says the limit, a long one wraps (QA-024)", async ({ page, request }) => {
+    const B = "http://127.0.0.1:8400";
+    const tag = Math.random().toString(36).slice(2, 8);
+    const node = `long-${tag}`;
+    await request.post(`${B}/v1/plane/${node}/profile`, { data: {
+      kind: "coding", agent: "claude-code", developer: `dev-${tag}`, repo: `r-long-${tag}`, repo_label: `long/${tag}` } });
+    const ts = new Date().toISOString();
+    const line = (seq: number, kind: string, payload: object) => ({ schema_version: "1.0", seq, node_id: node, kind, ts,
+      causal_root: null, gate: null, verdict: kind === "tool_call" ? "pass" : null, payload });
+    await request.post(`${B}/v1/plane/${node}/telemetry`, { data: { run_id: `${node}-r`, events: [
+      line(0, "tool_call", { tool: "Bash", args: { command: "pnpm test" } }),
+      line(1, "tool_result", { tool: "Bash", status: "ok", preview: "",
+        check: { kind: "tests", passed: true, command: "pnpm test", summary: "ok" } })] } });
+    await setConnection(page, { mode: "demo" });
+    await goHash(page, "memory");
+    const view = page.getByTestId("team-memory");
+    const tab = view.getByRole("tab", { name: `long/${tag}` });
+    await expect(view.getByTestId("memory-preview")).toBeVisible();
+    if (await tab.isVisible()) await tab.click();
+    await expect(view.getByTestId("memory-preview")).toContainText(`long/${tag}`);
+    const note = view.getByLabel("note for every agent");
+    await note.fill("x".repeat(5000));
+    expect((await note.inputValue()).length).toBe(400);
+    await expect(view.getByTestId("memory-note")).toContainText("a note is at most 400 characters");
+    await view.getByRole("button", { name: "add the note" }).click();
+    await expect(view.getByTestId("memory-preview")).toContainText("xxxxxxxxxx");
+    // the 400-character word wraps: the page keeps its width
+    const wide = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
+    expect(wide).toBeLessThanOrEqual(0);
+  });
+
   test("memory on the free plan: the developer's own, given to their agents", async ({ page, request }) => {
     const B = "http://127.0.0.1:8400";
     const tag = Math.random().toString(36).slice(2, 8);

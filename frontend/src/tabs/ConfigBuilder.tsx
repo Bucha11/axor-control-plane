@@ -26,6 +26,8 @@ type SinkType = ToolType | "?";
 
 // "max tool calls per run": a whole number, 1 to MAX_CAP; anything else is null
 const MAX_CAP = 1_000_000;
+// what the plane keeps of a tool's name (policy_api: str(name)[:200])
+const TOOL_NAME_MAX = 200;
 const capOf = (text: string): number | null => {
   const t = text.trim();
   return /^\d{1,7}$/.test(t) && Number(t) >= 1 && Number(t) <= MAX_CAP ? Number(t) : null;
@@ -783,7 +785,7 @@ export default function ConfigBuilder() {
                 <button onClick={() => { setSel(sel === i ? null : i); setFocus(["sinks", s.name]); }} className="flex flex-col"
                   title="more: which arguments decide, how bad if it goes wrong"
                   style={{ minWidth: 0, flex: "1 1 200px", background: "none", border: "none", padding: 0, textAlign: "left", cursor: "pointer" }}>
-                  <span style={{ fontFamily: MONO, fontSize: 13, color: s.type === "?" ? C.amber : C.text }}>
+                  <span style={{ fontFamily: MONO, fontSize: 13, color: s.type === "?" ? C.amber : C.text, overflowWrap: "anywhere" }}>
                     {s.name} {s.critical && <AlertTriangle size={11} color={C.red} style={{ display: "inline" }} />}
                     <span style={{ color: C.dim, fontSize: 10 }}> {sel === i ? "▴" : "▾"}</span>
                   </span>
@@ -842,7 +844,7 @@ export default function ConfigBuilder() {
                 style={{ background: C.bg, border: `1px solid ${C.line}`, borderRadius: 4, color: typeColor(draft.type), fontFamily: MONO, fontSize: 11, padding: "5px 6px" }}>
                 {TYPES.map((t) => <option key={t} value={t}>{TYPE_LABEL[t]}</option>)}
               </select>
-              <input autoFocus placeholder="tool name ⏎" value={draft.name} onChange={(e) => setDraft({ ...draft, name: e.target.value })}
+              <input autoFocus placeholder="tool name ⏎" value={draft.name} maxLength={TOOL_NAME_MAX} onChange={(e) => setDraft({ ...draft, name: e.target.value })}
                 onKeyDown={(e) => {
                   if (e.key === "Enter" && draft.name.trim()
                       && !sinks.some((x) => x.name === draft.name.trim())) {
@@ -852,7 +854,12 @@ export default function ConfigBuilder() {
                     setAdding(false);
                   }
                 }}
-                style={{ flex: 1, background: C.bg, border: `1px solid ${C.line}`, borderRadius: 4, color: C.text, fontFamily: MONO, fontSize: 12, padding: "6px 8px", outline: "none" }} />
+                style={{ flex: 1, minWidth: 0, background: C.bg, border: `1px solid ${C.line}`, borderRadius: 4, color: C.text, fontFamily: MONO, fontSize: 12, padding: "6px 8px", outline: "none" }} />
+              {draft.name.length >= TOOL_NAME_MAX && (
+                <span style={{ fontFamily: MONO, fontSize: 10.5, color: C.amber, whiteSpace: "nowrap" }}>
+                  at most {TOOL_NAME_MAX} characters
+                </span>
+              )}
             </div>
           ) : (
             <button onClick={() => setAdding(true)} className="flex items-center gap-2 px-4 py-3 w-full"
