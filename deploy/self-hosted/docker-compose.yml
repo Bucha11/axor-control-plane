@@ -193,7 +193,7 @@ services:
     healthcheck:
       test:
       - CMD-SHELL
-      - wget -qO- http://localhost:8080/ >/dev/null || exit 1
+      - wget -qO- http://127.0.0.1:8080/ >/dev/null || exit 1
       interval: 10s
       timeout: 5s
       retries: 10
