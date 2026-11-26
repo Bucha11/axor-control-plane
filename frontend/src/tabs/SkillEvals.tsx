@@ -144,7 +144,10 @@ function HowToRun() {
   const [skill, setSkill] = useState("./.claude/skills/my-skill");
   const [prompt, setPrompt] = useState("fix the failing test in tests/");
   const [checkCmd, setCheckCmd] = useState("python -m pytest -q");
-  const [trials, setTrials] = useState(5);
+  // "times each" as typed: a whole number 1–50, or said not to be (QA-027)
+  const [trialsText, setTrialsText] = useState("5");
+  const trials = /^\d{1,2}$/.test(trialsText.trim()) && Number(trialsText) >= 1 && Number(trialsText) <= 50
+    ? Number(trialsText) : null;
   const [picked, setPicked] = useState("");
   const machines = useQuery({ queryKey: ["machines"], queryFn: api.machines, refetchInterval: 10_000 });
   const mine = (machines.data?.machines ?? []).filter((m) => m.yours && m.online);
@@ -152,10 +155,10 @@ function HowToRun() {
   const agent = machine?.agents.includes("claude-code") ? "claude-code" : machine?.agents[0] ?? "claude-code";
   const queue = useMutation({
     mutationFn: () => api.queueSkillEval(machine!.machine_id, {
-      skills: [skill], agent, trials, tasks: [{ name: "task-1", prompt, check: checkCmd }] }),
+      skills: [skill], agent, trials: trials!, tasks: [{ name: "task-1", prompt, check: checkCmd }] }),
     onSuccess: () => void qc.invalidateQueries({ queryKey: ["machine-jobs"] }),
   });
-  const ready = !!machine && skill.trim() && prompt.trim() && checkCmd.trim();
+  const ready = !!machine && trials !== null && skill.trim() && prompt.trim() && checkCmd.trim();
   const field = (labelText: string, value: string, set: (v: string) => void, testId: string) => (
     <label className="flex items-center gap-2" style={{ fontFamily: MONO, fontSize: 11, color: C.mut }}>
       <span style={{ width: 110 }}>{labelText}</span>
@@ -177,13 +180,15 @@ function HowToRun() {
         {field("done when", checkCmd, setCheckCmd, "eval-check")}
         <label className="flex items-center gap-2" style={{ fontFamily: MONO, fontSize: 11, color: C.mut }}>
           <span style={{ width: 110 }}>times each</span>
-          <input type="number" min={1} max={50} value={trials} data-testid="eval-trials"
-            onChange={(ev) => setTrials(Math.max(1, Math.min(50, Number(ev.target.value) || 1)))}
-            style={{ width: 70, background: C.bg, border: `1px solid ${C.line}`, borderRadius: 5, color: C.text,
-                     fontFamily: MONO, fontSize: 11.5, padding: "5px 8px", outline: "none" }} />
-          <span style={{ color: C.dim }}>
-            {trials * 2} agent runs on your tokens · 5 each tells a big difference, a small one needs 20+
-          </span>
+          <input inputMode="numeric" value={trialsText} data-testid="eval-trials"
+            onChange={(ev) => setTrialsText(ev.target.value)}
+            style={{ width: 70, background: C.bg, border: `1px solid ${trials === null ? C.red : C.line}`, borderRadius: 5,
+                     color: C.text, fontFamily: MONO, fontSize: 11.5, padding: "5px 8px", outline: "none" }} />
+          {trials === null
+            ? <span style={{ color: C.red }}>a whole number from 1 to 50</span>
+            : <span style={{ color: C.dim }}>
+                {trials * 2} agent runs on your tokens · 5 each tells a big difference, a small one needs 20+
+              </span>}
         </label>
         {mine.length > 0 && (
           <label className="flex items-center gap-2" style={{ fontFamily: MONO, fontSize: 11, color: C.mut }}>
