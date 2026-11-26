@@ -960,7 +960,12 @@ function ControlBody({ focusNode, testBench }: { focusNode?: string; testBench: 
               type="number"
               min={0}
               value={budgetInput}
-              onChange={(e) => setBudgetInput(e.target.value)}
+              onChange={(e) => {
+                setBudgetInput(e.target.value);
+                // a fixed value takes the complaint away; one the field cannot
+                // hold (1e309) reads as empty, so say why apply is off (QA-034)
+                setCmdError(e.target.validity.badInput ? "cap must be a whole number of calls, like 50" : null);
+              }}
               placeholder={isCodingNode(node) ? "N more calls" : "set / lower"}
               aria-label="budget"
               disabled={stopped || command.isPending}
