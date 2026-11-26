@@ -2,7 +2,7 @@
 // `axor-wrap worker`): the machine and the queue are stubbed on the wire, the
 // page is the real one.
 import { expect, test, type Page } from "@playwright/test";
-import { goHash } from "./helpers";
+import { goHash, setConnection } from "./helpers";
 
 const MINE = { machine_id: "m-laptop", host: "laptop", repo_label: "acme/api", agents: ["claude-code"],
                last_seen: new Date().toISOString(), online: true, yours: true };
@@ -97,4 +97,30 @@ test("one way to install axor-wrap: the worker's command is Skills' with the eva
   await expect(page.getByTestId("skill-eval-cmd")).not.toContainText("pip install");
   await goHash(page, "skills");
   await expect(page.getByTestId("skill-try-cmd")).toContainText("uv tool install 'axor-wrap[plane]'");
+});
+
+test("a guest has no machines: the page does not ask for them (QA-042)", async ({ page }) => {
+  const GUEST = "gs_e2e_guest_token";
+  await page.route("**/v1/auth/status", (r) => r.fulfill({ json: {
+    auth_enabled: true, authenticated: false, scopes: [], guest_sessions: true, guest: false } }));
+  await page.route("**/v1/auth/guest", (r) => r.fulfill({ status: 201, json: {
+    token: GUEST, org: "guest_e2e", ttl_seconds: 1800,
+    expires_at: new Date(Date.now() + 20 * 60_000).toISOString() } }));
+  const asked: string[] = [];
+  let withGuest = 0;
+  page.on("request", (r) => {
+    if (r.headers()["authorization"] !== `Bearer ${GUEST}`) return;
+    withGuest += 1;
+    if (/\/v1\/(machines|machine-jobs)/.test(r.url())) asked.push(r.url());
+  });
+  await setConnection(page, { mode: "demo" });
+  await goHash(page, "skill-evals");
+  await expect(page.getByTestId("skill-eval-cmd")).toBeVisible();
+  // the guest session is in place (the page asks with it); opened again with it
+  await expect.poll(() => withGuest).toBeGreaterThan(0);
+  await page.reload();
+  await expect(page.getByTestId("skill-eval-cmd")).toBeVisible();
+  await page.waitForLoadState("networkidle");
+  await page.waitForTimeout(1000);
+  expect(asked).toEqual([]);
 });

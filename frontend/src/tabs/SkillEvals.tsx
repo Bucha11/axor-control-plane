@@ -10,6 +10,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ChevronDown, ChevronRight, Loader2 } from "lucide-react";
 import { api, SkillEval, SkillEvalArm, SkillEvalCompare, SkillEvalSkill, SkillEvalTask } from "../api";
 import { navigate } from "../router";
+import { isGuestToken, useApp } from "../store";
 import { C, MONO, btn } from "../theme";
 import { SkillSwitch, TeamSwitch } from "../components/SkillsOff";
 import { HowItWorks, MachineCommand } from "../components/MachineCommand";
@@ -150,7 +151,10 @@ function HowToRun() {
   const trials = /^\d{1,2}$/.test(trialsText.trim()) && Number(trialsText) >= 1 && Number(trialsText) <= 50
     ? Number(trialsText) : null;
   const [picked, setPicked] = useState("");
-  const machines = useQuery({ queryKey: ["machines"], queryFn: api.machines, refetchInterval: 10_000 });
+  // a guest has no account, so no machine: the plane refuses them the list (QA-042)
+  const guest = isGuestToken(useApp((s) => s.apiToken));
+  const machines = useQuery({ queryKey: ["machines"], queryFn: api.machines, refetchInterval: 10_000,
+                              enabled: !guest });
   const mine = (machines.data?.machines ?? []).filter((m) => m.yours && m.online);
   const machine = mine.find((m) => m.machine_id === picked) ?? mine[0];
   const agent = machine?.agents.includes("claude-code") ? "claude-code" : machine?.agents[0] ?? "claude-code";
@@ -239,8 +243,9 @@ const ACTIVE = new Set(["queued", "running"]);
 /** The jobs queued from here: how far along, and where the report is. */
 function Jobs() {
   const qc = useQueryClient();
+  const guest = isGuestToken(useApp((s) => s.apiToken));
   const jobs = useQuery({
-    queryKey: ["machine-jobs"], queryFn: api.machineJobs,
+    queryKey: ["machine-jobs"], queryFn: api.machineJobs, enabled: !guest,
     refetchInterval: (q) => ((q.state.data?.jobs ?? []).some((j) => ACTIVE.has(j.state)) ? 3000 : false),
   });
   const cancel = useMutation({
