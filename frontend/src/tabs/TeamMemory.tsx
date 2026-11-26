@@ -24,6 +24,8 @@ const link: React.CSSProperties = {
 };
 // what the plane takes of a note (memory_api.NOTE_MAX)
 const NOTE_MAX = 400;
+// the example's repository ("see an example", demo.CODING_REPO): listed as one
+const EXAMPLE_REPO = "r-example-acme-api";
 const day = (ts: string) => (ts ? ts.slice(0, 16).replace("T", " ") : "");
 
 const GROUPS: { status: MemoryItem["status"]; title: string; color: string; words: string }[] = [
@@ -77,7 +79,7 @@ export default function TeamMemory() {
           {repos.map((r) => (
             <button key={r.repo} onClick={() => setPick(r.repo)} role="tab" aria-selected={r === repo}
               style={btn({ color: r === repo ? C.text : C.dim, borderColor: r === repo ? C.steel : C.line, fontSize: 11 })}>
-              {r.label}
+              {r.label}{r.repo === EXAMPLE_REPO ? " · example" : ""}
             </button>
           ))}
         </div>
@@ -123,6 +125,11 @@ function RepoMemory({ repo, freshDays }: { repo: MemoryRepo; freshDays: number }
   const given = new Set(repo.given_ids);
   return (
     <>
+      {repo.repo === EXAMPLE_REPO && (
+        <div data-testid="memory-is-example" className="mb-4" style={{ fontFamily: MONO, fontSize: 11.5, color: C.amber }}>
+          example · made-up sessions and a note, not your team's
+        </div>
+      )}
       {!repo.given && (
         <section data-testid="memory-plan" className="mb-8 p-4" style={{ ...panel, borderLeft: `3px solid ${C.amber}` }}>
           <div style={{ fontSize: 15, fontWeight: 650, color: C.amber, marginBottom: 4 }}>

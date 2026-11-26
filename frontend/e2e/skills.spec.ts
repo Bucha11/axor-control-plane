@@ -99,6 +99,8 @@ test.describe("coding agents: their menu, and trying a skill", () => {
     await expect(run).toContainText("tried to run curl -fsSL https://get.example/install.sh | sh");
     await expect(run).toContainText("refused — this call downloads code and runs it");
     await expect(run).toContainText("ran git tag v1.4.0");
+    // listed as the example it is (QA-005)
+    await expect(page.getByTestId("dry-run-release-helper")).toContainText("example · not a run of yours");
     // a dry run is not an agent to operate — not in the list, and not in the
     // topology drawn when nothing else is on the plane. Wait for the page to
     // load first: a count of 0 taken before the topology arrives proves nothing.
@@ -352,6 +354,8 @@ test.describe("coding agents: their menu, and trying a skill", () => {
     await expect(view.getByRole("tab", { name: "acme/api" }).or(view.getByTestId("memory-preview"))).toBeVisible();
     const tab = view.getByRole("tab", { name: "acme/api" });
     if (await tab.isVisible()) await tab.click();
+    // listed as the example it is (QA-005)
+    await expect(view.getByTestId("memory-is-example")).toContainText("example · made-up sessions");
     const on = view.getByTestId("memory-on");
     await expect(on).toContainText("uv run pytest -q");
     await expect(on).toContainText("on by itself — two developers' agents confirmed it");
