@@ -60,6 +60,21 @@ test.describe("identity login (Settings)", () => {
     await expect(page.getByText("signed in as ada@acme.io")).toBeVisible();
   });
 
+  test("a sign-up error goes once the field it was about is changed", async ({ page }) => {
+    // QA-016: "the password is too short" stayed on screen after the password was fixed
+    await page.route("**/identity/v1/signup",
+      jsonRoute(400, { detail: "the password is too short (at least 8 characters)" }));
+    await goHash(page, "settings");
+    await page.getByRole("button", { name: "new? create a workspace" }).click();
+    await page.getByLabel("email").fill("ada@acme.io");
+    await page.getByLabel("password").fill("abc");
+    await page.getByLabel("organization name").fill("Acme");
+    await page.getByRole("button", { name: "create workspace" }).click();
+    await expect(page.getByText("the password is too short")).toBeVisible();
+    await page.getByLabel("password").fill("correct horse");
+    await expect(page.getByText("the password is too short")).toHaveCount(0);
+  });
+
   test("logging out returns to the sign-in form", async ({ page }) => {
     await page.route("**/identity/v1/login", jsonRoute(200, SESSION));
     await goHash(page, "settings");

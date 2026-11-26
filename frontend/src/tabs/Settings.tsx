@@ -892,6 +892,8 @@ export function IdentityLogin({ onDone, initialMode = "login", compact = false }
   const [orgName, setOrgName] = useState("");
   const [orgId, setOrgId] = useState("");
   const [error, setError] = useState<string | null>(null);
+  // an error is about what was sent: once a field changes it no longer applies
+  useEffect(() => setError(null), [email, password, orgName, orgId]);
   const [busy, setBusy] = useState(false);
   const [canSignup, setCanSignup] = useState<boolean | null>(null);
   const [providers, setProviders] = useState<OAuthProvider[]>([]);
