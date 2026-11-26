@@ -5,6 +5,29 @@ The Control Plane ships as three packages from one tag (`axor-backend`,
 images (`axor-platform`, `axor-frontend`). Self-hosted operators upgrade by
 tag; `deploy/offline` carries the same release to a machine with no network.
 
+## 0.6.1 — 2026-11-26
+
+Fixes from the first card payment on prod. Nothing touches enforcement.
+
+### Fixed
+
+- **A hosted guest is told to sign in to pay by card.** The plane refuses a
+  guest `/v1/license`, so Pricing had no organization to name and the paid
+  button stayed a mailto that, with no mail client, did nothing.
+- **The frontend's healthcheck** asks `127.0.0.1`, not `localhost`: in the
+  image `localhost` resolves to `::1` first and nginx listens on IPv4, so a
+  serving frontend read "unhealthy". Root, prod and self-hosted compose.
+- **`backup.sh`** writes the axor-billing copy owner-only, like every dump
+  (`docker cp` keeps the container's mode and ignores `umask`).
+
+### Changed
+
+- **Requires axor-eval 0.3.3**: a made-up result in live work — a tool that
+  really failed, a call the operator held — is a case too, as Incidents and
+  the live-work receipt show.
+- CI runs its tests again: `ruff` had stopped the job before them, and a
+  stale-monitor test raced the app's own background sweep.
+
 ## 0.6.0 — 2026-11-26
 
 A workspace can pay by card: the ladder is sold through Paddle, and the plane
