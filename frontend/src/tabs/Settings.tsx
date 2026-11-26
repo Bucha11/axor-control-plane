@@ -85,7 +85,11 @@ function EmailStatus() {
   );
 }
 
-function OrgMembers() {
+/** The workspace, and — on the Settings page — everything run on it: the team,
+ *  who may, single sign-on, SCIM, sessions and keys. `compact` is the header's
+ *  account menu, which says which workspace this is and points there: the
+ *  whole of it in a 300px popover ran off the bottom of the screen. */
+function OrgMembers({ compact = false, onDone }: { compact?: boolean; onDone?: () => void }) {
   const me = useQuery({ queryKey: ["identity-me"], queryFn: api.identityMe });
   if (me.isPending) return null;
   if (me.isError) {
@@ -112,6 +116,14 @@ function OrgMembers() {
           </span>
         )}
       </div>
+      {compact ? (
+        <button data-testid="manage-workspace"
+          onClick={() => { navigate("settings", { tab: "workspace" }); onDone?.(); }}
+          style={{ ...btn({ color: C.steel, fontSize: 11, padding: "5px 10px" }), alignSelf: "flex-start" }}>
+          {isAdmin ? "manage the workspace in Settings →" : "the team in Settings →"}
+        </button>
+      ) : (
+      <>
       <Team orgId={d.active_org} isAdmin={isAdmin} />
       <WhoMay orgId={d.active_org} isAdmin={isAdmin} />
       {isAdmin && <SingleSignOn orgId={d.active_org} />}
@@ -119,6 +131,8 @@ function OrgMembers() {
       {isAdmin && <Sessions orgId={d.active_org} />}
       {isAdmin && <OperatorKeys />}
       {isAdmin && <MachineIds />}
+      </>
+      )}
     </div>
   );
 }
@@ -862,8 +876,11 @@ function Team({ orgId, isAdmin }: { orgId: string; isAdmin: boolean }) {
   );
 }
 
-export function IdentityLogin({ onDone, initialMode = "login" }: {
+export function IdentityLogin({ onDone, initialMode = "login", compact = false }: {
   onDone?: () => void; initialMode?: "login" | "signup";
+  // the header's account menu: the workspace's name and a way to Settings,
+  // not the whole of its administration
+  compact?: boolean;
 } = {}) {
   const identityEmail = useApp((s) => s.identityEmail);
   const setSession = useApp((s) => s.setSession);
@@ -917,7 +934,7 @@ export function IdentityLogin({ onDone, initialMode = "login" }: {
         </button>
       </div>
       <EmailStatus />
-      <OrgMembers />
+      <OrgMembers compact={compact} onDone={onDone} />
       </>
     );
   }
