@@ -7,7 +7,7 @@ import { api } from "../api";
 import { navigate, useRoute } from "../router";
 import CodingOnboarding, { isCodingSession } from "../components/CodingOnboarding";
 import AdapterOnboarding from "../components/AdapterOnboarding";
-import GuardOnboarding from "../components/GuardOnboarding";
+import GuardOnboarding, { proxiedUrl, toolDraftError, wrapAnywhere } from "../components/GuardOnboarding";
 import ScanTools from "../components/ScanTools";
 import type { Journey } from "./Pricing";
 import { ConnectionMode, useApp, type ToolKlass } from "../store";
@@ -327,6 +327,7 @@ function ProxyOnboarding({ onWrap }: { onWrap: () => void }) {
   const [copied, setCopied] = useState<string | null>(null);
   const [draftName, setDraftName] = useState("");
   const [draftUrl, setDraftUrl] = useState("");
+  const [draftError, setDraftError] = useState<string | null>(null);
   const [mcpRaw, setMcpRaw] = useState("");
   const [mcpBusy, setMcpBusy] = useState(false);
   const [mcpNote, setMcpNote] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
@@ -397,7 +398,9 @@ function ProxyOnboarding({ onWrap }: { onWrap: () => void }) {
     const name = draftName.trim();
     const url = draftUrl.trim();
     if (!name || !url) return;
-    if (tools.some((t) => t.name === name)) return;
+    const why = toolDraftError(name, url, tools.map((t) => t.name));
+    setDraftError(why);
+    if (why) return;
     setTools([...tools, { name, url }]);
     setToolClass(name, { url });
     setDraftName("");
@@ -433,13 +436,18 @@ function ProxyOnboarding({ onWrap }: { onWrap: () => void }) {
   );
 
   const addRow = (
+    <div>
     <div className="flex items-center gap-2">
-      <input value={draftName} onChange={(e) => setDraftName(e.target.value)}
+      <input value={draftName} onChange={(e) => { setDraftName(e.target.value); setDraftError(null); }}
         onKeyDown={(e) => e.key === "Enter" && addTool()} placeholder="tool name ⏎"
         style={{ width: 140, background: C.bg, border: `1px solid ${C.line}`, borderRadius: 4, color: C.text, fontFamily: MONO, fontSize: 11.5, padding: "6px 8px", outline: "none" }} />
-      <input value={draftUrl} onChange={(e) => setDraftUrl(e.target.value)}
+      <input value={draftUrl} onChange={(e) => { setDraftUrl(e.target.value); setDraftError(null); }}
         onKeyDown={(e) => e.key === "Enter" && addTool()} placeholder="https://endpoint ⏎"
         style={{ flex: 1, background: C.bg, border: `1px solid ${C.line}`, borderRadius: 4, color: C.text, fontFamily: MONO, fontSize: 11.5, padding: "6px 8px", outline: "none" }} />
+    </div>
+    {draftError && (
+      <div data-testid="proxy-add-error" style={{ fontFamily: MONO, fontSize: 11, color: C.red, marginTop: 6, ...wrapAnywhere }}>{draftError}</div>
+    )}
     </div>
   );
 
@@ -494,9 +502,9 @@ function ProxyOnboarding({ onWrap }: { onWrap: () => void }) {
                 {tools.map((t, i) => (
                   <div key={t.name} className="px-4 py-3" style={{ borderTop: i ? `1px solid ${C.line}` : "none" }}>
                     <div className="flex items-center gap-3">
-                      <span style={{ fontFamily: MONO, fontSize: 13, color: C.text, width: 130 }}>{t.name}</span>
+                      <span style={{ fontFamily: MONO, fontSize: 13, color: C.text, width: 130, ...wrapAnywhere }}>{t.name}</span>
                       {t.url ? (
-                        <span style={{ fontFamily: MONO, fontSize: 11, color: C.dim, flex: 1 }}>{t.url}</span>
+                        <span style={{ fontFamily: MONO, fontSize: 11, color: C.dim, flex: 1, ...wrapAnywhere }}>{t.url}</span>
                       ) : (
                         <input placeholder="where it lives: https://… ⏎" aria-label={`where ${t.name} lives`}
                           onKeyDown={(e) => {
@@ -610,11 +618,11 @@ axor-proxy --config tools.json --backend-url ${window.location.origin}`}
           <div style={{ fontFamily: MONO, fontSize: 11.5, color: C.mut, marginBottom: 10 }}>2 · in your agent's config, replace each tool's address with these. Nothing else changes.</div>
           <div style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 8 }}>
             {tools.map((t, i) => {
-              const proxied = `${PROXY_PUBLIC_URL}/t/${t.name}/`;
+              const proxied = proxiedUrl(PROXY_PUBLIC_URL, t.name);
               return (
                 <div key={t.name} className="flex items-center gap-3 px-4 py-3" style={{ borderTop: i ? `1px solid ${C.line}` : "none" }}>
-                  <span style={{ fontFamily: MONO, fontSize: 12, color: C.mut, width: 130 }}>{t.name}</span>
-                  <span style={{ fontFamily: MONO, fontSize: 12, color: C.text, flex: 1 }}>{proxied}</span>
+                  <span style={{ fontFamily: MONO, fontSize: 12, color: C.mut, width: 130, ...wrapAnywhere }}>{t.name}</span>
+                  <span data-testid={`proxied-${t.name}`} style={{ fontFamily: MONO, fontSize: 12, color: C.text, flex: 1, ...wrapAnywhere }}>{proxied}</span>
                   <button onClick={() => {
                     void navigator.clipboard?.writeText(proxied);
                     setCopied(t.name);

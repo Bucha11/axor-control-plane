@@ -74,6 +74,55 @@ test.describe("onboarding", () => {
     await expect(page.getByTestId("guard-urls")).toContainText("http://localhost:8411/t/web_search/");
   });
 
+  // QA-015: a long name widened the page past its copy button, a name went
+  // into the address unencoded, a duplicate vanished, and "not a url" was taken.
+  const fitsTheWindow = (page: import("@playwright/test").Page) =>
+    page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth);
+
+  test("the guard's tools: odd names are encoded and wrap, a duplicate or a non-URL is refused (QA-015)", async ({ page, request }) => {
+    // the tools land in the workspace's policy, which other specs read
+    await resetPolicy(request);
+    await goHash(page, "connect?for=production");
+    await page.getByTestId("prod-way-proxy").click();
+    const name = page.getByPlaceholder("tool name ⏎");
+    const url = page.getByPlaceholder("https://where-it-lives ⏎");
+    const add = async (n: string, u: string) => { await name.fill(n); await url.fill(u); await url.press("Enter"); };
+    await add("web search", "https://a.example/search");
+    await expect(page.getByTestId("guard-urls")).toContainText("http://localhost:8401/t/web%20search/");
+    await add("web search", "https://b.example/search");
+    await expect(page.getByTestId("guard-add-error")).toContainText("web search is already listed");
+    await expect(page.getByTestId("guard-tool-web search")).toContainText("https://a.example/search");
+    await add("nourl", "not a url");
+    await expect(page.getByTestId("guard-add-error")).toContainText("not an http:// or https:// address");
+    await expect(page.getByTestId("guard-tool-nourl")).toHaveCount(0);
+    await add("A".repeat(3000), "https://" + "b".repeat(3000) + ".example");
+    await expect(page.getByTestId("guard-add-error")).toHaveCount(0);
+    await expect(page.getByTestId("guard-urls")).toContainText("AAAA");
+    expect(await fitsTheWindow(page)).toBe(true);
+    const copy = await page.getByTestId("guard-urls").locator("xpath=..").getByRole("button", { name: "copy" }).boundingBox();
+    expect(copy!.x + copy!.width).toBeLessThanOrEqual(page.viewportSize()!.width);
+    await resetPolicy(request);
+  });
+
+  test("a test run's tools: the same checks, the same encoding (QA-015)", async ({ page, request }) => {
+    await resetPolicy(request);
+    await goHash(page, "get-started");
+    const name = page.getByPlaceholder("tool name ⏎");
+    const url = page.getByPlaceholder("https://endpoint ⏎");
+    const add = async (n: string, u: string) => { await name.fill(n); await url.fill(u); await url.press("Enter"); };
+    await add("web search", "https://a.example/search");
+    await add("web search", "https://b.example/search");
+    await expect(page.getByTestId("proxy-add-error")).toContainText("web search is already listed");
+    await add("nourl", "ftp://files.example");
+    await expect(page.getByTestId("proxy-add-error")).toContainText("not an http:// or https:// address");
+    await add("L".repeat(3000), "https://c.example");
+    expect(await fitsTheWindow(page)).toBe(true);
+    await page.getByRole("button", { name: /Continue/ }).click();
+    await expect(page.getByTestId("proxied-web search")).toHaveText("http://127.0.0.1:8401/t/web%20search/");
+    expect(await fitsTheWindow(page)).toBe(true);
+    await resetPolicy(request);
+  });
+
   test("wrapping in code: the snippet checks the tools the scanner found", async ({ page }) => {
     await goHash(page, "connect?for=production");
     await page.getByTestId("prod-way-code").click();
