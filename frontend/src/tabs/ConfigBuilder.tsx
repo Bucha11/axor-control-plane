@@ -24,6 +24,13 @@ const TYPES = ["READ", "WRITE", "EXPORT", "EXEC"] as const;
 type ToolType = (typeof TYPES)[number];
 type SinkType = ToolType | "?";
 
+// "max tool calls per run": a whole number, 1 to MAX_CAP; anything else is null
+const MAX_CAP = 1_000_000;
+const capOf = (text: string): number | null => {
+  const t = text.trim();
+  return /^\d{1,7}$/.test(t) && Number(t) >= 1 && Number(t) <= MAX_CAP ? Number(t) : null;
+};
+
 interface ArgAllow {
   arg: string;
   set: string[];
@@ -410,6 +417,10 @@ export default function ConfigBuilder() {
   const [focus, setFocus] = useState<string[] | null>(null);
   const [emitted, setEmitted] = useState(false);
   const [budgetCapCalls, setBudgetCapCalls] = useState<number | null>(null);
+  // what is typed in "max tool calls", as typed: a value that is not a whole
+  // number from 1 to MAX_CAP is said so — never taken as "no limit" (QA-023)
+  const [capText, setCapText] = useState("");
+  const capBad = capText.trim() !== "" && capOf(capText) === null;
   const [peers, setPeers] = useState<PeerDecl[]>([]);
   const [peerDraft, setPeerDraft] = useState<PeerDecl | null>(null);
   const [wrapTools, setWrapTools] = useState<WrapTool[]>([]);
@@ -518,6 +529,7 @@ export default function ConfigBuilder() {
       if (x.type !== "?") setToolClass(x.name, { klass: x.type, outside: x.outside, ...toPolicy(x) });
     }
     setBudgetCapCalls(typeof cfg.budget_cap_calls === "number" ? cfg.budget_cap_calls : null);
+    setCapText(typeof cfg.budget_cap_calls === "number" ? String(cfg.budget_cap_calls) : "");
     const rawPeers = (cfg.peers ?? {}) as Record<string, Record<string, unknown>>;
     setPeers(Object.entries(rawPeers).map(([peer_id, p]) => ({
       peer_id, pubkey: String(p.pubkey ?? ""), level: String(p.level ?? "l0").toUpperCase() as PeerLevel,
@@ -854,15 +866,19 @@ export default function ConfigBuilder() {
           <Fold label="limit tool calls (optional)">
             <div className="flex items-center gap-2 flex-wrap">
               <span style={{ fontFamily: MONO, fontSize: 11.5, color: C.text }}>max tool calls per run</span>
-              <input type="number" min={1} value={budgetCapCalls ?? ""} placeholder="unlimited"
+              <input inputMode="numeric" value={capText} placeholder="unlimited" aria-label="max tool calls per run"
                 onChange={(e) => {
-                  const n = parseInt(e.target.value, 10);
-                  setBudgetCapCalls(e.target.value === "" || Number.isNaN(n) || n < 1 ? null : n);
+                  setCapText(e.target.value);
+                  const n = capOf(e.target.value);
+                  if (e.target.value.trim() === "") setBudgetCapCalls(null);
+                  else if (n !== null) setBudgetCapCalls(n);
                   setFocus(["budget_cap_calls"]);
                 }}
-                style={{ width: 100, background: C.bg, border: `1px solid ${C.line}`, borderRadius: 4, color: C.text, fontFamily: MONO, fontSize: 11.5, padding: "5px 8px", outline: "none" }} />
-              <span style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim }}>
-                {budgetCapCalls !== null
+                style={{ width: 100, background: C.bg, border: `1px solid ${capBad ? C.red : C.line}`, borderRadius: 4, color: C.text, fontFamily: MONO, fontSize: 11.5, padding: "5px 8px", outline: "none" }} />
+              <span style={{ fontFamily: MONO, fontSize: 10.5, color: capBad ? C.red : C.dim }}>
+                {capBad
+                  ? `a whole number from 1 to ${MAX_CAP.toLocaleString("en-US")} — or empty for no limit`
+                  : budgetCapCalls !== null
                   ? "past this, every call in the run is refused"
                   : "empty = no limit"}
               </span>
@@ -933,7 +949,7 @@ export default function ConfigBuilder() {
           <Tooltip content={unclassified > 0
             ? "Pick what every tool does first — a tool left on “pick one” is refused."
             : "See, tool by tool, what is let through and what is refused."}>
-            <button onClick={() => unclassified === 0 && sinks.length > 0 && setStage("preview")} disabled={unclassified > 0 || sinks.length === 0}
+            <button onClick={() => unclassified === 0 && sinks.length > 0 && !capBad && setStage("preview")} disabled={unclassified > 0 || sinks.length === 0 || capBad}
               style={btn({ color: unclassified || !sinks.length ? C.dim : C.text, borderColor: unclassified || !sinks.length ? C.line : C.steel, padding: "9px 18px", fontSize: 12.5, opacity: unclassified || !sinks.length ? 0.6 : 1, cursor: unclassified || !sinks.length ? "default" : "pointer" })}>
               See what gets refused <ArrowRight size={13} />
             </button>
