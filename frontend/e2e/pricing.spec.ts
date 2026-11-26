@@ -2,7 +2,7 @@
 // production agents — the cheapest plan and why, from the list prices
 // (src/quote.ts, the same numbers as the backend's ee/pricing.py).
 import { expect, test } from "@playwright/test";
-import { goHash } from "./helpers";
+import { goHash, setConnection } from "./helpers";
 
 test("both ways in: the calculator names the cheapest plan and what the next one adds", async ({ page }) => {
   await goHash(page, "pricing?for=both");
@@ -99,4 +99,20 @@ test("on the hosted plane, nobody signed in is told to sign in", async ({ page }
   await goHash(page, "pricing?for=coding");
   await expect(page.getByTestId("tier-coding").getByTestId("card-needs-org"))
     .toContainText("sign in to a workspace");
+});
+
+test("a hosted guest is told to sign in, not handed a link that does nothing", async ({ page }) => {
+  // the hosted posture, as e2e/guest.spec.ts puts it on the wire
+  await page.route("**/v1/auth/status", (r) => r.fulfill({ json: {
+    auth_enabled: true, authenticated: false, scopes: [], guest_sessions: true, guest: false } }));
+  await page.route("**/v1/auth/guest", (r) => r.fulfill({ status: 201, json: {
+    token: "gs_e2e_pricing", org: "guest_e2e", ttl_seconds: 1800,
+    expires_at: new Date(Date.now() + 20 * 60_000).toISOString() } }));
+  // what the plane answers a guest on /v1/license (guests.ACCOUNT_ONLY)
+  await page.route("**/v1/license/status", (r) => r.fulfill({ status: 403, json: {
+    error: "account_required", feature: "licences" } }));
+  await setConnection(page, { mode: "demo" });
+  await goHash(page, "pricing?for=coding");
+  await expect(page.getByTestId("tier-coding").getByTestId("card-needs-org"))
+    .toContainText("sign up or sign in to pay by card");
 });

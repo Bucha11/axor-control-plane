@@ -17,6 +17,7 @@ import { LAB_SHIPPED } from "../flags";
 import { navigate, useRoute } from "../router";
 import { ADDS, quotes, RUNG_NAME, type Rung } from "../quote";
 import { openCheckout, paddlePrice } from "../paddle";
+import { isGuestToken, useApp } from "../store";
 
 // A feature is either shipping today or on the roadmap. We mark the difference
 // explicitly rather than listing aspirational capabilities as if they exist — a
@@ -301,8 +302,16 @@ export default function Pricing() {
   const [devs, setDevs] = useState(5);
   const [agents, setAgents] = useState(1);
   const calc = quotes(devs, agents);
+  // A hosted guest has no workspace a license could be issued to, and the
+  // plane refuses them /v1/license (guests.ACCOUNT_ONLY). That 403 left the
+  // card button a mailto that did nothing, with no word why: say it instead,
+  // and stop asking once the guest session is known.
+  const email = useApp((s) => s.identityEmail);
+  const token = useApp((s) => s.apiToken);
+  const guest = !email && isGuestToken(token);
   // who a license bought here would be issued to — what the checkout names
-  const status = useQuery({ queryKey: ["license-status"], queryFn: api.licenseStatus, retry: false });
+  const status = useQuery({ queryKey: ["license-status"], queryFn: api.licenseStatus,
+                            retry: false, enabled: !guest });
   const org = status.data?.licensed_to;
   const hosted = status.data?.hosted === true;
   return (
@@ -448,7 +457,9 @@ export default function Pricing() {
               {price && !org && (
                 <div data-testid="card-needs-org"
                   style={{ fontFamily: MONO, fontSize: 9.5, color: C.dim, marginTop: 8, lineHeight: 1.4 }}>
-                  {hosted
+                  {guest
+                    ? "sign up or sign in to pay by card — a guest session has no workspace to license"
+                    : hosted
                     ? "sign in to a workspace to pay by card"
                     : "to pay by card, set AXOR_ORG on this deployment — the license names it"}
                 </div>
