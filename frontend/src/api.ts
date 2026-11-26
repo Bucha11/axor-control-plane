@@ -949,6 +949,7 @@ function commandRefusal(e: unknown): unknown {
 // clears the session. Operator/API tokens have no refresh token and fall
 // through unchanged.
 async function af(path: string, init: RequestInit = {}, retried = false): Promise<Response> {
+  if (!apiToken() && path !== "/v1/auth/status") await sessionSettled();
   const token = apiToken();
   const headers = new Headers(init.headers);
   if (token) headers.set("Authorization", `Bearer ${token}`);
@@ -981,6 +982,32 @@ async function af(path: string, init: RequestInit = {}, retried = false): Promis
 }
 
 // ── hosted guest sessions ─────────────────────────────────────────────────────
+
+// Whose requests these are, known once: with no token yet, the plane is asked
+// whether it needs one (auth off, or a session already there: no) and, where
+// guests are offered, a guest session is started. Until then a request
+// without a token waits — every screen used to fire its reads first and get a
+// burst of 401s before the guest token arrived (QA-042). Signing out (the
+// token gone) asks again.
+let session: Promise<void> | null = null;
+useApp.subscribe((s, prev) => {
+  if (prev.apiToken && !s.apiToken) session = null;
+});
+
+/** Settles once the session is known: a token is there, or none is needed,
+ *  or the plane refused a guest for now (`again` asks once more). */
+export function sessionSettled(again = false): Promise<void> {
+  if (!session || again) {
+    session = api.authStatus()
+      .then((st) => {
+        if (st.auth_enabled && st.guest_sessions && !st.authenticated && !apiToken()) {
+          return startGuest().then(() => undefined);
+        }
+      })
+      .catch(() => undefined);
+  }
+  return session;
+}
 
 let renewing: Promise<boolean> | null = null;
 // Seconds the plane asked a refused guest to wait (429 Retry-After), or 0.
