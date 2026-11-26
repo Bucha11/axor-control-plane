@@ -99,8 +99,12 @@ export default function Onboarding() {
   const route = useRoute();
   // the old /get-started link was the proxy walkthrough: it still is
   const initial = route.query.for ?? (route.segments[0] === "get-started" ? "production" : undefined);
-  const [way, setWay] = useState<Journey | null>(
-    initial === "coding" || initial === "production" || initial === "both" ? initial : null);
+  const fromUrl: Journey | null =
+    initial === "coding" || initial === "production" || initial === "both" ? initial : null;
+  const [way, setWay] = useState<Journey | null>(fromUrl);
+  // the URL says which way in: back / forward move between them with it
+  // (it was read once, and Back changed the URL under a page that stayed — QA-009)
+  useEffect(() => { setWay(fromUrl); }, [fromUrl]);
   const [codingDone, setCodingDone] = useState(false);
   const choose = (j: Journey) => { setWay(j); setCodingDone(false); navigate(`connect?for=${j}`); };
   // the way in is the menu's journey too

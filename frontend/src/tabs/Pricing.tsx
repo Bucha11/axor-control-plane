@@ -7,7 +7,7 @@
 // decided nothing. Static, but for whom a card checkout names (license
 // status). Safety and hobby-scale privacy are free forever; you pay for hosted
 // collaboration, the security workflow, and the size of the governed fleet.
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "../api";
 import { C, MONO, btn } from "../theme";
@@ -297,6 +297,9 @@ const shownTier = (t: Tier): Tier => LAB_SHIPPED ? t : {
 export default function Pricing() {
   const route = useRoute();
   const [journey, setJourney] = useState<Journey>(() => initialJourney(route.query));
+  // back / forward and a changed link move the tabs with the URL (QA-009)
+  const wanted = initialJourney(route.query);
+  useEffect(() => { setJourney(wanted); }, [wanted]);
   const shown = TIERS.filter((t) => t.journeys.includes(journey)).map(shownTier);
   // the calculator's two numbers, and the cheapest rung for them
   const [devs, setDevs] = useState(5);
