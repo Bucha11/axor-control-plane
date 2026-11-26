@@ -175,6 +175,27 @@ test.describe("settings", () => {
     expect(put).toEqual({ scopes: ["read", "ingest"] });
   });
 
+  test("a double-click on make a key makes one key", async ({ page }) => {
+    // QA-017: the second click got through before the button turned disabled —
+    // two keys minted, the second secret never shown
+    await page.route("**/v1/auth/status", (r) => r.fulfill({ status: 200, contentType: "application/json",
+      body: JSON.stringify({ auth_enabled: true, authenticated: true, scopes: ["read", "ingest", "operate", "admin"] }) }));
+    let posts = 0;
+    await page.route("**/v1/keys", async (r) => {
+      if (r.request().method() !== "POST") {
+        return r.fulfill({ status: 200, contentType: "application/json", body: "[]" });
+      }
+      posts += 1;
+      await new Promise((ok) => setTimeout(ok, 300));
+      await r.fulfill({ status: 201, contentType: "application/json",
+        body: JSON.stringify({ key_id: `k_${posts}`, secret: `ak_secret${posts}`, scopes: ["ingest"], node_id: null }) });
+    });
+    await goHash(page, "settings?tab=connect");
+    await page.getByTestId("key-mint").dblclick();
+    await expect(page.getByTestId("key-minted")).toContainText("ak_secret1");
+    expect(posts).toBe(1);
+  });
+
   test("production sees how the plane is protected, wall by wall", async ({ page }) => {
     await goHash(page, "settings?tab=security");
     const posture = page.getByTestId("security-posture");

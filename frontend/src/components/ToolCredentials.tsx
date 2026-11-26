@@ -23,6 +23,7 @@ import { api, VaultCredential } from "../api";
 import { useApp } from "../store";
 import { C, MONO, btn } from "../theme";
 import Tooltip from "./Tooltip";
+import { useOneAtATime } from "../oneAtATime";
 
 const input = {
   background: C.bg, border: `1px solid ${C.line}`, borderRadius: 5,
@@ -97,6 +98,7 @@ export default function ToolCredentials() {
     },
     onError: fail,
   });
+  const enrollOnce = useOneAtATime(enroll);
 
   const rotate = useMutation({
     mutationFn: ({ e, secret }: { e: VaultCredential; secret: string }) =>
@@ -262,7 +264,7 @@ export default function ToolCredentials() {
               : "sent as plaintext: no sealing key is registered, so this deployment will store it as-is"}
           </div>
           <button
-            onClick={() => enroll.mutate()}
+            onClick={() => enrollOnce()}
             disabled={enroll.isPending || !draft.tool || !draft.endpoint || !draft.secret}
             style={btn({ color: C.bg, background: C.steel, border: `1px solid ${C.steel}`, fontSize: 10.5, padding: "4px 10px" })}
           >

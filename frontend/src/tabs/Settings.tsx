@@ -23,6 +23,7 @@ import UsageAndBilling from "../components/UsageAndBilling";
 import AuditTrail from "../components/AuditTrail";
 import { useStartTour } from "../components/Tour";
 import { errorWords } from "../refusal";
+import { useOneAtATime } from "../oneAtATime";
 
 // Every trigger the backend emits, in words, and for whom. A trigger that fires
 // and cannot be subscribed to is a notification nobody receives — which is how
@@ -153,6 +154,7 @@ function OperatorKeys() {
     void qc.invalidateQueries({ queryKey: ["operator-keys"] });
   };
   const make = useMutation({ mutationFn: () => api.registerOperatorKey(navigator.platform || "browser"), onSuccess: done });
+  const makeOnce = useOneAtATime(make);
   const vouch = useMutation({ mutationFn: api.endorseOperatorKey, onSuccess: done });
   const revoke = useMutation({ mutationFn: api.revokeOperatorKey, onSuccess: done });
   const forget = useMutation({ mutationFn: () => opKey.forget(), onSuccess: done });
@@ -178,7 +180,7 @@ function OperatorKeys() {
       ) : can.data === false ? (
         <div style={{ color: C.amber }}>this browser cannot make Ed25519 keys — use a current Chrome, Edge, Firefox or Safari</div>
       ) : (
-        <button data-testid="op-key-make" onClick={() => make.mutate()} disabled={make.isPending}
+        <button data-testid="op-key-make" onClick={() => makeOnce()} disabled={make.isPending}
           style={btn({ fontSize: 11, padding: "3px 10px", color: C.text })}>
           {make.isPending ? "…" : "make a signing key in this browser"}
         </button>
@@ -311,6 +313,7 @@ function Provisioning({ orgId }: { orgId: string }) {
     mutationFn: () => api.scimToken(orgId),
     onSuccess: (r) => { setMade(r.token); void qc.invalidateQueries({ queryKey: ["scim", orgId] }); },
   });
+  const makeOnce = useOneAtATime(make);
   const revoke = useMutation({
     mutationFn: () => api.revokeScim(orgId),
     onSuccess: () => { setMade(null); void qc.invalidateQueries({ queryKey: ["scim", orgId] }); },
@@ -356,7 +359,7 @@ function Provisioning({ orgId }: { orgId: string }) {
           )}
           <div className="flex gap-3">
             <button data-testid="scim-make" disabled={make.isPending} style={{ ...link, color: C.steel }}
-              onClick={() => { if (!d.enabled || window.confirm("Make a new token? The one your provider has stops working.")) make.mutate(); }}>
+              onClick={() => { if (!d.enabled || window.confirm("Make a new token? The one your provider has stops working.")) makeOnce(); }}>
               {d.enabled ? "make a new token" : "make a token"}
             </button>
             {d.enabled && (
@@ -709,6 +712,7 @@ function Team({ orgId, isAdmin }: { orgId: string; isAdmin: boolean }) {
       void qc.invalidateQueries({ queryKey: ["org-invites", orgId] });
     },
   });
+  const inviteOnce = useOneAtATime(invite);
   const revoke = useMutation({
     mutationFn: (id: string) => api.revokeInvite(orgId, id),
     onSuccess: () => void qc.invalidateQueries({ queryKey: ["org-invites", orgId] }),
@@ -796,7 +800,7 @@ function Team({ orgId, isAdmin }: { orgId: string; isAdmin: boolean }) {
           <form onSubmit={(e) => {
             e.preventDefault();
             if (needsSeat) { setOffer(true); return; }
-            if (!invite.isPending) invite.mutate(undefined);
+            inviteOnce(undefined);
           }}
             className="flex items-center gap-2 mt-2">
             <input type="email" value={email} placeholder="their e-mail (optional — or send the link yourself)"
@@ -1917,6 +1921,7 @@ function MyKeys() {
     mutationFn: api.createMyKey,
     onSuccess: (r) => { setSecret(r.secret); void qc.invalidateQueries({ queryKey: ["my-keys"] }); },
   });
+  const mintOnce = useOneAtATime(mint);
   const revoke = useMutation({
     mutationFn: api.revokeMyKey,
     onSuccess: () => void qc.invalidateQueries({ queryKey: ["my-keys"] }),
@@ -1933,7 +1938,7 @@ function MyKeys() {
           <div style={{ color: C.amber, fontSize: 10.5, marginBottom: 8 }}>shown once — run it on your machine now</div>
         </>
       ) : (
-        <button data-testid="my-key-create" onClick={() => mint.mutate()} disabled={mint.isPending}
+        <button data-testid="my-key-create" onClick={() => mintOnce()} disabled={mint.isPending}
           style={btn({ color: C.steel, borderColor: C.steel, fontSize: 10.5, padding: "4px 10px", marginBottom: 8 })}>
           {mint.isPending ? "…" : "create a key for this machine"}
         </button>
@@ -1976,6 +1981,7 @@ function AgentKeys({ journey, menuAll }: { journey: Journey | null; menuAll: boo
       void qc.invalidateQueries({ queryKey: ["api-keys-audit"] });
     },
   });
+  const mintOnce = useOneAtATime(mint);
   const revoke = useMutation({
     mutationFn: (keyId: string) => api.revokeKey(keyId),
     onSuccess: () => {
@@ -2033,7 +2039,7 @@ function AgentKeys({ journey, menuAll }: { journey: Journey | null; menuAll: boo
         )}
         <input value={label} onChange={(e) => setLabel(e.target.value)} placeholder="label" aria-label="key label"
           style={{ ...INPUT_STYLE, width: 140, fontSize: 11, padding: "4px 8px" }} />
-        <button onClick={() => mint.mutate()} data-testid="key-mint"
+        <button onClick={() => mintOnce()} data-testid="key-mint"
           disabled={(preset === "custom" && scopes.length === 0) || (p.node && !node.trim()) || mint.isPending}
           style={btn({ color: C.steel, fontSize: 11 })}>
           {mint.isPending ? <Loader2 size={12} className="animate-spin" /> : null} make a key
@@ -2244,6 +2250,7 @@ function FederationVault() {
       void qc.invalidateQueries({ queryKey: ["vault-keys"] });
     },
   });
+  const createKeyOnce = useOneAtATime(createKey);
 
   const signedPosture = Boolean(signingKeyId);
   return (
@@ -2336,7 +2343,7 @@ function FederationVault() {
                 style={{ background: C.bg, border: `1px solid ${C.line}`, borderRadius: 4, color: C.text, fontFamily: MONO, fontSize: 11, padding: "5px 8px", flex: 1, outline: "none" }}
               />
               <button
-                onClick={() => createKey.mutate()}
+                onClick={() => createKeyOnce()}
                 disabled={!newKeyId.trim() || createKey.isPending}
                 style={btn({ color: C.steel, fontSize: 10.5, padding: "4px 10px" })}
               >
