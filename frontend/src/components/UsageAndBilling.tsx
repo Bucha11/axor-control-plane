@@ -22,20 +22,25 @@ function money(cents: number, currency: string): string {
 export default function UsageAndBilling() {
   const [month, setMonth] = useState<string | undefined>(undefined);
   const usage = useQuery({ queryKey: ["license-usage"], queryFn: () => api.licenseUsage(6) });
+  const status = useQuery({ queryKey: ["license-status"], queryFn: api.licenseStatus });
+  // A statement is drawn from a license (an active or an expired one); with
+  // none it is not asked for — that was a 404 on every Billing load (QA-042).
+  const held = status.data?.active === true || status.data?.expired === true;
   const invoice = useQuery({
     queryKey: ["license-invoice", month],
     queryFn: () => api.licenseInvoice(month),
     // 404 is the honest answer for an unlicensed deployment: usage is still
     // measured, there is just nothing to bill. Not worth retrying.
     retry: false,
+    enabled: held,
   });
 
   const ceiling = usage.data?.governed_node_ceiling ?? null;
   // An unlicensed deployment is a STATE, not a failure: usage is still measured,
   // there is simply nothing to bill. Rendering the raw 404 envelope would put a
   // status code in front of a customer for a situation that is entirely normal.
-  const unlicensed =
-    invoice.isError && /\b404\b/.test((invoice.error as Error).message);
+  const unlicensed = (status.data && !held)
+    || (invoice.isError && /\b404\b/.test((invoice.error as Error).message));
 
   return (
     <div data-testid="usage-billing">

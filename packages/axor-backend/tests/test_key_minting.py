@@ -240,5 +240,6 @@ class TestAuthStatusIsNotASilentOracle:
         with caplog.at_level(logging.WARNING, logger="axor.backend.auth"):
             r = await client.get("/v1/auth/status")
         assert r.json() == {"auth_enabled": True, "authenticated": False,
-                            "scopes": [], "guest_sessions": False, "guest": False}
+                            "scopes": [], "guest_sessions": False, "guest": False,
+                            "operator": False}
         assert caplog.records == []

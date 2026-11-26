@@ -89,7 +89,8 @@ async def test_filtered_and_exported(client: httpx.AsyncClient) -> None:
     await client.post("/v1/plane/claude-code-a/command",
                       json={"version": 2, "state": {"stopped": True}})
     only = (await client.get("/v1/audit", params={"action": "pause"})).json()
-    assert only["total"] == 2 and set(only["actions"]) == {"pause"}
+    # QA-020: the choices are every act on the trail, whichever one is picked
+    assert only["total"] == 2 and set(only["actions"]) == {"pause", "stop"}
     assert (await client.get("/v1/audit", params={"target": "code-b"})).json()["total"] == 1
     r = await client.get("/v1/audit/export", params={"format": "csv"})
     assert r.headers["content-type"].startswith("text/csv")

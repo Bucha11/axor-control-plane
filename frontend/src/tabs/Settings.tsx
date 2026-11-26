@@ -23,6 +23,7 @@ import UsageAndBilling from "../components/UsageAndBilling";
 import AuditTrail from "../components/AuditTrail";
 import { useStartTour } from "../components/Tour";
 import { errorWords } from "../refusal";
+import { useOneAtATime } from "../oneAtATime";
 
 // Every trigger the backend emits, in words, and for whom. A trigger that fires
 // and cannot be subscribed to is a notification nobody receives — which is how
@@ -153,6 +154,7 @@ function OperatorKeys() {
     void qc.invalidateQueries({ queryKey: ["operator-keys"] });
   };
   const make = useMutation({ mutationFn: () => api.registerOperatorKey(navigator.platform || "browser"), onSuccess: done });
+  const makeOnce = useOneAtATime(make);
   const vouch = useMutation({ mutationFn: api.endorseOperatorKey, onSuccess: done });
   const revoke = useMutation({ mutationFn: api.revokeOperatorKey, onSuccess: done });
   const forget = useMutation({ mutationFn: () => opKey.forget(), onSuccess: done });
@@ -178,7 +180,7 @@ function OperatorKeys() {
       ) : can.data === false ? (
         <div style={{ color: C.amber }}>this browser cannot make Ed25519 keys — use a current Chrome, Edge, Firefox or Safari</div>
       ) : (
-        <button data-testid="op-key-make" onClick={() => make.mutate()} disabled={make.isPending}
+        <button data-testid="op-key-make" onClick={() => makeOnce()} disabled={make.isPending}
           style={btn({ fontSize: 11, padding: "3px 10px", color: C.text })}>
           {make.isPending ? "…" : "make a signing key in this browser"}
         </button>
@@ -311,6 +313,7 @@ function Provisioning({ orgId }: { orgId: string }) {
     mutationFn: () => api.scimToken(orgId),
     onSuccess: (r) => { setMade(r.token); void qc.invalidateQueries({ queryKey: ["scim", orgId] }); },
   });
+  const makeOnce = useOneAtATime(make);
   const revoke = useMutation({
     mutationFn: () => api.revokeScim(orgId),
     onSuccess: () => { setMade(null); void qc.invalidateQueries({ queryKey: ["scim", orgId] }); },
@@ -356,7 +359,7 @@ function Provisioning({ orgId }: { orgId: string }) {
           )}
           <div className="flex gap-3">
             <button data-testid="scim-make" disabled={make.isPending} style={{ ...link, color: C.steel }}
-              onClick={() => { if (!d.enabled || window.confirm("Make a new token? The one your provider has stops working.")) make.mutate(); }}>
+              onClick={() => { if (!d.enabled || window.confirm("Make a new token? The one your provider has stops working.")) makeOnce(); }}>
               {d.enabled ? "make a new token" : "make a token"}
             </button>
             {d.enabled && (
@@ -709,6 +712,7 @@ function Team({ orgId, isAdmin }: { orgId: string; isAdmin: boolean }) {
       void qc.invalidateQueries({ queryKey: ["org-invites", orgId] });
     },
   });
+  const inviteOnce = useOneAtATime(invite);
   const revoke = useMutation({
     mutationFn: (id: string) => api.revokeInvite(orgId, id),
     onSuccess: () => void qc.invalidateQueries({ queryKey: ["org-invites", orgId] }),
@@ -796,7 +800,7 @@ function Team({ orgId, isAdmin }: { orgId: string; isAdmin: boolean }) {
           <form onSubmit={(e) => {
             e.preventDefault();
             if (needsSeat) { setOffer(true); return; }
-            if (!invite.isPending) invite.mutate(undefined);
+            inviteOnce(undefined);
           }}
             className="flex items-center gap-2 mt-2">
             <input type="email" value={email} placeholder="their e-mail (optional — or send the link yourself)"
@@ -876,8 +880,10 @@ function Team({ orgId, isAdmin }: { orgId: string; isAdmin: boolean }) {
   );
 }
 
-export function IdentityLogin({ onDone, initialMode = "login", compact = false }: {
+export function IdentityLogin({ onDone, onSignedUp, initialMode = "login", compact = false }: {
   onDone?: () => void; initialMode?: "login" | "signup";
+  // a new workspace was just made (before onDone)
+  onSignedUp?: () => void;
   // the header's account menu: the workspace's name and a way to Settings,
   // not the whole of its administration
   compact?: boolean;
@@ -892,6 +898,8 @@ export function IdentityLogin({ onDone, initialMode = "login", compact = false }
   const [orgName, setOrgName] = useState("");
   const [orgId, setOrgId] = useState("");
   const [error, setError] = useState<string | null>(null);
+  // an error is about what was sent: once a field changes it no longer applies
+  useEffect(() => setError(null), [email, password, orgName, orgId]);
   const [busy, setBusy] = useState(false);
   const [canSignup, setCanSignup] = useState<boolean | null>(null);
   const [providers, setProviders] = useState<OAuthProvider[]>([]);
@@ -958,7 +966,7 @@ export function IdentityLogin({ onDone, initialMode = "login", compact = false }
           ? await signup(email, password, orgName)
           : await login(email, password, orgId || undefined);
       setSession(session.access_token, session.refresh_token, session.user.email);
-      if (mode === "signup") track("signup_completed");
+      if (mode === "signup") { track("signup_completed"); onSignedUp?.(); }
       setPassword("");
       // Queries that 401'd before sign-in stay failed otherwise.
       void qc.invalidateQueries();
@@ -1026,32 +1034,33 @@ export function IdentityLogin({ onDone, initialMode = "login", compact = false }
           onChange={(e) => setOrgId(e.target.value)} style={INPUT_STYLE} aria-label="organization id" />
       )}
       {error && <div style={{ fontFamily: MONO, fontSize: 11, color: C.red }}>{error}</div>}
-      <div className="flex items-center gap-2">
+      {/* a label on one line: a narrow panel wraps whole buttons, never "log / in" (QA-022) */}
+      <div className="flex items-center gap-2 flex-wrap">
         <button type="submit" disabled={!canSubmit || busy}
-          style={btn({ color: C.steel, borderColor: C.steel, fontSize: 11, padding: "5px 14px" })}>
+          style={btn({ color: C.steel, borderColor: C.steel, fontSize: 11, padding: "5px 14px", whiteSpace: "nowrap" })}>
           {busy ? "…" : mode === "signup" ? "create workspace" : mode === "forgot" ? "send reset link" : "log in"}
         </button>
         {mode === "login" && !ssoFor && (
           <button type="button" data-testid="sso-start" onClick={() => void startSso()}
-            style={btn({ color: C.dim, fontSize: 10.5, padding: "5px 10px" })}>
+            style={btn({ color: C.dim, fontSize: 10.5, padding: "5px 10px", whiteSpace: "nowrap" })}>
             sign in with SSO
           </button>
         )}
         {mode === "login" && canMail && (
           <button type="button" onClick={() => { setError(null); setSent(null); setMode("forgot"); }}
-            style={btn({ color: C.dim, fontSize: 10.5, padding: "5px 10px" })}>
+            style={btn({ color: C.dim, fontSize: 10.5, padding: "5px 10px", whiteSpace: "nowrap" })}>
             forgot password?
           </button>
         )}
         {mode === "forgot" && (
           <button type="button" onClick={() => { setError(null); setMode("login"); }}
-            style={btn({ color: C.dim, fontSize: 10.5, padding: "5px 10px" })}>
+            style={btn({ color: C.dim, fontSize: 10.5, padding: "5px 10px", whiteSpace: "nowrap" })}>
             back to log in
           </button>
         )}
         {mode !== "forgot" && (canSignup !== false || mode === "signup") && (
           <button type="button" onClick={() => { setError(null); setMode(mode === "signup" ? "login" : "signup"); }}
-            style={btn({ color: C.dim, fontSize: 10.5, padding: "5px 10px" })}>
+            style={btn({ color: C.dim, fontSize: 10.5, padding: "5px 10px", whiteSpace: "nowrap" })}>
             {mode === "signup" ? "have an account? log in" : "new? create a workspace"}
           </button>
         )}
@@ -1103,6 +1112,7 @@ export default function Settings({ tab = "workspace" }: { tab?: string } = {}) {
       }),
     onSuccess: () => void qc.invalidateQueries({ queryKey: ["subscriptions"] }),
   });
+  const subscribeOnce = useOneAtATime(subscribe);
   const testAlert = useMutation({ mutationFn: (target: string) => api.testNotification(target) });
   const unsubscribe = useMutation({
     mutationFn: (target: string) => api.unsubscribeNotifications(target),
@@ -1139,7 +1149,9 @@ export default function Settings({ tab = "workspace" }: { tab?: string } = {}) {
   const resetCoach = useApp((s) => s.resetCoach);
   const startTour = useStartTour();
 
-  const funnel = useQuery({ queryKey: ["funnel", 30], queryFn: () => api.funnelReport(30), retry: false });
+  // the operator's alone: anyone else got a 403 for it on every load (QA-042)
+  const funnel = useQuery({ queryKey: ["funnel", 30], queryFn: () => api.funnelReport(30), retry: false,
+                            enabled: authStatus.data?.operator === true });
   const canAdmin = useCanAdmin();
   const prod = !journey || menuAll || journey !== "coding";
   const coding = !journey || menuAll || journey !== "production";
@@ -1232,8 +1244,12 @@ export default function Settings({ tab = "workspace" }: { tab?: string } = {}) {
               <div style={{ color: C.dim }}>no license active on this deployment</div>
             )}
             <div style={{ color: C.dim, fontSize: 10, marginTop: 3 }}>
+              {/* beside "no license active" it read as a contradiction, and named
+                  a deployment variable a workspace cannot set (QA-035) */}
               {licenseStatus.data.auto_renewal
-                ? "auto-renewal configured (AXOR_LICENSE_RENEWAL_URL)"
+                ? licenseStatus.data.active
+                  ? "renews itself before it expires"
+                  : "a license applied here will renew itself before it expires"
                 : "no auto-renewal — a new license has to be pasted here each term"}
               {" · "}
               {licenseStatus.data.usage_reporting
@@ -1417,7 +1433,7 @@ export default function Settings({ tab = "workspace" }: { tab?: string } = {}) {
           )}
         </div>
         <button
-          onClick={() => subscribe.mutate()}
+          onClick={() => subscribeOnce()}
           disabled={!url || selected.length === 0 || subscribe.isPending}
           style={btn({ color: C.steel, fontSize: 12 })}
         >
@@ -1592,7 +1608,11 @@ const TIER_NAME: Record<string, string> = {
 
 /** One month's money, line by line: the plan, developers past what it
  * includes, governed nodes past what it includes. */
-function StatementLines({ st, coding, prod }: { st: BillingStatement; coding: boolean; prod: boolean }) {
+function StatementLines({ st, coding, prod, estimate = false }: {
+  st: BillingStatement; coding: boolean; prod: boolean;
+  // what a plan not held would cost: nothing has accrued on it
+  estimate?: boolean;
+}) {
   const row = (what: React.ReactNode, amount: string, testid?: string) => (
     <div data-testid={testid} className="flex gap-3" style={{ fontFamily: MONO, fontSize: 11.5, padding: "3px 0", borderTop: `1px solid ${C.line}` }}>
       <span style={{ flex: 1, color: C.mut }}>{what}</span>
@@ -1615,7 +1635,13 @@ function StatementLines({ st, coding, prod }: { st: BillingStatement; coding: bo
         st.workspace_tier === "coding" && st.billable_nodes > 0 ? "on Team and up"
           : st.priced ? st.overage : "—", "bill-nodes")}
       <div className="flex gap-3" style={{ fontFamily: MONO, fontSize: 12.5, padding: "6px 0 0", borderTop: `1px solid ${C.line}` }}>
-        <span style={{ flex: 1, color: C.text }}>{st.provisional ? "so far this month" : "total"}</span>
+        <span style={{ flex: 1, color: C.text }}>
+          {/* an estimate is not a charge "so far": with nothing used it is the
+              plan's own price, and says so (QA-035) */}
+          {estimate
+            ? devs === 0 && st.peak_nodes === 0 ? "the plan's price alone — nothing used yet" : "on this plan, this month so far"
+            : st.provisional ? "so far this month" : "total"}
+        </span>
         <span data-testid="bill-total" style={{ color: C.text, fontWeight: 700 }}>{st.priced ? st.total : "per contract"}</span>
       </div>
       {st.provisional && (
@@ -1686,7 +1712,7 @@ function Billing({ coding, prod }: { coding: boolean; prod: boolean }) {
             {rungs.map((e) => (
               <div key={e.tier} data-testid={`if-paid-${e.tier}`}>
                 <div style={{ fontFamily: MONO, fontSize: 11.5, color: C.text, marginBottom: 4 }}>{TIER_NAME[e.tier ?? ""] ?? e.tier}</div>
-                <StatementLines st={e} coding={coding} prod={prod} />
+                <StatementLines st={e} coding={coding} prod={prod} estimate />
               </div>
             ))}
             <div style={{ fontFamily: MONO, fontSize: 10, color: C.dim }}>
@@ -1915,6 +1941,7 @@ function MyKeys() {
     mutationFn: api.createMyKey,
     onSuccess: (r) => { setSecret(r.secret); void qc.invalidateQueries({ queryKey: ["my-keys"] }); },
   });
+  const mintOnce = useOneAtATime(mint);
   const revoke = useMutation({
     mutationFn: api.revokeMyKey,
     onSuccess: () => void qc.invalidateQueries({ queryKey: ["my-keys"] }),
@@ -1931,7 +1958,7 @@ function MyKeys() {
           <div style={{ color: C.amber, fontSize: 10.5, marginBottom: 8 }}>shown once — run it on your machine now</div>
         </>
       ) : (
-        <button data-testid="my-key-create" onClick={() => mint.mutate()} disabled={mint.isPending}
+        <button data-testid="my-key-create" onClick={() => mintOnce()} disabled={mint.isPending}
           style={btn({ color: C.steel, borderColor: C.steel, fontSize: 10.5, padding: "4px 10px", marginBottom: 8 })}>
           {mint.isPending ? "…" : "create a key for this machine"}
         </button>
@@ -1974,6 +2001,7 @@ function AgentKeys({ journey, menuAll }: { journey: Journey | null; menuAll: boo
       void qc.invalidateQueries({ queryKey: ["api-keys-audit"] });
     },
   });
+  const mintOnce = useOneAtATime(mint);
   const revoke = useMutation({
     mutationFn: (keyId: string) => api.revokeKey(keyId),
     onSuccess: () => {
@@ -2031,7 +2059,7 @@ function AgentKeys({ journey, menuAll }: { journey: Journey | null; menuAll: boo
         )}
         <input value={label} onChange={(e) => setLabel(e.target.value)} placeholder="label" aria-label="key label"
           style={{ ...INPUT_STYLE, width: 140, fontSize: 11, padding: "4px 8px" }} />
-        <button onClick={() => mint.mutate()} data-testid="key-mint"
+        <button onClick={() => mintOnce()} data-testid="key-mint"
           disabled={(preset === "custom" && scopes.length === 0) || (p.node && !node.trim()) || mint.isPending}
           style={btn({ color: C.steel, fontSize: 11 })}>
           {mint.isPending ? <Loader2 size={12} className="animate-spin" /> : null} make a key
@@ -2242,12 +2270,15 @@ function FederationVault() {
       void qc.invalidateQueries({ queryKey: ["vault-keys"] });
     },
   });
+  const createKeyOnce = useOneAtATime(createKey);
 
   const signedPosture = Boolean(signingKeyId);
   return (
     <div className="flex gap-4 mb-4 stack-narrow" data-testid="federation-vault" style={{ alignItems: "stretch" }}>
       <ToolCredentials />
-      <div className="p-4 flex-1" style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 8 }}>
+      {/* `flex-1` is no class in utilities.css: without the inline flex the
+          card was as wide as its widest line, past the column (QA-041) */}
+      <div className="p-4 flex-1" style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 8, flex: 1, minWidth: 0 }}>
         <div style={{ fontSize: 10, fontFamily: MONO, color: C.dim, letterSpacing: "0.1em", marginBottom: 8 }}>
           SIGNING COMMANDS TO AGENTS
         </div>
@@ -2334,7 +2365,7 @@ function FederationVault() {
                 style={{ background: C.bg, border: `1px solid ${C.line}`, borderRadius: 4, color: C.text, fontFamily: MONO, fontSize: 11, padding: "5px 8px", flex: 1, outline: "none" }}
               />
               <button
-                onClick={() => createKey.mutate()}
+                onClick={() => createKeyOnce()}
                 disabled={!newKeyId.trim() || createKey.isPending}
                 style={btn({ color: C.steel, fontSize: 10.5, padding: "4px 10px" })}
               >

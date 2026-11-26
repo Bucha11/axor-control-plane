@@ -16,7 +16,7 @@ import { useEffect, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Circle, GraduationCap, Plug, Settings as SettingsIcon } from "lucide-react";
 import { api, renewSession } from "./api";
-import { C, MONO } from "./theme";
+import { C, MONO, btn } from "./theme";
 import { navigate, useRoute } from "./router";
 import { MODE_LABEL, isConnected, isGuestToken, useApp } from "./store";
 import GuestSession, { guestTimeLeft } from "./components/GuestSession";
@@ -168,6 +168,9 @@ export default function App() {
   }, [inSection, lookedAround, setLookedAround]);
   // an invitation is one decision: join or not — no product menu around it
   const firstVisit = (key === "home" && !isConnected(mode) && !lookedAround) || key === "invite";
+  // here, not in the header: the header is another one on the page it goes to
+  const [welcome, setWelcome] = useState(false);
+  const signedUp = () => { setWelcome(true); navigate("connect"); };
 
   // A wide screen gets the navigation as a sidebar: the sections and, under
   // Agents, its views — instead of a row of sections plus a row of views on
@@ -200,12 +203,13 @@ export default function App() {
             <SettingsButton active={key === "settings"} />
           </>
         )}
-        <AccountButton />
+        <AccountButton onSignedUp={signedUp} />
       </div>
     </div>
   );
   const body = (
     <>
+      {welcome && <SignedUpNote onDismiss={() => setWelcome(false)} />}
       <GuestSession />
       <AuthReturn />
       {key === "home" && <Home />}
@@ -256,7 +260,7 @@ export default function App() {
             section={SECTION_TITLE[PARENT_TAB[key] ?? key] ?? ""}
             view={key === "govern" && governView !== "govern"
               ? (GOVERN_VIEWS.find(([r]) => r === governView)?.[1] ?? "") : ""}
-            connectPage={key === "connect"} settingsPage={key === "settings"} />
+            connectPage={key === "connect"} settingsPage={key === "settings"} onSignedUp={signedUp} />
           <div style={{ padding: "0 24px" }}>{body}</div>
         </main>
         <Tour />
@@ -457,8 +461,8 @@ function Sidebar({ active, view }: { active: string; view: string }) {
 
 /** The bar over the page beside the sidebar: where you are, and the
  * session's controls — the header's job, without its navigation. */
-function TopBar({ section, view, connectPage, settingsPage }: {
-  section: string; view: string; connectPage: boolean; settingsPage: boolean;
+function TopBar({ section, view, connectPage, settingsPage, onSignedUp }: {
+  section: string; view: string; connectPage: boolean; settingsPage: boolean; onSignedUp: () => void;
 }) {
   return (
     <div data-testid="topbar" className="flex items-center" style={{
@@ -473,7 +477,26 @@ function TopBar({ section, view, connectPage, settingsPage }: {
       <LearnToggle />
       <ConnectionBadge onConnect={connectPage} />
       <SettingsButton active={settingsPage} />
-      <AccountButton />
+      <AccountButton onSignedUp={onSignedUp} />
+    </div>
+  );
+}
+
+/** Said once a sign-up from the header made the workspace: it ended on the
+ * marketing Home with nothing said (QA-036). */
+function SignedUpNote({ onDismiss }: { onDismiss: () => void }) {
+  const email = useApp((s) => s.identityEmail);
+  return (
+    <div role="status" data-testid="signup-done" style={{
+      position: "fixed", top: 12, left: "50%", transform: "translateX(-50%)", zIndex: 60,
+      background: C.panel, border: `1px solid ${C.green}`, padding: "8px 14px",
+      fontFamily: MONO, fontSize: 11.5, color: C.green,
+      display: "flex", gap: 12, alignItems: "center",
+    }}>
+      your workspace is ready — signed in as {email}. Next: connect your first agent.
+      <button onClick={onDismiss} style={btn({ color: C.mut, fontSize: 10.5, padding: "2px 8px" })}>
+        dismiss
+      </button>
     </div>
   );
 }
@@ -619,7 +642,7 @@ function ConnectionBadge({ onConnect }: { onConnect: boolean }) {
 /** Sign in from anywhere, in one click — not a wall in front of the product
  * and not a form buried in Settings. Anyone can look around first; the moment
  * they want their own data, the button is in the corner of every screen. */
-function AccountButton() {
+function AccountButton({ onSignedUp }: { onSignedUp: () => void }) {
   const email = useApp((s) => s.identityEmail);
   const guest = isGuestToken(useApp((s) => s.apiToken));
   const guestExpiresAt = useApp((s) => s.guestExpiresAt);
@@ -701,7 +724,12 @@ function AccountButton() {
               your runs, agents and incidents move into the new workspace.
             </div>
           )}
-          <IdentityLogin initialMode={guest ? "signup" : "login"} onDone={() => setOpen(false)} compact />
+          {/* The panel opens on what its button says: "sign in" → log in,
+              "save your work" → create a workspace. Keyed on `guest` it
+              depended on whether the guest session had arrived yet, so a fresh
+              browser got one or the other by timing (QA-022). */}
+          <IdentityLogin initialMode={late ? "signup" : "login"} onDone={() => setOpen(false)} compact
+            onSignedUp={onSignedUp} />
         </div>
       )}
     </div>
