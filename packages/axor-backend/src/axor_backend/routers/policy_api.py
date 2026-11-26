@@ -52,7 +52,8 @@ def _tool(name: str, raw: object) -> dict[str, Any]:
         if not isinstance(t, dict) or not all(
                 isinstance(k, str) and isinstance(v, list) and all(isinstance(x, str) for x in v)
                 for k, v in t.items()):
-            raise HTTPException(400, f"tools[{name!r}].trusted must map arguments to lists of values")
+            raise HTTPException(
+                400, f"tools[{name!r}].trusted must map arguments to lists of values")
         out["trusted"] = t
     if isinstance(raw.get("args_schema"), dict):
         out["args_schema"] = raw["args_schema"]

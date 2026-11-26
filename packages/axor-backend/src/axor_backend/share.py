@@ -114,7 +114,8 @@ _EXAMPLE_SCENARIOS = frozenset({"adapter-demo", "multi-agent-demo", "coding-demo
 def headline(deviation: str, case: dict[str, Any] | None = None) -> str:
     faults = (case or {}).get("fault_attribution") or []
     # a stop held the calls: nothing failed, the agent answered as if they ran
-    if faults and all(isinstance(f, dict) and f.get("fault_mode") == "observed_held" for f in faults):
+    if faults and all(isinstance(f, dict) and f.get("fault_mode") == "observed_held"
+                      for f in faults):
         return "The agent answered as if calls had run. It had been stopped."
     return HEADLINE.get(deviation) or (deviation.replace("_", " ").capitalize() + "."
                                        if deviation else "Something did not add up.")

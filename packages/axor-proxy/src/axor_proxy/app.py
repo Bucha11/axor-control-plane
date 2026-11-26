@@ -1047,7 +1047,8 @@ def create_app(state: ProxyState) -> Starlette:
         Agent traffic, like /t/…: the agent sends it, not an operator."""
         if state.guard is None:
             return JSONResponse({"error": "not_guarding",
-                                 "detail": "the answer is read in guard mode (--guard)"}, status_code=404)
+                                 "detail": "the answer is read in guard mode (--guard)"},
+                                status_code=404)
         try:
             body = await request.json()
         except ValueError:
@@ -1055,7 +1056,8 @@ def create_app(state: ProxyState) -> Starlette:
         text = body.get("text") if isinstance(body, dict) else None
         if not isinstance(text, str):
             return JSONResponse({"error": "bad_request",
-                                 "detail": 'send {"text": "<what the agent answered>"}'}, status_code=400)
+                                 "detail": 'send {"text": "<what the agent answered>"}'},
+                                status_code=400)
         out = state.guard.answer(request.headers.get("x-axor-session"), text)
         if out is None:
             return JSONResponse({"error": "no_conversation",

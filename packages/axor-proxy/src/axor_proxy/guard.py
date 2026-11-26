@@ -129,7 +129,8 @@ def outside_text(manifest: dict[str, Any] | None, answer: Any) -> str:  # noqa: 
     patterns = [str(p) for p in (manifest or {}).get("untrusted_fields", []) or []]
     stripped = [p[len("result."):] if p.startswith("result.") else ("" if p == "result" else p)
                 for p in patterns]
-    if not stripped or any(p in ("", "*") for p in stripped) or not isinstance(answer, (dict, list)):
+    if (not stripped or any(p in ("", "*") for p in stripped)
+            or not isinstance(answer, (dict, list))):
         return answer_text(answer)
     parts: list[Any] = []
     for path in stripped:

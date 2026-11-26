@@ -86,7 +86,10 @@ test("on the hosted plane the checkout says so, for the license to be installed 
   await licensedTo(page, "org_acme", true);
   await goHash(page, "pricing?for=coding");
   await page.getByTestId("cta-coding").click();
-  await expect.poll(() => page.evaluate(() => (window as unknown as { __paddle: unknown[] }).__paddle.at(-1)))
+  // Paddle.js loads after the click: until it has, there is no __paddle to
+  // read, and the poll must go round again rather than throw
+  await expect.poll(() => page.evaluate(() =>
+    ((window as unknown as { __paddle?: unknown[] }).__paddle ?? []).at(-1)))
     .toEqual(["open", { items: [{ priceId: "pri_coding", quantity: 1 }],
                         customData: { org: "org_acme", hosted: true } }]);
 });
