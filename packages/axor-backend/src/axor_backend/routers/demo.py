@@ -47,6 +47,22 @@ from axor_backend.tenancy import current_org_id
 router = APIRouter(prefix="/v1/demo", tags=["demo"])
 
 
+def _tree_events_now() -> list[dict]:
+    """The canned tree run, stamped now, a second apart: the example reads as
+    a run that just happened ("just now", in order), not the fixture's date
+    with every event at the same midnight. Both ways in (the example fleet and
+    the canned tree alone) stamp it so: the canned tree kept the fixture's
+    date while its run said "now", and the feed, the cards and the runs list
+    of one example named three different times (QA-039)."""
+    from datetime import UTC, datetime, timedelta
+
+    from axor_backend import demo
+
+    start = datetime.now(UTC) - timedelta(seconds=len(demo.TREE_EVENTS))
+    return [{**e, "ts": (start + timedelta(seconds=i)).isoformat()}
+            for i, e in enumerate(demo.TREE_EVENTS)]
+
+
 async def _seed(
     store: Store, cache: object, run_id: str, node: str, scenario: str,
     events: list[dict], evidence: list[dict], created: str | None = None,
@@ -103,7 +119,7 @@ async def seed_tree_run(
     from axor_backend import demo
 
     await _seed(store, cache, "ex_tree", demo.TREE_ORCH, "multi-agent-demo",
-                demo.TREE_EVENTS, demo.TREE_EVIDENCE)
+                _tree_events_now(), demo.TREE_EVIDENCE)
     return {"seeded": ["ex_tree"], "config": demo.TREE_CONFIG}
 
 
@@ -124,18 +140,10 @@ async def seed_fleet(
     battery keeps it — re-seeding must not pile a second drift report onto a
     node whose operator has since cut the context and re-probed.
     """
-    from datetime import UTC, datetime, timedelta
-
     from axor_backend import demo, plane
 
-    # the canned tree run, stamped now, a second apart: the example reads as a
-    # run that just happened ("just now", in order), not the fixture's date
-    # with every event at the same midnight
-    start = datetime.now(UTC) - timedelta(seconds=len(demo.TREE_EVENTS))
     await _seed(store, cache, "ex_tree", demo.TREE_ORCH, "multi-agent-demo",
-                [{**e, "ts": (start + timedelta(seconds=i)).isoformat()}
-                 for i, e in enumerate(demo.TREE_EVENTS)],
-                demo.TREE_EVIDENCE)
+                _tree_events_now(), demo.TREE_EVIDENCE)
     nodes = [demo.TREE_ORCH, demo.TREE_RESEARCH, demo.TREE_WRITER, demo.TREE_SCRAPER]
     for node in nodes:
         # a heartbeat's worth of reported state, so each node is listed and

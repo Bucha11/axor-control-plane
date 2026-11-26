@@ -92,6 +92,22 @@ test.describe("control", () => {
     await expect(page.getByText(/can only lower the cap/)).toBeVisible();
   });
 
+  test("the example fleet tells one time, and its chips say why they overlap (QA-039)", async ({ page, request }) => {
+    // the example fleet, then the canned tree on top of it — as a visitor
+    // clicking both ways in does. The canned tree kept its fixture's date
+    // ("Mon, Jul 6") in the feed while its run said "now".
+    await request.post(`${BACKEND}/v1/demo/seed-fleet`);
+    await request.post(`${BACKEND}/v1/demo/seed-tree-run`);
+    await setConnection(page, { mode: "adapter" });
+    await goHash(page, "control");
+    const rows = page.getByTestId("fleet-activity").getByTestId("feed-row").filter({ hasText: "tree-orch" });
+    await expect(rows.first()).toBeVisible();
+    await expect(rows.first()).toContainText(/\d\d:\d\d:\d\d/);
+    await expect(rows.first()).not.toContainText(/\b(Mon|Tue|Wed|Thu|Fri|Sat|Sun)\b/);
+    // "needs you" is on top of a state: the chips say so
+    await expect(page.getByTestId("chips-overlap")).toContainText("counted in its state too");
+  });
+
   test("a cap error goes once the value is fixed, and a number too big says so (QA-034)", async ({ page, request }) => {
     const node = uniqueNode("gov-capfix");
     await seedNode(request, node);
