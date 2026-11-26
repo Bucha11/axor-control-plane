@@ -130,8 +130,12 @@ export const MODE_LABEL: Record<ConnectionMode, string> = {
 };
 
 // Keys whose values are credentials; everything else is UI preference.
+// `identityEmail` goes with them: it says "signed in", and kept in local storage
+// beside a token that is not, a new tab showed "signed in as …" while every
+// request was refused (QA-004). Who is signed in lives where the sign-in does.
 const SECRET_KEYS = [
   "apiToken", "refreshToken", "vaultSigningToken", "vaultCredsToken", "guestTokens",
+  "identityEmail",
 ] as const;
 
 // One Storage face over two backing stores: session for the secret half of the

@@ -916,6 +916,31 @@ function uploadAs(): Record<string, string> {
   return apiToken() ? { "X-Axor-Upload-Token": apiToken() } : {};
 }
 
+async function scopeRefusal(resp: Response): Promise<boolean> {
+  try {
+    return ((await resp.clone().json()) as { error?: unknown }).error === "forbidden";
+  } catch {
+    return false;
+  }
+}
+
+/** A command the plane refused for its signature, said with what to do: the
+ *  raw "no operator keys registered" left an operator nowhere to go (QA-003). */
+function commandRefusal(e: unknown): unknown {
+  if (!(e instanceof ApiError) || e.status !== 403) return e;
+  if (/no operator keys registered/.test(e.message)) {
+    return new ApiError(403, "operator_key_needed",
+      "this workspace signs every command, and it has no operator key yet — an owner or admin "
+      + "makes one for this browser in Settings → workspace → operator keys");
+  }
+  if (/sig_invalid|unknown operator|operator=/.test(e.message)) {
+    return new ApiError(403, "operator_key_unknown",
+      "this browser's operator key is not one the workspace knows — register it in "
+      + "Settings → workspace → operator keys");
+  }
+  return e;
+}
+
 // Authed fetch: merges the Authorization header into any request. When an
 // identity access token has expired, a 401 triggers one transparent refresh
 // (using the stored refresh token) and the request is retried; a failed refresh
@@ -934,11 +959,15 @@ async function af(path: string, init: RequestInit = {}, retried = false): Promis
   if (resp.status === 401 && !retried && token.startsWith("gs_") && (await renewGuest(token))) {
     return af(path, init, true);
   }
-  // Something the user DID was refused: their role may have changed since this
-  // access token was issued (an owner made them a member). The refresh reads
-  // the role afresh; one retry, never for a background read.
+  // Something the user DID was refused for their ROLE: it may have changed
+  // since this access token was issued (an owner made them a member). The
+  // refresh reads the role afresh; one retry, never for a background read.
+  // Only a scope refusal ({"error": "forbidden"}) — any other 403 is the
+  // plane's answer on the merits (a malformed license, no operator key), and
+  // retrying it sent every such request twice (QA-019).
   if (resp.status === 403 && !retried && (init.method ?? "GET").toUpperCase() !== "GET"
-      && useApp.getState().refreshToken && (await refreshSession(null))) {
+      && useApp.getState().refreshToken && (await scopeRefusal(resp))
+      && (await refreshSession(null))) {
     return af(path, init, true);
   }
   // only for something the user DID: a panel's background read that needs an
@@ -1569,7 +1598,8 @@ export const api = {
       body: JSON.stringify({ version, state, operator: signed?.operator ?? "op_ui", timestamp,
                              sig: signed?.sig ?? "" }),
     });
-    return j<{ node_id: string; version: number; state: Record<string, unknown> }>(r);
+    return j<{ node_id: string; version: number; state: Record<string, unknown> }>(r)
+      .catch((e: unknown) => { throw commandRefusal(e); });
   },
   // `mustRefuse` names the calls a must_block pin holds — needed when the run
   // was recorded ungoverned and refused nothing (else it can't be checked)

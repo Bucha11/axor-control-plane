@@ -285,6 +285,22 @@ test.describe("identity login (Settings)", () => {
     await expect(page.getByTestId("may-skills-members")).toBeChecked();
   });
 
+  test("a new tab is signed out, not signed in with nothing working (QA-004)", async ({ page, context }) => {
+    await page.route("**/identity/v1/login", jsonRoute(200, SESSION));
+    await goHash(page, "settings");
+    await page.getByLabel("email", { exact: true }).fill("ada@acme.io");
+    await page.getByLabel("password").fill("correct horse");
+    await page.getByRole("button", { name: "log in", exact: true }).click();
+    await expect(page.getByText("signed in as ada@acme.io")).toBeVisible();
+
+    const other = await context.newPage();          // same browser, new tab
+    await goHash(other, "settings");
+    await expect(other.getByText("signed in as ada@acme.io")).toHaveCount(0);
+    await expect(other.getByRole("button", { name: "ada@acme.io" })).toHaveCount(0);
+    // and the first tab is untouched
+    await expect(page.getByText("signed in as ada@acme.io")).toBeVisible();
+  });
+
   test("the header's account menu names the workspace and points to Settings for the rest", async ({ page }) => {
     // The whole administration (team, who may, sign-on, SCIM, keys) used to
     // render inside this 300px menu, which then ran off the bottom of the screen.

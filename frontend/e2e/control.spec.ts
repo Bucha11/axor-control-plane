@@ -55,6 +55,24 @@ test.describe("control", () => {
     await expect(page.getByText(/applying|paused/).first()).toBeVisible();
   });
 
+  test("a command a signing workspace refuses says what to do, and is sent once (QA-003, QA-019)", async ({ page, request }) => {
+    const node = uniqueNode("gov-unsigned");
+    await seedNode(request, node);
+    let sent = 0;
+    await page.route(`**/v1/plane/${node}/command`, (r) => {
+      sent += 1;
+      return r.fulfill({ status: 403, json: { detail: "no operator keys registered; commands rejected" } });
+    });
+    await setConnection(page, { mode: "adapter" });
+    await goHash(page, "control");
+    await page.getByTestId(`agent-row-${node}`).click();
+    await page.getByRole("button", { name: /Pause/ }).click();
+    await expect(page.getByText(/no operator key yet/).first()).toBeVisible();
+    await expect(page.getByText(/Settings → workspace → operator keys/).first()).toBeVisible();
+    await expect(page.getByText(/\{"detail"/)).toHaveCount(0);       // not the raw JSON
+    expect(sent).toBe(1);
+  });
+
   test("the budget cap is decrease-only (widening is refused client-side)", async ({ page, request }) => {
     const node = uniqueNode("gov-budget");
     await seedNode(request, node);

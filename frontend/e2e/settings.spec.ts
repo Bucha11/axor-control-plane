@@ -48,8 +48,10 @@ test.describe("settings", () => {
     // deployment's (AXOR_VENDOR_PUBKEY), not something this form accepts.
     await expect(page.getByPlaceholder("vendor public key (hex)")).toHaveCount(0);
     await page.getByRole("button", { name: /Verify license/ }).click();
-    // A 4xx from the verify endpoint surfaces as a red error line.
-    await expect(page.getByText(/^\d{3} \{"detail"/)).toBeVisible();
+    // A 4xx from the verify endpoint surfaces as a red error line — in words,
+    // not the raw JSON body (QA-018)
+    await expect(page.getByText(/malformed license|signature invalid/).first()).toBeVisible();
+    await expect(page.getByText(/^\d{3} \{"detail"/)).toHaveCount(0);
   });
 
   test("every trigger the backend emits can be subscribed to", async ({ page }) => {

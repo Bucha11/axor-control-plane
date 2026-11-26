@@ -156,8 +156,14 @@ def verify_license(license_json: str, vendor_pubkey_hex: str) -> License:
         sig_hex = data["sig"]
         lic = data["license"]
         message = _license_payload(lic)
-    except (json.JSONDecodeError, KeyError, TypeError) as exc:
-        raise LicenseError(f"malformed license: {exc}") from exc
+    except json.JSONDecodeError as exc:
+        # said as a person reads it: the parser's own words ("Expecting value:
+        # line 1 column 1 (char 0)") reached the Settings page (QA-018)
+        raise LicenseError("malformed license: this is not a license file — paste the JSON "
+                           "you were sent, as it is") from exc
+    except (KeyError, TypeError) as exc:
+        raise LicenseError("malformed license: the file has no license or no signature "
+                           f"({exc!s})") from exc
 
     try:
         VerifyKey(bytes.fromhex(vendor_pubkey_hex)).verify(
@@ -176,7 +182,7 @@ def verify_license(license_json: str, vendor_pubkey_hex: str) -> License:
             features=tuple(lic.get("features", ())),
         )
     except (KeyError, TypeError, ValueError) as exc:
-        raise LicenseError(f"malformed license fields: {exc}") from exc
+        raise LicenseError(f"malformed license: a field is missing or of the wrong kind ({exc!s})") from exc
 
 
 def sign_license(lic: dict, vendor_privkey_hex: str) -> str:
