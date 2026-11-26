@@ -1658,6 +1658,9 @@ function StatementLines({ st, coding, prod, estimate = false }: {
  * on the free plan, what this month would cost on each paid plan. */
 function Billing({ coding, prod }: { coding: boolean; prod: boolean }) {
   const q = useQuery({ queryKey: ["billing"], queryFn: api.billing, retry: false });
+  // how long this workspace's runs are kept: its plan's window on the hosted plane
+  const ent = useQuery({ queryKey: ["entitlements"], queryFn: api.entitlements, retry: false });
+  const keep = ent.data?.retention_days;
   const [open, setOpen] = useState<string | null>(null);
   if (q.isError) {
     return (
@@ -1687,6 +1690,12 @@ function Billing({ coding, prod }: { coding: boolean; prod: boolean }) {
         {plan.licensed && (
           <div style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim }}>
             {plan.organization}{plan.expires_at ? ` · until ${plan.expires_at}` : ""}
+          </div>
+        )}
+        {keep !== undefined && (
+          <div data-testid="billing-retention" style={{ fontFamily: MONO, fontSize: 11, color: C.mut }}>
+            {keep === null ? "runs are kept as long as you keep them"
+              : `runs are kept ${keep === 365 ? "a year" : `${keep} days`} — a higher plan keeps more`}
           </div>
         )}
         <button onClick={() => navigate("pricing")} className="mt-2"

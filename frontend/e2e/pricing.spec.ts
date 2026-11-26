@@ -192,3 +192,11 @@ test("the Connect copy and the Enterprise floor quote the same prices as the car
   await expect(free).toContainText("Business seat on top, $40");
   await expect(free).not.toContainText("$25");
 });
+
+test("each rung keeps more run history", async ({ page }) => {
+  await goHash(page, "pricing?for=both");
+  for (const words of ["runs kept 7 days", "runs kept 30 days", "runs kept 90 days", "runs kept a year",
+                       "runs kept as long as you choose"]) {
+    await expect(page.getByText(words).first()).toBeVisible();
+  }
+});

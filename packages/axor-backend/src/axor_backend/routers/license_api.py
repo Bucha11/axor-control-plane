@@ -218,9 +218,14 @@ async def license_entitlements(state: StateDep, store: StoreDep) -> dict:
     past that, locked, with the reason. An ingest key may read it — a tree run
     asks before it mixes agent families."""
     from axor_backend.ee.entitlements import coding_entitlements, workspace_tier
+    from axor_backend.lifecycle import retention_days
 
     tier = workspace_tier(active_license(state, current_org_id()))
-    return await coding_entitlements(store, tier)
+    # how long this workspace's runs are kept: the plan's on the hosted plane
+    # (None: as long as it chooses) — Settings says it beside the plan
+    keep = retention_days(state, current_org_id())
+    return {**await coding_entitlements(store, tier),
+            "retention_days": int(keep) if keep and keep > 0 else None}
 
 
 @router.put("/agent-family")

@@ -1309,6 +1309,9 @@ export interface Entitlements {
   agent_family_chosen?: boolean;
   // a paid plan's seat limit (an admin's), and the seats this month used
   seat_cap?: number | null; seats_used?: number;
+  // days this workspace's runs are kept (its plan's, on the hosted plane);
+  // null: as long as it keeps them
+  retention_days?: number | null;
   locked: Record<string, LockReason[]>;
   locked_trees: Record<string, LockReason[]>;
   reasons: Record<LockReason, string>;

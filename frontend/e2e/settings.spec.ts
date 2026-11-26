@@ -174,6 +174,18 @@ test.describe("settings", () => {
   });
 
   test("tabs follow the journey:a coding team sees no security tab, plain alerts, keys with the lines to use them", async ({ page }) => {
+});
+
+  test("billing says how long the plan keeps runs", async ({ page }) => {
+    await page.route("**/v1/license/entitlements", (r) => r.fulfill({ json: {
+      tier: "community", free: true, developers: 1, agent_families: 1, agent_family: null,
+      locked: {}, locked_trees: {}, reasons: {}, retention_days: 7 } }));
+    await goHash(page, "settings");
+    await page.getByTestId("settings-tabs").getByRole("tab", { name: "billing" }).click();
+    await expect(page.getByTestId("billing-retention")).toContainText("runs are kept 7 days — a higher plan keeps more");
+  });
+
+  test("tabs follow the journey: a coding team sees no security tab, plain alerts, keys with the lines to use them", async ({ page }) => {
     await page.addInitScript(() => {
       const raw = localStorage.getItem("axor-app");
       const data = raw ? JSON.parse(raw) : { state: {}, version: 0 };

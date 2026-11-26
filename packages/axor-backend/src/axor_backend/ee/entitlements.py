@@ -32,6 +32,22 @@ def workspace_tier(license_: Any | None) -> str:  # noqa: ANN401 - License | Non
     return license_.workspace_tier if license_ is not None else "community"
 
 
+# How long a workspace's runs are kept on the hosted plane, by plan: one rung
+# up keeps more history. None keeps them as long as the workspace chooses
+# (Enterprise). A self-hosted plane keeps its own AXOR_RETENTION_DAYS instead:
+# what it stores is the operator's, on the operator's disk.
+RETENTION_DAYS: dict[str, int | None] = {
+    "community": 7, "coding": 30, "business": 30, "team": 90, "security": 365,
+    "enterprise": None,
+}
+
+
+def plan_retention_days(license_: Any | None) -> int | None:  # noqa: ANN401 - License | None
+    """The plan's window for a license held — expired or not: a renewal that
+    slips by a day must not cut a year of history down to a week."""
+    return RETENTION_DAYS.get(workspace_tier(license_), RETENTION_DAYS["community"])
+
+
 FAMILY_SETTING = "coding_agent_family"
 KNOWN_FAMILIES = ("claude-code", "codex")
 

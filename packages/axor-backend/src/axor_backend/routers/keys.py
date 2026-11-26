@@ -68,8 +68,10 @@ async def security_posture(config: ConfigDep) -> dict:
         {"id": "vault_signing_token", "ok": config.vault_signing_token is not None,
          "what": "requesting a signature needs its own token, not just admin",
          "fix": "set AXOR_VAULT_SIGNING_TOKEN"},
-        {"id": "retention", "ok": config.retention_days is not None,
-         "what": (f"runs are kept {config.retention_days:g} days" if config.retention_days
+        # on the hosted plane each plan has its window (ee.entitlements.RETENTION_DAYS)
+        {"id": "retention", "ok": config.hosted or config.retention_days is not None,
+         "what": ("runs are kept as long as each workspace's plan says" if config.hosted
+                  else f"runs are kept {config.retention_days:g} days" if config.retention_days
                   else "runs are kept forever"),
          "fix": "set AXOR_RETENTION_DAYS"},
     ]
