@@ -223,8 +223,9 @@ function HowToRun() {
             no machine of yours is on line · once, in the repository the eval runs in (it stays open and
             runs what you start here — only yours):
           </div>
+          {/* the same install as Connect and Skills give, with the extra the worker needs */}
           <MachineCommand testId="skill-eval-cmd"
-            cmd={"pip install --upgrade 'axor-wrap[eval]'\naxor-wrap worker"} />
+            cmd={"uv tool install 'axor-wrap[plane,eval]'\naxor-wrap worker"} />
         </div>
       )}
       <Jobs />
