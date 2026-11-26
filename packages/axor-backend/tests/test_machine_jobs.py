@@ -25,14 +25,15 @@ async def _developer(client: httpx.AsyncClient, priv: Ed25519PrivateKey,  # noqa
     return me, _bearer(key)
 
 
-async def _machine(client: httpx.AsyncClient, key: dict, machine_id: str = "m-laptop") -> None:
+async def _machine(client: httpx.AsyncClient, key: dict,  # noqa: F811
+                   machine_id: str = "m-laptop") -> None:
     r = await client.post("/v1/machines/heartbeat", headers=key, json={
         "machine_id": machine_id, "host": "laptop", "repo": "acme/api",
         "agents": ["claude-code", "something-else"]})
     assert r.status_code == 200, r.text
 
 
-async def _queue(client: httpx.AsyncClient, me: dict, machine_id: str = "m-laptop",
+async def _queue(client: httpx.AsyncClient, me: dict, machine_id: str = "m-laptop",  # noqa: F811
                  spec: dict = SPEC) -> httpx.Response:
     return await client.post("/v1/machine-jobs", headers=me,
                               json={"machine_id": machine_id, "kind": "skill_eval", "spec": spec})
