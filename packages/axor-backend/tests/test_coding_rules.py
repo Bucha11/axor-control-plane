@@ -133,3 +133,38 @@ async def test_a_code_host_already_trusted_does_not_block_the_list(
     r = await client.put("/v1/coding/exceptions", headers=owner,
                          json={"trusted_sources": ["github.com", "gitlab.com"]})
     assert r.status_code == 400 and "gitlab.com" in r.json()["detail"]
+
+
+async def test_a_public_suffix_or_a_blog_platform_is_never_a_trusted_source(
+        client: httpx.AsyncClient, priv, monkeypatch) -> None:  # noqa: ANN001, F811
+    """QA-210, QA-211: *.co.uk, *.com.au and *.github.io trusted every site
+    anyone registers under them; medium.com and dev.to anyone publishes on.
+    One site under a suffix is the team's to name; one saved before stays."""
+    owner = _bearer(_mint(priv, role="owner"))
+    for host in ("*.co.uk", "*.com.au", "co.uk", "*.co.za", "*.github.io", "*.blogspot.com",
+                 "*.wordpress.com", "*.substack.com", "*.vercel.app", "*.netlify.app",
+                 "*.pages.dev", "*.herokuapp.com", "github.io"):
+        r = await client.put("/v1/coding/exceptions", headers=owner,
+                             json={"trusted_sources": ["pypi.org", host]})
+        assert r.status_code == 400, host
+        assert "never a trusted source" in r.json()["detail"] and host in r.json()["detail"]
+    for host in ("medium.com", "dev.to", "*.medium.com", "someone.medium.com"):
+        r = await client.put("/v1/coding/exceptions", headers=owner,
+                             json={"trusted_sources": ["pypi.org", host]})
+        assert r.status_code == 400, host
+        assert "a blog platform is never a trusted source" in r.json()["detail"]
+    for host in ("docs.example.co.uk", "*.example.com.au", "pallets.github.io",
+                 "*.readthedocs.io"):
+        r = await client.put("/v1/coding/exceptions", headers=owner,
+                             json={"trusted_sources": ["pypi.org", host]})
+        assert r.status_code == 200, (host, r.text)
+    # saved before the refusal: kept while the team edits the rest of its list
+    monkeypatch.setattr("axor_backend.routers.coding_api._PUBLIC_SUFFIXES", frozenset())
+    monkeypatch.setattr("axor_backend.routers.coding_api._BLOG_HOSTS", ())
+    r = await client.put("/v1/coding/exceptions", headers=owner,
+                         json={"trusted_sources": ["*.github.io", "dev.to"]})
+    assert r.status_code == 200, r.text
+    monkeypatch.undo()
+    r = await client.put("/v1/coding/exceptions", headers=owner,
+                         json={"trusted_sources": ["*.github.io", "dev.to", "pypi.org"]})
+    assert r.status_code == 200, r.text

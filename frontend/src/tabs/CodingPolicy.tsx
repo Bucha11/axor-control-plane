@@ -203,8 +203,9 @@ function TrustedSources({ d, canEdit }: { d: CodingRules; canEdit: boolean }) {
       <div style={sub}>
         Hosts whose pages the agents read like your developers' own words: a command such a page shows
         (<code>pip install pyjwt</code> on the package's docs) can be run. Name documentation you trust —
-        never a site anyone can write to (a code host's issues, a forum, a pastebin): an instruction
-        planted there would run. <code>*.readthedocs.io</code> covers its subdomains.
+        never a site anyone can write to (a code host's issues, a forum, a pastebin, a blog platform, or
+        every site under <code>*.github.io</code> or <code>*.co.uk</code>): an instruction planted there
+        would run. <code>*.readthedocs.io</code> covers its subdomains.
       </div>
       {d.trusted_sources.length > 0 && (
         <div className="flex gap-2 flex-wrap mb-3">

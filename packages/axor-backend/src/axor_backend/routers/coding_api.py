@@ -142,6 +142,34 @@ _OPEN_HOSTS = ("pastebin.com", "paste.ee", "hastebin.com", "dpaste.org", "dpaste
                "stackoverflow.com", "stackexchange.com", "superuser.com", "serverfault.com",
                "askubuntu.com", "reddit.com", "quora.com", "news.ycombinator.com",
                "discourse.org", "discord.com")
+# blog platforms: anyone can publish an article there (QA-211)
+_BLOG_HOSTS = ("medium.com", "dev.to", "hashnode.com", "hashnode.dev")
+# a name under which anyone registers or publishes a site of their own: a
+# country's company domains, and hosting where every user gets a subdomain.
+# "*.co.uk" or "*.github.io" trusts every one of them (QA-210, QA-211); one
+# site under it (docs.example.co.uk, myorg.github.io) is the team's to name.
+_PUBLIC_SUFFIXES = frozenset((
+    "co.uk", "org.uk", "me.uk", "ltd.uk", "plc.uk", "net.uk", "ac.uk", "gov.uk",
+    "com.au", "net.au", "org.au", "edu.au", "gov.au", "id.au", "asn.au",
+    "co.nz", "net.nz", "org.nz", "co.jp", "ne.jp", "or.jp", "ac.jp", "go.jp",
+    "co.kr", "or.kr", "co.in", "net.in", "org.in", "firm.in", "gen.in", "ind.in",
+    "com.br", "net.br", "org.br", "com.cn", "net.cn", "org.cn", "com.tw", "com.hk",
+    "com.sg", "com.my", "co.za", "org.za", "com.mx", "com.ar", "com.tr", "co.il",
+    "com.ua", "com.pl", "co.id", "com.ph", "com.vn", "co.th", "com.pk", "com.ng",
+    "com.eg", "com.sa", "com.co", "com.pe", "com.es", "co.at", "or.at",
+    "github.io", "gitlab.io", "blogspot.com", "wordpress.com", "substack.com",
+    "tumblr.com", "vercel.app", "netlify.app", "pages.dev", "workers.dev",
+    "herokuapp.com", "web.app", "firebaseapp.com", "glitch.me", "notion.site",
+    "neocities.org", "surge.sh", "onrender.com", "fly.dev", "repl.co",
+))
+# the usual second level of a country's domain (co.xx, com.xx, …): also a
+# public suffix when the list above does not name the country
+_SECOND_LEVEL = re.compile(r"^(?:co|com|net|org|gov|edu|ac|or|ne|go|ltd|plc|nom|gen|firm)"
+                           r"\.[a-z]{2}$")
+
+
+def _public_suffix(name: str) -> bool:
+    return name in _PUBLIC_SUFFIXES or bool(_SECOND_LEVEL.match(name))
 
 
 def _matches(host: str, names: tuple[str, ...]) -> bool:
@@ -174,7 +202,8 @@ def _exceptions(raw: object, known: set[str]) -> list[dict]:
 def _sources(raw: object, held: tuple[str, ...] | list[str] = ()) -> list[str]:
     """Hosts whose text is not "from outside": a page there is read like the
     developer's own words, so a command it shows may be run. Exact hosts, or
-    *.example.com for its subdomains — never a bare TLD or everything."""
+    *.example.com for its subdomains — never a bare TLD, a public suffix
+    (*.co.uk, *.github.io) or everything."""
     if not isinstance(raw, list) or len(raw) > MAX_SOURCES:
         raise HTTPException(400, f"trusted_sources is a list of at most {MAX_SOURCES} hosts")
     hosts = sorted({str(h).strip().lower() for h in raw if str(h).strip()})
@@ -191,6 +220,15 @@ def _sources(raw: object, held: tuple[str, ...] | list[str] = ()) -> list[str]:
     if open_:
         raise HTTPException(400, f"{', '.join(open_)}: a forum or a pastebin is never a trusted "
                                  "source — anyone can write to it; name the project's docs site")
+    blogs = [h for h in hosts if h not in held and _matches(h, _BLOG_HOSTS)]
+    if blogs:
+        raise HTTPException(400, f"{', '.join(blogs)}: a blog platform is never a trusted source "
+                                 "— anyone can publish on it; name the project's docs site")
+    public = [h for h in hosts if h not in held and _public_suffix(h.removeprefix("*."))]
+    if public:
+        raise HTTPException(400, f"{', '.join(public)}: that trusts every site anyone registers "
+                                 "or publishes under it — never a trusted source; name one site "
+                                 "(docs.example.co.uk, myorg.github.io)")
     return hosts
 
 
