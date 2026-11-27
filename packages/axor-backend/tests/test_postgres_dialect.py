@@ -312,3 +312,17 @@ async def test_an_unconditional_set_still_moves_the_revision(
             "SELECT revision FROM settings WHERE key = 'k'"
         ))).scalar()
     assert revision == 2
+
+
+async def test_two_reseeds_of_one_run_at_once_do_not_collide(pg_store: Store) -> None:
+    """QA-044: the tour seeds the coding example and, alongside, memory and
+    pair, which seed it again — two reseeds of one run at once both deleted,
+    both inserted, and the second failed on uq_events_run_node_seq (a random
+    500). They take turns now."""
+    import asyncio
+
+    lines = [_line("demo-node", i) for i in range(1, 40)]
+    await asyncio.gather(*(
+        pg_store.reseed_run("ex_race", "demo-node", "coding-demo", "2026-01-01T00:00:00Z", lines)
+        for _ in range(6)))
+    assert len(await pg_store.run_events("ex_race")) == len(lines)
