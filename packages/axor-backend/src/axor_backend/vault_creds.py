@@ -122,8 +122,19 @@ def _key(tool: str, endpoint: str) -> str:
 class ToolCredentialVault:
     """Federation-scoped credential custody with per-node dispense scope."""
 
-    def __init__(self, store: Any) -> None:  # noqa: ANN401 - Store protocol
+    def __init__(self, store: Any, plaintext_allowed: bool = True) -> None:  # noqa: ANN401 - Store protocol
         self._store = store
+        # False on the vendor's hosted plane: §14.2's condition for hosting the
+        # vault is that the vendor cannot read what it holds, so a credential
+        # comes sealed to the workspace's own key or not at all
+        self._plaintext_allowed = plaintext_allowed
+
+    def _refuse_plaintext(self) -> None:
+        raise EnrollmentInvalid(
+            "the hosted plane never stores a credential it can read — register "
+            "your workspace's sealing key (`axor-proxy vault keygen`) and send "
+            "`sealed_secret`, sealed to it, instead of `secret`"
+        )
 
     async def _load(self) -> dict[str, dict]:
         return (await self._store.get_setting(_STORE_KEY)) or {}
@@ -172,6 +183,8 @@ class ToolCredentialVault:
                 "store plaintext credentials — send `sealed_secret`, sealed to "
                 f"{sealing[:16]}…, instead of `secret`"
             )
+        if secret and not sealed_secret and not self._plaintext_allowed:
+            self._refuse_plaintext()
         if sealed_secret:
             _check_sealed(sealed_secret, tool, endpoint)
         elif not secret:
@@ -258,6 +271,8 @@ class ToolCredentialVault:
                 "this deployment has a sealing key registered — rotate with "
                 "`sealed_secret`, not `secret`"
             )
+        if new_secret and not sealed_secret and not self._plaintext_allowed:
+            self._refuse_plaintext()
         if sealed_secret:
             _check_sealed(sealed_secret, tool, endpoint)
         elif not new_secret:
