@@ -181,7 +181,7 @@ def evidence_receipt_html(
         '<p class="small">left out of this link (it could carry contents): '
         + html.escape(", ".join(removed)) + "</p>"
     ) if removed else ""
-    when = html.escape(ts[:16].replace("T", " ")) if ts else ""
+    when = html.escape(_utc(ts))
     # the plane's own test-run proxy is not an agent: say what it is
     who = "a test run (through the proxy)" if node_id == "proxy" else node_id
     meta = " · ".join(x for x in (html.escape(who), when) if x)
@@ -197,6 +197,29 @@ def evidence_receipt_html(
             how_we_know(str(c.get("verdict_source", "")), c.get("confidence"))),
         why=why_block, withheld=withheld, ref=html.escape(run_id),
     )
+
+
+def _utc(ts: str) -> str:
+    """A stored time as its reader can place it: in UTC, and saying so. The
+    bare "2026-11-27 19:37" was UTC while the owner's own pages showed 23:37
+    local, and nothing on the receipt said which (QA-191)."""
+    if not ts:
+        return ""
+    from datetime import UTC, datetime
+
+    try:
+        when = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+    except ValueError:
+        return ts[:16].replace("T", " ")
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=UTC)   # the plane stores UTC
+    return when.astimezone(UTC).strftime("%Y-%m-%d %H:%M UTC")
+
+
+def link_gone_html() -> str:
+    """What someone opening a withdrawn or unknown share link sees: a page in
+    words, not the API's JSON (QA-190)."""
+    return _GONE
 
 
 def _render(value: Any) -> str:  # noqa: ANN401
@@ -449,4 +472,27 @@ happened — caught by Axor. Observations only.">
     Caught by <a href="https://axor.dev">Axor</a> — it checks what AI agents do against what
     they say, and stops the dangerous part.
   </footer>
+</body></html>"""
+
+
+_GONE = """<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>This link no longer works — Axor</title>
+<style>
+  body { background:#12161A; color:#D2DAE1; font-family:system-ui,-apple-system,sans-serif;
+         max-width:640px; margin:0 auto; padding:32px 18px 48px; line-height:1.5; }
+  .brand { font-family:ui-monospace,Menlo,monospace; font-weight:700; letter-spacing:.04em;
+           font-size:12px; }
+  h1 { font-size:24px; line-height:1.3; font-weight:700; margin:22px 0 6px; color:#F0F3F6; }
+  p { font-size:14px; color:#B8C2CC; }
+  a { color:#7FA8CC; text-decoration:none; }
+</style></head>
+<body>
+  <div class="brand">AXOR</div>
+  <h1>This link no longer works</h1>
+  <p>Whoever shared it has withdrawn it, or the address is not complete. Nothing it showed is
+  available here any more. If you still need it, ask the person who sent it for a new link.</p>
+  <p><a href="https://axor.dev">What is Axor?</a></p>
 </body></html>"""

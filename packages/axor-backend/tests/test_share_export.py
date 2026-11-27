@@ -249,3 +249,29 @@ class TestTheContentRuleNamesWhatItWithheld:
         page = (await client.get(f"/v1/share/{token}")).text
         assert "SECRET-BODY" not in page
         assert "observed_reality.response_body" in page
+
+
+async def test_qa190_a_withdrawn_link_is_a_page_in_words(client: httpx.AsyncClient) -> None:
+    """QA-190: an anonymous visitor opening a revoked link got the API's raw
+    JSON ({"detail": "link revoked or unknown"})."""
+    store = client._app.state.store  # type: ignore[attr-defined]
+    await store.upsert_run("r9", "n1", "s", "2026-09-08T00:00:00+00:00")
+    await store.set_evidence("r9", [CASE])
+    token = (await client.post("/v1/runs/r9/cases/0/share")).json()["token"]
+    assert (await client.delete(f"/v1/share/{token}")).status_code == 200
+    for url in (f"/v1/share/{token}", "/v1/share/no-such-token"):
+        r = await client.get(url)
+        assert r.status_code == 404
+        assert r.headers["content-type"].startswith("text/html")
+        assert "This link no longer works" in r.text and '"detail"' not in r.text
+
+
+async def test_qa191_the_receipt_says_its_time_is_utc(client: httpx.AsyncClient) -> None:
+    """QA-191: the shared receipt and the HTML export showed "2026-11-27 19:37"
+    with no zone; it was UTC, while the owner's pages showed local time."""
+    store = client._app.state.store  # type: ignore[attr-defined]
+    await store.upsert_run("r10", "n1", "s", "2026-11-27T19:37:12+00:00")
+    await store.set_evidence("r10", [CASE])
+    token = (await client.post("/v1/runs/r10/cases/0/share")).json()["token"]
+    for url in (f"/v1/share/{token}", "/v1/runs/r10/cases/0/export"):
+        assert "2026-11-27 19:37 UTC" in (await client.get(url)).text
