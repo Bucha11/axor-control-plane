@@ -1648,7 +1648,7 @@ function TokenFold() {
   );
 }
 
-const TIER_NAME: Record<string, string> = {
+export const TIER_NAME: Record<string, string> = {
   community: "Free", coding: "Coding", business: "Business", team: "Team", security: "Security Workspace",
   enterprise: "Enterprise",
 };

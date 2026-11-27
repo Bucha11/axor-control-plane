@@ -177,3 +177,14 @@ test.describe("a skill too large to check (QA-217)", () => {
     await expect(page.getByText(/Request Entity Too Large|<html>/)).toHaveCount(0);
   });
 });
+
+test("Connect on a paid workspace follows its plan, not the free one (QA-157)", async ({ page }) => {
+  await page.route("**/v1/license/entitlements", (r) => r.fulfill({ json: {
+    tier: "business", free: false, developers: null, agent_families: null, agent_family: null,
+    locked: {}, locked_trees: {} } }));
+  await setConnection(page, { mode: "none" });
+  await goHash(page, "connect?for=coding");
+  const box = page.getByTestId("coding-free");
+  await expect(box).toContainText("your workspace is on the Business plan");
+  await expect(box).not.toContainText("free for 1 developer");
+});
