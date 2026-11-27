@@ -5,6 +5,28 @@ The Control Plane ships as three packages from one tag (`axor-backend`,
 images (`axor-platform`, `axor-frontend`). Self-hosted operators upgrade by
 tag; `deploy/offline` carries the same release to a machine with no network.
 
+## 0.7.2 — 2026-11-27
+
+### Added
+
+- **A workspace makes its own vault tokens.** Without a deployment
+  `AXOR_VAULT_*_TOKEN`, a workspace admin mints its own token for dispensing
+  tool credentials and for requesting signatures (Settings → security; shown
+  once, only its hash kept, replacing it cuts off the old one). From then on
+  that subsystem asks for it in the `X-Vault-*-Token` header axor-proxy already
+  sends. A deployment token still rules every workspace. New:
+  `/v1/vault/tokens…`.
+
+### Fixed
+
+- **No native dialogs.** Every `confirm()` / `prompt()` (stop, cap, replan,
+  inject, holds, revokes…) is an in-app dialog: Enter confirms, Escape cancels.
+- **Days are the viewer's local day** where they come from a full timestamp
+  (invites, legal holds, SCIM and machine keys); calendar dates stay as given.
+- **18 layout utilities used across the UI were never defined** (`mb-4`,
+  `px-3`, `flex-1`, …): stacked cards no longer touch. A test now fails on any
+  layout utility the stylesheet does not define.
+
 ## 0.7.1 — 2026-11-27
 
 ### Changed
