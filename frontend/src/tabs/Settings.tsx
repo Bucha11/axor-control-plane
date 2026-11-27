@@ -14,7 +14,7 @@ import {
   oauthStartUrl, signup, signupAvailable, ssoDiscover, ssoStartUrl, type OAuthProvider,
 } from "../identity";
 import { navigate } from "../router";
-import { MODE_LABEL, useApp } from "../store";
+import { MODE_LABEL, isGuestToken, useApp } from "../store";
 import { C, MONO, btn } from "../theme";
 import { useOperatorKeys } from "../signedConnect";
 import * as opKey from "../opKey";
@@ -1597,26 +1597,30 @@ function TokenFold() {
   const setApiToken = useApp((s) => s.setApiToken);
   const identityEmail = useApp((s) => s.identityEmail);
   const authStatus = useQuery({ queryKey: ["auth-status", apiToken], queryFn: api.authStatus });
+  // a guest session is nobody's token: not shown here as "signed in" beside the
+  // sign-in form (QA-102)
+  const own = isGuestToken(apiToken) ? "" : apiToken;
+  const signedIn = !!authStatus.data?.authenticated && !authStatus.data.guest;
   // signed in with an account: its token is not a thing to show or paste
   if (identityEmail) return null;
   return (
-    <details className="mt-3" open={!!apiToken || undefined}>
+    <details className="mt-3" open={!!own || undefined}>
       <summary style={{ cursor: "pointer", fontFamily: MONO, fontSize: 11, color: C.dim }}>
-        use an access token instead {authStatus.data?.authenticated && apiToken ? "· signed in with one" : ""}
+        use an access token instead {signedIn && own ? "· signed in with one" : ""}
       </summary>
       <div className="mt-2">
         <div style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim, marginBottom: 8 }}>
           the operator token of a plane you run yourself, or an API key — sent with every request from this browser
         </div>
         <div className="flex items-center gap-2 mb-2">
-          <input type="password" value={apiToken} onChange={(e) => setApiToken(e.target.value)}
+          <input type="password" value={own} onChange={(e) => setApiToken(e.target.value)}
             placeholder="access token" aria-label="access token" style={INPUT_STYLE} />
           <span style={{ fontFamily: MONO, fontSize: 11, whiteSpace: "nowrap",
-            color: authStatus.data?.authenticated ? C.green : C.red }}>
-            {authStatus.data?.authenticated ? "● signed in" : "○ not signed in"}
+            color: signedIn ? C.green : C.red }}>
+            {signedIn ? "● signed in" : "○ not signed in"}
           </span>
         </div>
-        {authStatus.data?.authenticated && (
+        {signedIn && authStatus.data && (
           <div style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim }}>
             can: {(authStatus.data.scopes ?? []).join(", ") || "nothing"}
           </div>

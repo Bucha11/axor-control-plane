@@ -231,6 +231,35 @@ test.describe("settings (QA, 0.7.2)", () => {
     expect(asGuest).toEqual([]);
     expect(license.filter((b) => b.includes("gs_"))).toEqual([]);
   });
+
+  test("a refused token refresh says the session ended, and Settings shows one state (QA-102)", async ({ page }) => {
+    // a signed-in tab whose refresh token another tab already rotated
+    await page.addInitScript(() => {
+      if (sessionStorage.getItem("qa102")) return;
+      sessionStorage.setItem("qa102", "1");
+      sessionStorage.setItem("axor-app", JSON.stringify({ version: 0, state: {
+        apiToken: "acc-old", refreshToken: "ref-old", identityEmail: "ada@acme.io",
+        vaultSigningToken: "", vaultCredsToken: "", guestTokens: [] } }));
+    });
+    await page.route("**/v1/auth/status", (r) => {
+      const bearer = r.request().headers()["authorization"] ?? "";
+      return r.fulfill({ json: bearer.includes("gs_")
+        ? { auth_enabled: true, authenticated: true, guest: true, guest_sessions: true, scopes: ["read", "ingest", "operate"] }
+        : { auth_enabled: true, authenticated: false, guest_sessions: true, scopes: [] } });
+    });
+    await page.route("**/v1/auth/guest", (r) => r.fulfill({ status: 201, json: {
+      token: "gs_e2e_guest_token", org: "guest_e2e", ttl_seconds: 1800,
+      expires_at: new Date(Date.now() + 29 * 60_000).toISOString() } }));
+    await page.route("**/identity/v1/me", (r) => r.fulfill({ status: 401, json: { detail: "token expired" } }));
+    await page.route("**/identity/v1/refresh", (r) => r.fulfill({ status: 401, json: { detail: "invalid refresh token" } }));
+    await goHash(page, "settings");
+    await expect(page.getByTestId("session-ended")).toContainText("your session ended — sign in again");
+    await expect(page.getByRole("button", { name: "log in", exact: true })).toBeVisible();
+    await page.waitForFunction(() => (sessionStorage.getItem("axor-app") ?? "").includes("gs_e2e_guest_token"));
+    await expect(page.getByText("○ not signed in")).toBeAttached();
+    await expect(page.getByText("● signed in", { exact: true })).toHaveCount(0);
+    await expect(page.getByText(/^can: /)).toHaveCount(0);
+  });
 });
 
 const SESSION = {

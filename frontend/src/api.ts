@@ -1109,6 +1109,7 @@ async function refreshSession(staleToken: string | null): Promise<boolean> {
           return true;
         }
         useApp.getState().clearSession();
+        useApp.getState().setSessionEnded(true);
         return false;
       })
       .finally(() => {

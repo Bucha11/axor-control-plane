@@ -13,6 +13,7 @@ import { api, guestRetryAfter, sessionSettled } from "../api";
 import { isGuestToken, useApp } from "../store";
 import { C, MONO, btn } from "../theme";
 import { IdentityLogin } from "../tabs/Settings";
+import { navigate } from "../router";
 import { track } from "../funnel";
 
 const LABELS: [string, string][] = [
@@ -34,6 +35,7 @@ export default function GuestSession() {
   const apiToken = useApp((s) => s.apiToken);
   const refreshToken = useApp((s) => s.refreshToken);
   const guestTokens = useApp((s) => s.guestTokens);
+  const sessionEnded = useApp((s) => s.sessionEnded);
   const [ask, setAsk] = useState<string | null>(null);
   const [askText, setAskText] = useState<{ title?: string; why?: string }>({});
   const [moved, setMoved] = useState<string | null>(null);
@@ -104,6 +106,18 @@ export default function GuestSession() {
 
   return (
     <>
+      {sessionEnded && (
+        <div data-testid="session-ended" style={{
+          maxWidth: 1040, margin: "0 auto 12px", fontFamily: MONO, fontSize: 11.5, color: C.amber,
+          border: `1px solid ${C.amber}`, borderRadius: 8, padding: "8px 12px",
+          display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+          <span style={{ flex: 1 }}>your session ended — sign in again</span>
+          <button onClick={() => navigate("settings", { tab: "workspace" })}
+            style={btn({ fontSize: 10.5, padding: "2px 8px", color: C.steel, borderColor: C.steel })}>sign in</button>
+          <button onClick={() => useApp.getState().setSessionEnded(false)}
+            style={btn({ fontSize: 10.5, padding: "2px 8px", color: C.mut })}>ok</button>
+        </div>
+      )}
       {busyFor > 0 && !apiToken && (
         <div data-testid="guest-busy" style={{
           maxWidth: 1040, margin: "0 auto 12px", fontFamily: MONO, fontSize: 11.5, color: C.amber,
