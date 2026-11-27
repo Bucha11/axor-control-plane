@@ -8,7 +8,7 @@ import { track } from "../funnel";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Check, Copy, Loader2, Trash2 } from "lucide-react";
 import { api, BillingReport, BillingStatement, type Capability, type Permissions } from "../api";
-import { useCanAdmin, useHasScope } from "../team";
+import { useCanAdmin, useHasScope, useHasScopeKnown } from "../team";
 import {
   IdentityError, emailAvailable, forgotPassword, here, login, logout, oauthProviders,
   oauthStartUrl, signup, signupAvailable, ssoDiscover, ssoStartUrl, type OAuthProvider,
@@ -2270,6 +2270,7 @@ function Connections({ coding, prod }: { coding: boolean; prod: boolean }) {
 
 /** Each wall of this plane, up or down, with how to raise the ones that are down. */
 function SecurityPosture() {
+  const canOwn = useHasScope()("admin");
   const posture = useQuery({ queryKey: ["security-posture"], queryFn: api.securityPosture, retry: false });
   const sealing = useQuery({ queryKey: ["vault-sealing", ""], queryFn: api.vaultSealingKey, retry: false });
   const items = [
@@ -2283,7 +2284,8 @@ function SecurityPosture() {
   return (
     <>
       <PostureItems items={items} />
-      <VaultTokens />
+      {/* only the owner holds `admin`, which the vault tokens need (QA-121) */}
+      {canOwn && <VaultTokens />}
     </>
   );
 }
@@ -2380,6 +2382,11 @@ function PostureItems({ items }: { items: { id: string; ok: boolean; what: strin
 // federation". The separation is backend-enforced (separate credentials);
 // the UI mirrors it structurally.
 function FederationVault() {
+  // The vault's setup — enrolling credentials, keys under custody, the sign
+  // audit — is the owner's (`admin`); members and admins sign with what is
+  // there (`operate`). They were shown every form and refused by each (QA-121).
+  const canOwn = useHasScope()("admin");
+  const ownKnown = useHasScopeKnown()("admin");
   // Both reads are gated by the signing-token, so it is part of the key:
   // typing the token refetches instead of leaving a stale 403 on screen.
   const vaultSigningToken = useApp((s) => s.vaultSigningToken);
@@ -2388,6 +2395,7 @@ function FederationVault() {
   });
   const audit = useQuery({
     queryKey: ["vault-audit", vaultSigningToken], queryFn: () => api.vaultSigningAudit(),
+    enabled: ownKnown,
   });
   const qc = useQueryClient();
 
@@ -2417,7 +2425,13 @@ function FederationVault() {
   const signedPosture = Boolean(signingKeyId);
   return (
     <div className="flex gap-4 mb-4 stack-narrow" data-testid="federation-vault" style={{ alignItems: "stretch" }}>
-      <ToolCredentials />
+      {canOwn ? <ToolCredentials /> : (
+        <div data-testid="vault-owner-only" className="p-4" style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 8, flex: 1, minWidth: 0, fontFamily: MONO, fontSize: 11, color: C.mut, lineHeight: 1.6 }}>
+          <div style={{ fontSize: 10, color: C.dim, letterSpacing: "0.1em", marginBottom: 8 }}>TOOL CREDENTIALS</div>
+          The workspace owner enrols, rotates and registers the keys for tool credentials. You sign
+          your own commands with a key already under custody, beside this.
+        </div>
+      )}
       {/* without flex 1 + minWidth 0 the card was as wide as its widest
           line, past the column (QA-041) */}
       <div className="p-4 flex-1" style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 8, flex: 1, minWidth: 0 }}>
@@ -2491,7 +2505,7 @@ function FederationVault() {
                 ))}
               </select>
             </div>
-            <div className="flex items-center gap-2 flex-wrap">
+            {canOwn && <div className="flex items-center gap-2 flex-wrap">
               <input
                 value={newKeyId}
                 onChange={(e) => setNewKeyId(e.target.value)}
@@ -2513,7 +2527,7 @@ function FederationVault() {
               >
                 {createKey.isPending ? <Loader2 size={11} className="animate-spin" /> : null} create signing key
               </button>
-            </div>
+            </div>}
             {createKey.isError && (
               <div style={{ fontFamily: MONO, fontSize: 10.5, color: C.red }}>
                 {(createKey.error as Error).message}

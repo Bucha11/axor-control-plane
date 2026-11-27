@@ -52,3 +52,11 @@ export function useHasScope(): (scope: "read" | "ingest" | "operate" | "admin") 
   const q = useQuery({ queryKey: ["auth-status", apiToken], queryFn: api.authStatus });
   return (scope) => !q.data || !q.data.auth_enabled || q.data.scopes.includes(scope);
 }
+
+/** Like useHasScope, but false until the plane has answered: for a request
+ *  that must not go out unless the caller holds the scope (QA-121). */
+export function useHasScopeKnown(): (scope: "read" | "ingest" | "operate" | "admin") => boolean {
+  const apiToken = useApp((s) => s.apiToken);
+  const q = useQuery({ queryKey: ["auth-status", apiToken], queryFn: api.authStatus });
+  return (scope) => !!q.data && (!q.data.auth_enabled || q.data.scopes.includes(scope));
+}

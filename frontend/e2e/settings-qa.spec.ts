@@ -96,6 +96,23 @@ test.describe("settings (QA, 0.7.2)", () => {
     await expect(page.getByTestId("federation-vault")).toHaveCount(0);
   });
 
+  test("a member or admin is not shown the vault forms only the owner may use (QA-121)", async ({ page }) => {
+    // member and admin roles carry read, ingest and operate — not admin
+    await page.route("**/v1/auth/status", (r) => r.fulfill({ json: {
+      auth_enabled: true, authenticated: true, scopes: ["read", "ingest", "operate"] } }));
+    let audit = 0;
+    await page.route("**/v1/vault/signing/audit*", (r) => { audit += 1; return r.fulfill({ json: [] }); });
+    await goHash(page, "settings?tab=security");
+    await expect(page.getByTestId("federation-vault")).toBeVisible();
+    await expect(page.getByTestId("vault-owner-only")).toContainText("The workspace owner enrols");
+    await expect(page.getByRole("button", { name: /enrol a credential/ })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: /create signing key/ })).toHaveCount(0);
+    await expect(page.getByTestId("vault-tokens")).toHaveCount(0);
+    // what a member does use is still there: signing their commands
+    await expect(page.getByTestId("signing-controls")).toBeVisible();
+    expect(audit).toBe(0);
+  });
+
   test("vault token replace and drop ask first; dropping one keeps the other's shown value (QA-065)", async ({ page }) => {
     // stubbed: a real token on the shared test plane would lock the vault for other specs
     const state = { creds: false, signing: true };
