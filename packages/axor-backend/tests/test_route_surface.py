@@ -173,6 +173,9 @@ EXPECTED: dict[tuple[str, str], str] = {
     # storing plaintext at all.
     ("POST", "/v1/vault/creds/sealing-key"): "admin",
     ("GET", "/v1/vault/creds/sealing-key"): "admin",
+    ("GET", "/v1/vault/tokens"): "admin",
+    ("POST", "/v1/vault/tokens/{which}"): "admin",
+    ("DELETE", "/v1/vault/tokens/{which}"): "admin",
     ("POST", "/v1/vault/signing/keys"): "admin",
     ("GET", "/v1/vault/signing/keys"): "operate",
     ("POST", "/v1/vault/signing/sign"): "operate",

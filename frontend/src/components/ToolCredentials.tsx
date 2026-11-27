@@ -182,7 +182,7 @@ export default function ToolCredentials() {
         <div style={label}>vault creds token (X-Vault-Creds-Token)</div>
         <input
           style={input} type="password" value={credsToken} aria-label="creds token"
-          placeholder="required when the deployment sets AXOR_VAULT_CREDS_TOKEN"
+          placeholder="required once this workspace has a creds token (Settings → security), or the plane sets one"
           onChange={(e) => setCredsToken(e.target.value)}
         />
       </div>

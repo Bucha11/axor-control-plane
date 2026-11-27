@@ -126,6 +126,9 @@ _READ_POLICY: tuple[tuple[str, str], ...] = (
     # The key to seal against is public, but whether this deployment is in
     # envelope mode at all is the shape of its custody — same bar as the rest.
     ("/v1/vault/creds/sealing-key", "admin"),
+    # Which subsystems have a workspace token, when and by whom: never the token,
+    # but the shape of the vault's walls — the admin's, like the rest.
+    ("/v1/vault/tokens", "admin"),
     # Pubkeys are explicitly NOT secrets (vault_signing module docstring), but
     # the per-key operator allowlist is operational config, so: not `read`.
     ("/v1/vault/signing/keys", "operate"),

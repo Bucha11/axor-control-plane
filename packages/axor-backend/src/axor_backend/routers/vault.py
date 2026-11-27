@@ -17,12 +17,14 @@ from __future__ import annotations
 
 import base64
 import binascii
+import secrets
+from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
 
-from axor_backend.auth import constant_time_eq
+from axor_backend.auth import constant_time_eq, hash_secret
 from axor_backend.clock import now
-from axor_backend.deps import StoreDep
+from axor_backend.deps import PrincipalDep, StoreDep
 from axor_backend.vault_dispense import AUDIT_KIND as DISPENSE_KIND
 from axor_backend.vault_dispense import NODE_KEYS_SETTING, AttestationRefused
 from axor_backend.vault_dispense import log_entry as dispense_row
@@ -46,10 +48,16 @@ def _page(limit: int) -> int:
     return min(limit, AUDIT_PAGE_MAX)
 
 
-def vault_gate(request: Request, which: str) -> None:
+async def vault_gate(request: Request, which: str) -> None:
     """Per-subsystem bearer check. A configured token is required exactly for
     its own subsystem; in the open dev posture (no token configured) the
     subsystem follows the app's global posture — which startup logs loudly.
+
+    The deployment's token (AXOR_VAULT_<WHICH>_TOKEN) is one secret for the
+    whole plane: right for a self-hosted plane, wrong for one with many
+    workspaces, where it would be handed to all of them. Without it, a
+    workspace may mint its own token for each subsystem (Settings → security);
+    once it has, that workspace's requests need it.
 
     Compared with `constant_time_eq`, like the API token and every scoped key in
     `security.py`. A `!=` on secrets returns at the first differing byte, and
@@ -57,12 +65,85 @@ def vault_gate(request: Request, which: str) -> None:
     — the last place in the codebase that should compare a secret in a way that
     leaks its prefix.
     """
-    expected = getattr(request.app.state.config, f"vault_{which}_token")
-    if expected is None:
-        return
     presented = request.headers.get(f"x-vault-{which}-token", "")
-    if not constant_time_eq(presented, expected):
-        raise HTTPException(403, f"vault {which}: missing or wrong token")
+    expected = getattr(request.app.state.config, f"vault_{which}_token")
+    if expected is not None:
+        if not constant_time_eq(presented, expected):
+            raise HTTPException(403, f"vault {which}: missing or wrong token")
+        return
+    own = (await workspace_tokens(request.app.state.store)).get(which)
+    if own and not constant_time_eq(hash_secret(presented), own["hash"]):
+        raise HTTPException(403, f"vault {which}: this workspace requires its own "
+                                 f"{which} token (X-Vault-{which.capitalize()}-Token)")
+
+
+# ── a workspace's own vault tokens ────────────────────────────────────────────
+
+WORKSPACE_TOKENS_SETTING = "vault_tokens/v1"
+SUBSYSTEMS = ("creds", "signing")
+
+
+async def workspace_tokens(store: Any) -> dict[str, dict]:  # noqa: ANN401
+    """The workspace's minted tokens by subsystem: hash, when, by whom."""
+    held = await store.get_setting(WORKSPACE_TOKENS_SETTING)
+    return held if isinstance(held, dict) else {}
+
+
+def _subsystem(which: str) -> str:
+    if which not in SUBSYSTEMS:
+        raise HTTPException(404, f"no vault subsystem {which!r} (creds or signing)")
+    return which
+
+
+@router.get("/tokens")
+async def vault_tokens(request: Request, store: StoreDep) -> dict:
+    """Which of the workspace's vault subsystems have a token of their own —
+    never the token. With a deployment token set, that one rules instead."""
+    deployment = {w: getattr(request.app.state.config, f"vault_{w}_token") is not None
+                  for w in SUBSYSTEMS}
+    held = await workspace_tokens(store)
+    return {w: {"set": w in held, "since": held.get(w, {}).get("ts"),
+                "by": held.get(w, {}).get("by"), "deployment": deployment[w]}
+            for w in SUBSYSTEMS}
+
+
+@router.post("/tokens/{which}", status_code=201)
+async def vault_mint_token(which: str, request: Request, store: StoreDep,
+                           principal: PrincipalDep) -> dict:
+    """Mint (or replace) the workspace's token for one subsystem. Shown once;
+    only its hash is kept. Replacing it cuts off whoever holds the old one —
+    which is what a rotation after a leak needs. An owner or admin."""
+    from axor_backend import audit, permissions
+
+    permissions.require_admin(principal)
+    which = _subsystem(which)
+    if getattr(request.app.state.config, f"vault_{which}_token") is not None:
+        raise HTTPException(409, f"this plane has a deployment {which} token, which "
+                                 "rules every workspace — a workspace token would not apply")
+    secret = f"axv_{which}_{secrets.token_urlsafe(32)}"
+    held = await workspace_tokens(store)
+    held[which] = {"hash": hash_secret(secret), "ts": now(), "by": audit.actor(request)["who"]}
+    await store.set_setting(WORKSPACE_TOKENS_SETTING, held)
+    await audit.record(store, request, "vault_token", which)
+    return {"subsystem": which, "token": secret,
+            "header": f"X-Vault-{which.capitalize()}-Token"}
+
+
+@router.delete("/tokens/{which}")
+async def vault_drop_token(which: str, request: Request, store: StoreDep,
+                           principal: PrincipalDep) -> dict:
+    """Drop the workspace's token: the subsystem goes back to the admin's
+    scope alone. An owner or admin."""
+    from axor_backend import audit, permissions
+
+    permissions.require_admin(principal)
+    which = _subsystem(which)
+    held = await workspace_tokens(store)
+    if held.pop(which, None) is None:
+        raise HTTPException(404, f"this workspace has no {which} token")
+    await store.set_setting(WORKSPACE_TOKENS_SETTING, held)
+    await audit.record(store, request, "vault_token_dropped", which)
+    return {"subsystem": which, "set": False}
 
 
 def _speaking_as(request: Request, node_id: str) -> None:
@@ -98,7 +179,7 @@ def _speaking_as(request: Request, node_id: str) -> None:
 
 @router.post("/creds/enroll")
 async def vault_enroll(body: dict, request: Request, store: StoreDep) -> dict:
-    vault_gate(request, "creds")
+    await vault_gate(request, "creds")
     from axor_backend.vault_creds import EnrollmentInvalid, ToolCredentialVault
 
     try:
@@ -129,7 +210,7 @@ async def vault_dispense(body: dict, request: Request, store: StoreDep) -> dict:
 
     The scope check used to do the work of all four.
     """
-    vault_gate(request, "creds")
+    await vault_gate(request, "creds")
     from axor_backend.vault_creds import DispenseDenied, ToolCredentialVault
 
     node_id = str(body.get("node_id", ""))
@@ -168,7 +249,7 @@ async def vault_dispense(body: dict, request: Request, store: StoreDep) -> dict:
 
 @router.post("/creds/rotate")
 async def vault_rotate(body: dict, request: Request, store: StoreDep) -> dict:
-    vault_gate(request, "creds")
+    await vault_gate(request, "creds")
     from axor_backend.vault_creds import (
         DispenseDenied,
         EnrollmentInvalid,
@@ -197,7 +278,7 @@ async def vault_rotate(body: dict, request: Request, store: StoreDep) -> dict:
 async def vault_revoke(body: dict, request: Request, store: StoreDep) -> dict:
     """Narrowing only: revoke is available over the plane in an incident;
     granting is enrollment config, never a command."""
-    vault_gate(request, "creds")
+    await vault_gate(request, "creds")
     from axor_backend.vault_creds import NotEnrolled, ToolCredentialVault
 
     try:
@@ -223,7 +304,7 @@ async def vault_register_sealing_key(
     Public by definition, so registering it is not handing us anything. What it
     buys is that we are no longer trusted to decline to look — we are unable to.
     """
-    vault_gate(request, "creds")
+    await vault_gate(request, "creds")
     from axor_backend.vault_creds import SEALING_KEY_SETTING
 
     pubkey = str(body.get("public_key_hex", ""))
@@ -236,7 +317,7 @@ async def vault_register_sealing_key(
 @router.get("/creds/sealing-key")
 async def vault_sealing_key(request: Request, store: StoreDep) -> dict:
     """The key to seal against, and whether this deployment holds plaintext."""
-    vault_gate(request, "creds")
+    await vault_gate(request, "creds")
     from axor_backend.vault_creds import SEALING_KEY_SETTING
 
     pubkey = await store.get_setting(SEALING_KEY_SETTING)
@@ -254,7 +335,7 @@ async def vault_register_node_key(
     node without a registered key still dispenses — its rows just read
     `signed: false`, which is the honest record of what happened.
     """
-    vault_gate(request, "creds")
+    await vault_gate(request, "creds")
     node_id = str(body.get("node_id", ""))
     pubkey = str(body.get("public_key_hex", ""))
     if not node_id or len(pubkey) != 64 or not _is_hex(pubkey):
@@ -269,7 +350,7 @@ async def vault_register_node_key(
 
 @router.get("/creds/node-keys")
 async def vault_node_keys(request: Request, store: StoreDep) -> dict:
-    vault_gate(request, "creds")
+    await vault_gate(request, "creds")
     return (await store.get_setting(NODE_KEYS_SETTING)) or {}
 
 
@@ -285,7 +366,7 @@ async def vault_creds_audit(
     thing something else was quietly making safe. Page with `before_id` from the
     `audit_id` of the last row you read.
     """
-    vault_gate(request, "creds")
+    await vault_gate(request, "creds")
     return await store.vault_audit_entries(
         DISPENSE_KIND, limit=_page(limit), before_id=before_id,
     )
@@ -293,7 +374,7 @@ async def vault_creds_audit(
 
 @router.get("/creds/health")
 async def vault_health(request: Request, store: StoreDep) -> dict:
-    vault_gate(request, "creds")
+    await vault_gate(request, "creds")
     from axor_backend.vault_creds import ToolCredentialVault
 
     return await ToolCredentialVault(store).health()
@@ -303,7 +384,7 @@ async def vault_health(request: Request, store: StoreDep) -> dict:
 
 @router.post("/signing/keys")
 async def vault_create_key(body: dict, request: Request, store: StoreDep) -> dict:
-    vault_gate(request, "signing")
+    await vault_gate(request, "signing")
     from axor_backend.vault_signing import SigningCustody, SignRefused
 
     try:
@@ -316,7 +397,7 @@ async def vault_create_key(body: dict, request: Request, store: StoreDep) -> dic
 
 @router.get("/signing/keys")
 async def vault_list_keys(request: Request, store: StoreDep) -> list[dict]:
-    vault_gate(request, "signing")
+    await vault_gate(request, "signing")
     from axor_backend.vault_signing import SigningCustody
 
     return await SigningCustody(store).keys_public()
@@ -324,7 +405,7 @@ async def vault_list_keys(request: Request, store: StoreDep) -> list[dict]:
 
 @router.post("/signing/sign")
 async def vault_sign(body: dict, request: Request, store: StoreDep) -> dict:
-    vault_gate(request, "signing")
+    await vault_gate(request, "signing")
     from axor_backend.vault_signing import SigningCustody, SignRefused
 
     principal = getattr(request.state, "principal", None)
@@ -346,7 +427,7 @@ async def vault_audit(
 ) -> list[dict]:
     """Every signature request, granted or refused. Newest first, paged — see
     `/creds/audit` for why paging arrived with the table."""
-    vault_gate(request, "signing")
+    await vault_gate(request, "signing")
     from axor_backend.vault_signing import SigningCustody
 
     return await SigningCustody(store).audit(

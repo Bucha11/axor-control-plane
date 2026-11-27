@@ -2219,10 +2219,82 @@ function SecurityPosture() {
   const sealing = useQuery({ queryKey: ["vault-sealing", ""], queryFn: api.vaultSealingKey, retry: false });
   const items = [
     ...(posture.data?.items ?? []),
-    ...(sealing.data ? [{ id: "vault_custody", ok: sealing.data.envelope_mode,
+    // a hosted plane reports sealed custody itself (sealed_credentials)
+    ...(sealing.data && !posture.data?.items.some((i) => i.id === "sealed_credentials")
+      ? [{ id: "vault_custody", ok: sealing.data.envelope_mode,
       what: "tool credentials are stored sealed — the plane holds only what it cannot open",
       fix: "make a sealing key with axor-proxy vault keygen and register its public half below" }] : []),
   ];
+  return (
+    <>
+      <PostureItems items={items} />
+      <VaultTokens />
+    </>
+  );
+}
+
+const VAULT_WORDS: Record<"creds" | "signing", string> = {
+  creds: "dispensing tool credentials",
+  signing: "requesting a signature",
+};
+
+/** The workspace's own token per vault subsystem: with one, that subsystem
+ *  asks for it (X-Vault-…-Token), not just an admin. Shown once; a new one
+ *  cuts off whoever holds the old one. */
+function VaultTokens() {
+  const qc = useQueryClient();
+  const tokens = useQuery({ queryKey: ["vault-tokens"], queryFn: api.vaultTokens, retry: false });
+  const [shown, setShown] = useState<{ which: string; token: string; header: string } | null>(null);
+  const done = () => {
+    void qc.invalidateQueries({ queryKey: ["vault-tokens"] });
+    void qc.invalidateQueries({ queryKey: ["security-posture"] });
+  };
+  const make = useMutation({ mutationFn: api.makeVaultToken,
+    onSuccess: (r) => { setShown({ which: r.subsystem, token: r.token, header: r.header }); done(); } });
+  const makeOnce = useOneAtATime(make);
+  const drop = useMutation({ mutationFn: api.dropVaultToken, onSuccess: () => { setShown(null); done(); } });
+  if (!tokens.data) return null;
+  return (
+    <div data-testid="vault-tokens" className="mt-3" style={{ fontFamily: MONO, fontSize: 11, lineHeight: 1.7 }}>
+      <div style={{ color: C.mut, marginBottom: 4 }}>THIS WORKSPACE'S VAULT TOKENS</div>
+      {(["creds", "signing"] as const).map((w) => {
+        const t = tokens.data[w];
+        return (
+          <div key={w} data-testid={`vault-token-${w}`} className="flex items-center gap-2 flex-wrap">
+            <span style={{ color: C.text, minWidth: 220 }}>{VAULT_WORDS[w]}</span>
+            {t.deployment ? (
+              <span style={{ color: C.dim }}>set by this plane's operator</span>
+            ) : t.set ? (
+              <>
+                <span style={{ color: C.green }}>token since {t.since ? localTime(t.since) : "—"}{t.by ? ` · ${t.by}` : ""}</span>
+                <button onClick={() => makeOnce(w)} data-testid={`vault-token-${w}-replace`}
+                  style={btn({ color: C.text, borderColor: C.steel, fontSize: 10.5, padding: "2px 8px" })}>replace</button>
+                <button onClick={() => drop.mutate(w)} data-testid={`vault-token-${w}-drop`}
+                  style={btn({ color: C.mut, borderColor: C.line, fontSize: 10.5, padding: "2px 8px" })}>drop</button>
+              </>
+            ) : (
+              <button onClick={() => makeOnce(w)} data-testid={`vault-token-${w}-make`}
+                style={btn({ color: C.text, borderColor: C.steel, fontSize: 10.5, padding: "2px 8px" })}>make a token</button>
+            )}
+          </div>
+        );
+      })}
+      {shown && (
+        <div data-testid="vault-token-shown" className="mt-2 p-2" style={{ border: `1px solid ${C.amber}`, borderRadius: 6, overflowWrap: "anywhere" }}>
+          <div style={{ color: C.amber }}>shown once — give it to whatever calls the vault, as {shown.header}:</div>
+          <div style={{ color: C.text }}>{shown.token}</div>
+          <div style={{ color: C.dim }}>for axor-proxy: AXOR_VAULT_{shown.which.toUpperCase()}_TOKEN=…</div>
+        </div>
+      )}
+      {(make.isError || drop.isError) && (
+        <div style={{ color: C.red }}>{((make.error ?? drop.error) as Error).message}</div>
+      )}
+    </div>
+  );
+}
+
+/** The posture's items, up or down. */
+function PostureItems({ items }: { items: { id: string; ok: boolean; what: string; fix: string }[] }) {
   if (!items.length) return <div style={{ fontFamily: MONO, fontSize: 11, color: C.dim }}>…</div>;
   const down = items.filter((i) => !i.ok).length;
   return (

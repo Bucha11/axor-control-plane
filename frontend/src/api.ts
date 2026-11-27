@@ -2381,6 +2381,15 @@ export const api = {
       body: JSON.stringify({ guest_token: guestToken }),
     }).then((r) => j<{ claimed: boolean; moved: Record<string, number> }>(r)),
 
+  // a workspace's own vault tokens (Settings → security): which are set, never the token
+  vaultTokens: () =>
+    af("/v1/vault/tokens").then((r) => j<Record<"creds" | "signing", {
+      set: boolean; since: string | null; by: string | null; deployment: boolean }>>(r)),
+  makeVaultToken: (which: "creds" | "signing") =>
+    af(`/v1/vault/tokens/${which}`, { method: "POST" })
+      .then((r) => j<{ subsystem: string; token: string; header: string }>(r)),
+  dropVaultToken: (which: "creds" | "signing") =>
+    af(`/v1/vault/tokens/${which}`, { method: "DELETE" }).then((r) => j<{ set: boolean }>(r)),
   securityPosture: () =>
     af("/v1/security/posture").then((r) => j<{
       items: { id: string; ok: boolean; what: string; fix: string }[]; signing: string;

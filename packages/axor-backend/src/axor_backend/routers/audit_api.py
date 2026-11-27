@@ -291,7 +291,7 @@ async def compliance_pack(request: Request, state: StateDep, store: StoreDep,
         from axor_backend.routers.vault import vault_gate
         from axor_backend.vault_signing import SigningCustody, SignRefused
 
-        vault_gate(request, "signing")
+        await vault_gate(request, "signing")
         try:
             signed = await SigningCustody(store).sign(
                 operator=audit.actor(request)["who"], key_id=sign,
