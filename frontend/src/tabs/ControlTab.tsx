@@ -20,6 +20,7 @@ import Tooltip from "../components/Tooltip";
 import { codingExampleOnly, fleetExampleOnly, isCodingSession } from "../components/CodingOnboarding";
 import { AlertMe, KeepAsTest, SignUpForYourAgent } from "../components/AccountAction";
 import { NOT_A_TEST_BENCH, behindProxy, cannotCut, isTestBench } from "../agentName";
+import { useOneAtATime } from "../oneAtATime";
 
 const REFETCH_MS = 5000;
 
@@ -176,6 +177,7 @@ function SpawnGoverned({ switchToAdapter }: { switchToAdapter?: boolean }) {
     },
     onError: (e: Error) => setErr(e.message),
   });
+  const spawnTreeOnce = useOneAtATime(spawnTree);
   const seedTree = useMutation({
     mutationFn: () => api.seedTreeRun(),
     onSuccess: async () => {
@@ -198,12 +200,13 @@ function SpawnGoverned({ switchToAdapter }: { switchToAdapter?: boolean }) {
     },
     onError: (e: Error) => setErr(e.message),
   });
+  const spawnOnce = useOneAtATime(spawn);
   return (
     <div className="mt-3" data-tour="spawn">
       <div className="flex flex-wrap items-center gap-2">
       <Tooltip content="Starts a real axor-core governed agent (an IntentLoop) on the proxy and connects it to the plane — so you can watch a live node heartbeat and obey your interventions without wiring your own.">
         <button
-          onClick={() => spawn.mutate()}
+          onClick={() => spawnOnce()}
           disabled={spawn.isPending}
           style={btn({ color: C.bg, background: C.green, border: `1px solid ${C.green}`, fontSize: 12, fontWeight: 700, padding: "8px 14px" })}
         >
@@ -212,7 +215,7 @@ function SpawnGoverned({ switchToAdapter }: { switchToAdapter?: boolean }) {
       </Tooltip>
       <Tooltip content="Runs a REAL 3-node governed tree (axor-core IntentLoops over the message bus): the scraper's web taint is carried up two delegation hops and the orchestrator's export is denied — containment, live.">
         <button
-          onClick={() => spawnTree.mutate()}
+          onClick={() => spawnTreeOnce()}
           disabled={spawnTree.isPending}
           style={btn({ color: C.text, borderColor: C.steel, fontSize: 12, padding: "8px 14px" })}
         >
@@ -1207,6 +1210,7 @@ function SayToAgent({ nodeId }: { nodeId: string }) {
     mutationFn: () => api.sayToAgent(nodeId, text.trim()),
     onSuccess: () => { setText(""); void qc.invalidateQueries({ queryKey: ["said", nodeId] }); },
   });
+  const sendOnce = useOneAtATime(send);
   const notes = (said.data?.notes ?? []).filter((n) => !n.pair && !n.from_node).slice(-3);
   return (
     <div data-testid="say-to-agent" className="mt-4" style={{ fontFamily: MONO, fontSize: 11, color: C.mut }}>
@@ -1221,11 +1225,11 @@ function SayToAgent({ nodeId }: { nodeId: string }) {
       ))}
       <div className="flex gap-2 items-start">
         <textarea value={text} onChange={(e) => setText(e.target.value)} rows={2} aria-label="say to the agent"
-          onKeyDown={(e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && text.trim()) send.mutate(); }}
+          onKeyDown={(e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && text.trim()) sendOnce(); }}
           placeholder="e.g. use the existing token table, not a new one"
           style={{ flex: 1, background: C.bg, border: `1px solid ${C.line}`, borderRadius: 4, color: C.text,
                    fontFamily: "inherit", fontSize: 12, padding: "6px 8px", outline: "none", resize: "vertical" }} />
-        <button data-testid="say-send" onClick={() => send.mutate()} disabled={!text.trim() || send.isPending}
+        <button data-testid="say-send" onClick={() => sendOnce()} disabled={!text.trim() || send.isPending}
           style={btn({ fontSize: 11, padding: "6px 12px", color: text.trim() ? C.text : C.dim })}>send</button>
       </div>
       <div style={{ color: C.dim, fontSize: 10.5, marginTop: 4 }}>
@@ -1317,6 +1321,7 @@ function NotYours({ developer, nodeId, hasTeam }: { developer: string; nodeId: s
     mutationFn: () => api.askToPair(nodeId),
     onSuccess: () => void qc.invalidateQueries({ queryKey: ["pair-requests"] }),
   });
+  const askOnce = useOneAtATime(ask);
   return (
     <div data-testid="not-your-session" className="mb-3" style={{ fontFamily: MONO, fontSize: 11.5, color: C.mut, lineHeight: 1.7 }}>
       {developer}'s session — they, or an owner or admin, pause and stop it.
@@ -1329,7 +1334,7 @@ function NotYours({ developer, nodeId, hasTeam }: { developer: string; nodeId: s
           ) : mineReq?.status === "pending" ? (
             <span data-testid="asked-to-pair" style={{ color: C.dim }}>asked to pair — {developer} is told in their agent</span>
           ) : (
-            <button onClick={() => ask.mutate()} disabled={ask.isPending} data-testid="ask-to-pair"
+            <button onClick={() => askOnce()} disabled={ask.isPending} data-testid="ask-to-pair"
               style={btn({ fontSize: 11, padding: "4px 12px" })}>
               {mineReq?.status === "declined" ? "ask to pair again" : "ask to pair — watch it live"}
             </button>

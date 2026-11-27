@@ -15,6 +15,7 @@ import { C, MONO, btn } from "../theme";
 import { HowItWorks } from "../components/MachineCommand";
 import { useWorkStarted } from "../workStarted";
 import { localTime } from "../time";
+import { useOneAtATime } from "../oneAtATime";
 
 const label: React.CSSProperties = {
   fontFamily: MONO, fontSize: 10.5, color: C.dim, letterSpacing: "0.1em", marginBottom: 8,
@@ -123,6 +124,7 @@ function RepoMemory({ repo, freshDays }: { repo: MemoryRepo; freshDays: number }
     mutationFn: () => api.addMemoryNote(repo.repo, note.trim()),
     onSuccess: () => { setNote(""); void qc.invalidateQueries({ queryKey: ["memory"] }); },
   });
+  const addOnce = useOneAtATime(add);
   const given = new Set(repo.given_ids);
   // the product's example is read, never changed: its switches, the
   // workspace-wide rotation and a note all wrote into the real workspace (QA-005)
@@ -202,11 +204,11 @@ function RepoMemory({ repo, freshDays }: { repo: MemoryRepo; freshDays: number }
         </div>
         <div className="flex gap-2 items-center flex-wrap">
           <input value={note} onChange={(e) => setNote(e.target.value)} maxLength={NOTE_MAX}
-            onKeyDown={(e) => e.key === "Enter" && note.trim() && add.mutate()}
+            onKeyDown={(e) => e.key === "Enter" && note.trim() && addOnce()}
             placeholder="e.g. run migrations with --dry-run first" aria-label="note for every agent"
             style={{ flex: 1, minWidth: 260, background: C.bg, border: `1px solid ${C.line}`, borderRadius: 4,
                      color: C.text, fontSize: 13, padding: "7px 10px", outline: "none" }} />
-          <button onClick={() => add.mutate()} disabled={!note.trim() || add.isPending}
+          <button onClick={() => addOnce()} disabled={!note.trim() || add.isPending}
             style={btn({ color: note.trim() ? C.text : C.dim, fontSize: 11 })}>add the note</button>
         </div>
         {note.length >= NOTE_MAX && (

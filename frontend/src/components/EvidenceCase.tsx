@@ -14,6 +14,7 @@ import { navigate } from "../router";
 import { C, MONO } from "../theme";
 import Tooltip from "./Tooltip";
 import { localTime } from "../time";
+import { useOneAtATime } from "../oneAtATime";
 
 const HEADLINE: Record<string, string> = {
   fabrication_contained: "contained a fabrication at the boundary",
@@ -145,6 +146,7 @@ export default function EvidenceCase({
       });
     },
   });
+  const shareOnce = useOneAtATime(share);
 
   return (
     <div style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 8, overflow: "hidden" }}>
@@ -182,7 +184,7 @@ export default function EvidenceCase({
           </Tooltip>
           <KeepAsTest runId={runId} testId="case-keep" />
           <Tooltip content="Copy a revocable permalink to just this case — one page, scoped token, no access to the rest of the workspace. Revoke it any time.">
-            <button onClick={() => share.mutate()} style={action(copied ? C.green : C.mut)}>
+            <button onClick={() => shareOnce()} style={action(copied ? C.green : C.mut)}>
               {copied ? <Check size={11} /> : <Share2 size={11} />} {copied ? "link copied" : "Share"}
             </button>
           </Tooltip>

@@ -14,6 +14,7 @@ import { untrustedFields } from "../policyConfig";
 import ScanTools from "./ScanTools";
 import { C, MONO, btn } from "../theme";
 import { IdentityLogin } from "../tabs/Settings";
+import { useOneAtATime } from "../oneAtATime";
 import { useWorkStarted } from "../workStarted";
 
 type Klass = ToolKlass;
@@ -120,6 +121,7 @@ export default function GuardOnboarding() {
     mutationFn: () => api.createKey(["ingest"], `node ${nodeId}`, nodeId),
     onSuccess: (k) => setKey(k.secret),
   });
+  const mintOnce = useOneAtATime(mint);
   const manifests = useMutation({
     mutationFn: () => api.wrapManifests(tools.map((t) => ({
       id: t.name, source: policy[t.name]?.source ?? t.url, description: "",
@@ -271,7 +273,7 @@ export default function GuardOnboarding() {
           <input value={port} onChange={(e) => setPort(e.target.value.replace(/[^\d]/g, "").slice(0, 5))}
             aria-label="proxy port" style={{ ...input, width: 64 }} />
           {needsKey && !key && (
-            <button onClick={() => mint.mutate()} disabled={!nodeId.trim() || mint.isPending} data-testid="guard-mint"
+            <button onClick={() => mintOnce()} disabled={!nodeId.trim() || mint.isPending} data-testid="guard-mint"
               style={btn({ color: C.steel, borderColor: C.steel, fontSize: 11, padding: "4px 10px" })}>
               {mint.isPending ? "…" : "create the key"}
             </button>

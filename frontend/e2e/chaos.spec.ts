@@ -29,8 +29,13 @@ test("a broken tool, what the agent said, and arming one on a live agent", async
   const live = page.getByTestId("chaos-live");
   await live.getByRole("button", { name: node }).click();
   await live.getByLabel("how to break it").selectOption("corrupt_retrieval");
-  await live.getByTestId("chaos-arm").click();
+  // a double-click arms once (the QA-045/087/101 sweep: a create button
+  // took the second click of a double-click before it turned disabled)
+  let arms = 0;
+  await page.route("**/v1/chaos/arm", async (r) => { arms += 1; await new Promise((ok) => setTimeout(ok, 300)); await r.continue(); });
+  await live.getByTestId("chaos-arm").dblclick();
   await expect(page.getByTestId("chaos-armed")).toContainText(`armed: ${node} — send_email, poisoning its results`);
+  expect(arms).toBe(1);
 
   // the schedule is Team: shown, locked, with the way to it
   await expect(page.getByTestId("chaos-schedule")).toContainText("part of Team");

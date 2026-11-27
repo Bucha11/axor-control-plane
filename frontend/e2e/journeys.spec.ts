@@ -56,6 +56,24 @@ test.describe("three ways in", () => {
     await expect(page.getByTestId("cmd-connect")).toHaveCount(0);
   });
 
+  test("a double-click on create the key makes one key", async ({ page }) => {
+    // QA-045: the second click of a double-click got through before the button
+    // turned disabled — two keys minted, the second secret never shown
+    await setConnection(page, { mode: "none", apiToken: "ax_e2e_member" });
+    await page.route("**/v1/auth/status", (r) => r.fulfill({ json: { auth_enabled: true, authenticated: true, scopes: ["read", "ingest"] } }));
+    let posts = 0;
+    await page.route("**/v1/keys/mine", async (r) => {
+      if (r.request().method() !== "POST") return r.fulfill({ json: [] });
+      posts += 1;
+      await new Promise((ok) => setTimeout(ok, 300));
+      await r.fulfill({ status: 201, json: { key_id: `k_${posts}`, secret: `ak_secret${posts}`, scopes: ["ingest"], node_id: null } });
+    });
+    await goHash(page, "connect?for=coding");
+    await page.getByTestId("mint-coding-key").dblclick();
+    await expect(page.getByTestId("cmd-connect")).toContainText("--key ak_secret1");
+    expect(posts).toBe(1);
+  });
+
   test("on an open plane no key is asked for", async ({ page }) => {
     // a fresh plane: no session has reported yet (other specs share this one)
     await page.route("**/v1/plane/nodes", (route) => route.fulfill({ json: [] }));

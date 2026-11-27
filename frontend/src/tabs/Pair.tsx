@@ -16,6 +16,7 @@ import { HowItWorks } from "../components/MachineCommand";
 import { useApp } from "../store";
 import { useMine } from "../team";
 import { useWorkStarted } from "../workStarted";
+import { useOneAtATime } from "../oneAtATime";
 
 const label: React.CSSProperties = {
   fontFamily: MONO, fontSize: 10.5, color: C.dim, letterSpacing: "0.1em", marginBottom: 8,
@@ -91,6 +92,7 @@ function PairHome({ node }: { node?: string }) {
     mutationFn: (nodeId: string) => api.openPair(nodeId, outside, [...invite]),
     onSuccess: (r) => { void qc.invalidateQueries({ queryKey: ["pairs"] }); navigate(`pair/${r.token}`); },
   });
+  const openOnce = useOneAtATime(open);
   const decide = useMutation({
     mutationFn: ({ id, accept }: { id: number; accept: boolean }) => api.decidePairRequest(id, accept),
     onSuccess: (r) => {
@@ -103,6 +105,7 @@ function PairHome({ node }: { node?: string }) {
     mutationFn: (nodeId: string) => api.askToPair(nodeId),
     onSuccess: () => void qc.invalidateQueries({ queryKey: ["pair-requests"] }),
   });
+  const askOnce = useOneAtATime(ask);
   const started = useWorkStarted();
   const example = useMutation({
     mutationFn: api.seedPair,
@@ -226,7 +229,7 @@ function PairHome({ node }: { node?: string }) {
                     );
                   })()}
                   <span style={{ fontFamily: MONO, fontSize: 11, color: C.dim }}>{n.profile?.agent}</span>
-                  <button onClick={() => open.mutate(n.node_id)} disabled={open.isPending}
+                  <button onClick={() => openOnce(n.node_id)} disabled={open.isPending}
                     data-testid={`pair-start-${n.node_id}`} style={btn({ color: C.text, fontSize: 11, padding: "4px 12px" })}>
                     {invite.size ? `start pairing · invite ${invite.size}` : "start pairing"}
                   </button>
@@ -297,7 +300,7 @@ function PairHome({ node }: { node?: string }) {
                   ) : r?.status === "pending" ? (
                     <span data-testid={`pair-asked-${n.node_id}`} style={{ fontFamily: MONO, fontSize: 11, color: C.dim }}>asked — {n.profile?.developer} is told in their agent</span>
                   ) : (
-                    <button onClick={() => ask.mutate(n.node_id)} disabled={ask.isPending}
+                    <button onClick={() => askOnce(n.node_id)} disabled={ask.isPending}
                       data-testid={`pair-ask-${n.node_id}`} style={btn({ fontSize: 11, padding: "4px 12px" })}>
                       {r?.status === "declined" ? "ask again" : "ask to pair"}
                     </button>
@@ -480,6 +483,7 @@ function PairPane({ token }: { token: string }) {
     mutationFn: () => api.sendNote(token, text.trim(), feed.data?.pair.you === "teammate" ? feed.data.pair.node_id : undefined),
     onSuccess: () => { setText(""); void qc.invalidateQueries({ queryKey: ["pair", token] }); },
   });
+  const sendOnce = useOneAtATime(send);
   const command = useMutation({
     mutationFn: (f: PairFeed) => api.command(f.pair.node_id, f.pair.desired_version + 1, { paused: !f.pair.paused }),
     onSuccess: () => void qc.invalidateQueries({ queryKey: ["pair", token] }),
@@ -648,12 +652,12 @@ function PairPane({ token }: { token: string }) {
 
       <div className="px-4 py-3" style={{ borderTop: `1px solid ${C.line}` }}>
         <textarea value={text} onChange={(e) => setText(e.target.value)} rows={2} aria-label="note to the agent"
-          onKeyDown={(e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && text.trim()) send.mutate(); }}
+          onKeyDown={(e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && text.trim()) sendOnce(); }}
           placeholder={teammate ? "a note to the agent — e.g. the test needs the fake limiter from conftest" : "a suggestion to the agent"}
           style={{ width: "100%", background: C.bg, border: `1px solid ${C.line}`, borderRadius: 6, color: C.text,
                    fontFamily: "inherit", fontSize: 13, padding: "8px 10px", outline: "none", resize: "vertical" }} />
         <div className="flex items-center gap-3 mt-2 flex-wrap">
-          <button onClick={() => send.mutate()} disabled={!text.trim() || send.isPending} data-testid="pair-send"
+          <button onClick={() => sendOnce()} disabled={!text.trim() || send.isPending} data-testid="pair-send"
             style={btn({ color: text.trim() ? C.text : C.dim, fontSize: 11, padding: "5px 12px" })}>send to the agent</button>
           <span style={{ fontSize: 11.5, color: C.dim, lineHeight: 1.5, flex: 1, minWidth: 200 }}>
             {teammate

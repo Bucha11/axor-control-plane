@@ -23,6 +23,7 @@ import { useCanAdmin } from "../team";
 import { errorWords } from "../refusal";
 import { agentLabel } from "../agentName";
 import { useWorkStarted } from "../workStarted";
+import { useOneAtATime } from "../oneAtATime";
 
 
 /** One line of whatever the agent claimed or the tool returned. */
@@ -412,6 +413,7 @@ function AllowExactly({ item }: { item: IncidentItem }) {
       void api.setIncidentStatus(item.id, "not_a_problem").then(() => qc.invalidateQueries({ queryKey: ["incidents"] }));
     },
   });
+  const addOnce = useOneAtATime(add);
   const rule = rules.data?.catalog?.find((r) => r.id === item.cause && !r.fixed);
   if (!canAdmin) return null;
   if (item.origin === "web_page" && item.cause === "outside_text") {
@@ -440,7 +442,7 @@ function AllowExactly({ item }: { item: IncidentItem }) {
             style={{ ...fieldSmall, flex: 1, minWidth: 200 }} />
           <input aria-label="why" value={note} onChange={(e) => setNote(e.target.value)} placeholder="why (optional)"
             style={{ ...fieldSmall, width: 140 }} />
-          <button data-testid="allow-exactly-save" disabled={!value.trim() || add.isPending} onClick={() => add.mutate()}
+          <button data-testid="allow-exactly-save" disabled={!value.trim() || add.isPending} onClick={() => addOnce()}
             style={{ ...small, border: `1px solid ${C.amber}`, color: C.amber }}>allow for the team</button>
           <button onClick={() => setOpen(false)} style={small}>cancel</button>
           <div style={{ width: "100%", color: C.dim, fontSize: 10.5 }}>

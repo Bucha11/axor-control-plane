@@ -383,6 +383,27 @@ test.describe("coding agents: their menu, and trying a skill", () => {
     await expect(page).toHaveURL(/#\/explain\/ex_mem_/);
   });
 
+  test("team memory: a double-click on add the note adds one note", async ({ page }) => {
+    // QA-101: the second click of a double-click got through before the button
+    // turned disabled — two notes, both given to every agent
+    const repo = { repo: "r-e2e-notes", label: "e2e/notes", items: [], preview: "", given_ids: [], sessions_given: 0,
+                   version: "v0", changes: [], drift: null, given: true };
+    await page.route("**/v1/memory", (r) => r.fulfill({ json: { repos: [repo], fresh_days: 30, plan_tier: "free" } }));
+    let posts = 0;
+    await page.route("**/v1/memory/notes", async (r) => {
+      posts += 1;
+      await new Promise((ok) => setTimeout(ok, 300));
+      await r.fulfill({ status: 201, json: { id: posts } });
+    });
+    await setConnection(page, { mode: "demo" });
+    await goHash(page, "memory");
+    const view = page.getByTestId("team-memory");
+    await view.getByLabel("note for every agent").fill("The payments module is frozen.");
+    await view.getByRole("button", { name: "add the note" }).dblclick();
+    await expect(view.getByLabel("note for every agent")).toHaveValue("");
+    expect(posts).toBe(1);
+  });
+
   test("team memory drift: agents did worse after a change — on the memory page, in Incidents, context health and Replay", async ({ page, request }) => {
     const B = "http://127.0.0.1:8400";
     const tag = Math.random().toString(36).slice(2, 8);
