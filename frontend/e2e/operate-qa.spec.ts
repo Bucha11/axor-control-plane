@@ -241,3 +241,45 @@ test("the proxy's test run keeps its setup and tools across a reload; a long nam
   await expect(page.getByTestId("prod-way-chooser")).toHaveCount(0);
   await request.put(`${BACKEND}/v1/policy`, { data: { tools: {} } });
 });
+
+test.describe("signing in (QA-052, QA-053)", () => {
+  const ok = (body: unknown) => (route: import("@playwright/test").Route) => route.fulfill({ json: body });
+  const user = { user_id: "usr_1", email: "ada.lovelace.long.address@acme-analytical-engines.io" };
+
+  test("the account menu's log out sits on one line, at 1366 and at 390", async ({ page }) => {
+    await setConnection(page, { mode: "adapter" });
+    await page.route("**/identity/v1/login", ok({
+      access_token: "acc-token", refresh_token: "ref-token", token_type: "Bearer", expires_in: 900,
+      user, org: { org_id: "org_1", role: "owner", tier: "community" } }));
+    await page.route("**/identity/v1/me", ok({ user, active_org: "org_1", role: "owner",
+      memberships: [{ org_id: "org_1", role: "owner", name: "Acme", tier: "coding" }] }));
+    await page.route("**/identity/v1/orgs/org_1/members", ok({ members: [] }));
+    await goHash(page, "settings");
+    await page.getByLabel("email", { exact: true }).fill(user.email);
+    await page.getByLabel("password").fill("correct horse");
+    await page.getByRole("button", { name: "log in", exact: true }).click();
+    await goHash(page, "govern");
+    for (const width of [1366, 390]) {
+      await page.setViewportSize({ width, height: 844 });
+      await page.getByRole("button", { name: user.email }).click();
+      const out = page.getByRole("dialog", { name: "account" }).getByRole("button", { name: "log out" });
+      await expect(out).toBeVisible();
+      const box = (await out.boundingBox())!;
+      expect(box.height, `log out at ${width}`).toBeLessThan(28);
+      await page.keyboard.press("Escape");
+      await goHash(page, width === 1366 ? "evidence" : "govern");
+    }
+  });
+
+  test("a log in with an address that is not one says so", async ({ page }) => {
+    let sent = 0;
+    await page.route("**/identity/v1/login", (r) => { sent += 1; return r.fulfill({ status: 401, json: {} }); });
+    await setConnection(page, { mode: "adapter" });
+    await goHash(page, "settings");
+    await page.getByLabel("email", { exact: true }).fill("<img src=x onerror=alert(1)>@example.com");
+    await page.getByLabel("password").fill("correct horse");
+    await page.getByRole("button", { name: "log in", exact: true }).click();
+    await expect(page.getByText("that is not an e-mail address we can send to")).toBeVisible();
+    expect(sent).toBe(0);
+  });
+});

@@ -72,14 +72,14 @@ function EmailStatus() {
   const resend = useMutation({ mutationFn: () => api.resendVerification(here()) });
   if (!canMail || me.data?.user.email_verified !== false) return null;
   return (
-    <div className="flex items-center gap-2 mb-2" data-testid="email-unverified"
+    <div className="flex items-center gap-2 mb-2 flex-wrap" data-testid="email-unverified"
       style={{ fontFamily: MONO, fontSize: 11, color: C.amber }}>
       e-mail not confirmed — alert mail goes only to a confirmed address
       {resend.isSuccess ? (
         <span style={{ color: C.green }}>· link sent to {resend.data.sent_to}</span>
       ) : (
         <button onClick={() => resend.mutate()} disabled={resend.isPending}
-          style={btn({ color: C.mut, fontSize: 10.5, padding: "2px 8px" })}>
+          style={btn({ color: C.mut, fontSize: 10.5, padding: "2px 8px", whiteSpace: "nowrap" })}>
           {resend.isPending ? "…" : "resend link"}
         </button>
       )}
@@ -931,8 +931,9 @@ export function IdentityLogin({ onDone, onSignedUp, initialMode = "login", compa
   if (identityEmail) {
     return (
       <>
-      <div className="flex items-center gap-2 mb-3" style={{ fontFamily: MONO, fontSize: 11.5 }}>
-        <span style={{ color: C.green }}>● signed in as {identityEmail}</span>
+      {/* the button keeps its label on one line: "log / out" (QA-052) */}
+      <div className="flex items-center gap-2 mb-3 flex-wrap" style={{ fontFamily: MONO, fontSize: 11.5 }}>
+        <span style={{ color: C.green, minWidth: 0, overflowWrap: "anywhere" }}>● signed in as {identityEmail}</span>
         <button
           onClick={() => {
             void logout(useApp.getState().refreshToken);
@@ -941,7 +942,7 @@ export function IdentityLogin({ onDone, onSignedUp, initialMode = "login", compa
             qc.clear();
             onDone?.();
           }}
-          style={btn({ color: C.mut, fontSize: 10.5, padding: "3px 10px" })}>
+          style={btn({ color: C.mut, fontSize: 10.5, padding: "3px 10px", whiteSpace: "nowrap" })}>
           log out
         </button>
       </div>
@@ -986,10 +987,18 @@ export function IdentityLogin({ onDone, onSignedUp, initialMode = "login", compa
   const canSubmit = mode === "forgot" ? email : email && password && (mode === "login" || orgName);
 
   return (
+    // noValidate: the browser's own bubble for a bad address showed nothing
+    // here and sent nothing — the check is ours, with words (QA-053)
     <form
+      noValidate
       onSubmit={(e) => {
         e.preventDefault();
-        if (canSubmit && !busy) submit();
+        if (!canSubmit || busy) return;
+        if (!/^[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+$/.test(email.trim())) {
+          setError("that is not an e-mail address we can send to");
+          return;
+        }
+        submit();
       }}
       className="mb-3"
       style={{ display: "flex", flexDirection: "column", gap: 8 }}
