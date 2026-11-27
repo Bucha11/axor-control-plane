@@ -368,3 +368,11 @@ async def test_a_renewed_license_moves_the_plan_forward_with_no_caller(tmp_path,
 
         assert await renew(lic()) == 200
         assert await plan() == ("business", "2999-01-01")
+
+        # QA-130: an upgrade bought mid-period is issued to the same end date —
+        # it moves the plan up; the lower one, replayed at that date, does not
+        assert await renew(lic(workspace_tier="team")) == 200
+        assert await plan() == ("team", "2999-01-01")
+        assert await renew(lic(workspace_tier="business")) == 409
+        assert await renew(lic(workspace_tier="team")) == 409          # the same one again
+        assert await plan() == ("team", "2999-01-01")

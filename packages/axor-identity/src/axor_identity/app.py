@@ -866,12 +866,20 @@ def create_app(database_url: str | None = None, *,
         if _now_iso()[:10] > lic.expires_at:
             raise HTTPException(403, f"this license expired on {lic.expires_at}")
         held = org.get("tier_expires")
-        if held and lic.expires_at <= held:
+        # Forward in time, or up the ladder within the same period: an upgrade
+        # bought mid-period is issued to the same end date, and refusing it
+        # left identity on the old plan — Business paid for, single sign-on and
+        # SCIM still locked (QA-130). An older, lower license replayed at the
+        # same date is still refused.
+        upgrade = (held and lic.expires_at == held
+                   and licensing.rank(lic.tier) > licensing.rank(str(org.get("tier") or "")))
+        if held and lic.expires_at <= held and not upgrade:
             raise HTTPException(409, f"this license ends on {lic.expires_at}, not after "
-                                     f"the plan in force ({held}) — renewal only moves forward")
+                                     f"the plan in force ({held}), and is not a higher "
+                                     "plan — renewal only moves forward")
         await store.set_org_tier(org_id, lic.tier, lic.expires_at)
-        await _on_trail(org_id, "plan_renewed", lic.tier, who="license renewal",
-                        tier=lic.tier, until=lic.expires_at)
+        await _on_trail(org_id, "plan_upgraded" if upgrade else "plan_renewed", lic.tier,
+                        who="license renewal", tier=lic.tier, until=lic.expires_at)
         return {"org_id": org_id, "tier": lic.tier, "expires_at": lic.expires_at}
 
     def _sso_view(org_id: str, held: dict | None, provable: set[str],

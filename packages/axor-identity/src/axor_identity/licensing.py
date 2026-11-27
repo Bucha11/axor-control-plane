@@ -20,6 +20,11 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 ORDER = {"community": 0, "coding": 1, "business": 2, "team": 3, "security": 4, "enterprise": 5}
 
 
+def rank(tier: str) -> int:
+    """Where a plan sits on the ladder; -1 for none or unknown."""
+    return ORDER.get(tier, -1)
+
+
 class LicenseError(Exception):
     pass
 
