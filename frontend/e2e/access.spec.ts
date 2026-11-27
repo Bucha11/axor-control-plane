@@ -133,10 +133,17 @@ test.describe("access (QA, 0.7.3)", () => {
 
   test("on Replay a viewer is offered neither making the rule nor keeping the run (QA-196)", async ({ page, request }) => {
     expect((await request.post(`${BACKEND}/v1/demo/seed-prod-incident`)).ok()).toBeTruthy();
+    // a run of the workspace's own agent (the example's events, recorded as
+    // its own): on the example itself nothing is offered to anyone (QA-194)
+    const node = `support-agent-view-${Date.now().toString(36)}`;
+    const events = (await (await request.get(`${BACKEND}/v1/runs/ex_prod_drop/events`)).json()) as Record<string, unknown>[];
+    const own = await request.post(`${BACKEND}/v1/ingest/${node}-drop`, { data: { node_id: node, scenario: "custom",
+      events: events.map(({ id: _id, run_id: _run, ...e }) => ({ ...e, node_id: node })) } });
+    expect(own.ok(), await own.text()).toBeTruthy();
     await playRole(page, VIEWER);
     const writes: string[] = [];
     page.on("request", (r) => { if (r.method() !== "GET" && /\/v1\/(pins|policy)/.test(r.url())) writes.push(r.url()); });
-    await goHash(page, "explain/ex_prod_drop?seq=4&node=support-agent-prod");
+    await goHash(page, `explain/${node}-drop?seq=4&node=${node}`);
     await page.getByTestId("whatif-outside").click();
     await expect(page.getByTestId("make-rule-viewer"))
       .toHaveText("as a viewer you can't make it a rule — an owner, admin or member can");

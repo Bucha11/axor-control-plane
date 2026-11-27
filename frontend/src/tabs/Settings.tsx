@@ -1728,8 +1728,10 @@ function Billing({ coding, prod }: { coding: boolean; prod: boolean }) {
   const { plan, current, history, if_paid } = q.data;
   const months = [...(current ? [current] : []), ...history];
   // the paid plan that fits: the cheapest of those that serve this workspace
+  // — the coding plan for coding agents alone, Team or Security for production
+  // agents alone, the cheapest of all for both
   const rungs = if_paid.filter((e) =>
-    e.tier === "coding" ? coding : e.tier === "security" ? prod && !coding : true);
+    coding && prod ? e.tier !== "security" : coding ? e.tier === "coding" : e.tier !== "coding");
   const fit = rungs.length
     ? rungs.reduce((a, b) => ((b.total_cents ?? 0) < (a.total_cents ?? 0) ? b : a))
     : null;

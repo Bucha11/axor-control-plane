@@ -209,7 +209,9 @@ const AGENT_PY = [
 ].join("\n");
 
 test.describe("one record of what the tools do", () => {
-  test("the guard finds the tools in your code and asks where each lives", async ({ page }) => {
+  test("the guard finds the tools in your code and asks where each lives", async ({ page, request }) => {
+    // the workspace's tool policy is shared by every spec: start from an empty one
+    await resetPolicy(request);
     await goHash(page, "connect?for=production");
     await page.getByTestId("prod-way-proxy").click();
     await page.getByTestId("guard-scan").setInputFiles({
