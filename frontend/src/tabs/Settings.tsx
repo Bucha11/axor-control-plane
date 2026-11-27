@@ -841,7 +841,7 @@ function Team({ orgId, isAdmin }: { orgId: string; isAdmin: boolean }) {
                   see the plan →
                 </button>
                 <button type="button" data-testid="invite-as-viewer"
-                  onClick={() => { setRole("viewer"); setOffer(false); invite.mutate("viewer"); }}
+                  onClick={() => { setRole("viewer"); setOffer(false); inviteOnce("viewer"); }}
                   style={{ background: "none", border: "none", padding: 0, cursor: "pointer", color: C.steel, fontFamily: MONO, fontSize: 11 }}>
                   or invite them as a viewer — free, they watch
                 </button>

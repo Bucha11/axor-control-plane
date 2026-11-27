@@ -555,6 +555,7 @@ function FinishTest({ runId, calledTools, onDone }: {
     mutationFn: () => api.submitClaim(runId, text, said, calledTools),
     onSuccess: () => onDone(),
   });
+  const submitOnce = useOneAtATime(submit);
   const base = (import.meta.env.VITE_PROXY_PUBLIC_URL ?? "http://127.0.0.1:8401").replace(/\/$/, "");
   const snippet = `curl -X POST ${base}/axor/runs/${runId}/claim \\\n  -H 'content-type: application/json' \\\n  -d '{"text": "<the agent's answer>", "claims": {"tools_succeeded": ["<tool it says worked>"]}}'`;
   const toggle = (t: string) => setSaid((s) => s.includes(t) ? s.filter((x) => x !== t) : [...s, t]);
@@ -580,7 +581,7 @@ function FinishTest({ runId, calledTools, onDone }: {
           </label>
         ))}
       </div>
-      <button onClick={() => submit.mutate()} disabled={!text.trim() || submit.isPending}
+      <button onClick={() => submitOnce()} disabled={!text.trim() || submit.isPending}
         style={btn({ color: C.bg, background: C.green, border: `1px solid ${C.green}`, fontSize: 12, fontWeight: 700, padding: "6px 14px" })}>
         {submit.isPending ? <Loader2 size={13} className="animate-spin" /> : null} Check the answer
       </button>

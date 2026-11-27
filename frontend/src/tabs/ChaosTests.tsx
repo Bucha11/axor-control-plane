@@ -12,6 +12,7 @@ import { useApp } from "../store";
 import Coach from "../components/Coach";
 import { agentLabel, liveAgents } from "../agentName";
 import { useWorkStarted } from "../workStarted";
+import { useOneAtATime } from "../oneAtATime";
 
 export const MODE_WORDS: Record<string, string> = {
   silent_fail: "returning an error",
@@ -172,6 +173,7 @@ function LiveArm({ agents, modes, onArmed }: { agents: string[]; modes: string[]
     mutationFn: () => api.chaosArm(picked, tool.trim() || undefined, mode || undefined),
     onSuccess: onArmed,
   });
+  const armOnce = useOneAtATime(arm);
   return (
     <div style={card} data-testid="chaos-live">
       <div style={{ fontSize: 13.5, fontWeight: 600, marginBottom: 4 }}>On your live agents, next run</div>
@@ -200,7 +202,7 @@ function LiveArm({ agents, modes, onArmed }: { agents: string[]; modes: string[]
               {modes.map((m) => <option key={m} value={m}>{MODE_WORDS[m] ?? m}</option>)}
             </select>
           </div>
-          <button data-testid="chaos-arm" onClick={() => arm.mutate()} disabled={!picked.length || arm.isPending}
+          <button data-testid="chaos-arm" onClick={() => armOnce()} disabled={!picked.length || arm.isPending}
             style={btn({ color: picked.length ? C.text : C.dim, borderColor: picked.length ? C.steel : C.line, fontSize: 11.5, padding: "5px 12px" })}>
             {arm.isPending ? "…" : "break it on the next run"}
           </button>
