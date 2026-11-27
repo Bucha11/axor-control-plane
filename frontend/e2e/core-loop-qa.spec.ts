@@ -124,3 +124,34 @@ test.describe("operator keys (QA-173)", () => {
     await expect(panel.getByText(/^vouched for by ada@acme.io#377c9673$/)).toHaveCount(0);
   });
 });
+
+test("a command another tab beat to the agent is named and can be sent again (QA-172)", async ({ page, request }) => {
+  const node = `gov-race-${hex6()}`;
+  await seedNode(request, node);
+  let calls = 0;
+  await page.route(`**/v1/plane/${node}/command`, async (r) => {
+    calls += 1;
+    if (calls === 1) return r.fulfill({ status: 409, json: { detail: "stale version 1; expected 2" } });
+    return r.continue();
+  });
+  await setConnection(page, { mode: "adapter" });
+  await goHash(page, `govern/${node}`);
+  await page.getByRole("button", { name: /Pause/ }).click();
+  const lost = page.getByTestId("command-lost");
+  await expect(lost).toContainText("not sent: pause — someone else changed this agent first");
+  await expect(page.getByText(/stale version/)).toHaveCount(0);
+  await lost.getByRole("button", { name: "send pause again" }).click();
+  await expect(lost).toHaveCount(0);
+  await expect.poll(async () => {
+    const all = await (await request.get(`${BACKEND}/v1/plane/nodes`)).json() as
+      { node_id: string; desired: { state: { paused?: boolean } } | null }[];
+    return all.find((n) => n.node_id === node)?.desired?.state.paused;
+  }).toBe(true);
+});
+
+test("an address naming no agent says there is none (QA-176)", async ({ page, request }) => {
+  await seedNode(request, `gov-real-${hex6()}`);
+  await setConnection(page, { mode: "adapter" });
+  await goHash(page, "govern/no-such-node-qa");
+  await expect(page.getByTestId("no-such-agent")).toContainText("There is no agent “no-such-node-qa” on the plane.");
+});

@@ -6,7 +6,7 @@ import { useHasTeam, useMay, useMine } from "../team";
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Circle, Gauge, GitBranch, Lock, Pause, Play, Square, Syringe } from "lucide-react";
-import { ActivityEvent, api, FleetRow, IncidentItem, NodeInfo, NodeRun, type LockReason, type TreeSummary } from "../api";
+import { ActivityEvent, api, ApiError, FleetRow, IncidentItem, NodeInfo, NodeRun, type LockReason, type TreeSummary } from "../api";
 import { describeAck } from "./RunControl";
 import Coverage from "../components/Coverage";
 import TopologyGraph, { PeerCard } from "../components/TopologyGraph";
@@ -454,7 +454,9 @@ function ControlBody({ focusNode, testBench, examplesOffered }: {
     // commanded — a traced tree's children are in the topology and not in that
     // list. Gating this query on the graph lens meant Control said "no governed
     // nodes connected yet" while it held the whole tree.
-    enabled: lens === "graph" || list.length === 0,
+    enabled: lens === "graph" || list.length === 0
+      // an address naming an agent the list does not have: is it traced, or none?
+      || (sel != null && !everyone.some((n) => n.node_id === sel)),
   });
   // the topology draws every node that traced here — a skill's dry run too,
   // which is not an agent to operate (see `everyone` above)
@@ -470,6 +472,9 @@ function ControlBody({ focusNode, testBench, examplesOffered }: {
   };
   const [more, setMore] = useState(false);
   const [cmdError, setCmdError] = useState<string | null>(null);
+  // a command another tab (or person) beat to the agent: named, and offered
+  // again on the state as it is now (QA-172)
+  const [lost, setLost] = useState<{ nodeId: string; state: Record<string, unknown> } | null>(null);
   const [filter, setFilter] = useState<Status | "all">("all");
   const fleetQ = useQuery({ queryKey: ["fleet"], queryFn: api.fleet, refetchInterval: REFETCH_MS });
   // a tree's agents fold into one row: which node belongs to which tree run
@@ -507,9 +512,18 @@ function ControlBody({ focusNode, testBench, examplesOffered }: {
     }) => api.command(nodeId, version, state),
     onSuccess: () => {
       setCmdError(null);
+      setLost(null);
       void qc.invalidateQueries({ queryKey: ["nodes"] });
     },
-    onError: (err: Error) => setCmdError(err.message),
+    onError: (err: Error, vars) => {
+      if (err instanceof ApiError && err.status === 409 && /stale version/.test(err.message)) {
+        setCmdError(null);
+        setLost({ nodeId: vars.nodeId, state: vars.state });
+        void qc.invalidateQueries({ queryKey: ["nodes"] });
+        return;
+      }
+      setCmdError(err.message);
+    },
   });
 
   const cascade = useMutation({
@@ -610,6 +624,8 @@ function ControlBody({ focusNode, testBench, examplesOffered }: {
   }
 
   const node = list.find((n) => n.node_id === sel) ?? null;
+  const unknownSel = sel != null && !node && !everyone.some((n) => n.node_id === sel)
+    && topo.isSuccess && !(topoData?.nodes ?? []).some((n) => n.node_id === sel);
   const benchOk = isTestBench(node, testBench);
 
   const desired = node?.desired ?? null;
@@ -626,6 +642,7 @@ function ControlBody({ focusNode, testBench, examplesOffered }: {
   const send = (state: Record<string, unknown>) => {
     if (!node) return;
     setCmdError(null);
+    setLost(null);
     command.mutate({
       nodeId: node.node_id,
       version: (node.desired?.version ?? 0) + 1,
@@ -721,6 +738,15 @@ function ControlBody({ focusNode, testBench, examplesOffered }: {
       {fleetExampleOnly(list.map((n) => n.node_id)) && (
         <FleetExampleStory onPick={pick} onGraph={() => setLens("graph")} />
       )}
+      {unknownSel && (
+        // opened by an address naming no agent: said, not a fleet with a
+        // stray note under it (QA-176)
+        <div data-testid="no-such-agent" className="mb-3 p-3"
+          style={{ border: `1px solid ${C.amber}`, borderRadius: 8, fontFamily: MONO, fontSize: 11.5, color: C.mut }}>
+          <span style={{ color: C.amber }}>There is no agent “{sel}” on the plane.</span> It may have been removed,
+          or the address is mistyped — the agents there are listed below.
+        </div>
+      )}
       <h1 style={{ fontSize: 22, fontWeight: 650, margin: "0 0 4px" }}>
         {needYou === 0 && (heldStopped + heldPaused) > 0
           ? <>Nothing needs you — {[heldStopped ? `${heldStopped} stopped` : "", heldPaused ? `${heldPaused} paused` : ""]
@@ -775,7 +801,7 @@ function ControlBody({ focusNode, testBench, examplesOffered }: {
       )}
       {/* a traced node that does not report has no panel: its reputation
           stays here, by the graph */}
-      {sel && !node && topoData?.nodes.find((n) => n.node_id === sel)?.kind !== "peer" && (
+      {sel && !node && !unknownSel && topoData?.nodes.find((n) => n.node_id === sel)?.kind !== "peer" && (
         <ReputationCard nodeId={sel} />
       )}
 
@@ -1220,6 +1246,16 @@ function ControlBody({ focusNode, testBench, examplesOffered }: {
           {cmdError && (
             <div className="mt-3" style={{ fontFamily: MONO, fontSize: 11, color: C.red }}>
               {cmdError}
+            </div>
+          )}
+          {lost && lost.nodeId === node.node_id && (
+            <div data-testid="command-lost" className="mt-3" style={{ fontFamily: MONO, fontSize: 11, color: C.amber, lineHeight: 1.6 }}>
+              not sent: {Object.entries(lost.state).map(([k, v]) => stateWords(k, v)).join(", ")} — someone else
+              changed this agent first (another tab, or another operator). What they sent is shown above.{" "}
+              <button disabled={command.isPending} onClick={() => send(lost.state)}
+                style={btn({ color: C.text, borderColor: C.line, fontSize: 11, padding: "2px 10px" })}>
+                send {Object.entries(lost.state).map(([k, v]) => stateWords(k, v)).join(", ")} again
+              </button>
             </div>
           )}
           {cascade.isSuccess && cascade.variables?.nodeId === node?.node_id && (
