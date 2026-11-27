@@ -671,9 +671,14 @@ const inviteUrl = (token: string) =>
  * install sends mail. */
 function Team({ orgId, isAdmin }: { orgId: string; isAdmin: boolean }) {
   const qc = useQueryClient();
-  const members = useQuery({ queryKey: ["org-members", orgId], queryFn: () => api.orgMembers(orgId), retry: false });
+  // while an invite waits, whoever accepts it shows up here by themselves —
+  // asked again every 15 s and when the page is back in view (QA-067)
   const invites = useQuery({ queryKey: ["org-invites", orgId], queryFn: () => api.orgInvites(orgId),
-                             enabled: isAdmin, retry: false });
+                             enabled: isAdmin, retry: false, refetchOnWindowFocus: true,
+                             refetchInterval: (q) => (q.state.data?.invites.length ? 15_000 : false) });
+  const waiting = (invites.data?.invites.length ?? 0) > 0;
+  const members = useQuery({ queryKey: ["org-members", orgId], queryFn: () => api.orgMembers(orgId), retry: false,
+                             refetchOnWindowFocus: true, refetchInterval: waiting ? 15_000 : false });
   const [email, setEmail] = useState("");
   const [role, setRole] = useState("member");
   const [made, setMade] = useState<{ link: string; mailed: boolean; email: string | null } | null>(null);
@@ -806,9 +811,9 @@ function Team({ orgId, isAdmin }: { orgId: string; isAdmin: boolean }) {
           }}
             className="flex items-center gap-2 mt-2">
             <input type="email" value={email} placeholder="their e-mail (optional — or send the link yourself)"
-              onChange={(e) => setEmail(e.target.value)} aria-label="invite email"
+              onChange={(e) => { setEmail(e.target.value); invite.reset(); }} aria-label="invite email"
               style={{ ...INPUT_STYLE, flex: 1 }} />
-            <select value={role} onChange={(e) => setRole(e.target.value)} aria-label="invite role"
+            <select value={role} onChange={(e) => { setRole(e.target.value); invite.reset(); }} aria-label="invite role"
               style={{ ...INPUT_STYLE, width: 100 }}>
               {["member", "admin", "viewer"].map((r) => <option key={r} value={r}>{r}</option>)}
             </select>

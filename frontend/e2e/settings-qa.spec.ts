@@ -124,4 +124,63 @@ test.describe("settings (QA, 0.7.2)", () => {
     await expect(page.getByTestId("vault-token-shown")).toContainText("axv_creds_new");
     expect(calls).toEqual(["POST creds", "DELETE signing"]);
   });
+
+  test("the owner's team list picks up an accepted invite without a reload (QA-067)", async ({ page }) => {
+    await signInAsOwner(page);
+    let accepted = false;
+    await page.route("**/identity/v1/orgs/org_1/members", (r) => r.fulfill({ json: { members: [
+      { user_id: "usr_1", email: "ada@acme.io", role: "owner", since: "2026-01-01" },
+      ...(accepted ? [{ user_id: "usr_2", email: "bob@acme.io", role: "member", since: "2026-11-27" }] : [])] } }));
+    await page.route("**/identity/v1/orgs/org_1/invites", (r) => r.fulfill({ json: { invites: accepted ? [] : [
+      { invite_id: "inv_1", role: "member", email: "bob@acme.io", created_ts: "2026-11-27T10:00:00Z",
+        expires_ts: "2026-12-04T10:00:00Z" }] } }));
+    await logIn(page);
+    await expect(page.getByTestId("invites-open")).toContainText("bob@acme.io");
+    accepted = true;
+    // back to the tab: asked again (and every 15 s while an invite waits)
+    await page.evaluate(() => window.dispatchEvent(new Event("visibilitychange")));
+    await expect(page.getByTestId("member-bob@acme.io")).toBeVisible();
+    await expect(page.getByTestId("invites-open")).toHaveCount(0);
+  });
+
+  test("an invite error goes once its fields change (QA-068)", async ({ page }) => {
+    await signInAsOwner(page);
+    await page.route("**/identity/v1/orgs/org_1/members", (r) => r.fulfill({ json: { members: [
+      { user_id: "usr_1", email: "ada@acme.io", role: "owner", since: "2026-01-01" }] } }));
+    await page.route("**/identity/v1/orgs/org_1/invites", (r) => r.request().method() === "POST"
+      ? r.fulfill({ status: 422, json: { detail: "that is not an e-mail address" } })
+      : r.fulfill({ json: { invites: [] } }));
+    await logIn(page);
+    await page.getByLabel("invite email").fill("bob@acme.io");
+    await page.getByTestId("invite-make").click();
+    await expect(page.getByText("that is not an e-mail address")).toBeVisible();
+    await page.getByLabel("invite role").selectOption("viewer");
+    await expect(page.getByText("that is not an e-mail address")).toHaveCount(0);
+    await page.getByTestId("invite-make").click();
+    await expect(page.getByText("that is not an e-mail address")).toBeVisible();
+    await page.getByLabel("invite email").fill("");
+    await expect(page.getByText("that is not an e-mail address")).toHaveCount(0);
+  });
 });
+
+const SESSION = {
+  access_token: "acc-token", refresh_token: "ref-token", token_type: "Bearer", expires_in: 900,
+  user: { user_id: "usr_1", email: "ada@acme.io" },
+  org: { org_id: "org_1", role: "owner", tier: "community" },
+};
+
+// the identity service is not in the e2e stack: stubbed
+async function signInAsOwner(page: Page): Promise<void> {
+  await page.route("**/identity/v1/login", (r) => r.fulfill({ json: SESSION }));
+  await page.route("**/identity/v1/me", (r) => r.fulfill({ json: {
+    user: SESSION.user, active_org: "org_1", role: "owner",
+    memberships: [{ org_id: "org_1", role: "owner", name: "Acme", tier: "coding" }] } }));
+}
+
+async function logIn(page: Page): Promise<void> {
+  await goHash(page, "settings");
+  await page.getByLabel("email", { exact: true }).fill("ada@acme.io");
+  await page.getByLabel("password").fill("correct horse");
+  await page.getByRole("button", { name: "log in", exact: true }).click();
+  await expect(page.getByText("workspace Acme")).toBeVisible();
+}
