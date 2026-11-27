@@ -99,6 +99,47 @@ def _target_org(body: dict, principal: object) -> str:
     return str(named)
 
 
+@router.post("/plan")
+async def change_plan(body: dict, request: Request, state: StateDep, store: StoreDep,
+                      principal: PrincipalDep) -> dict:
+    """Move this workspace's card subscription to another rung. An upgrade
+    used to be a new checkout and so a second subscription billing beside the
+    first (QA-131); the vendor's billing service changes the one there is and
+    sends the new rung's license back as for any change. The owner's — the
+    plan is what the workspace pays."""
+    from axor_backend import audit, permissions
+    from axor_backend.licensing import held_license_json
+
+    permissions.require_admin(principal)
+    tier = str(body.get("tier") or "")
+    base = state.config.license_renewal_url
+    if not base:
+        raise HTTPException(409, "this plane is not paid for by card — a plan changes "
+                                 "with a new license")
+    org = current_org_id()
+    held = await held_license_json(state, org)
+    if not held:
+        raise HTTPException(409, "this workspace has no plan bought by card to change "
+                                 "— buy one on the pricing page")
+    import httpx  # noqa: PLC0415
+
+    url = base.rstrip("/").removesuffix("/v1/renewal") + "/v1/plan"
+    try:
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            r = await client.post(url, json={"license_json": held, "tier": tier})
+    except httpx.HTTPError as exc:
+        raise HTTPException(502, "the billing service could not be reached — nothing "
+                                 "was changed; try again") from exc
+    if r.status_code != 200:
+        try:
+            detail = r.json().get("detail") or r.text[:200]
+        except ValueError:
+            detail = r.text[:200]
+        raise HTTPException(r.status_code if r.status_code < 500 else 502, str(detail))
+    await audit.record(store, request, "plan_change_requested", tier)
+    return r.json()
+
+
 @router.post("/verify")
 async def license_verify(
     body: dict, state: StateDep, store: StoreDep, config: ConfigDep,

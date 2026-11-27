@@ -2162,6 +2162,12 @@ export const api = {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ enabled, interval_hours: intervalHours, config }),
     }).then((r) => j<{ enabled: boolean; interval_hours: number }>(r)),
+  // move this workspace's card subscription to another rung (QA-131) — the
+  // owner's; the new rung's license follows from the payment provider
+  changePlan: (tier: string) =>
+    af("/v1/license/plan", { method: "POST", headers: { "content-type": "application/json" },
+                             body: JSON.stringify({ tier }) })
+      .then((r) => j<{ from: string; to: string }>(r)),
   licenseStatus: () =>
     af("/v1/license/status").then((r) =>
       j<{

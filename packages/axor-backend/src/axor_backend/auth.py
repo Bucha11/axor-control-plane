@@ -247,6 +247,8 @@ _WRITE_POLICY: tuple[tuple[str, str], ...] = (
     # Verifying a license STORES and ACTIVATES it (app.license_verify), so it
     # changes the deployment's entitlement state — admin, and never open.
     ("/v1/license/verify", "admin"),
+    # changing the plan the workspace pays for is the owner's, like its license
+    ("/v1/license/plan", "admin"),
     # which agent family the free plan keeps: a workspace decision
     ("/v1/license/agent-family", "operate"),
     ("/v1/license/seat-cap", "operate"),   # the workspace's limit on developer seats

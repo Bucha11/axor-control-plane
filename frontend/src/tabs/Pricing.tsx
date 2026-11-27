@@ -8,7 +8,9 @@
 // status). Safety and hobby-scale privacy are free forever; you pay for hosted
 // collaboration, the security workflow, and the size of the governed fleet.
 import { useEffect, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { askConfirm } from "../components/Ask";
+import { useHasScopeKnown } from "../team";
 import { api } from "../api";
 import { C, MONO, btn } from "../theme";
 import Coach from "../components/Coach";
@@ -325,6 +327,49 @@ export default function Pricing() {
                             retry: false, enabled: !guest });
   const org = status.data?.licensed_to;
   const hosted = status.data?.hosted === true;
+  // The plan is the owner's to buy or change (`admin`): a viewer opened the
+  // workspace's checkout and could have bought it a plan (QA-132).
+  const owner = useHasScopeKnown()("admin");
+  const signedIn = !!email;
+  // The plan in force, and whether it is paid by card here: then another rung
+  // is a change of that subscription, not a second one bought beside it
+  // (QA-131), and the rung in force is not offered again (QA-157).
+  const current = status.data?.active ? status.data.workspace_tier : undefined;
+  const byCard = hosted && status.data?.auto_renewal === true
+    && (current === "coding" || current === "business" || current === "team");
+  // After a payment or a change, the new plan arrives from the payment
+  // provider within seconds to a minute: watch for it and say so, instead of
+  // a Pricing that still offers "Get Coding" (QA-133).
+  const qc = useQueryClient();
+  const [waiting, setWaiting] = useState<{ from?: string; until: number } | null>(null);
+  const [payNote, setPayNote] = useState<{ text: string; ok: boolean } | null>(null);
+  useEffect(() => {
+    if (!waiting) return;
+    const t = window.setInterval(() => {
+      if (Date.now() > waiting.until) { setWaiting(null); return; }
+      void qc.invalidateQueries({ queryKey: ["license-status"] });
+    }, 4000);
+    return () => window.clearInterval(t);
+  }, [waiting, qc]);
+  useEffect(() => {
+    if (waiting && current && current !== waiting.from) {
+      setWaiting(null);
+      setPayNote({ text: `${RUNG_NAME[current as Rung] ?? current} is on for this workspace.`, ok: true });
+      void qc.invalidateQueries({ queryKey: ["entitlements"] });
+      void qc.invalidateQueries({ queryKey: ["billing"] });
+    }
+  }, [current, waiting, qc]);
+  const changePlan = async (rung: Rung) => {
+    const from = RUNG_NAME[current as Rung] ?? current;
+    if (!(await askConfirm(`Move this workspace from ${from} to ${RUNG_NAME[rung]}? The same subscription changes, prorated on the card on file — nothing is bought twice.`))) return;
+    try {
+      await api.changePlan(rung);
+      setPayNote(null);
+      setWaiting({ from: current, until: Date.now() + 3 * 60_000 });
+    } catch (e) {
+      setPayNote({ text: (e as Error).message, ok: false });
+    }
+  };
   return (
     <div style={{ maxWidth: 1040, margin: "0 auto" }}>
       <Coach id="pricing" title="Pricing — one ladder">
@@ -367,6 +412,14 @@ export default function Pricing() {
         <Calculator devs={devs} agents={agents} setDevs={setDevs} setAgents={setAgents} calc={calc} />
       )}
 
+      {(waiting || payNote) && (
+        <div data-testid="plan-note" className="mb-3" style={{ fontFamily: MONO, fontSize: 11.5,
+          color: waiting ? C.steel : payNote?.ok ? C.green : C.amber, lineHeight: 1.6 }}>
+          {waiting
+            ? "Waiting for the payment provider — the plan turns on here within a minute; this page updates by itself."
+            : payNote?.text}
+        </div>
+      )}
       <div className="flex gap-4" style={{ flexWrap: "wrap" }}>
         {shown.map((base) => {
           const { cta, ...over } = base.on?.[journey] ?? {};
@@ -377,7 +430,12 @@ export default function Pricing() {
             : t.highlightFor?.includes(journey) ?? false;
           const meta = KIND_META[t.kind];
           const price = cta ? undefined : cardPrice(t);
-          const card = price && org ? { price, org } : undefined;
+          const rung = tierRung(t);
+          const inForce = !!rung && rung === current;
+          // a signed-in member, admin or viewer: the owner chooses the plan
+          const notOwners = !!price && signedIn && status.data !== undefined && !owner;
+          const card = price && org && !inForce && !notOwners ? { price, org } : undefined;
+          const switchTo = card && byCard && rung ? rung : undefined;
           return (
             <div
               key={t.name}
@@ -483,15 +541,26 @@ export default function Pricing() {
                   nothing is due today: the card is kept on file, and the plan is billed per developer at the end of each month
                 </div>
               )}
-              <a
+              {(inForce || notOwners) && (
+                <div data-testid={inForce ? "card-in-force" : "card-owner-only"}
+                  style={{ fontFamily: MONO, fontSize: 10, color: inForce ? C.green : C.dim, marginTop: 8, lineHeight: 1.4 }}>
+                  {inForce ? "your plan" : "the workspace owner chooses the plan"}
+                </div>
+              )}
+              {!(inForce || notOwners) && <a
                 href={cta ? `#/${cta.route}` : ctaHref(t)}
                 onClick={cta
                   ? (e) => { e.preventDefault(); navigate(cta.route); }
+                  : switchTo
+                    ? (e) => { e.preventDefault(); void changePlan(switchTo); }
                   : card
                     ? (e) => {
                       e.preventDefault();
-                      // Paddle.js unreachable: the order link is still a way to pay
-                      openCheckout(card.price, card.org, hosted, email || undefined).catch(() => { window.location.href = ctaHref(t); });
+                      setPayNote(null);
+                      openCheckout(card.price, card.org, hosted, email || undefined)
+                        .then(() => setWaiting({ from: current, until: Date.now() + 5 * 60_000 }))
+                        // the payment page did not load: say so, with the other way (QA-136)
+                        .catch(() => setPayNote({ ok: false, text: "the payment page could not load — an ad or script blocker can stop it; allow cdn.paddle.com and try again, or write to sales@axor.dev" }));
                     }
                     : undefined}
                 data-testid={`cta-${t.name.split(" ")[0].toLowerCase()}`}
@@ -510,8 +579,8 @@ export default function Pricing() {
                   color: meta.color,
                 }}
               >
-                {cta ? cta.label : ctaLabel(t)}
-              </a>
+                {cta ? cta.label : switchTo ? `Switch to ${t.name}` : ctaLabel(t)}
+              </a>}
             </div>
           );
         })}
