@@ -124,18 +124,23 @@ function routeOf(step: TourStep): string {
 }
 
 // Shared launcher: load the side's example data, then start on its first stop.
+// A workspace that chose its journey gets that journey's tour, and the tour
+// never changes it; the connection it switches to the example is put back
+// when the tour ends (QA-215).
 export function useStartTour(): (side?: TourSide) => void {
   const connect = useApp((s) => s.connect);
   const setTourStep = useApp((s) => s.setTourStep);
   const setTourSide = useApp((s) => s.setTourSide);
   const stored = useApp((s) => s.tourSide);
+  const journey = useApp((s) => s.journey);
   const markLearnSeen = useApp((s) => s.markLearnSeen);
   const setJourney = useApp((s) => s.setJourney);
   return useCallback((side?: TourSide) => {
-    const which = side ?? stored;
+    const which = side ?? (journey === "coding" || journey === "production" ? journey : stored);
     markLearnSeen();
     setTourSide(which);
-    setJourney(which);
+    // the first way in a visitor took; a journey already chosen stays
+    if (!journey) setJourney(which);
     const seeds = which === "coding"
       ? [api.seedCoding().then(() => Promise.allSettled([
           api.seedPair().then((p) => localStorage.setItem(PAIR_KEY, p.token)),
@@ -143,10 +148,12 @@ export function useStartTour(): (side?: TourSide) => void {
       : [api.seedFleet(), api.seedAdapterRuns(), api.seedProdIncident()];
     // example data is idempotent; a failed seed still leaves a readable tour
     void Promise.allSettled(seeds).then(() => {
+      // restarted mid-tour: what to put back is still the one from before
+      if (useApp.getState().tourStep == null) useApp.setState((s) => ({ tourRestore: s.connection }));
       connect("demo");
       setTourStep(0);
     });
-  }, [stored, connect, setTourStep, setTourSide, markLearnSeen, setJourney]);
+  }, [stored, journey, connect, setTourStep, setTourSide, markLearnSeen, setJourney]);
 }
 
 const CARD_W = 340;

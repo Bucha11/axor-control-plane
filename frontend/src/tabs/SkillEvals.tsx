@@ -6,6 +6,7 @@
 // written: per skill, what it does alone and on top of the others, whether the
 // agent opened it at all, and its token cost; per arm, solved and spend.
 import { useEffect, useState } from "react";
+import ReadFailed from "../components/ReadFailed";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ChevronDown, ChevronRight, Loader2 } from "lucide-react";
 import { api, SkillEval, SkillEvalArm, SkillEvalCompare, SkillEvalSkill, SkillEvalTask } from "../api";
@@ -109,7 +110,8 @@ function EvalList() {
       {/* the page's question first: does a skill help? Sharing one comes after;
           turning one off is on Try a skill */}
       <HowToRun />
-      {!started && !rows.some((r) => r.eval_id === "se-example") && (
+      {evals.isError && <div className="mt-4"><ReadFailed what="the skill evals" error={evals.error} retry={() => void evals.refetch()} /></div>}
+      {!started && !evals.isError && !rows.some((r) => r.eval_id === "se-example") && (
         <div className="mt-4" style={{ fontFamily: MONO, fontSize: 12, color: C.mut }}>
           {rows.length === 0 ? "none yet — " : ""}
           <button onClick={() => example.mutate()} data-testid="skill-eval-example"

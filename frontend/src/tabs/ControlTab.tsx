@@ -4,6 +4,7 @@ import { askConfirm, askPrompt } from "../components/Ask";
 import { refusalWords } from "../refusal";
 import { useHasTeam, useMay, useMine } from "../team";
 import { useEffect, useState } from "react";
+import ReadFailed from "../components/ReadFailed";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Circle, Gauge, GitBranch, Lock, Pause, Play, Square, Syringe } from "lucide-react";
 import { ActivityEvent, api, FleetRow, IncidentItem, NodeInfo, NodeRun, type LockReason, type TreeSummary } from "../api";
@@ -497,6 +498,16 @@ function ControlBody({ focusNode, testBench }: { focusNode?: string; testBench: 
     );
   }
 
+  // a failed read is not "no agents yet" (QA-233): said, with a retry, and
+  // nothing offered that would act on an empty plane
+  const readError = nodes.isError ? nodes.error : fleetQ.isError ? fleetQ.error : null;
+  const readFailed = readError && (
+    <ReadFailed what="the agents" error={readError}
+      retry={() => { void nodes.refetch(); void fleetQ.refetch(); }} />
+  );
+  if (nodes.isError || (readFailed && list.length === 0)) {
+    return <div style={{ maxWidth: 640, margin: "0 auto" }}>{readFailed}</div>;
+  }
   const traced = topoData?.nodes ?? [];
   if (list.length === 0 && otherSide > 0) {
     return (
@@ -666,6 +677,7 @@ function ControlBody({ focusNode, testBench }: { focusNode?: string; testBench: 
   return (
     <div className={node ? "fleet-grid fleet-grid-open" : "fleet-grid"}>
     <div style={{ minWidth: 0 }}>
+      {readFailed}
       <Coach id="control" title="Control — operate governed agents live">
         Each row is a live governed agent (a node). Click one to open its panel:{" "}
         <span style={{ color: C.text }}>desired</span> is what you've commanded,{" "}

@@ -43,7 +43,7 @@ import Sentinel from "./tabs/Sentinel";
 import Regression from "./tabs/Regression";
 import Settings, { IdentityLogin } from "./tabs/Settings";
 import AuthReturn from "./components/AuthReturn";
-import PolicySync from "./components/PolicySync";
+import PolicySync, { PolicyNotice } from "./components/PolicySync";
 import Tabs from "./components/Tabs";
 import Pricing from "./tabs/Pricing";
 import CodingPolicy from "./tabs/CodingPolicy";
@@ -235,8 +235,8 @@ export default function App() {
         </>
       )}
       {key === "policy" && (menu.journey === "coding" ? <CodingPolicy />
-        : menu.journey === "both" ? <><CodingPolicy /><div style={{ height: 40 }} /><ConfigBuilder /></>
-          : <ConfigBuilder />)}
+        : menu.journey === "both" ? <><CodingPolicy /><div style={{ height: 40 }} /><PolicyNotice /><ConfigBuilder /></>
+          : <><PolicyNotice /><ConfigBuilder /></>)}
       {key === "skills" && <Skills />}
       {key === "skill-evals" && <SkillEvals evalId={runIdParam ? safeDecode(runIdParam) : undefined} />}
       {key === "connect" && <Onboarding />}

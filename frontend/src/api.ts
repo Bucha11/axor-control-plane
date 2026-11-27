@@ -260,6 +260,8 @@ export interface CodingException {
 export interface CodingRules {
   set: boolean; allow: string[]; mode: "enforce" | "observe"; by: string; ts: string;
   exceptions: CodingException[]; trusted_sources: string[];
+  // what a save sends back: one from an older version is refused (QA-212)
+  version: number;
   catalog?: { id: string; what: string; why: string; fixed: boolean }[];
   // the policy an operator last signed (sidecars with operator keys take what
   // widens only from it), and whether it is still what stands here
@@ -897,7 +899,13 @@ export function apiError(status: number, text: string): ApiError {
     }
     if (!words && typeof body.error === "string") words = body.error.replace(/_/g, " ");
   } catch { /* not JSON */ }
-  if (!words) words = text.trim().slice(0, 300) || `the request failed (HTTP ${status})`;
+  // not the plane's sentence: a proxy's or server's own page ("Internal Server
+  // Error", nginx's HTML) is said in words, never shown raw (QA-234)
+  if (!words) {
+    words = status >= 500 ? `the plane could not answer (HTTP ${status}) — try again in a moment`
+      : /^\s*</.test(text) || !text.trim() ? `the request was refused (HTTP ${status})`
+        : text.trim().slice(0, 300);
+  }
   // a refused credential is said in this app's words, never the plane's raw
   // 401 text (QA-236); the reason, if any, is on the session-ended banner
   if (status === 401) {
@@ -1692,12 +1700,13 @@ export const api = {
   // `mustRefuse` names the calls a must_block pin holds — needed when the run
   // was recorded ungoverned and refused nothing (else it can't be checked)
   // the workspace's tool policy (what each tool does) — one for everyone
+  // `version` is the one read: a save from an older one is refused (QA-212)
   getPolicy: () =>
-    af("/v1/policy").then((r) => j<{ tools: Record<string, ToolClass>; updated_ts: string | null }>(r)),
-  putPolicy: (tools: Record<string, ToolClass>) =>
+    af("/v1/policy").then((r) => j<{ tools: Record<string, ToolClass>; updated_ts: string | null; version: number }>(r)),
+  putPolicy: (tools: Record<string, ToolClass>, version?: number) =>
     af("/v1/policy", { method: "PUT", headers: { "content-type": "application/json" },
-                       body: JSON.stringify({ tools }) })
-      .then((r) => j<{ tools: Record<string, ToolClass>; changed: string[] }>(r)),
+                       body: JSON.stringify({ tools, ...(version === undefined ? {} : { version }) }) })
+      .then((r) => j<{ tools: Record<string, ToolClass>; changed: string[]; version: number }>(r)),
   // take a case out of the check (Safe to ship?)
   unpin: (runId: string) =>
     af(`/v1/pins/${encodeURIComponent(runId)}`, { method: "DELETE" })
@@ -1811,23 +1820,27 @@ export const api = {
     af("/v1/demo/seed-team-skill", { method: "POST" }).then((r) => j<{ name: string }>(r)),
   // the team's rules for coding agents (an admin's decision)
   codingRules: () => af("/v1/coding/rules").then((r) => j<CodingRules>(r)),
+  // `version`: the one the screen read — a save from an older one is refused
+  // with what changed since (409 "stale", QA-212)
   setCodingRules: (allow: string[], mode: "enforce" | "observe",
-                   more: { exceptions?: CodingException[]; trusted_sources?: string[] } = {}) =>
+                   more: { exceptions?: CodingException[]; trusted_sources?: string[] } = {},
+                   version?: number) =>
     af("/v1/coding/rules", {
       method: "PUT", headers: { "content-type": "application/json" },
-      body: JSON.stringify({ allow, mode, ...more }),
+      body: JSON.stringify({ allow, mode, ...more, ...(version === undefined ? {} : { version }) }),
     }).then((r) => j<CodingRules>(r)),
   // the team's exceptions and trusted sources alone — for whoever the
   // workspace lets grant them, not only the admin who sets the rules
-  setCodingExceptions: (more: { exceptions?: CodingException[]; trusted_sources?: string[] }) =>
+  setCodingExceptions: (more: { exceptions?: CodingException[]; trusted_sources?: string[] },
+                        version?: number) =>
     af("/v1/coding/exceptions", {
       method: "PUT", headers: { "content-type": "application/json" },
-      body: JSON.stringify(more),
+      body: JSON.stringify({ ...more, ...(version === undefined ? {} : { version }) }),
     }).then((r) => j<CodingRules>(r)),
   // one more exception, on top of the team's policy as it is now
   addCodingException: async (e: CodingException): Promise<CodingRules> => {
     const now: CodingRules = await api.codingRules();
-    return api.setCodingExceptions({ exceptions: [...now.exceptions, e] });
+    return api.setCodingExceptions({ exceptions: [...now.exceptions, e] }, now.version);
   },
   // who may do what to the team's agents, and what the caller may
   permissions: () => af("/v1/permissions").then((r) => j<Permissions>(r)),
