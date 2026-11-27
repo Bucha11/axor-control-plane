@@ -18,6 +18,8 @@ import TaintGraph from "./TaintGraph";
 import { localTime } from "../time";
 import CutResult from "../components/CutResult";
 import Coach from "../components/Coach";
+import RoleNote from "../components/RoleNote";
+import { useHasScope } from "../team";
 
 type Cf = "noexec" | "taint" | "policy" | "outside";
 
@@ -210,6 +212,8 @@ export default function ReplayTab({ runId: rawRunId, cursor: cursorProp, seq: se
   }, [runId]);
 
   const [settled, setSettled] = useState<string | null>(null);
+  // a viewer marks, keeps and makes nothing: the plane refuses it (QA-196)
+  const mayKeep = useHasScope()("operate");
   const settle = useMutation({
     mutationFn: (status: "looked_at" | "not_a_problem") => api.setIncidentStatus(`ev:${runId}:0`, status),
     onSuccess: (_r, status) => {
@@ -537,7 +541,9 @@ export default function ReplayTab({ runId: rawRunId, cursor: cursorProp, seq: se
           {incident && (
             <div data-testid="replay-settle" className="mt-3 flex items-center gap-3 flex-wrap"
               style={{ fontFamily: MONO, fontSize: 11.5, color: C.mut }}>
-              {settled ? <span style={{ color: C.green }}>✓ marked {settled}</span> : (
+              {settled ? <span style={{ color: C.green }}>✓ marked {settled}</span> : !mayKeep ? (
+                <RoleNote inline need="operate" what="mark this incident" testid="replay-settle-viewer" />
+              ) : (
                 <>
                   <button onClick={() => settle.mutate("looked_at")} disabled={settle.isPending}
                     style={btn({ color: C.text, fontSize: 11, padding: "4px 10px" })}>looked at — done</button>
@@ -612,7 +618,8 @@ export default function ReplayTab({ runId: rawRunId, cursor: cursorProp, seq: se
 
           {rulesQuestion && <div data-testid="replay-keep" className="mt-4 flex items-center gap-2 flex-wrap" style={{ fontFamily: MONO, fontSize: 11.5, color: C.mut }}>
             keep this run as a test:
-            {(["must_block", "must_pass"] as const).map((side) => (
+            {!mayKeep && <RoleNote inline need="operate" what="keep runs as tests" testid="replay-keep-viewer" />}
+            {mayKeep && (["must_block", "must_pass"] as const).map((side) => (
               <button key={side} onClick={() => pin.mutate(side)} disabled={pin.isPending}
                 style={btn({ color: pinned === side ? C.green : C.text, fontSize: 11, padding: "4px 10px" })}>
                 {pinned === side ? "✓ " : ""}{side === "must_block" ? "an attack — must stay blocked" : "normal work — must keep passing"}
@@ -656,6 +663,7 @@ function MakeRule({ runId, node, seq, tool, klass, tools: inRun, otherRuns }: {
     return Object.entries(all).map(([name, c]) => ({ name, outside: c.outside }));
   }, [seen.data, inRun, node]);
   const added = tools.filter((t) => t.name !== tool && !policy[t.name]);
+  const mayMake = useHasScope()("operate");
   const apply = useMutation({
     mutationFn: async () => {
       const source = `seen in ${node}'s runs`;
@@ -704,14 +712,16 @@ function MakeRule({ runId, node, seq, tool, klass, tools: inRun, otherRuns }: {
           </li>
         )}
       </ul>
-      <div className="flex items-center gap-3 mt-3">
+      {!mayMake ? (
+        <div className="mt-3"><RoleNote need="operate" what="make it a rule" testid="make-rule-viewer" /></div>
+      ) : <div className="flex items-center gap-3 mt-3">
         <button onClick={() => apply.mutate()} disabled={apply.isPending || seen.isPending} data-testid="make-rule-apply"
           style={btn({ color: C.text, borderColor: C.steel, fontSize: 12, padding: "6px 14px" })}>
           {apply.isPending ? "…" : "Make it a rule and check it →"}
         </button>
         <span style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim }}>opens Safe to ship? with the rules from Policy</span>
         {apply.isError && <span style={{ color: C.red, fontSize: 12 }}>{(apply.error as Error).message}</span>}
-      </div>
+      </div>}
     </div>
   );
 }

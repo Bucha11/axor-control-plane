@@ -5,13 +5,14 @@ import { C, MONO } from "../theme";
 import { whoCan, whoIs } from "../refusal";
 import { useScopes } from "../team";
 
-export default function RoleNote({ need, what, testid = "role-note" }: {
-  need: "ingest" | "operate" | "admin"; what: string; testid?: string;
+export default function RoleNote({ need, what, testid = "role-note", inline = false }: {
+  need: "ingest" | "operate" | "admin"; what: string; testid?: string; inline?: boolean;
 }) {
   const have = useScopes() ?? [];
+  const Tag = inline ? "span" : "div";
   return (
-    <div data-testid={testid} style={{ fontFamily: MONO, fontSize: 11, color: C.dim, lineHeight: 1.6 }}>
+    <Tag data-testid={testid} style={{ fontFamily: MONO, fontSize: 11, color: C.dim, lineHeight: 1.6 }}>
       as {whoIs(have)} you can&apos;t {what} — {whoCan(need)} can
-    </div>
+    </Tag>
   );
 }

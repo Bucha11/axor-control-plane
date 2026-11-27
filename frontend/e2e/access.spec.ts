@@ -2,7 +2,7 @@
 // findings of the journaled QA run on 0.7.3 (QA-NNN in each test). The role is
 // played by stubbing /v1/auth/status's scopes.
 import { expect, test, type Page } from "@playwright/test";
-import { goHash, seedNode, setConnection, uniqueNode } from "./helpers";
+import { BACKEND, goHash, seedNode, setConnection, uniqueNode } from "./helpers";
 
 const VIEWER = ["read"];
 const MEMBER = ["read", "ingest", "operate"];
@@ -105,5 +105,65 @@ test.describe("access (QA, 0.7.3)", () => {
       .toHaveText("as a viewer you can't change the schedule — an owner, admin or member can");
     await expect(page.getByTestId("chaos-schedule-save")).toHaveCount(0);
     await expect(page.getByLabel("every how many hours")).toBeDisabled();
+  });
+
+  test("a viewer reads an incident's status and is not offered changing it (QA-196)", async ({ page }) => {
+    await playRole(page, VIEWER);
+    await page.route("**/v1/incidents?*", (r) => r.fulfill({ json: ONE_INCIDENT }));
+    await goHash(page, "evidence");
+    await expect(page.getByTestId("incidents-viewer"))
+      .toHaveText("as a viewer you can't mark incidents — an owner, admin or member can");
+    await expect(page.getByTestId("incident-status-text")).toHaveText("new");
+    await expect(page.getByTestId("incident-status")).toHaveCount(0);
+  });
+
+  test("a viewer is offered neither share nor keep on a case, and the links are not asked for (QA-196, QA-214)", async ({ page }) => {
+    await setConnection(page, { mode: "demo" });
+    await playRole(page, VIEWER);
+    const linkReads: string[] = [];
+    page.on("request", (r) => { if (r.url().includes("/v1/share-links")) linkReads.push(r.url()); });
+    await goHash(page, "eval");
+    await page.getByRole("button", { name: /Run the test/ }).click();
+    await expect(page.getByTestId("case-viewer").first())
+      .toHaveText("as a viewer you can't keep or share this case — an owner, admin or member can", { timeout: 20_000 });
+    await expect(page.getByRole("button", { name: "Share" })).toHaveCount(0);
+    await expect(page.getByTestId("case-keep")).toHaveCount(0);
+    expect(linkReads).toEqual([]);
+  });
+
+  test("on Replay a viewer is offered neither making the rule nor keeping the run (QA-196)", async ({ page, request }) => {
+    expect((await request.post(`${BACKEND}/v1/demo/seed-prod-incident`)).ok()).toBeTruthy();
+    await playRole(page, VIEWER);
+    const writes: string[] = [];
+    page.on("request", (r) => { if (r.method() !== "GET" && /\/v1\/(pins|policy)/.test(r.url())) writes.push(r.url()); });
+    await goHash(page, "explain/ex_prod_drop?seq=4&node=support-agent-prod");
+    await page.getByTestId("whatif-outside").click();
+    await expect(page.getByTestId("make-rule-viewer"))
+      .toHaveText("as a viewer you can't make it a rule — an owner, admin or member can");
+    await expect(page.getByTestId("make-rule-apply")).toHaveCount(0);
+    await expect(page.getByTestId("replay-keep-viewer"))
+      .toHaveText("as a viewer you can't keep runs as tests — an owner, admin or member can");
+    await expect(page.getByTestId("replay-keep").getByRole("button")).toHaveCount(0);
+    expect(writes).toEqual([]);
+  });
+
+  test("on Safe to ship? a viewer is offered neither unpin nor the schedule (QA-196, QA-152)", async ({ page }) => {
+    await playRole(page, VIEWER);
+    await page.route("**/v1/regression/schedule", (r) => r.fulfill({ json: {
+      enabled: false, interval_hours: 24, last_run_ts: null, ee_active: true } }));
+    await page.route("**/v1/regression", (r) => r.fulfill({ json: {
+      rows: [{ run_id: "run_kept1", side: "must_block", label: "kept", result: "held", first_divergence: null,
+               new_denial: null, pinned_denials: 1, escaped_denials: [], demo: false }],
+      regressed: 0, escaped: 0, unanchored: 0, skipped: [], own_rows: 1, demo_rows: 0, safe_to_ship: true } }));
+    await goHash(page, "prevent");
+    await page.getByRole("button", { name: /Check these rules/ }).click();
+    await expect(page.getByTestId("unpin-viewer"))
+      .toHaveText("as a viewer you can't take a case out of the check — an owner, admin or member can");
+    await page.getByTestId("case-run_kept1").click();
+    await expect(page.getByTestId("unpin-run_kept1")).toHaveCount(0);
+    await page.getByRole("button", { name: /run this check on a schedule/ }).click();
+    await expect(page.getByTestId("schedule-viewer"))
+      .toHaveText("as a viewer you can't change the schedule — an owner, admin or member can");
+    await expect(page.getByRole("button", { name: /Schedule with the rules above/ })).toHaveCount(0);
   });
 });

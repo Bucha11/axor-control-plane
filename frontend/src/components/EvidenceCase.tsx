@@ -15,6 +15,8 @@ import { C, MONO } from "../theme";
 import Tooltip from "./Tooltip";
 import { localTime } from "../time";
 import { useOneAtATime } from "../oneAtATime";
+import { useHasScope, useHasScopeKnown } from "../team";
+import RoleNote from "./RoleNote";
 
 const HEADLINE: Record<string, string> = {
   fabrication_contained: "contained a fabrication at the boundary",
@@ -123,8 +125,11 @@ export default function EvidenceCase({
   // Every link handed out for this case, not only the one this page made: a
   // link already sent was otherwise unrevocable after a reload.
   const qc = useQueryClient();
+  // a viewer shares nothing and may not list the links: not asked (QA-196, QA-214)
+  const mayShare = useHasScope()("operate");
+  const mayListLinks = useHasScopeKnown()("operate");
   const links = useQuery({ queryKey: ["share-links", runId], queryFn: () => api.shareLinks(runId),
-                           retry: false });
+                           retry: false, enabled: mayListLinks });
   const active = (links.data?.links ?? []).filter((l) => l.case_index === caseIndex && !l.revoked);
   const revoked = useMutation({
     mutationFn: (token: string) => api.revokeShare(token),
@@ -190,11 +195,12 @@ export default function EvidenceCase({
             </button>
           </Tooltip>
           <KeepAsTest runId={runId} testId="case-keep" />
-          <Tooltip content="Copy a revocable permalink to just this case — one page, scoped token, no access to the rest of the workspace. Revoke it any time.">
+          {!mayShare && <RoleNote inline need="operate" what="keep or share this case" testid="case-viewer" />}
+          {mayShare && <Tooltip content="Copy a revocable permalink to just this case — one page, scoped token, no access to the rest of the workspace. Revoke it any time.">
             <button onClick={() => shareOnce()} style={action(copied ? C.green : C.mut)}>
               {copied ? <Check size={11} /> : <Share2 size={11} />} {copied ? "link copied" : "Share"}
             </button>
-          </Tooltip>
+          </Tooltip>}
           <button onClick={() => setMoreExports((v) => !v)} aria-expanded={moreExports}
             data-testid="case-export" style={action(C.mut)}>
             <ExternalLink size={11} /> Export {moreExports ? "▴" : "▾"}
