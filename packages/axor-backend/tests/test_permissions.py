@@ -175,3 +175,16 @@ async def test_the_login_service_tells_the_trail_who_joined_and_left(
     report = (await c.get("/v1/audit/report", headers=who("olga@acme.dev", "owner"),
                           params={"month": month})).json()
     assert [r["action"] for r in report["access_changes"]] == ["scim_removed"]
+    # QA-134: the row carries the role of who acted, not the login service's
+    # own "admin"; a viewer joining reads viewer, an act with no role none
+    assert "role" not in row or row["role"] != "admin"
+    assert (await c.post("/v1/audit/identity", headers=svc, json={
+        "action": "member_added", "target": "vic@acme.dev", "who": "vic@acme.dev",
+        "role": "viewer", "detail": {"role": "viewer", "invited": True}})).status_code == 204
+    assert (await c.post("/v1/audit/identity", headers=svc, json={
+        "action": "plan_upgraded", "target": "team", "who": "license renewal",
+        "detail": {"tier": "team"}})).status_code == 204
+    rows = (await c.get("/v1/audit", headers=who("olga@acme.dev", "owner"))).json()["items"]
+    joined = next(r for r in rows if r["action"] == "member_added")
+    assert joined.get("role") == "viewer"
+    assert any(r["action"] == "plan_upgraded" for r in rows)
