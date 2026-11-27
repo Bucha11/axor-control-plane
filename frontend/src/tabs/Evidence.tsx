@@ -23,6 +23,7 @@ import { useCanAdmin } from "../team";
 import { errorWords } from "../refusal";
 import { agentLabel } from "../agentName";
 import { useWorkStarted } from "../workStarted";
+import { localTime } from "../time";
 
 
 /** One line of whatever the agent claimed or the tool returned. */
@@ -86,10 +87,9 @@ const inlineLink: React.CSSProperties = {
   fontSize: 11.5, color: C.steel,
 };
 
+// one format app-wide (QA-105); a stamp that is not ISO is never a date (QA-081)
 function when(ts: string | null): string {
-  if (!ts) return "—";
-  const d = new Date(ts);
-  return Number.isNaN(d.getTime()) ? ts : d.toLocaleString();
+  return ts ? localTime(ts, true) : "—";
 }
 
 const KIND_CHIPS: [string, string][] = [

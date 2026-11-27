@@ -17,6 +17,7 @@ import { C, MONO, btn } from "../theme";
 import Coach from "../components/Coach";
 import { incidentWhat } from "./Evidence";
 import Tooltip from "../components/Tooltip";
+import { isoDate, localTime } from "../time";
 import { codingExampleOnly, fleetExampleOnly, isCodingSession } from "../components/CodingOnboarding";
 import { AlertMe, KeepAsTest, SignUpForYourAgent } from "../components/AccountAction";
 import { NOT_A_TEST_BENCH, behindProxy, cannotCut, isTestBench } from "../agentName";
@@ -1510,25 +1511,24 @@ function primary(st: Status[]): Status {
 
 /** "40s ago" today; past a day, the day and time — "3d ago" says nothing about when. */
 function lastActive(iso?: string | null): string {
-  if (!iso) return "—";
-  const d = new Date(iso);
-  if (isNaN(d.getTime())) return "—";
+  const d = isoDate(iso);
+  if (!iso || !d) return "—";
   return Date.now() - d.getTime() < 86_400_000 ? ago(iso) : stamp(iso);
 }
 
-/** "14:31:07" for today, "Thu 12 Nov 14:31" for any other day. */
+/** "14:31:07" for today, "2026-11-12 14:31" for any other day; a stamp that
+ *  is not ISO ("seq:3") is no time at all, never a date in 2001 (QA-081). */
 function stamp(iso: string): string {
-  const d = new Date(iso);
-  if (isNaN(d.getTime())) return "";
+  const d = isoDate(iso);
+  if (!d) return "";
   const today = new Date().toDateString() === d.toDateString();
-  return today ? d.toTimeString().slice(0, 8)
-    : `${d.toLocaleDateString(undefined, { weekday: "short", day: "numeric", month: "short" })} ${d.toTimeString().slice(0, 5)}`;
+  return today ? d.toTimeString().slice(0, 8) : localTime(iso);
 }
 
 function ago(iso?: string | null): string {
-  if (!iso) return "—";
-  const s = Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 1000));
-  if (isNaN(s)) return "—";
+  const d = isoDate(iso);
+  if (!d) return "—";
+  const s = Math.max(0, Math.round((Date.now() - d.getTime()) / 1000));
   if (s < 60) return `${s}s ago`;
   if (s < 3600) return `${Math.floor(s / 60)}m ago`;
   if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
@@ -2270,6 +2270,11 @@ function ActivityFeed({ only }: { only?: Set<string> }) {
     if (only && !only.has(e.node_id)) return false;
     return true;
   });
+  // newest first by time, not by arrival: an example seeded after real work
+  // landed below it with older times (QA-103). Stable, so a run's own order
+  // (a call before its answer) holds; a stamp that is not ISO goes last.
+  const at = (e: ActivityEvent) => isoDate(e.ts)?.getTime() ?? -Infinity;
+  kept.sort((x, y) => at(y) - at(x));
   const rows = feedRows(kept).filter(({ e, text }) => !find
     || `${e.node_id} ${titleOf.get(e.node_id) ?? ""} ${text}`.toLowerCase().includes(find.toLowerCase()));
   const work = new Set(["tool_call", "tool_result", "claim", "fault_injected", "denial"]);

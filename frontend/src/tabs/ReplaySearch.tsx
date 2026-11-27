@@ -11,6 +11,7 @@ import { navigate } from "../router";
 import { useApp } from "../store";
 import { C, MONO, btn } from "../theme";
 import Coach from "../components/Coach";
+import { localTime } from "../time";
 
 export const LAST_SEARCH = "axor-replay-search";
 
@@ -60,9 +61,7 @@ function window_(when: When, from: string, to: string): { since?: string; until?
 }
 
 function stamp(ts: string | null): string {
-  if (!ts) return "—";
-  const d = new Date(ts);
-  return `${d.toLocaleDateString(undefined, { weekday: "short", day: "numeric", month: "short" })} ${d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23" })}`;
+  return ts ? localTime(ts, true) : "—";
 }
 
 const chip = (on: boolean): React.CSSProperties => btn({

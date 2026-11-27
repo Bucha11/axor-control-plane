@@ -15,6 +15,7 @@ import { guessKlass, toolsFromSteps } from "../toolGuess";
 import { policyRules } from "../policyConfig";
 import { C, MONO, btn, sevColor } from "../theme";
 import TaintGraph from "./TaintGraph";
+import { localTime } from "../time";
 import CutResult from "../components/CutResult";
 import Coach from "../components/Coach";
 
@@ -371,8 +372,7 @@ export default function ReplayTab({ runId: runIdProp, cursor: cursorProp, seq: s
       </Coach>
       <div data-tour="replay-picker" className="flex items-center gap-3 flex-wrap" style={{ marginBottom: 14, fontFamily: MONO, fontSize: 11.5 }}>
         <button onClick={backToSearch} data-testid="replay-back" style={link}>← find another step</button>
-        {run && <span style={{ color: C.dim }}>{new Date(run.created_ts).toLocaleString(undefined, {
-          weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", hourCycle: "h23" })}</span>}
+        {run && <span style={{ color: C.dim }}>{localTime(run.created_ts)}</span>}
       </div>
 
       <h1 data-testid="replay-title" style={{ fontSize: 21, fontWeight: 650, lineHeight: 1.35, margin: "0 0 4px" }}>
