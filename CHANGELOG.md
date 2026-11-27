@@ -5,6 +5,36 @@ The Control Plane ships as three packages from one tag (`axor-backend`,
 images (`axor-platform`, `axor-frontend`). Self-hosted operators upgrade by
 tag; `deploy/offline` carries the same release to a machine with no network.
 
+## 0.7.3 — 2026-11-27
+
+### Fixed
+
+From a second exploratory QA pass over the hosted plane:
+
+- **A malformed link no longer blanks the app**; a page that fails to render
+  says so beside a working app.
+- **The tour's example seeding no longer fails at random**: two reseeds of one
+  demo run take turns.
+- **"Spawn a governed demo node" appears in Control**: its heartbeats carry the
+  credential its run was uploaded with.
+- **The product's example team memory is read-only.**
+- **Signing:** facts and cascade stop are signed by the browser's own operator
+  key, like every command; commands record the operator who signs them; one
+  name, "operator keys".
+- **Roles:** viewers, members and admins are not offered actions their role
+  cannot take (keys, alerts, the vault's owner-only forms).
+- **Settings and sign-in:** webhook refusals no longer reveal internal
+  addresses; webhook URLs are limited (500); a session that cannot refresh says
+  "sign in again"; identity logs why an SMTP server refused a message; a guest
+  is not asked for what a guest cannot have.
+- **Double-clicks** send once on every button that creates something; the tour
+  ends on Escape; the in-app dialog keeps focus inside it.
+- **Operating screens:** real timestamps on governed demo events, one local time
+  format, the activity feed in order, cap values validated, Replay search
+  limits, `#/catch?auto=1` opened directly works, Trusted sources refuses paste
+  sites and Q&A forums, a just-shared link is no longer briefly called revoked,
+  and layout fixes at 390px.
+
 ## 0.7.2 — 2026-11-27
 
 ### Added
