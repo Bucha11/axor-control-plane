@@ -2285,7 +2285,9 @@ function VaultTokens() {
   const make = useMutation({ mutationFn: api.makeVaultToken,
     onSuccess: (r) => { setShown({ which: r.subsystem, token: r.token, header: r.header }); done(); } });
   const makeOnce = useOneAtATime(make);
-  const drop = useMutation({ mutationFn: api.dropVaultToken, onSuccess: () => { setShown(null); done(); } });
+  // dropping one token hides only its own just-shown value (QA-065)
+  const drop = useMutation({ mutationFn: api.dropVaultToken,
+    onSuccess: (_r, w) => { setShown((s) => (s?.which === w ? null : s)); done(); } });
   if (!tokens.data) return null;
   return (
     <div data-testid="vault-tokens" className="mt-3" style={{ fontFamily: MONO, fontSize: 11, lineHeight: 1.7 }}>
@@ -2300,9 +2302,12 @@ function VaultTokens() {
             ) : t.set ? (
               <>
                 <span style={{ color: C.green }}>token since {t.since ? localTime(t.since) : "—"}{t.by ? ` · ${t.by}` : ""}</span>
-                <button onClick={() => makeOnce(w)} data-testid={`vault-token-${w}-replace`}
+                {/* each cuts off whoever holds the token now: asked first (QA-065) */}
+                <button data-testid={`vault-token-${w}-replace`}
+                  onClick={async () => { if (await askConfirm(`Replace the token for ${VAULT_WORDS[w]}? Whatever uses the current one is cut off until it gets the new one.`)) makeOnce(w); }}
                   style={btn({ color: C.text, borderColor: C.steel, fontSize: 10.5, padding: "2px 8px" })}>replace</button>
-                <button onClick={() => drop.mutate(w)} data-testid={`vault-token-${w}-drop`}
+                <button data-testid={`vault-token-${w}-drop`}
+                  onClick={async () => { if (await askConfirm(`Drop the token for ${VAULT_WORDS[w]}? From then on an admin alone may do it.`)) drop.mutate(w); }}
                   style={btn({ color: C.mut, borderColor: C.line, fontSize: 10.5, padding: "2px 8px" })}>drop</button>
               </>
             ) : (

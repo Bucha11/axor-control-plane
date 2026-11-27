@@ -95,4 +95,33 @@ test.describe("settings (QA, 0.7.2)", () => {
     await expect(page.getByTestId("vault-viewer")).toBeVisible();
     await expect(page.getByTestId("federation-vault")).toHaveCount(0);
   });
+
+  test("vault token replace and drop ask first; dropping one keeps the other's shown value (QA-065)", async ({ page }) => {
+    // stubbed: a real token on the shared test plane would lock the vault for other specs
+    const state = { creds: false, signing: true };
+    const row = (set: boolean) => ({ set, since: set ? "2026-11-27T10:00:00+00:00" : null, by: set ? "ada@acme.io" : null, deployment: false });
+    await page.route("**/v1/vault/tokens", (r) => r.fulfill({ json: { creds: row(state.creds), signing: row(state.signing) } }));
+    const calls: string[] = [];
+    await page.route("**/v1/vault/tokens/*", (r) => {
+      const which = r.request().url().endsWith("creds") ? "creds" : "signing";
+      calls.push(`${r.request().method()} ${which}`);
+      if (r.request().method() === "DELETE") { state[which] = false; return r.fulfill({ json: { set: false } }); }
+      state[which] = true;
+      return r.fulfill({ status: 201, json: { subsystem: which, token: `axv_${which}_new`, header: "X-Vault-Token" } });
+    });
+    await goHash(page, "settings?tab=security");
+    await page.getByTestId("vault-token-creds-make").click();
+    await expect(page.getByTestId("vault-token-shown")).toContainText("axv_creds_new");
+    // replace: asked, and cancelling sends nothing
+    await page.getByTestId("vault-token-signing-replace").click();
+    await expect(page.getByTestId("ask")).toContainText("Replace the token");
+    await page.getByTestId("ask").getByRole("button", { name: "cancel" }).click();
+    // drop: asked; the creds token just shown stays on screen
+    await page.getByTestId("vault-token-signing-drop").click();
+    await expect(page.getByTestId("ask")).toContainText("Drop the token");
+    await answerAsk(page);
+    await expect(page.getByTestId("vault-token-signing-make")).toBeVisible();
+    await expect(page.getByTestId("vault-token-shown")).toContainText("axv_creds_new");
+    expect(calls).toEqual(["POST creds", "DELETE signing"]);
+  });
 });
