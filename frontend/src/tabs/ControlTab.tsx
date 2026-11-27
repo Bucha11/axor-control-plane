@@ -24,6 +24,10 @@ import { NOT_A_TEST_BENCH, behindProxy, cannotCut, isTestBench } from "../agentN
 import { useOneAtATime } from "../oneAtATime";
 
 const REFETCH_MS = 5000;
+// a node is quiet after three missed heartbeats (T = 10 s, protocol §9)
+const QUIET_MS = 30_000;
+// the proxy's demo node (axor_proxy.governed): it leaves the plane after a while
+const isDemoNode = (id: string) => /^governed-[0-9a-f]{6}$/.test(id);
 
 const LEVEL_COLOR: Record<string, string> = {
   FLAGGED: C.red, WATCH: C.amber, CLEAN: C.dim,
@@ -249,7 +253,9 @@ function SpawnGoverned({ switchToAdapter }: { switchToAdapter?: boolean }) {
       )}
       {spawn.isSuccess && (
         <div style={{ fontFamily: MONO, fontSize: 11, color: C.dim, marginTop: 8 }}>
-          governed node live — it heartbeats to the plane; pause / stop / inject below reach it.
+          governed node live until {localTime(spawn.data.leaves_at)} — it heartbeats to the plane; pause / stop /
+          inject below reach it. It holds no operator keys of its own: it takes a command as the plane
+          checked it, and does not check the signature again.
         </div>
       )}
     </div>
@@ -578,6 +584,10 @@ function ControlBody({ focusNode, testBench }: { focusNode?: string; testBench: 
   const reported = node?.reported ?? null;
   const applying =
     desired != null && desired.version > (reported?.applied_version ?? 0);
+  // a node silent past 3 heartbeats (protocol §9) is not applying anything:
+  // a demo node that had left still read "applying…" for good (QA-171)
+  const quietSince = reported?.updated_ts && Date.now() - Date.parse(reported.updated_ts) > QUIET_MS
+    ? reported.updated_ts : null;
   const paused = desired?.state.paused === true;
   const stopped = desired?.state.stopped === true;
 
@@ -891,6 +901,16 @@ function ControlBody({ focusNode, testBench }: { focusNode?: string; testBench: 
               <span data-testid="example-no-commands" style={{ fontFamily: MONO, fontSize: 11, color: C.dim }}>
                 example node — it takes no commands; yours do
               </span>
+            ) : applying && quietSince && isDemoNode(node.node_id) ? (
+              <span data-testid="demo-node-left" style={{ fontFamily: MONO, fontSize: 11, color: C.dim }}>
+                this demo node left the plane at {localTime(quietSince)} — it takes no more
+                commands; spawn another under “try more examples”
+              </span>
+            ) : applying && quietSince ? (
+              <span data-testid="node-quiet" style={{ fontFamily: MONO, fontSize: 11, color: C.amber }}>
+                not applied: the agent has not reported since {localTime(quietSince)} — it gets{" "}
+                {Object.entries(desired?.state ?? {}).map(([k, v]) => stateWords(k, v)).join(", ")} when it reconnects
+              </span>
             ) : applying ? (
               <span style={{ fontFamily: MONO, fontSize: 11, color: C.amber }}>
                 applying {Object.entries(desired?.state ?? {}).map(([k, v]) => stateWords(k, v)).join(", ")}…
@@ -937,7 +957,7 @@ function ControlBody({ focusNode, testBench }: { focusNode?: string; testBench: 
 
           <details className="mb-3" style={{ fontFamily: MONO, fontSize: 11, color: C.mut, lineHeight: 1.7 }}>
             <summary style={{ cursor: "pointer", color: C.dim }}>
-              details{applying ? " · a command is on its way to the agent" : ""}
+              details{applying && !quietSince ? " · a command is on its way to the agent" : ""}
             </summary>
             commanded (desired){" "}
             <span style={{ color: C.text }}>
