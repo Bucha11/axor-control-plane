@@ -271,6 +271,24 @@ class Store:
                 user_id=user_id, email=email, password_hash=password_hash,
                 created_ts=ts, email_verified=email_verified))
 
+    async def create_account(self, user_id: str, email: str, password_hash: str | None,
+                             org_id: str, org_name: str, ts: str, *,
+                             email_verified: bool = False, new_user: bool = True) -> None:
+        """A user, their workspace and their ownership of it — in ONE
+        transaction (QA-230): a failure in any step leaves none of them, so an
+        address is never left with an account and no workspace. ``new_user``
+        False: the user exists (an account left without one) and only gets its
+        workspace."""
+        async with self.engine.begin() as conn:
+            if new_user:
+                await conn.execute(insert(users).values(
+                    user_id=user_id, email=email, password_hash=password_hash,
+                    created_ts=ts, email_verified=email_verified))
+            await conn.execute(insert(orgs).values(
+                org_id=org_id, name=org_name, tier="community", created_ts=ts))
+            await conn.execute(insert(memberships).values(
+                user_id=user_id, org_id=org_id, role="owner", created_ts=ts))
+
     async def count_users(self) -> int:
         """How many users exist at all — the whole table, not one org's.
 

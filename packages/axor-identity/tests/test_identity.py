@@ -74,6 +74,67 @@ async def test_duplicate_email_is_409(client: httpx.AsyncClient) -> None:
                                   "or reset the password if you forgot it")
 
 
+# QA-230: a 300-character workspace name answered 500 and left the user
+# created without a workspace — sign-up then said "exists", log-in "no
+# organization": the address was stuck.
+async def test_a_too_long_workspace_name_is_a_400_in_words_and_writes_nothing(
+        client: httpx.AsyncClient, app) -> None:  # noqa: ANN001
+    r = await client.post("/v1/signup", json={"email": "long@acme.io", "password": PW,
+                                              "org_name": "W" * 300})
+    assert r.status_code == 400
+    assert r.json()["detail"] == "a workspace name is at most 100 characters (this one has 300)"
+    assert await app.state.store.get_user_by_email("long@acme.io") is None
+    r = await client.post("/v1/signup", json={"email": "long@acme.io", "password": "x" * 2000,
+                                              "org_name": "Acme"})
+    assert r.status_code == 400 and "password is at most" in r.json()["detail"]
+    await _signup(client, "long@acme.io", org="W" * 100)
+
+
+async def test_a_sign_up_that_fails_half_way_leaves_no_account(
+        client: httpx.AsyncClient, app, monkeypatch) -> None:  # noqa: ANN001
+    from axor_identity import storage
+
+    real = storage.insert
+
+    def failing_insert(table):  # noqa: ANN001, ANN202 - the org insert breaks
+        if table is storage.orgs:
+            raise RuntimeError("the database refused the workspace")
+        return real(table)
+
+    monkeypatch.setattr(storage, "insert", failing_insert)
+    with pytest.raises(RuntimeError):
+        await client.post("/v1/signup", json={"email": "half@acme.io", "password": PW,
+                                              "org_name": "Acme"})
+    monkeypatch.setattr(storage, "insert", real)
+    assert await app.state.store.get_user_by_email("half@acme.io") is None
+    await _signup(client, "half@acme.io")
+
+
+async def test_an_account_left_without_a_workspace_is_completed_by_signing_up_again(
+        client: httpx.AsyncClient, app) -> None:  # noqa: ANN001
+    from axor_identity.passwords import hash_password
+
+    # what the old half-made sign-up left behind
+    await app.state.store.create_user("usr_stuck", "stuck@acme.io", hash_password(PW),
+                                      "2026-11-27T00:00:00Z")
+    r = await client.post("/v1/login", json={"email": "stuck@acme.io", "password": PW})
+    assert r.status_code == 403
+    assert "sign up again with this address and password" in r.json()["detail"]["detail"]
+    # someone else cannot take the address over with another password
+    r = await client.post("/v1/signup", json={"email": "stuck@acme.io",
+                                              "password": "another password",
+                                              "org_name": "Mine"})
+    assert r.status_code == 409
+    done = await _signup(client, "stuck@acme.io", org="Stuck Inc")
+    assert done["user"]["user_id"] == "usr_stuck" and done["org"]["role"] == "owner"
+    r = await client.post("/v1/login", json={"email": "stuck@acme.io", "password": PW})
+    assert r.status_code == 200
+    # and once it has one, sign-up says "exists" as for anyone
+    r = await client.post("/v1/signup", json={"email": "stuck@acme.io", "password": PW,
+                                              "org_name": "Second"})
+    assert r.status_code == 409
+
+
 # ── login ─────────────────────────────────────────────────────────────────────
 async def test_login_success_and_token_verifies_against_jwks(
         client: httpx.AsyncClient) -> None:

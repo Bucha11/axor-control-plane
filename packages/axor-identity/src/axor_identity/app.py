@@ -297,6 +297,7 @@ def create_app(database_url: str | None = None, *,
             return await _signup_invited(body)
         if not body.org_name.strip():
             raise HTTPException(422, "a new workspace needs a name")
+        _check_lengths(body)
         # The gate runs before the e-mail is even looked at, so a refused signup
         # cannot be used to probe which addresses are registered.
         if signup_mode == "closed":
@@ -310,15 +311,26 @@ def create_app(database_url: str | None = None, *,
         # in at once, so an answer that looked the same as success would need
         # sign-up to wait for a mailed link first — and an install without mail
         # could not sign anyone up. So it says so, and what to do instead.
-        if await store.get_user_by_email(email):
+        org_id = "org_" + secrets.token_hex(6)
+        ts = _now_iso()
+        existing = await store.get_user_by_email(email)
+        if existing is not None:
+            # QA-230: an account left without a workspace (a sign-up that
+            # failed half-way, before it was one transaction) is completed by
+            # signing up again with the same address AND its password — the
+            # one repair path. Anyone else gets the usual 409.
+            stored = existing["password_hash"]
+            if stored and not await store.memberships_for_user(existing["user_id"]) \
+                    and verify_password(stored, body.password):
+                await store.create_account(existing["user_id"], email, None, org_id,
+                                           body.org_name.strip(), ts, new_user=False)
+                return await _issue_session(existing, org_id, "owner", "community")
             raise HTTPException(409, "that address already has an account — log in, "
                                      "or reset the password if you forgot it")
         user_id = "usr_" + secrets.token_hex(8)
-        org_id = "org_" + secrets.token_hex(6)
-        ts = _now_iso()
-        await store.create_user(user_id, email, hash_password(body.password), ts)
-        await store.create_org(org_id, body.org_name, "community", ts)
-        await store.add_membership(user_id, org_id, "owner", ts)
+        # one transaction: a failure leaves no account without a workspace
+        await store.create_account(user_id, email, hash_password(body.password), org_id,
+                                   body.org_name.strip(), ts)
         user = {"user_id": user_id, "email": email}
         await _send_link(user, "verify", body.return_to, quiet=True)
         return await _issue_session(user, org_id, "owner", "community")
@@ -339,7 +351,12 @@ def create_app(database_url: str | None = None, *,
             await store.update_password(user["user_id"], hash_password(body.password))
         memberships = await store.memberships_for_user(user["user_id"])
         if not memberships:
-            raise HTTPException(403, "user has no organization membership")
+            # QA-230: say what completes it — signing up again with this
+            # address and password makes the workspace (see signup)
+            raise HTTPException(403, {"code": "no_workspace",
+                                      "detail": "this account has no workspace yet — create "
+                                                "one: sign up again with this address and "
+                                                "password"})
         chosen = _pick_org(memberships, body.org_id)
         return await _issue_session(user, chosen["org_id"], chosen["role"],
                                     chosen["tier"])
@@ -550,6 +567,7 @@ def create_app(database_url: str | None = None, *,
     async def _signup_invited(body: SignupBody) -> dict:
         """A new account that joins the inviting organization — allowed
         whatever the signup mode: an admin chose to let this one in."""
+        _check_lengths(body)
         record = await _open_invite(body.invite or "")
         email = _norm_email(body.email)
         if record["email"] and record["email"] != email:
@@ -659,9 +677,8 @@ def create_app(database_url: str | None = None, *,
         user_id = "usr_" + secrets.token_hex(8)
         org_id = "org_" + secrets.token_hex(6)
         name = (profile.display or profile.email.split("@")[0])[:150]
-        await store.create_user(user_id, profile.email, None, ts, email_verified=True)
-        await store.create_org(org_id, f"{name}'s workspace", "community", ts)
-        await store.add_membership(user_id, org_id, "owner", ts)
+        await store.create_account(user_id, profile.email, None, org_id,
+                                   f"{name}'s workspace", ts, email_verified=True)
         await store.link_identity(provider.name, profile.subject, user_id,
                                   profile.email, ts)
         return user_id, True
@@ -1792,6 +1809,21 @@ def create_app(database_url: str | None = None, *,
         return {"ok": True}
 
     return app
+
+
+# QA-230: limits said in words, checked before anything is written. A name
+# longer than the column made the insert fail half-way through a sign-up.
+_ORG_NAME_MAX = 100
+_PASSWORD_MAX = 1024
+
+
+def _check_lengths(body: SignupBody) -> None:
+    name = body.org_name.strip()
+    if len(name) > _ORG_NAME_MAX:
+        raise HTTPException(400, f"a workspace name is at most {_ORG_NAME_MAX} characters "
+                                 f"(this one has {len(name)})")
+    if len(body.password) > _PASSWORD_MAX:
+        raise HTTPException(400, f"a password is at most {_PASSWORD_MAX} characters")
 
 
 def _pick_org(memberships: list[dict], org_id: str | None) -> dict:
