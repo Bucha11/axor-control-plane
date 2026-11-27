@@ -176,6 +176,26 @@ export default function Onboarding() {
 
 type ProdWay = "code" | "proxy";
 
+// what was chosen here survives a reload, as the guard's agent and port do:
+// a reload put the visitor back at the choice with no tools (QA-051)
+const WAY_KEY = "axor-prod-way";
+const PROXY_MODE_KEY = "axor-proxy-mode";
+const PROXY_TOOLS_KEY = "axor-proxy-tools";
+function stored<T extends string>(key: string, allowed: readonly T[]): T | null {
+  const v = localStorage.getItem(key);
+  return v && (allowed as readonly string[]).includes(v) ? (v as T) : null;
+}
+function remember(key: string, value: string | null): void {
+  if (value == null) localStorage.removeItem(key);
+  else localStorage.setItem(key, value);
+}
+function storedTools(): Tool[] {
+  try {
+    const v = JSON.parse(localStorage.getItem(PROXY_TOOLS_KEY) ?? "[]") as unknown;
+    return Array.isArray(v) ? v.filter((t): t is Tool => !!t && typeof t.name === "string" && typeof t.url === "string") : [];
+  } catch { return []; }
+}
+
 /** Two ways to put a production agent under Axor, and they are not the same
  * product: both refuse a dangerous call, pause, stop and cap; the wrap is inside
  * the agent and also sees the model (it can cut an item from its context), the
@@ -183,7 +203,8 @@ type ProdWay = "code" | "proxy";
  * test runs watch instead of blocking.
  * Said before either is set up, so nobody wires a proxy expecting a guard. */
 function ProductionOnboarding({ initial, proxyMode }: { initial?: ProdWay; proxyMode?: ProxyMode }) {
-  const [way, setWay] = useState<ProdWay | null>(initial ?? null);
+  const [way, setWayState] = useState<ProdWay | null>(initial ?? stored(WAY_KEY, ["code", "proxy"] as const));
+  const setWay = (w: ProdWay | null) => { setWayState(w); remember(WAY_KEY, w); };
   if (way === "code") {
     return (
       <div style={{ maxWidth: 640, margin: "0 auto" }}>
@@ -196,7 +217,8 @@ function ProductionOnboarding({ initial, proxyMode }: { initial?: ProdWay; proxy
     return (
       <div style={{ maxWidth: 640, margin: "0 auto" }}>
         <WaySwitch way={way} setWay={setWay} />
-        <ProxyModes onWrap={() => setWay("code")} initial={proxyMode ?? (initial === "proxy" ? "test" : "guard")} />
+        <ProxyModes onWrap={() => setWay("code")} initial={proxyMode
+          ?? (initial === "proxy" ? "test" : stored(PROXY_MODE_KEY, ["guard", "test"] as const) ?? "guard")} />
       </div>
     );
   }
@@ -263,7 +285,8 @@ type ProxyMode = "guard" | "test";
 /** The proxy has two jobs: guard the agent's tools (blocks), or a test run
  * (watches, and can break a tool on purpose to catch a made-up answer). */
 function ProxyModes({ onWrap, initial }: { onWrap: () => void; initial: ProxyMode }) {
-  const [mode, setMode] = useState<ProxyMode>(initial);
+  const [mode, setModeState] = useState<ProxyMode>(initial);
+  const setMode = (m: ProxyMode) => { setModeState(m); remember(PROXY_MODE_KEY, m); };
   return (
     <>
       <div className="flex gap-2 flex-wrap" style={{ marginBottom: 16 }} data-testid="proxy-modes">
@@ -323,7 +346,8 @@ function BothSteps({ at, onStep }: { at: 1 | 2; onStep: (n: 1 | 2) => void }) {
 
 function ProxyOnboarding({ onWrap }: { onWrap: () => void }) {
   const [step, setStep] = useState(1);
-  const [tools, setTools] = useState<Tool[]>([]);
+  const [tools, setTools] = useState<Tool[]>(storedTools);
+  useEffect(() => { remember(PROXY_TOOLS_KEY, tools.length ? JSON.stringify(tools) : null); }, [tools]);
   const [copied, setCopied] = useState<string | null>(null);
   const [draftName, setDraftName] = useState("");
   const [draftUrl, setDraftUrl] = useState("");

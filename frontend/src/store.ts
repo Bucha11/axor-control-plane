@@ -32,6 +32,10 @@ interface AppState {
   refreshToken: string;
   // Who is logged in, for display (identity login only).
   identityEmail: string;
+  // The sign-in ran out (its refresh was refused): said, not a silent guest
+  // (QA-102). Not kept across a reload.
+  sessionEnded: boolean;
+  setSessionEnded: (v: boolean) => void;
   // Hosted guest sessions this tab has held (newest first; the live one is
   // also `apiToken`). Kept so signing up can claim every one of them — an
   // expired guest's work is still claimable for a day.
@@ -69,6 +73,10 @@ interface AppState {
   // "show everything" from a journey's menu
   menuAll: boolean;
   setMenuAll: (v: boolean) => void;
+  // the example fleet, hidden from Agents by "hide the example" (QA-082);
+  // loading it again shows it again
+  fleetExampleHidden: boolean;
+  setFleetExampleHidden: (v: boolean) => void;
   // What each of the agent's tools does — one record, written wherever it is
   // decided (the wrap's and the proxy's onboarding, Policy) and read by all of
   // them and by a test run, so nobody classifies the same tools twice.
@@ -219,6 +227,8 @@ export const useApp = create<AppState>()(
       apiToken: "",
       refreshToken: "",
       identityEmail: "",
+      sessionEnded: false,
+      setSessionEnded: (v) => set({ sessionEnded: v }),
       guestTokens: [],
       guestExpiresAt: "",
       signingKeyId: "",
@@ -235,6 +245,8 @@ export const useApp = create<AppState>()(
       setJourney: (j) => set({ journey: j }),
       menuAll: false,
       setMenuAll: (v) => set({ menuAll: v }),
+      fleetExampleHidden: false,
+      setFleetExampleHidden: (v) => set({ fleetExampleHidden: v }),
       toolPolicy: {},
       setToolClass: (name, patch) =>
         set((s) => ({ toolPolicy: { ...s.toolPolicy,
@@ -256,7 +268,7 @@ export const useApp = create<AppState>()(
       setLastRun: (runId) => set({ lastRunId: runId }),
       setApiToken: (token) => set({ apiToken: token }),
       setSession: (access, refresh, email) =>
-        set({ apiToken: access, refreshToken: refresh, identityEmail: email }),
+        set({ apiToken: access, refreshToken: refresh, identityEmail: email, sessionEnded: false }),
       clearSession: () => set({ apiToken: "", refreshToken: "", identityEmail: "" }),
       setGuest: (token, expiresAt) =>
         set((s) => ({
@@ -295,7 +307,7 @@ export const useApp = create<AppState>()(
       // The trade: opening the app in a new tab asks you to sign in again.
       // For a governance console that is the right side of the trade.
       storage: createJSONStorage(() => splitStorage),
-      partialize: (s) => s,
+      partialize: ({ sessionEnded, ...s }) => s,
     },
   ),
 );

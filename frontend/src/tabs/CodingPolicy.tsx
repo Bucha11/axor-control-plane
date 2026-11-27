@@ -264,7 +264,7 @@ function PolicySignature({ signed }: { signed?: CodingRules["signed"] }) {
         armed
           ? <button data-testid="policy-sign" onClick={() => sign.mutate()} disabled={sign.isPending}
               style={btn({ fontSize: 11, padding: "4px 12px", color: C.text })}>sign the team's policy</button>
-          : <span style={{ color: C.dim }}>make a signing key in this browser (Settings) to sign it</span>
+          : <span style={{ color: C.dim }}>make an operator key in this browser (Settings → workspace → operator keys) to sign it</span>
       )}
       {sign.error && <span style={{ color: C.red }}>{(sign.error as Error).message}</span>}
     </div>

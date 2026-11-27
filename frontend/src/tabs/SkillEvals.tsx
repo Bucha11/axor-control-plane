@@ -16,6 +16,7 @@ import { SkillSwitch, TeamSwitch } from "../components/SkillsOff";
 import { HowItWorks, MachineCommand } from "../components/MachineCommand";
 import { useWorkStarted } from "../workStarted";
 import { localTime } from "../time";
+import { useOneAtATime } from "../oneAtATime";
 
 const label: React.CSSProperties = {
   fontFamily: MONO, fontSize: 10.5, color: C.dim, letterSpacing: "0.1em", marginBottom: 8,
@@ -164,6 +165,7 @@ function HowToRun() {
       skills: [skill], agent, trials: trials!, tasks: [{ name: "task-1", prompt, check: checkCmd }] }),
     onSuccess: () => void qc.invalidateQueries({ queryKey: ["machine-jobs"] }),
   });
+  const queueOnce = useOneAtATime(queue);
   const ready = !!machine && trials !== null && skill.trim() && prompt.trim() && checkCmd.trim();
   const field = (labelText: string, value: string, set: (v: string) => void, testId: string) => (
     <label className="flex items-center gap-2" style={{ fontFamily: MONO, fontSize: 11, color: C.mut }}>
@@ -184,8 +186,9 @@ function HowToRun() {
         {field("the skill", skill, setSkill, "eval-skill")}
         {field("a task", prompt, setPrompt, "eval-prompt")}
         {field("done when", checkCmd, setCheckCmd, "eval-check")}
-        <label className="flex items-center gap-2" style={{ fontFamily: MONO, fontSize: 11, color: C.mut }}>
-          <span style={{ width: 110 }}>times each</span>
+        <label className="flex items-center gap-2 flex-wrap" style={{ fontFamily: MONO, fontSize: 11, color: C.mut }}>
+          {/* the label keeps its width and its line at 390 (QA-104) */}
+          <span data-testid="eval-trials-label" style={{ width: 110, flexShrink: 0, whiteSpace: "nowrap" }}>times each</span>
           <input inputMode="numeric" value={trialsText} data-testid="eval-trials"
             onChange={(ev) => setTrialsText(ev.target.value)}
             style={{ width: 70, background: C.bg, border: `1px solid ${trials === null ? C.red : C.line}`, borderRadius: 5,
@@ -214,7 +217,7 @@ function HowToRun() {
       </div>
       {mine.length > 0 ? (
         <div className="flex items-center gap-3 flex-wrap">
-          <button data-testid="eval-run" disabled={!ready || queue.isPending} onClick={() => queue.mutate()}
+          <button data-testid="eval-run" disabled={!ready || queue.isPending} onClick={() => queueOnce()}
             style={btn({ color: C.bg, background: C.green, border: `1px solid ${C.green}`, fontSize: 12,
                          fontWeight: 700, padding: "7px 16px" })}>
             {queue.isPending ? "queueing…" : "Run"}

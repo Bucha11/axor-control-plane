@@ -14,6 +14,7 @@ import { isGuestToken, useApp } from "../store";
 import { untrustedFields } from "../policyConfig";
 import { C, MONO, btn } from "../theme";
 import { IdentityLogin } from "../tabs/Settings";
+import { useOneAtATime } from "../oneAtATime";
 import { filesFromList, plainGuess } from "../tabs/ConfigBuilder";
 
 export type Framework = "langchain" | "claude" | "python";
@@ -204,6 +205,7 @@ export default function AdapterOnboarding() {
     mutationFn: () => api.createKey(["ingest"], `node ${nodeId}`, nodeId),
     onSuccess: (k) => setKey(k.secret),
   });
+  const mintOnce = useOneAtATime(mint);
   const download = useMutation({
     mutationFn: () => api.wrapManifests(rows.map((r) => ({
       id: r.tool.id, source: r.tool.source, description: r.tool.description,
@@ -366,7 +368,7 @@ export default function AdapterOnboarding() {
             style={{ background: C.bg, border: `1px solid ${C.line}`, borderRadius: 4, color: C.text,
                      fontFamily: MONO, fontSize: 11.5, padding: "4px 8px", width: 160 }} />
           {needsKey && !key && (
-            <button onClick={() => mint.mutate()} disabled={!nodeId.trim() || mint.isPending} data-testid="adapter-mint"
+            <button onClick={() => mintOnce()} disabled={!nodeId.trim() || mint.isPending} data-testid="adapter-mint"
               style={btn({ color: C.steel, borderColor: C.steel, fontSize: 11, padding: "4px 10px" })}>
               {mint.isPending ? "…" : "create the key"}
             </button>

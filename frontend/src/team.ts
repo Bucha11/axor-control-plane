@@ -43,3 +43,20 @@ export function useMine(): (developer?: string | null) => boolean {
   // a developer that is an opaque id (a machine key) names nobody: the team's
   return (developer) => !email || !developer || !developer.includes("@") || developer.toLowerCase() === email;
 }
+
+/** Whether this sign-in carries a scope: a viewer holds only `read`, a member
+ *  `operate` and `ingest`, the owner `admin` too. An open plane, or not known
+ *  yet: yes — the plane still says no where it must. */
+export function useHasScope(): (scope: "read" | "ingest" | "operate" | "admin") => boolean {
+  const apiToken = useApp((s) => s.apiToken);
+  const q = useQuery({ queryKey: ["auth-status", apiToken], queryFn: api.authStatus });
+  return (scope) => !q.data || !q.data.auth_enabled || q.data.scopes.includes(scope);
+}
+
+/** Like useHasScope, but false until the plane has answered: for a request
+ *  that must not go out unless the caller holds the scope (QA-121). */
+export function useHasScopeKnown(): (scope: "read" | "ingest" | "operate" | "admin") => boolean {
+  const apiToken = useApp((s) => s.apiToken);
+  const q = useQuery({ queryKey: ["auth-status", apiToken], queryFn: api.authStatus });
+  return (scope) => !!q.data && (!q.data.auth_enabled || q.data.scopes.includes(scope));
+}

@@ -162,6 +162,16 @@ async def memory_of_session(node_id: str, store: StoreDep) -> dict:
     return {"node_id": node_id, "given": out}
 
 
+def _not_the_example(repo: str) -> None:
+    """The product's example memory is read, never changed (QA-005): its
+    switches and a note wrote into the real workspace's records."""
+    from axor_backend import demo
+
+    if repo == demo.CODING_REPO:
+        raise HTTPException(409, "this is the product's example memory — it is there to "
+                                 "look at; your own repositories' memory is yours to change")
+
+
 @router.put("/v1/memory/{item_id}")
 async def set_status(item_id: int, body: dict, request: Request, store: StoreDep,
                      principal: PrincipalDep) -> dict:
@@ -172,6 +182,7 @@ async def set_status(item_id: int, body: dict, request: Request, store: StoreDep
     item = await store.memory_item_by_id(item_id)
     if item is None:
         raise HTTPException(404, "no such memory item")
+    _not_the_example(item["repo"])
     if item["status"] == "kept_out" and status == "on":
         raise HTTPException(409, f"kept out: {item['doc'].get('reason', '')}")
     now = _now()
@@ -202,6 +213,7 @@ async def add_note(body: dict, request: Request, store: StoreDep,
     text = " ".join(str(body.get("text", "")).split())
     if not repo or repo not in await store.repo_labels():
         raise HTTPException(404, "no coding session has reported that repository")
+    _not_the_example(repo)
     if not text:
         raise HTTPException(400, "a note has text")
     if len(text) > NOTE_MAX:

@@ -14,6 +14,7 @@ import { untrustedFields } from "../policyConfig";
 import ScanTools from "./ScanTools";
 import { C, MONO, btn } from "../theme";
 import { IdentityLogin } from "../tabs/Settings";
+import { useOneAtATime } from "../oneAtATime";
 import { useWorkStarted } from "../workStarted";
 
 type Klass = ToolKlass;
@@ -54,7 +55,11 @@ const input = {
 /** Why a tool cannot be added as typed, or null when it can. A second tool
  *  under a name already listed was dropped without a word, and anything was
  *  taken for an address — the proxy forwards to http(s) only (QA-015). */
+export const MAX_TOOL_NAME = 64;
 export function toolDraftError(name: string, url: string, names: string[]): string | null {
+  // a 5000-character name made every step a wall of text (QA-050)
+  if (name.length > MAX_TOOL_NAME)
+    return `a tool name is at most ${MAX_TOOL_NAME} characters (this one has ${name.length})`;
   if (names.includes(name)) return `${name} is already listed — give this tool another name`;
   let protocol = "";
   try { protocol = new URL(url).protocol; } catch { /* not a URL at all */ }
@@ -120,6 +125,7 @@ export default function GuardOnboarding() {
     mutationFn: () => api.createKey(["ingest"], `node ${nodeId}`, nodeId),
     onSuccess: (k) => setKey(k.secret),
   });
+  const mintOnce = useOneAtATime(mint);
   const manifests = useMutation({
     mutationFn: () => api.wrapManifests(tools.map((t) => ({
       id: t.name, source: policy[t.name]?.source ?? t.url, description: "",
@@ -271,7 +277,7 @@ export default function GuardOnboarding() {
           <input value={port} onChange={(e) => setPort(e.target.value.replace(/[^\d]/g, "").slice(0, 5))}
             aria-label="proxy port" style={{ ...input, width: 64 }} />
           {needsKey && !key && (
-            <button onClick={() => mint.mutate()} disabled={!nodeId.trim() || mint.isPending} data-testid="guard-mint"
+            <button onClick={() => mintOnce()} disabled={!nodeId.trim() || mint.isPending} data-testid="guard-mint"
               style={btn({ color: C.steel, borderColor: C.steel, fontSize: 11, padding: "4px 10px" })}>
               {mint.isPending ? "…" : "create the key"}
             </button>

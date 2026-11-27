@@ -315,7 +315,7 @@ function DryRuns() {
             return (
               <div key={n.node_id} style={{ borderTop: i ? `1px solid ${C.line}` : "none" }}>
                 <button onClick={() => setOpen(isOpen ? null : n.node_id)} data-testid={`dry-run-${t.skill}`}
-                  className="flex items-center gap-3 px-4 py-3 w-full"
+                  className="flex items-center gap-3 px-4 py-3 w-full flex-wrap"
                   style={{ background: "none", border: "none", cursor: "pointer", textAlign: "left" }}>
                   {isOpen ? <ChevronDown size={13} color={C.dim} /> : <ChevronRight size={13} color={C.dim} />}
                   <span style={{ fontSize: 13.5, color: C.text }}>{t.skill}</span>
@@ -324,7 +324,8 @@ function DryRuns() {
                     <span style={{ fontFamily: MONO, fontSize: 10.5, color: C.amber }}>example · not a run of yours</span>
                   )}
                   <span style={{ flex: 1 }} />
-                  <span style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim }}>
+                  {/* the date wraps whole, never "2026-11- / 27 16:42" (QA-104) */}
+                  <span data-testid="dry-run-when" style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim, whiteSpace: "nowrap" }}>
                     {localTime(n.reported?.updated_ts)}
                   </span>
                 </button>

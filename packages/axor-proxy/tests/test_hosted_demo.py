@@ -122,3 +122,41 @@ async def test_a_refused_claim_is_a_failed_test_not_a_finished_one(
     r = await page.post(f"/axor/runs/{run_id}/simulate", json={})
     assert r.status_code == 502
     assert r.json()["detail"] == "the test could not finish: this proxy requires a bearer token"
+
+
+async def test_the_demo_node_heartbeats_with_the_spawners_credential(
+        monkeypatch: pytest.MonkeyPatch) -> None:
+    """QA-080: the node's run landed in the spawner's workspace, but its
+    heartbeats went without a credential, so on a plane with auth on it never
+    appeared in Control. They carry the same credential as the upload."""
+    import asyncio
+
+    from axor_proxy import governed
+
+    seen: dict[str, object] = {}
+
+    class FakeClient:
+        def __init__(self, base: str, session: object, run_id: str | None = None,
+                     ingest_key: str | None = None, **_: object) -> None:
+            seen["ingest_key"] = ingest_key
+
+        async def run(self, stop: asyncio.Event) -> None:
+            await stop.wait()
+
+        async def heartbeat_loop(self, stop: asyncio.Event, level_fn: object = None) -> None:
+            await stop.wait()
+
+        async def flush(self, level: str = "NORMAL") -> None:
+            return None
+
+    async def accept(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={})
+
+    real = httpx.AsyncClient
+    monkeypatch.setattr(governed, "PlaneClient", FakeClient)
+    monkeypatch.setattr(governed.httpx, "AsyncClient",
+                        lambda **kw: real(transport=httpx.MockTransport(accept), **kw))
+    out = await governed.spawn_governed_node("http://plane.test", ingest_key="user-jwt",
+                                             ttl_seconds=0.05)
+    await out["_task"]
+    assert seen["ingest_key"] == "user-jwt"

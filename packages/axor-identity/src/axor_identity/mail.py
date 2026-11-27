@@ -61,12 +61,33 @@ class SmtpMailer:
                                                   context=ctx)
         else:
             conn = smtplib.SMTP(self.host, self.port, timeout=self.timeout)
-        with conn:
-            if self.tls == "starttls":
-                conn.starttls(context=ctx)
-            if self.username:
-                conn.login(self.username, self.password)
-            conn.send_message(msg)
+        try:
+            with conn:
+                if self.tls == "starttls":
+                    conn.starttls(context=ctx)
+                if self.username:
+                    conn.login(self.username, self.password)
+                conn.send_message(msg)
+        except smtplib.SMTPRecipientsRefused as exc:
+            # the API answers only "the mail server did not take the message":
+            # why is said here, in the server's own words (QA-120)
+            for to, (code, text) in exc.recipients.items():
+                log.error("SMTP %s:%s refused the recipient %s: %s %s", self.host, self.port,
+                          to, code, _said(text))
+            raise
+        except smtplib.SMTPResponseException as exc:
+            log.error("SMTP %s:%s refused the message to %s: %s %s", self.host, self.port,
+                      msg["To"], exc.smtp_code, _said(exc.smtp_error))
+            raise
+        except (smtplib.SMTPException, OSError) as exc:
+            log.error("SMTP %s:%s could not take the message to %s: %s: %s", self.host,
+                      self.port, msg["To"], type(exc).__name__, exc)
+            raise
+
+
+def _said(text: bytes | str) -> str:
+    """The server's reply text, as text."""
+    return text.decode("utf-8", "replace") if isinstance(text, bytes) else str(text)
 
 
 def mailer_from_url(url: str | None, sender: str | None = None) -> Mailer | None:

@@ -26,6 +26,10 @@ async def test_governed_session_records_a_taint_denial() -> None:
     # Every event carries a unique seq (the backend dedups on it).
     seqs = [line["seq"] for line in lines]
     assert len(seqs) == len(set(seqs))
+    # QA-081: every event carries a real ISO time, never "seq:N".
+    from datetime import datetime
+    stamps = [datetime.fromisoformat(line["ts"]) for line in lines]
+    assert all(s.tzinfo is not None for s in stamps) and stamps == sorted(stamps)
 
 
 @pytest.mark.anyio

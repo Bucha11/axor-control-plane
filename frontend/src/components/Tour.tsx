@@ -15,7 +15,7 @@ import { useQuery } from "@tanstack/react-query";
 import { X } from "lucide-react";
 import { api } from "../api";
 import { navigate } from "../router";
-import { useApp } from "../store";
+import { isGuestToken, useApp } from "../store";
 import { C, MONO } from "../theme";
 
 export type TourSide = "coding" | "production";
@@ -27,6 +27,7 @@ interface TourStep {
   body: string;
   cta?: { label: string; route: string }; // the last step: the way in
   example?: true;        // only the examples show it: skipped once the workspace's own agents report
+  account?: true;        // a guest is refused this page: skipped for a guest (QA-046)
 }
 
 const sel = (testId: string) => `[data-testid="${testId}"]`;
@@ -40,7 +41,7 @@ export const TOURS: Record<TourSide, TourStep[]> = {
       body: "Example data: Claude Code and Codex in one repository. Claude Code read a docs page — what it brought back stays marked “from the web”. Codex then tried to run the command that page suggested and was refused at the shell, though Codex never saw the page. Every session shows up here live: pause it, stop it, cap it.",
     },
     {
-      route: "pair/{pair}", target: sel("pair-pane"), title: "Pair on a session",
+      route: "pair/{pair}", target: sel("pair-pane"), account: true, title: "Pair on a session",
       body: "Open a pair on a teammate's session and send the link: you watch each step as it happens — what it ran, what failed, what it said — and can write the agent a note. It gets the note at its next step.",
     },
     {
@@ -160,7 +161,8 @@ export default function Tour() {
   const apiToken = useApp((s) => s.apiToken);
   const ws = useQuery({ queryKey: ["workspace", apiToken], queryFn: api.workspace, staleTime: 60_000,
                         enabled: stepIdx != null });
-  const TOUR = ws.data?.work_started ? TOURS[side].filter((s) => !s.example) : TOURS[side];
+  const guest = isGuestToken(apiToken);
+  const TOUR = TOURS[side].filter((s) => !(ws.data?.work_started && s.example) && !(guest && s.account));
   const step = stepIdx == null ? TOUR[0] : TOUR[Math.min(stepIdx, TOUR.length - 1)];
   const active = stepIdx != null;
   const [rect, setRect] = useState<DOMRect | null>(null);
@@ -176,6 +178,23 @@ export default function Tour() {
     const route = routeOf(step);
     const want = `#/${route}`;
     if (window.location.hash !== want) navigate(route);
+  }, [active, stepIdx]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Escape ends the tour, and so does leaving the step's page — through the
+  // sidebar, a link or the browser's back: the card no longer describes what
+  // is on screen (QA-047). Only the path counts: a page may add its own query.
+  useEffect(() => {
+    if (!active) return;
+    const pathOf = (h: string) => h.replace(/^#?\/?/, "").split("?")[0];
+    const want = pathOf(routeOf(step));
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setTourStep(null); };
+    const onHash = () => { if (pathOf(window.location.hash) !== want) setTourStep(null); };
+    window.addEventListener("keydown", onKey);
+    window.addEventListener("hashchange", onHash);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("hashchange", onHash);
+    };
   }, [active, stepIdx]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Find and track the target (poll briefly — the tab may still be mounting).

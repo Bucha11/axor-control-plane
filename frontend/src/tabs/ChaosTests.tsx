@@ -12,6 +12,8 @@ import { useApp } from "../store";
 import Coach from "../components/Coach";
 import { agentLabel, liveAgents } from "../agentName";
 import { useWorkStarted } from "../workStarted";
+import { useOneAtATime } from "../oneAtATime";
+import { localTime } from "../time";
 
 export const MODE_WORDS: Record<string, string> = {
   silent_fail: "returning an error",
@@ -139,7 +141,7 @@ function Row({ r, odd }: { r: ChaosRun; odd: boolean }) {
     <div data-testid="chaos-row" style={{ display: "grid", gridTemplateColumns: "130px 1fr 130px", gap: 12,
       padding: "10px 12px", background: odd ? C.panel : C.panel2, borderLeft: `3px solid ${v.color}` }}>
       <div style={{ fontFamily: MONO, fontSize: 11, color: C.mut }}>
-        {new Date(r.created_ts).toLocaleString(undefined, { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", hourCycle: "h23" })}
+        {localTime(r.created_ts)}
         <div style={{ color: C.text, marginTop: 2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={r.node_id}>{agentLabel(r.node_id)}</div>
       </div>
       <div style={{ minWidth: 0 }}>
@@ -172,6 +174,7 @@ function LiveArm({ agents, modes, onArmed }: { agents: string[]; modes: string[]
     mutationFn: () => api.chaosArm(picked, tool.trim() || undefined, mode || undefined),
     onSuccess: onArmed,
   });
+  const armOnce = useOneAtATime(arm);
   return (
     <div style={card} data-testid="chaos-live">
       <div style={{ fontSize: 13.5, fontWeight: 600, marginBottom: 4 }}>On your live agents, next run</div>
@@ -200,7 +203,7 @@ function LiveArm({ agents, modes, onArmed }: { agents: string[]; modes: string[]
               {modes.map((m) => <option key={m} value={m}>{MODE_WORDS[m] ?? m}</option>)}
             </select>
           </div>
-          <button data-testid="chaos-arm" onClick={() => arm.mutate()} disabled={!picked.length || arm.isPending}
+          <button data-testid="chaos-arm" onClick={() => armOnce()} disabled={!picked.length || arm.isPending}
             style={btn({ color: picked.length ? C.text : C.dim, borderColor: picked.length ? C.steel : C.line, fontSize: 11.5, padding: "5px 12px" })}>
             {arm.isPending ? "…" : "break it on the next run"}
           </button>
@@ -283,7 +286,7 @@ function Schedule({ agents, modes, current, onSaved }: {
         {save.isError && <span style={{ color: C.red }}>{(save.error as Error).message}</span>}
         {current.last_run_ts && (
           <span style={{ color: C.dim }}>
-            last: {new Date(current.last_run_ts).toLocaleString()} —{" "}
+            last: {localTime(current.last_run_ts)} —{" "}
             {current.last_armed.length
               ? current.last_armed.map((a) => `${a.node_id}: ${a.tool}`).join(", ")
               : "nothing armed"}

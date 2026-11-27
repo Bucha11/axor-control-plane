@@ -122,9 +122,12 @@ async def vault_mint_token(which: str, request: Request, store: StoreDep,
                                  "rules every workspace — a workspace token would not apply")
     secret = f"axv_{which}_{secrets.token_urlsafe(32)}"
     held = await workspace_tokens(store)
+    replaced = which in held
     held[which] = {"hash": hash_secret(secret), "ts": now(), "by": audit.actor(request)["who"]}
     await store.set_setting(WORKSPACE_TOKENS_SETTING, held)
-    await audit.record(store, request, "vault_token", which)
+    # a replacement reads apart from a first token on the trail (QA-070)
+    await audit.record(store, request, "vault_token", which,
+                       **({"replaced": True} if replaced else {}))
     return {"subsystem": which, "token": secret,
             "header": f"X-Vault-{which.capitalize()}-Token"}
 

@@ -17,9 +17,11 @@ import { C, MONO, btn } from "../theme";
 import Coach from "../components/Coach";
 import { incidentWhat } from "./Evidence";
 import Tooltip from "../components/Tooltip";
-import { codingExampleOnly, fleetExampleOnly, isCodingSession } from "../components/CodingOnboarding";
+import { isoDate, localTime } from "../time";
+import { FLEET_EXAMPLE, codingExampleOnly, fleetExampleOnly, isCodingSession } from "../components/CodingOnboarding";
 import { AlertMe, KeepAsTest, SignUpForYourAgent } from "../components/AccountAction";
 import { NOT_A_TEST_BENCH, behindProxy, cannotCut, isTestBench } from "../agentName";
+import { useOneAtATime } from "../oneAtATime";
 
 const REFETCH_MS = 5000;
 
@@ -176,6 +178,7 @@ function SpawnGoverned({ switchToAdapter }: { switchToAdapter?: boolean }) {
     },
     onError: (e: Error) => setErr(e.message),
   });
+  const spawnTreeOnce = useOneAtATime(spawnTree);
   const seedTree = useMutation({
     mutationFn: () => api.seedTreeRun(),
     onSuccess: async () => {
@@ -198,12 +201,13 @@ function SpawnGoverned({ switchToAdapter }: { switchToAdapter?: boolean }) {
     },
     onError: (e: Error) => setErr(e.message),
   });
+  const spawnOnce = useOneAtATime(spawn);
   return (
     <div className="mt-3" data-tour="spawn">
       <div className="flex flex-wrap items-center gap-2">
       <Tooltip content="Starts a real axor-core governed agent (an IntentLoop) on the proxy and connects it to the plane — so you can watch a live node heartbeat and obey your interventions without wiring your own.">
         <button
-          onClick={() => spawn.mutate()}
+          onClick={() => spawnOnce()}
           disabled={spawn.isPending}
           style={btn({ color: C.bg, background: C.green, border: `1px solid ${C.green}`, fontSize: 12, fontWeight: 700, padding: "8px 14px" })}
         >
@@ -212,7 +216,7 @@ function SpawnGoverned({ switchToAdapter }: { switchToAdapter?: boolean }) {
       </Tooltip>
       <Tooltip content="Runs a REAL 3-node governed tree (axor-core IntentLoops over the message bus): the scraper's web taint is carried up two delegation hops and the orchestrator's export is denied — containment, live.">
         <button
-          onClick={() => spawnTree.mutate()}
+          onClick={() => spawnTreeOnce()}
           disabled={spawnTree.isPending}
           style={btn({ color: C.text, borderColor: C.steel, fontSize: 12, padding: "8px 14px" })}
         >
@@ -257,9 +261,11 @@ function SpawnGoverned({ switchToAdapter }: { switchToAdapter?: boolean }) {
  * another — built by those libraries, posted through the plane's own routes. */
 export function ExampleFleet({ compact = false }: { compact?: boolean }) {
   const qc = useQueryClient();
+  const unhide = useApp((s) => s.setFleetExampleHidden);
   const seed = useMutation({
     mutationFn: api.seedFleet,
     onSuccess: () => {
+      unhide(false);
       // "fleet" too: until it is read again the cards fell back to the seeding
       // time and the 24h totals to nothing, beside a feed of the run (QA-039)
       for (const key of ["nodes", "topology", "probe-report", "repair", "reputation", "fleet"]) {
@@ -376,8 +382,11 @@ function ControlBody({ focusNode, testBench }: { focusNode?: string; testBench: 
   // lives on Try a skill
   // once the workspace's own agents report, the examples loaded before stop
   // showing beside them (an example asked for after that still shows)
+  // ...and the example fleet once "hide the example" was clicked (QA-082)
+  const fleetHidden = useApp((st) => st.fleetExampleHidden);
+  const hiddenExample = (id: string) => fleetHidden && FLEET_EXAMPLE.includes(id);
   const everyone = (nodes.data ?? []).filter((n) => !n.node_id.startsWith("skill-try.")
-    && !n.example_hidden);
+    && !n.example_hidden && !(n.example && hiddenExample(n.node_id)));
   // the menu's side: coding agents (sessions and their tree runs) or
   // production agents — everything when no side was chosen or all was asked for
   const journey = useApp((st) => st.journey);
@@ -413,9 +422,13 @@ function ControlBody({ focusNode, testBench }: { focusNode?: string; testBench: 
   // which is not an agent to operate (see `everyone` above)
   const topoData = topo.data && {
     ...topo.data,
-    nodes: topo.data.nodes.filter((n) => !n.node_id.startsWith("skill-try.")
+    nodes: topo.data.nodes.filter((n) => !n.node_id.startsWith("skill-try.") && !hiddenExample(n.node_id)
+      // a peer only the hidden example talked to goes with it
+      && !(fleetHidden && n.kind === "peer" && topo.data!.edges.filter((e) => e.to === n.node_id)
+        .every((e) => hiddenExample(e.from)))
       && !(nodes.data ?? []).some((x) => x.node_id === n.node_id && x.example_hidden)),
-    edges: topo.data.edges.filter((e) => !e.from.startsWith("skill-try.") && !e.to.startsWith("skill-try.")),
+    edges: topo.data.edges.filter((e) => !e.from.startsWith("skill-try.") && !e.to.startsWith("skill-try.")
+      && !hiddenExample(e.from) && !hiddenExample(e.to)),
   };
   const [more, setMore] = useState(false);
   const [cmdError, setCmdError] = useState<string | null>(null);
@@ -872,7 +885,13 @@ function ControlBody({ focusNode, testBench }: { focusNode?: string; testBench: 
               <span style={{ color: node.profile?.title ? C.dim : C.text, fontSize: node.profile?.title ? 11 : 13 }}>{node.node_id}</span>
             </span>
             )}
-            {applying ? (
+            {applying && node.example ? (
+              // nothing runs behind an example: "applying pause…" waited
+              // forever (QA-090)
+              <span data-testid="example-no-commands" style={{ fontFamily: MONO, fontSize: 11, color: C.dim }}>
+                example node — it takes no commands; yours do
+              </span>
+            ) : applying ? (
               <span style={{ fontFamily: MONO, fontSize: 11, color: C.amber }}>
                 applying {Object.entries(desired?.state ?? {}).map(([k, v]) => stateWords(k, v)).join(", ")}…
               </span>
@@ -944,7 +963,7 @@ function ControlBody({ focusNode, testBench }: { focusNode?: string; testBench: 
             <span>budget cap</span>
             <span style={{ color: C.text }}>
               {typeof desired?.state.budget_cap_calls === "number"
-                ? `${desired.state.budget_cap_calls} calls`
+                ? `${desired.state.budget_cap_calls.toLocaleString("en-US")} call${desired.state.budget_cap_calls === 1 ? "" : "s"}`
                 : "unlimited"}
             </span>
             {typeof desired?.state.budget_cap_calls === "number" && (
@@ -962,36 +981,40 @@ function ControlBody({ focusNode, testBench }: { focusNode?: string; testBench: 
               </span>
             )}
             <input
-              type="number"
-              min={0}
+              // text, not number: a number field turned 1.5 into 1 and 1e309
+              // into nothing without a word (QA-034, QA-084)
+              type="text"
+              inputMode="numeric"
+              maxLength={12}
               value={budgetInput}
               onChange={(e) => {
                 setBudgetInput(e.target.value);
-                // a fixed value takes the complaint away; one the field cannot
-                // hold (1e309) reads as empty, so say why apply is off (QA-034)
-                setCmdError(e.target.validity.badInput ? "cap must be a whole number of calls, like 50" : null);
+                // a fixed value takes the complaint away; a bad one says why
+                // apply is off
+                setCmdError(e.target.value === "" || capOf(e.target.value) != null ? null : CAP_RULE);
               }}
               placeholder={isCodingNode(node) ? "N more calls" : "set / lower"}
               aria-label="budget"
               disabled={stopped || command.isPending}
-              style={{ width: 92, background: C.bg, border: `1px solid ${C.line}`, borderRadius: 4, color: C.text, fontFamily: MONO, fontSize: 11, padding: "4px 7px", outline: "none" }}
+              // wide enough for its placeholder, at 390 too, where fields are 16px (QA-091)
+              style={{ width: 132, flexShrink: 0, background: C.bg, border: `1px solid ${C.line}`, borderRadius: 4, color: C.text, fontFamily: MONO, fontSize: 11, padding: "4px 7px", outline: "none" }}
             />
             <Tooltip content="Cap how many tool calls this agent may still make. While it runs a cap can only be lowered (the agent refuses a raise); remove it and restart the agent to lift it.">
               <button
                 onClick={async () => {
-                  const entered = parseInt(budgetInput, 10);
-                  if (Number.isNaN(entered) || entered < 0) { setCmdError("cap must be a non-negative integer"); return; }
+                  const entered = capOf(budgetInput);
+                  if (entered == null) { setCmdError(CAP_RULE); return; }
                   // a coding session: "N more calls" from where it is now
                   const n = isCodingNode(node) ? (fleetRows.get(node.node_id)?.calls ?? 0) + entered : entered;
                   const cur = typeof desired?.state.budget_cap_calls === "number" ? desired.state.budget_cap_calls : null;
                   if (cur != null && n > cur) { setCmdError(`can only lower the cap on a running agent — ${n} > current ${cur}. Remove it and restart the agent to start over.`); return; }
                   if (cur == null && !await askConfirm(
-                    `Cap ${node.node_id} at ${n} tool calls?\n\nWhile it runs the cap can only be lowered, never raised: when it is spent every call is refused (429) until you remove the cap and restart the agent.`)) return;
+                    `Cap ${node.node_id} at ${n.toLocaleString("en-US")} tool call${n === 1 ? "" : "s"}?\n\nWhile it runs the cap can only be lowered, never raised: when it is spent every call is refused (429) until you remove the cap and restart the agent.`)) return;
                   send({ budget_cap_calls: n });
                   setBudgetInput("");
                 }}
-                disabled={stopped || command.isPending || budgetInput === ""}
-                style={btn({ color: (stopped || budgetInput === "") ? C.dim : C.steel, borderColor: C.line, fontSize: 11, padding: "4px 10px" })}
+                disabled={stopped || command.isPending || capOf(budgetInput) == null}
+                style={btn({ color: (stopped || capOf(budgetInput) == null) ? C.dim : C.steel, borderColor: C.line, fontSize: 11, padding: "4px 10px" })}
               >
                 <Gauge size={12} /> apply
               </button>
@@ -1097,6 +1120,12 @@ function ControlBody({ focusNode, testBench }: { focusNode?: string; testBench: 
                   <Syringe size={12} /> Inject next turn
                 </button>
               </Tooltip>
+              {/* a disabled button shows no tooltip: the reason is said beside it (QA-090) */}
+              {!benchOk && !stopped && (
+                <span data-testid="inject-why" style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim, alignSelf: "center" }}>
+                  inject: test-bench agents only
+                </span>
+              )}
               </>}
             </div>
           )}
@@ -1207,6 +1236,7 @@ function SayToAgent({ nodeId }: { nodeId: string }) {
     mutationFn: () => api.sayToAgent(nodeId, text.trim()),
     onSuccess: () => { setText(""); void qc.invalidateQueries({ queryKey: ["said", nodeId] }); },
   });
+  const sendOnce = useOneAtATime(send);
   const notes = (said.data?.notes ?? []).filter((n) => !n.pair && !n.from_node).slice(-3);
   return (
     <div data-testid="say-to-agent" className="mt-4" style={{ fontFamily: MONO, fontSize: 11, color: C.mut }}>
@@ -1221,11 +1251,11 @@ function SayToAgent({ nodeId }: { nodeId: string }) {
       ))}
       <div className="flex gap-2 items-start">
         <textarea value={text} onChange={(e) => setText(e.target.value)} rows={2} aria-label="say to the agent"
-          onKeyDown={(e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && text.trim()) send.mutate(); }}
+          onKeyDown={(e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && text.trim()) sendOnce(); }}
           placeholder="e.g. use the existing token table, not a new one"
           style={{ flex: 1, background: C.bg, border: `1px solid ${C.line}`, borderRadius: 4, color: C.text,
                    fontFamily: "inherit", fontSize: 12, padding: "6px 8px", outline: "none", resize: "vertical" }} />
-        <button data-testid="say-send" onClick={() => send.mutate()} disabled={!text.trim() || send.isPending}
+        <button data-testid="say-send" onClick={() => sendOnce()} disabled={!text.trim() || send.isPending}
           style={btn({ fontSize: 11, padding: "6px 12px", color: text.trim() ? C.text : C.dim })}>send</button>
       </div>
       <div style={{ color: C.dim, fontSize: 10.5, marginTop: 4 }}>
@@ -1317,6 +1347,7 @@ function NotYours({ developer, nodeId, hasTeam }: { developer: string; nodeId: s
     mutationFn: () => api.askToPair(nodeId),
     onSuccess: () => void qc.invalidateQueries({ queryKey: ["pair-requests"] }),
   });
+  const askOnce = useOneAtATime(ask);
   return (
     <div data-testid="not-your-session" className="mb-3" style={{ fontFamily: MONO, fontSize: 11.5, color: C.mut, lineHeight: 1.7 }}>
       {developer}'s session — they, or an owner or admin, pause and stop it.
@@ -1329,7 +1360,7 @@ function NotYours({ developer, nodeId, hasTeam }: { developer: string; nodeId: s
           ) : mineReq?.status === "pending" ? (
             <span data-testid="asked-to-pair" style={{ color: C.dim }}>asked to pair — {developer} is told in their agent</span>
           ) : (
-            <button onClick={() => ask.mutate()} disabled={ask.isPending} data-testid="ask-to-pair"
+            <button onClick={() => askOnce()} disabled={ask.isPending} data-testid="ask-to-pair"
               style={btn({ fontSize: 11, padding: "4px 12px" })}>
               {mineReq?.status === "declined" ? "ask to pair again" : "ask to pair — watch it live"}
             </button>
@@ -1508,27 +1539,37 @@ function primary(st: Status[]): Status {
   return "idle";
 }
 
+const MAX_CAP = 1_000_000;
+const CAP_RULE = `cap must be a whole number of calls from 0 to ${MAX_CAP.toLocaleString("en-US")}, like 50`;
+/** The cap typed, or null for anything but a whole number in range: 1.5, -5,
+ *  1e309 and 23 digits each say so instead of turning into 1, nothing or 1e+23. */
+function capOf(text: string): number | null {
+  const t = text.trim();
+  if (!/^\d{1,7}$/.test(t)) return null;
+  const n = Number(t);
+  return n <= MAX_CAP ? n : null;
+}
+
 /** "40s ago" today; past a day, the day and time — "3d ago" says nothing about when. */
 function lastActive(iso?: string | null): string {
-  if (!iso) return "—";
-  const d = new Date(iso);
-  if (isNaN(d.getTime())) return "—";
+  const d = isoDate(iso);
+  if (!iso || !d) return "—";
   return Date.now() - d.getTime() < 86_400_000 ? ago(iso) : stamp(iso);
 }
 
-/** "14:31:07" for today, "Thu 12 Nov 14:31" for any other day. */
+/** "14:31:07" for today, "2026-11-12 14:31" for any other day; a stamp that
+ *  is not ISO ("seq:3") is no time at all, never a date in 2001 (QA-081). */
 function stamp(iso: string): string {
-  const d = new Date(iso);
-  if (isNaN(d.getTime())) return "";
+  const d = isoDate(iso);
+  if (!d) return "";
   const today = new Date().toDateString() === d.toDateString();
-  return today ? d.toTimeString().slice(0, 8)
-    : `${d.toLocaleDateString(undefined, { weekday: "short", day: "numeric", month: "short" })} ${d.toTimeString().slice(0, 5)}`;
+  return today ? d.toTimeString().slice(0, 8) : localTime(iso);
 }
 
 function ago(iso?: string | null): string {
-  if (!iso) return "—";
-  const s = Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 1000));
-  if (isNaN(s)) return "—";
+  const d = isoDate(iso);
+  if (!d) return "—";
+  const s = Math.max(0, Math.round((Date.now() - d.getTime()) / 1000));
   if (s < 60) return `${s}s ago`;
   if (s < 3600) return `${Math.floor(s / 60)}m ago`;
   if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
@@ -1571,6 +1612,7 @@ function StatusChips({ units, filter, setFilter }: {
  * made-up answer passed up the tree and refused on its way out, a leak only
  * visible across sessions, a context gone bad — each a link to where it is. */
 function FleetExampleStory({ onPick, onGraph }: { onPick: (id: string) => void; onGraph: () => void }) {
+  const hide = useApp((s) => s.setFleetExampleHidden);
   const row = (n: string, testId: string, go: () => void, text: React.ReactNode, act?: React.ReactNode) => (
     <div style={{ padding: "3px 0", fontFamily: MONO, fontSize: 11.5, color: C.mut, lineHeight: 1.6 }}>
       <span style={{ color: C.amber }}>{n}</span> {text}{" "}
@@ -1583,8 +1625,11 @@ function FleetExampleStory({ onPick, onGraph }: { onPick: (id: string) => void; 
   return (
     <div data-testid="fleet-example-story" style={{ border: `1px solid ${C.line}`, borderRadius: 8,
       padding: "12px 16px", marginBottom: 18, background: C.panel }}>
-      <div style={{ fontFamily: MONO, fontSize: 10.5, color: C.steel, letterSpacing: "0.06em", marginBottom: 4 }}>
-        EXAMPLE · A RESEARCH AGENT AND ITS HELPERS
+      <div className="flex items-center" style={{ fontFamily: MONO, fontSize: 10.5, color: C.steel, letterSpacing: "0.06em", marginBottom: 4 }}>
+        <span style={{ flex: 1 }}>EXAMPLE · A RESEARCH AGENT AND ITS HELPERS</span>
+        <button onClick={() => hide(true)} data-testid="story-hide"
+          style={{ background: "none", border: "none", padding: 0, cursor: "pointer", fontFamily: MONO,
+                   fontSize: 10.5, color: C.steel, letterSpacing: 0 }}>hide the example ×</button>
       </div>
       <div style={{ fontSize: 13, color: C.text, lineHeight: 1.6, marginBottom: 6 }}>
         <span style={{ fontFamily: MONO }}>tree-orch</span> hands the work to{" "}
@@ -1614,6 +1659,8 @@ function FleetExampleStory({ onPick, onGraph }: { onPick: (id: string) => void; 
         style={btn({ color: C.text, borderColor: C.steel, fontSize: 11.5, padding: "5px 12px", marginTop: 10 })}>
         Govern my production agent →
       </button>
+      {/* the spawn actions stay reachable beside the example (QA-082) */}
+      <SpawnGoverned switchToAdapter />
       <SignUpForYourAgent />
     </div>
   );
@@ -2253,6 +2300,7 @@ function ActivityFeed({ only }: { only?: Set<string> }) {
   const nodesQ = useQuery({ queryKey: ["nodes"], queryFn: api.nodes });
   const treesQ = useQuery({ queryKey: ["trees"], queryFn: api.trees });
   const examples = new Set((nodesQ.data ?? []).filter((n) => n.example_hidden).map((n) => n.node_id));
+  const fleetHidden = useApp((st) => st.fleetExampleHidden);
   // a coding session reads as its task: the developer's first request in it;
   // a tree's agent as its node ("read 3 of 6"); a tree as its task
   const titleOf = new Map((nodesQ.data ?? []).filter((n) => n.profile?.title)
@@ -2267,9 +2315,15 @@ function ActivityFeed({ only }: { only?: Set<string> }) {
     // a skill's dry run is shown on Try a skill, not among the agents' work
     if (e.node_id.startsWith("skill-try.")) return false;
     if (examples.has(e.node_id)) return false;
+    if (fleetHidden && FLEET_EXAMPLE.includes(e.node_id)) return false;
     if (only && !only.has(e.node_id)) return false;
     return true;
   });
+  // newest first by time, not by arrival: an example seeded after real work
+  // landed below it with older times (QA-103). Stable, so a run's own order
+  // (a call before its answer) holds; a stamp that is not ISO goes last.
+  const at = (e: ActivityEvent) => isoDate(e.ts)?.getTime() ?? -Infinity;
+  kept.sort((x, y) => at(y) - at(x));
   const rows = feedRows(kept).filter(({ e, text }) => !find
     || `${e.node_id} ${titleOf.get(e.node_id) ?? ""} ${text}`.toLowerCase().includes(find.toLowerCase()));
   const work = new Set(["tool_call", "tool_result", "claim", "fault_injected", "denial"]);

@@ -123,12 +123,13 @@ export function CodingStage({ autoplay = false }: { autoplay?: boolean }) {
           {/* where text came from, recorded once per repository and shared by both agents */}
           <line x1={N.claude.x} y1={N.claude.y} x2={L.x} y2={L.y} stroke={ledger ? C.amber : C.line} strokeWidth="1" strokeDasharray="3 3" />
           <line x1={N.codex.x} y1={N.codex.y} x2={L.x} y2={L.y} stroke={ledger ? C.amber : C.line} strokeWidth="1" strokeDasharray="3 3" />
-          <rect x={L.x - (narrow ? 118 : 88)} y={L.y - (narrow ? 26 : 18)}
-            width={narrow ? 236 : 176} height={narrow ? 52 : 36} rx="6" fill={C.panel}
+          {/* wide enough for its 14px sub-label on a phone: it spilled out on both sides (QA-107) */}
+          <rect data-testid="ledger-box" x={L.x - (narrow ? 140 : 88)} y={L.y - (narrow ? 26 : 18)}
+            width={narrow ? 280 : 176} height={narrow ? 52 : 36} rx="6" fill={C.panel}
             stroke={ledger ? C.amber : C.line} strokeWidth="1.2" />
           <text x={L.x} y={L.y - (narrow ? 4 : 2)} textAnchor="middle" fill={ledger ? C.amber : C.mut}
             fontSize={narrow ? 16 : 10} fontFamily={MONO}>{narrow ? "where text came from" : "repo · where text came from"}</text>
-          <text x={L.x} y={L.y + (narrow ? 17 : 11)} textAnchor="middle" fill={C.dim} fontSize={narrow ? 14 : 9} fontFamily={MONO}>
+          <text data-testid="ledger-sub" x={L.x} y={L.y + (narrow ? 17 : 11)} textAnchor="middle" fill={C.dim} fontSize={narrow ? 14 : 9} fontFamily={MONO}>
             {ledger ? "“setup.limitkit.example” ← web" : "shared by all agents"}
           </text>
 

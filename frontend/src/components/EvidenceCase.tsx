@@ -14,6 +14,7 @@ import { navigate } from "../router";
 import { C, MONO } from "../theme";
 import Tooltip from "./Tooltip";
 import { localTime } from "../time";
+import { useOneAtATime } from "../oneAtATime";
 
 const HEADLINE: Record<string, string> = {
   fabrication_contained: "contained a fabrication at the boundary",
@@ -130,6 +131,13 @@ export default function EvidenceCase({
     onSuccess: () => void qc.invalidateQueries({ queryKey: ["share-links", runId] }),
   });
 
+  // The link just made is revoked when it was revoked — not when the list has
+  // not been read again yet: right after sharing, the old list made a fresh
+  // link read "revoked · this link no longer opens" until the refetch landed.
+  const shareGone = !!shareToken && (
+    (revoked.isSuccess && revoked.variables === shareToken)
+    || (links.data?.links ?? []).some((l) => l.token === shareToken && l.revoked));
+
   const share = useMutation({
     mutationFn: () => api.shareCase(runId, caseIndex),
     onSuccess: (r) => {
@@ -145,6 +153,7 @@ export default function EvidenceCase({
       });
     },
   });
+  const shareOnce = useOneAtATime(share);
 
   return (
     <div style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 8, overflow: "hidden" }}>
@@ -171,7 +180,7 @@ export default function EvidenceCase({
           {(c.deviation ?? "no deviation").toUpperCase().replaceAll("_", " ")} · {c.verdict_source} ·
           confidence {c.confidence}
         </span>
-        <div className="flex gap-2 items-center">
+        <div className="flex gap-2 items-center flex-wrap">
           <Tooltip content="Jump to the exact step in Replay where this discrepancy happened — scrub around it, fork a counterfactual.">
             <button
               onClick={() => navigate(`explain/${runId}`, { seq: replayStep, node: replayNode })}
@@ -182,7 +191,7 @@ export default function EvidenceCase({
           </Tooltip>
           <KeepAsTest runId={runId} testId="case-keep" />
           <Tooltip content="Copy a revocable permalink to just this case — one page, scoped token, no access to the rest of the workspace. Revoke it any time.">
-            <button onClick={() => share.mutate()} style={action(copied ? C.green : C.mut)}>
+            <button onClick={() => shareOnce()} style={action(copied ? C.green : C.mut)}>
               {copied ? <Check size={11} /> : <Share2 size={11} />} {copied ? "link copied" : "Share"}
             </button>
           </Tooltip>
@@ -282,11 +291,10 @@ export default function EvidenceCase({
       {shareUrl && (
         <div className="px-4 py-2 flex items-center gap-2" style={{ borderTop: `1px solid ${C.line}` }}>
           <span style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim }}>
-            {shareToken && !active.some((l) => l.token === shareToken) && links.data
-              ? "revoked · this link no longer opens" : "revocable permalink"}
+            {shareGone ? "revoked · this link no longer opens" : "revocable permalink"}
             {" · observations only, no raw bodies · "}{shareUrl}
           </span>
-          {shareToken && (active.some((l) => l.token === shareToken) || !links.data) && (
+          {shareToken && !shareGone && (
             <button
               onClick={() => revoked.mutate(shareToken)}
               disabled={revoked.isPending}
@@ -314,5 +322,7 @@ function action(color: string): React.CSSProperties {
     fontSize: 11,
     padding: "5px 10px",
     cursor: "pointer",
+    // a narrow screen wraps whole buttons, never a label inside one (QA-091)
+    whiteSpace: "nowrap",
   };
 }

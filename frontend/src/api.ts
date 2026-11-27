@@ -933,12 +933,19 @@ async function scopeRefusal(resp: Response): Promise<boolean> {
 
 /** A command the plane refused for its signature, said with what to do: the
  *  raw "no operator keys registered" left an operator nowhere to go (QA-003). */
-function commandRefusal(e: unknown): unknown {
+function commandRefusal(e: unknown, hasKey = true): unknown {
   if (!(e instanceof ApiError) || e.status !== 403) return e;
   if (/no operator keys registered/.test(e.message)) {
     return new ApiError(403, "operator_key_needed",
       "this workspace signs every command, and it has no operator key yet — an owner or admin "
       + "makes one for this browser in Settings → workspace → operator keys");
+  }
+  // this browser has no key at all: it sent no operator, and saying its key
+  // is unknown read as if it had one (QA-083)
+  if (!hasKey && /sig_invalid|unknown operator|operator=/.test(e.message)) {
+    return new ApiError(403, "operator_key_needed",
+      "this workspace signs every command, and this browser has no operator key — make one in "
+      + "Settings → workspace → operator keys");
   }
   if (/sig_invalid|unknown operator|operator=/.test(e.message)) {
     return new ApiError(403, "operator_key_unknown",
@@ -956,6 +963,13 @@ function commandRefusal(e: unknown): unknown {
 async function af(path: string, init: RequestInit = {}, retried = false): Promise<Response> {
   if (!apiToken() && path !== "/v1/auth/status") await sessionSettled();
   const token = apiToken();
+  const feature = isGuestToken(token) && (init.method ?? "GET").toUpperCase() === "GET" ? guestCannotRead(path) : null;
+  if (feature) {
+    // the plane's own answer, without asking it
+    return new Response(JSON.stringify({ error: "account_required", feature,
+      detail: `${feature} need an account — sign up free; your guest work comes with you` }),
+      { status: 403, headers: { "content-type": "application/json" } });
+  }
   const headers = new Headers(init.headers);
   if (token) headers.set("Authorization", `Bearer ${token}`);
   const resp = await fetch(path, { ...init, headers });
@@ -987,6 +1001,23 @@ async function af(path: string, init: RequestInit = {}, retried = false): Promis
 }
 
 // ── hosted guest sessions ─────────────────────────────────────────────────────
+
+// What the plane answers a guest only with 403 account_required
+// (backend guests.ACCOUNT_ONLY). Not asked for: every screen that read one
+// put a 403 in the console, Settings most of all (QA-049). A write still
+// goes, so the plane's answer can offer the sign-up.
+const GUEST_CANNOT_READ: [string, string][] = [
+  ["/v1/notifications", "notifications"], ["/v1/regression", "the regression corpus"],
+  ["/v1/lab/", "Lab deploys"], ["/v1/vault", "the vault"], ["/v1/keys", "API and node keys"],
+  ["/v1/license", "licences"], ["/v1/pair", "pair sessions"], ["/v1/machine", "machines"],
+];
+
+/** The feature a guest's read of `path` needs an account for, or null. */
+function guestCannotRead(path: string): string | null {
+  const p = path.split("?")[0];
+  if (p === "/v1/license/entitlements") return null;
+  return GUEST_CANNOT_READ.find(([x]) => p.startsWith(x))?.[1] ?? null;
+}
 
 // Whose requests these are, known once: with no token yet, the plane is asked
 // whether it needs one (auth off, or a session already there: no) and, where
@@ -1085,6 +1116,7 @@ async function refreshSession(staleToken: string | null): Promise<boolean> {
           return true;
         }
         useApp.getState().clearSession();
+        useApp.getState().setSessionEnded(true);
         return false;
       })
       .finally(() => {
@@ -1270,6 +1302,28 @@ async function signedStatement(payload: Record<string, unknown>):
 // deployment's signing custody (the vault) as before; null when neither.
 // Everything newer — notes, the coding policy, vouches — is signed by this
 // browser's key alone (opKey.sign).
+/** Who signs this browser's commands: its own operator key, else the vault's
+ *  operator; null when it signs nothing. */
+async function signingOperator(): Promise<string | null> {
+  const own = await opKey.load();
+  if (own?.operatorId) return own.operatorId;
+  return useApp.getState().signingKeyId ? "op_ui" : null;
+}
+
+// A command's own record of who asked (a replan's, a cut's, an injection's) is
+// the operator who signs it: "op_ui" inside a command signed by another key
+// recorded the wrong person (QA-083).
+const RECORDS_OPERATOR = ["replan", "pending_injection", "pending_excision", "pending_experiment"];
+function withOperator(state: Record<string, unknown>, who: string | null): Record<string, unknown> {
+  if (!who) return state;
+  const out = { ...state };
+  for (const k of RECORDS_OPERATOR) {
+    const v = out[k];
+    if (v && typeof v === "object" && !Array.isArray(v)) out[k] = { ...v, operator: who };
+  }
+  return out;
+}
+
 async function operatorSign(payload: unknown): Promise<{ operator: string; sig: string } | null> {
   const own = await opKey.sign(payload);
   if (own) return own;
@@ -1637,15 +1691,18 @@ export const api = {
     // One timestamp, signed and sent — the adapter reconstructs the exact bytes
     // from (node_id, version, body=state, timestamp), so they must match.
     const timestamp = new Date().toISOString();
+    state = withOperator(state, await signingOperator());
     const signed = await operatorSign({ node_id: nodeId, version, body: state, timestamp });
+    // no key, no operator: a made-up "op_ui" was refused as an unknown
+    // operator, and read as if this browser had a key (QA-083)
     const r = await af(`/v1/plane/${encodeURIComponent(nodeId)}/command`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ version, state, operator: signed?.operator ?? "op_ui", timestamp,
+      body: JSON.stringify({ version, state, operator: signed?.operator ?? "", timestamp,
                              sig: signed?.sig ?? "" }),
     });
     return j<{ node_id: string; version: number; state: Record<string, unknown> }>(r)
-      .catch((e: unknown) => { throw commandRefusal(e); });
+      .catch((e: unknown) => { throw commandRefusal(e, !!signed); });
   },
   // `mustRefuse` names the calls a must_block pin holds — needed when the run
   // was recorded ungoverned and refused nothing (else it can't be checked)
@@ -2206,14 +2263,17 @@ export const api = {
   appendFact: async (nodeId: string, fact: Record<string, unknown>) => {
     // Facts are signed with version=0 (they carry no optimistic version — the
     // adapter signs (node_id, 0, body=fact, timestamp)).
+    // signed like a command: this browser's own operator key first, else the
+    // vault's — and the fact's own "who" is that signer, not a fixed "op_ui"
+    // (QA-122)
     const timestamp = new Date().toISOString();
-    const sig = signingArmed()
-      ? await vaultSign({ node_id: nodeId, version: 0, body: fact, timestamp })
-      : "";
+    const who = await signingOperator();
+    const body = who && "operator" in fact ? { ...fact, operator: who } : fact;
+    const signed = await operatorSign({ node_id: nodeId, version: 0, body, timestamp });
     const r = await af(`/v1/plane/${encodeURIComponent(nodeId)}/facts`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ fact, operator: "op_ui", timestamp, sig }),
+      body: JSON.stringify({ fact: body, operator: signed?.operator ?? "", timestamp, sig: signed?.sig ?? "" }),
     });
     return j<{ appended: boolean }>(r);
   },
@@ -2229,18 +2289,13 @@ export const api = {
   // distributes the signal child-ward along spawn edges (spec v2 Ch.4 §6).
   cascadeStop: async (nodeId: string, version: number) => {
     const timestamp = new Date().toISOString();
-    const sig = signingArmed()
-      ? await vaultSign({
-          node_id: nodeId,
-          version,
-          body: { stopped: true, cascade: true },
-          timestamp,
-        })
-      : "";
+    // this browser's own operator key first, else the vault's (QA-122)
+    const signed = await operatorSign({
+      node_id: nodeId, version, body: { stopped: true, cascade: true }, timestamp });
     const r = await af(`/v1/plane/${encodeURIComponent(nodeId)}/cascade-stop`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ version, operator: "op_ui", timestamp, sig }),
+      body: JSON.stringify({ version, operator: signed?.operator ?? "", timestamp, sig: signed?.sig ?? "" }),
     });
     return j<{ stopped: string[]; count: number; mode?: string }>(r);
   },
@@ -2456,7 +2511,7 @@ export const api = {
           scopes?: string[];
           node_id?: string | null;
           label?: string;
-          by: { kind: string; id: string | null };
+          by: { kind: string; id: string | null; email?: string };
         }[]
       >(r),
     ),

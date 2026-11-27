@@ -1,7 +1,7 @@
 // The guided tour: one per kind of agent on Home, on that side's example data,
 // ending at its way in. Starting it never swaps Home for another page.
 import { expect, test } from "@playwright/test";
-import { goHash } from "./helpers";
+import { goHash, setConnection } from "./helpers";
 
 test.describe("tour", () => {
   test("once the workspace's own agents report, Home offers no example and the tour skips the example-only stop", async ({ page }) => {
@@ -94,6 +94,39 @@ test.describe("tour", () => {
     await expect(dialog.getByText("Your agents, live")).toBeVisible();
     await dialog.getByRole("button", { name: "skip tour" }).click();
     await expect(page.getByRole("dialog", { name: "guided tour" })).toHaveCount(0);
+  });
+
+  test("a guest's coding tour skips the pair page a guest is refused", async ({ page }) => {
+    // QA-046: step 2 opened #/pair/<token>, which tells a guest "Sign in to join
+    // a pair session" — the tour showed a refusal
+    await setConnection(page, { mode: "none", apiToken: "gs_e2e_guest_token" });
+    await goHash(page, "home");
+    await page.getByRole("button", { name: "Take the tour" }).click();
+    const dialog = page.getByRole("dialog", { name: "guided tour" });
+    await expect(dialog.getByText("Your coding agents, on one plane")).toBeVisible({ timeout: 15_000 });
+    await expect(dialog.getByText("1 / 8")).toBeVisible();
+    await dialog.getByRole("button", { name: "next →" }).click();
+    await expect(dialog.getByText("What your agents learned, for the whole team", { exact: true })).toBeVisible();
+    await expect(page).toHaveURL(/#\/memory$/);
+  });
+
+  test("Escape ends the tour, and so does leaving the step's page", async ({ page }) => {
+    // QA-047: Escape did nothing, and after a sidebar click the card and the
+    // dimmed backdrop stayed on top of an unrelated page
+    await goHash(page, "home?for=production");
+    await page.getByRole("button", { name: "Take the tour" }).click();
+    const dialog = page.getByRole("dialog", { name: "guided tour" });
+    await expect(dialog.getByText("Your agents, live")).toBeVisible({ timeout: 15_000 });
+    await page.keyboard.press("Escape");
+    await expect(dialog).toHaveCount(0);
+
+    await goHash(page, "home?for=production");
+    await page.getByRole("button", { name: "Take the tour" }).click();
+    await expect(dialog.getByText("Your agents, live")).toBeVisible({ timeout: 15_000 });
+    await expect(page).toHaveURL(/#\/govern$/);
+    await page.getByRole("button", { name: "Policy", exact: true }).click();
+    await expect(page).toHaveURL(/#\/policy$/);
+    await expect(dialog).toHaveCount(0);
   });
 
   test("is restartable from Settings → learn", async ({ page }) => {

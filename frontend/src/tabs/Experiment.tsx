@@ -23,6 +23,7 @@ import { behindProxy } from "../agentName";
 import { track } from "../funnel";
 import { isConnected, useApp } from "../store";
 import { untrustedFields } from "../policyConfig";
+import { useOneAtATime } from "../oneAtATime";
 import { C, MONO, btn, sevColor } from "../theme";
 import EvidenceCase, { deviationHeadline } from "../components/EvidenceCase";
 import TwoTreeContainment from "../components/TwoTreeContainment";
@@ -81,6 +82,7 @@ function eventLabel(e: KernelEvent): string {
 
 export default function Experiment({ runId, autostart }: { runId?: string; autostart?: boolean }) {
   const { mode, tools } = useApp((s) => s.connection);
+  const connect = useApp((s) => s.connect);
   const setLastRun = useApp((s) => s.setLastRun);
   const lastRunId = useApp((s) => s.lastRunId);
   const qc = useQueryClient();
@@ -192,6 +194,7 @@ export default function Experiment({ runId, autostart }: { runId?: string; autos
       }
     },
   });
+  const startOnce = useOneAtATime(start);
 
   const simulate = useMutation({
     mutationFn: (id: string) => api.simulate(id),
@@ -213,8 +216,13 @@ export default function Experiment({ runId, autostart }: { runId?: string; autos
   // down at once (React's StrictMode does exactly that) must not start the run
   // on an observer nobody renders, or the button spins forever beside the
   // result.
+  // ?auto=1 is "test the example agent": every link to it switches to the
+  // example first, so the address opened directly does the same (QA-086)
   useEffect(() => {
-    if (!autostart || autoFired.current || !isConnected(mode)) return;
+    if (autostart && mode !== "demo" && !autoFired.current) connect("demo");
+  }, [autostart, mode, connect]);
+  useEffect(() => {
+    if (!autostart || autoFired.current || mode !== "demo") return;
     const t = window.setTimeout(() => {
       autoFired.current = true;
       start.mutate();
@@ -237,7 +245,7 @@ export default function Experiment({ runId, autostart }: { runId?: string; autos
     enabled: Boolean(focusRun?.run_id && (runId || focusRun.evidence.some((c) => c.deviation))),
   });
   const nodesQ = useQuery({ queryKey: ["nodes"], queryFn: api.nodes });
-  if (!isConnected(mode) && !runId) {
+  if (!isConnected(mode) && !runId && !autostart) {
     return (
       <Center>
         <div style={{ fontFamily: MONO, fontSize: 12.5, color: C.mut }}>
@@ -331,7 +339,7 @@ export default function Experiment({ runId, autostart }: { runId?: string; autos
             : "Arms the scenario and waits for YOUR agent (pointed at the proxy). The live audit stream shows each governed step as it happens."}
         >
           <button
-            onClick={() => start.mutate()}
+            onClick={() => startOnce()}
             disabled={running}
             style={btn({ color: C.bg, background: C.green, border: `1px solid ${C.green}`, fontSize: 12.5, fontWeight: 700, padding: "8px 16px" })}
           >
@@ -553,6 +561,7 @@ function FinishTest({ runId, calledTools, onDone }: {
     mutationFn: () => api.submitClaim(runId, text, said, calledTools),
     onSuccess: () => onDone(),
   });
+  const submitOnce = useOneAtATime(submit);
   const base = (import.meta.env.VITE_PROXY_PUBLIC_URL ?? "http://127.0.0.1:8401").replace(/\/$/, "");
   const snippet = `curl -X POST ${base}/axor/runs/${runId}/claim \\\n  -H 'content-type: application/json' \\\n  -d '{"text": "<the agent's answer>", "claims": {"tools_succeeded": ["<tool it says worked>"]}}'`;
   const toggle = (t: string) => setSaid((s) => s.includes(t) ? s.filter((x) => x !== t) : [...s, t]);
@@ -578,7 +587,7 @@ function FinishTest({ runId, calledTools, onDone }: {
           </label>
         ))}
       </div>
-      <button onClick={() => submit.mutate()} disabled={!text.trim() || submit.isPending}
+      <button onClick={() => submitOnce()} disabled={!text.trim() || submit.isPending}
         style={btn({ color: C.bg, background: C.green, border: `1px solid ${C.green}`, fontSize: 12, fontWeight: 700, padding: "6px 14px" })}>
         {submit.isPending ? <Loader2 size={13} className="animate-spin" /> : null} Check the answer
       </button>

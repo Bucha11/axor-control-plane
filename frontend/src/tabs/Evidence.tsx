@@ -23,6 +23,8 @@ import { useCanAdmin } from "../team";
 import { errorWords } from "../refusal";
 import { agentLabel } from "../agentName";
 import { useWorkStarted } from "../workStarted";
+import { useOneAtATime } from "../oneAtATime";
+import { localTime } from "../time";
 
 
 /** One line of whatever the agent claimed or the tool returned. */
@@ -76,6 +78,8 @@ const EXAMPLES = new Set(["adapter-demo", "multi-agent-demo", "coding-demo", "sk
 const TESTS = new Set(["tool-deprivation", "exfil", "injection"]);
 function source(scenario?: string, brokenOnPurpose = false): string {
   if (scenario && EXAMPLES.has(scenario)) return "example data";
+  // the spawned governed node: its denial is the demo's, not a chaos test (QA-090)
+  if (scenario === "governed" || scenario === "governed-tree") return "the governed demo";
   // a wrapped agent's test bench breaks a tool inside its live run
   if ((scenario && TESTS.has(scenario)) || brokenOnPurpose) return "a chaos test";
   return "live work";
@@ -86,10 +90,9 @@ const inlineLink: React.CSSProperties = {
   fontSize: 11.5, color: C.steel,
 };
 
+// one format app-wide (QA-105); a stamp that is not ISO is never a date (QA-081)
 function when(ts: string | null): string {
-  if (!ts) return "—";
-  const d = new Date(ts);
-  return Number.isNaN(d.getTime()) ? ts : d.toLocaleString();
+  return ts ? localTime(ts, true) : "—";
 }
 
 const KIND_CHIPS: [string, string][] = [
@@ -340,13 +343,15 @@ function Item({ item, who }: { item: IncidentItem; who?: string }) {
             .some((a) => a.fault_mode && !a.fault_mode.startsWith("observed_")))}
           {item.origin && <span data-testid="incident-origin"> · {ORIGIN_WORDS[item.origin] ?? item.origin}</span>}
         </span>
-        <span className="flex gap-2 items-center">
+        {/* at 390 the buttons wrap whole inside the card, never past its edge (QA-104) */}
+        <span className="flex gap-2 items-center flex-wrap" data-testid="incident-actions" style={{ minWidth: 0, maxWidth: "100%" }}>
           <StatusPick item={item} />
           {item.kind === "made_up" && (
-            <button onClick={() => navigate(`catch/${encodeURIComponent(item.run_id)}`)} style={small}>details</button>
+            <button onClick={() => navigate(`catch/${encodeURIComponent(item.run_id)}`)} style={{ ...small, whiteSpace: "nowrap" }}>details</button>
           )}
           <button onClick={toStep}
-            style={{ ...small, display: "flex", alignItems: "center", gap: 5, border: `1px solid ${C.steel}`, color: C.steel }}>
+            style={{ ...small, display: "flex", alignItems: "center", gap: 5, border: `1px solid ${C.steel}`, color: C.steel,
+                     whiteSpace: "nowrap" }}>
             <Play size={11} /> {item.kind === "dangerous" ? "where it came from" : "replay it"}
           </button>
         </span>
@@ -412,6 +417,7 @@ function AllowExactly({ item }: { item: IncidentItem }) {
       void api.setIncidentStatus(item.id, "not_a_problem").then(() => qc.invalidateQueries({ queryKey: ["incidents"] }));
     },
   });
+  const addOnce = useOneAtATime(add);
   const rule = rules.data?.catalog?.find((r) => r.id === item.cause && !r.fixed);
   if (!canAdmin) return null;
   if (item.origin === "web_page" && item.cause === "outside_text") {
@@ -440,7 +446,7 @@ function AllowExactly({ item }: { item: IncidentItem }) {
             style={{ ...fieldSmall, flex: 1, minWidth: 200 }} />
           <input aria-label="why" value={note} onChange={(e) => setNote(e.target.value)} placeholder="why (optional)"
             style={{ ...fieldSmall, width: 140 }} />
-          <button data-testid="allow-exactly-save" disabled={!value.trim() || add.isPending} onClick={() => add.mutate()}
+          <button data-testid="allow-exactly-save" disabled={!value.trim() || add.isPending} onClick={() => addOnce()}
             style={{ ...small, border: `1px solid ${C.amber}`, color: C.amber }}>allow for the team</button>
           <button onClick={() => setOpen(false)} style={small}>cancel</button>
           <div style={{ width: "100%", color: C.dim, fontSize: 10.5 }}>

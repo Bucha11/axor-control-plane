@@ -6,7 +6,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { refusalWords } from "../refusal";
-import { api, ScrubberPayload, ScrubberStep } from "../api";
+import { api, ApiError, ScrubberPayload, ScrubberStep } from "../api";
 import { navigate } from "../router";
 import { useApp } from "../store";
 import { incidentWhat } from "./Evidence";
@@ -15,6 +15,7 @@ import { guessKlass, toolsFromSteps } from "../toolGuess";
 import { policyRules } from "../policyConfig";
 import { C, MONO, btn, sevColor } from "../theme";
 import TaintGraph from "./TaintGraph";
+import { localTime } from "../time";
 import CutResult from "../components/CutResult";
 import Coach from "../components/Coach";
 
@@ -166,9 +167,17 @@ function sentence(steps: ScrubberStep[], s: ScrubberStep): string {
 // evidence anchors and regression rows name) and is resolved to its step once
 // the trace loads.
 // `node` disambiguates `seq` in a multi-node run, where every node counts from 0.
-export default function ReplayTab({ runId: runIdProp, cursor: cursorProp, seq: seqProp, node: nodeProp }: {
+/** The run id as written in the address: it arrives still percent-encoded,
+ *  and was encoded a second time for the request (QA-089). */
+function decoded(id: string | undefined): string | undefined {
+  if (id == null) return id;
+  try { return decodeURIComponent(id); } catch { return id; }
+}
+
+export default function ReplayTab({ runId: rawRunId, cursor: cursorProp, seq: seqProp, node: nodeProp }: {
   runId?: string; cursor?: string; seq?: string; node?: string;
 }) {
+  const runIdProp = decoded(rawRunId);
   const runs = useQuery({ queryKey: ["runs"], queryFn: api.listRuns });
   const policy = useApp((st) => st.toolPolicy);
   const [pickedRun, setPickedRun] = useState<string | null>(runIdProp ?? null);
@@ -178,6 +187,8 @@ export default function ReplayTab({ runId: runIdProp, cursor: cursorProp, seq: s
     queryKey: ["scrubber", runId],
     queryFn: () => api.scrubber(runId!),
     enabled: !!runId,
+    // a run that is not there is not there the second time either (QA-089)
+    retry: (n, e) => n < 1 && !(e instanceof ApiError && e.status < 500),
   });
 
   const [cursor, setCursor] = useState(cursorProp ? Number(cursorProp) : 0);
@@ -257,6 +268,20 @@ export default function ReplayTab({ runId: runIdProp, cursor: cursorProp, seq: s
     seqLanded.current = key;
   }, [seqProp, nodeProp, runId, scrubber.data, nodeEvents.isPending, nodeEvents.data]);
 
+  // A cursor the run does not have (-3, 99, "x") opens at the nearest step
+  // and says so, as a seq out of range does — it showed no step at all (QA-089)
+  const [cursorMissing, setCursorMissing] = useState<{ asked: string; at: number } | null>(null);
+  useEffect(() => {
+    setCursorMissing(null);
+    if (!cursorProp || !scrubber.data) return;
+    const n = scrubber.data.steps.length;
+    const c = Number(cursorProp);
+    if (!n || (Number.isInteger(c) && c >= 0 && c < n)) return;
+    const at = Number.isFinite(c) && c >= n ? n - 1 : 0;
+    setCursor(at);
+    setCursorMissing({ asked: cursorProp, at });
+  }, [cursorProp, scrubber.data]);
+
   // The URL follows the step on screen, so a reload or a shared link opens on
   // it (QA-031). Replaced, not pushed: Back still leaves Replay. A `seq` link
   // keeps its seq until it has landed.
@@ -266,7 +291,7 @@ export default function ReplayTab({ runId: runIdProp, cursor: cursorProp, seq: s
     const [path, qs] = window.location.hash.split("?");
     const params = new URLSearchParams(qs ?? "");
     params.delete("seq");
-    params.set("cursor", String(Math.min(cursor, steps.length - 1)));
+    params.set("cursor", String(Math.max(0, Math.min(cursor, steps.length - 1))));
     const next = `${path}?${params}`;
     if (next !== window.location.hash) window.history.replaceState(null, "", next);
   }, [cursor, steps.length, runIdProp, seqProp]);
@@ -304,7 +329,7 @@ export default function ReplayTab({ runId: runIdProp, cursor: cursorProp, seq: s
 
   const run = (runs.data ?? []).find((r) => r.run_id === runId);
   const incident = run?.evidence?.[0];
-  const cur = steps[Math.min(cursor, Math.max(steps.length - 1, 0))];
+  const cur = steps[Math.max(0, Math.min(cursor, steps.length - 1))];
   const curRef = taintRef(cur);
   const divIndex = firstDiv != null ? steps.findIndex((x) => x.seq === firstDiv) : -1;
   const divStep = divIndex >= 0 ? steps[divIndex] : undefined;
@@ -371,8 +396,7 @@ export default function ReplayTab({ runId: runIdProp, cursor: cursorProp, seq: s
       </Coach>
       <div data-tour="replay-picker" className="flex items-center gap-3 flex-wrap" style={{ marginBottom: 14, fontFamily: MONO, fontSize: 11.5 }}>
         <button onClick={backToSearch} data-testid="replay-back" style={link}>← find another step</button>
-        {run && <span style={{ color: C.dim }}>{new Date(run.created_ts).toLocaleString(undefined, {
-          weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", hourCycle: "h23" })}</span>}
+        {run && <span style={{ color: C.dim }}>{localTime(run.created_ts)}</span>}
       </div>
 
       <h1 data-testid="replay-title" style={{ fontSize: 21, fontWeight: 650, lineHeight: 1.35, margin: "0 0 4px" }}>
@@ -393,6 +417,11 @@ export default function ReplayTab({ runId: runIdProp, cursor: cursorProp, seq: s
       {seqMissing && (
         <div data-testid="replay-seq-missing" style={{ fontFamily: MONO, fontSize: 11.5, color: C.amber, marginBottom: 12 }}>
           This run has no step with seq {seqMissing} — opened at the first step.
+        </div>
+      )}
+      {cursorMissing && (
+        <div data-testid="replay-cursor-missing" style={{ fontFamily: MONO, fontSize: 11.5, color: C.amber, marginBottom: 12 }}>
+          This run has no step at position {cursorMissing.asked} — opened at step {cursorMissing.at + 1}.
         </div>
       )}
       {run?.node_id && <SessionMemory nodeId={run.node_id} />}

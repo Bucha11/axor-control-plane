@@ -117,10 +117,10 @@ test.describe("control", () => {
     const input = page.getByPlaceholder("set / lower");
 
     await input.fill("-5");
-    await page.getByRole("button", { name: /apply/ }).click();
-    await expect(page.getByText("cap must be a non-negative integer")).toBeVisible();
+    await expect(page.getByText(/cap must be a whole number/)).toBeVisible();
+    await expect(page.getByRole("button", { name: /apply/ })).toBeDisabled();
     await input.fill("5");
-    await expect(page.getByText("cap must be a non-negative integer")).toHaveCount(0);
+    await expect(page.getByText(/cap must be a whole number/)).toHaveCount(0);
 
     // 1e309 is no number an input can hold: apply is off, and it says why
     await input.fill("");
@@ -196,6 +196,32 @@ test.describe("control", () => {
     await expect(ask).toHaveCount(0);
     await expect(page.getByTestId("stopped-note")).toBeVisible();
     expect(commands).toHaveLength(1);
+  });
+
+  test("the stop dialog keeps Tab inside and gives focus back to Stop", async ({ page, request }) => {
+    // QA-085: three Tabs reached the page behind the dialog, and after Escape
+    // focus fell to the page body instead of back to the Stop button
+    const node = uniqueNode("gov-focus");
+    await seedNode(request, node);
+    await setConnection(page, { mode: "adapter" });
+    await goHash(page, "control");
+    await page.getByTestId(`agent-row-${node}`).click();
+    await page.getByRole("button", { name: "more…" }).click();
+    const stop = page.getByRole("button", { name: "Stop", exact: true });
+    const ask = page.getByTestId("ask");
+    await stop.click();
+    const ok = ask.getByRole("button", { name: "ok" });
+    const cancel = ask.getByRole("button", { name: "cancel" });
+    await expect(ok).toBeFocused();
+    await page.keyboard.press("Tab");
+    await expect(cancel).toBeFocused();
+    await page.keyboard.press("Tab");
+    await expect(ok).toBeFocused();
+    await page.keyboard.press("Shift+Tab");
+    await expect(cancel).toBeFocused();
+    await page.keyboard.press("Escape");
+    await expect(ask).toHaveCount(0);
+    await expect(stop).toBeFocused();
   });
 
   test("the intervention menu gates inject behind test-bench", async ({ page, request }) => {

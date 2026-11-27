@@ -842,6 +842,14 @@ class Store:
         """
         async with self.engine.begin() as conn:
             org = current_org_id()
+            if conn.dialect.name == "postgresql":
+                # one reseed of a run at a time: two at once (the tour seeds the
+                # coding example and, alongside, memory and pair, which seed it
+                # too) both deleted, both inserted, and the second failed on
+                # uq_events_run_node_seq — a random 500 (QA-044). SQLite has a
+                # single writer already.
+                await conn.execute(sa_text("SELECT pg_advisory_xact_lock(hashtext(:k))"),
+                                   {"k": f"reseed:{org}:{run_id}"})
             await conn.execute(delete(events).where(
                 events.c.run_id == run_id, events.c.org_id == org,
             ))

@@ -52,8 +52,10 @@ test.describe("shell", () => {
     // the test screen belongs to Chaos tests
     await expect(page.getByRole("button", { name: "Chaos tests", exact: true })).toHaveAttribute("aria-current", "page");
     // the run lands, and the button that started it is ready again — it used
-    // to spin forever beside the result (an auto-start on a torn-down mount)
-    await expect(page.getByText(/FABRICATED TOOL RESULT/).first()).toBeVisible({ timeout: 15_000 });
+    // to spin forever beside the result (an auto-start on a torn-down mount).
+    // A real run through the proxy: under the full suite's load 15 s was
+    // sometimes not enough (QA-123), as the other catch tests already allow.
+    await expect(page.getByText(/FABRICATED TOOL RESULT/).first()).toBeVisible({ timeout: 30_000 });
     await expect(page.getByRole("button", { name: /Run the test/ })).toBeEnabled();
   });
 

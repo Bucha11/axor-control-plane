@@ -23,6 +23,23 @@ test.describe("eval (demo-mode)", () => {
     await expect(page.getByRole("button", { name: /Run the test/ })).toBeVisible();
   });
 
+  test("a double-click on Run the test starts one run", async ({ page }) => {
+    // QA-087: the second click of a double-click got through before the button
+    // turned disabled — two runs started, an extra incident on the plane
+    let posts = 0;
+    await page.route("**/axor/runs", async (r) => {
+      if (r.request().method() === "POST") {
+        posts += 1;
+        await new Promise((ok) => setTimeout(ok, 300));
+      }
+      await r.continue();
+    });
+    await goHash(page, "eval");
+    await page.getByRole("button", { name: /Run the test/ }).dblclick();
+    await expect(page.getByText("fabricated a tool result").first()).toBeVisible({ timeout: 20_000 });
+    expect(posts).toBe(1);
+  });
+
   test("running an experiment catches the fabrication as an EvidenceCase", async ({ page }) => {
     await goHash(page, "eval");
     await page.getByRole("button", { name: /Run the test/ }).click();
@@ -58,6 +75,22 @@ test.describe("eval (demo-mode)", () => {
     await expect(page.getByText(/revocable permalink · observations only/)).toBeVisible();
     await page.getByRole("button", { name: "revoke", exact: true }).click();
     await expect(page.getByText(/this link no longer opens/)).toBeVisible();
+  });
+
+  test("a link just made is not called revoked while the list is read again", async ({ page }) => {
+    // the old list made a fresh link read "revoked · this link no longer opens"
+    // until the refetch landed — on a slow machine long enough to be seen
+    await goHash(page, "eval");
+    await page.getByRole("button", { name: /Run the test/ }).click();
+    await expect(page.getByText("fabricated a tool result").first()).toBeVisible({ timeout: 20_000 });
+    await page.route("**/v1/share-links*", async (r) => {
+      await new Promise((ok) => setTimeout(ok, 6000));
+      await r.continue().catch(() => undefined);
+    });
+    await page.getByRole("button", { name: /Share/ }).first().click();
+    // before the slowed list comes back: the fresh link reads as what it is
+    await expect(page.getByText(/revocable permalink · observations only/)).toBeVisible({ timeout: 3000 });
+    await expect(page.getByText(/this link no longer opens/)).toHaveCount(0);
   });
 });
 

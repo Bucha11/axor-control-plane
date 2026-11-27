@@ -27,6 +27,7 @@ test("Run queues the eval on your machine, and the page follows it to the report
   await page.route("**/v1/machine-jobs?limit=10", (r) => r.fulfill({ json: { jobs } }));
   await page.route("**/v1/machine-jobs", async (r) => {
     queued.push(r.request().postDataJSON());
+    await new Promise((ok) => setTimeout(ok, 300));
     jobs = [job({})];
     await r.fulfill({ status: 201, json: jobs[0] });
   });
@@ -39,8 +40,10 @@ test("Run queues the eval on your machine, and the page follows it to the report
 
   await page.getByTestId("eval-skill").fill("./.claude/skills/changelog");
   await page.getByTestId("eval-trials").fill("3");
-  await page.getByTestId("eval-run").click();
-  await expect.poll(() => queued.length).toBe(1);
+  // a double-click queues one job (the QA-045/087/101 sweep)
+  await page.getByTestId("eval-run").dblclick();
+  await expect(page.getByTestId("eval-job-job-1")).toContainText("waiting for the machine");
+  expect(queued.length).toBe(1);
   expect(queued[0]).toEqual({ machine_id: "m-laptop", kind: "skill_eval", spec: {
     skills: ["./.claude/skills/changelog"], agent: "claude-code", trials: 3,
     tasks: [{ name: "task-1", prompt: "fix the failing test in tests/", check: "python -m pytest -q" }] } });

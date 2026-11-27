@@ -96,6 +96,27 @@ async def test_a_code_host_is_never_a_trusted_source(
     assert r.status_code == 200, r.text
 
 
+async def test_a_forum_or_pastebin_is_never_a_trusted_source(
+        client: httpx.AsyncClient, priv, monkeypatch) -> None:  # noqa: ANN001, F811
+    """QA-100: pastebin.com and stackoverflow.com were trusted, though the
+    screen says never a forum or a pastebin. One saved before stays."""
+    owner = _bearer(_mint(priv, role="owner"))
+    for host in ("pastebin.com", "stackoverflow.com", "*.stackexchange.com", "www.reddit.com",
+                 "superuser.com"):
+        r = await client.put("/v1/coding/exceptions", headers=owner,
+                             json={"trusted_sources": ["pypi.org", host]})
+        assert r.status_code == 400, host
+        assert "a forum or a pastebin is never a trusted source" in r.json()["detail"]
+    monkeypatch.setattr("axor_backend.routers.coding_api._OPEN_HOSTS", ())
+    r = await client.put("/v1/coding/exceptions", headers=owner,
+                         json={"trusted_sources": ["pastebin.com"]})
+    assert r.status_code == 200, r.text
+    monkeypatch.undo()
+    r = await client.put("/v1/coding/exceptions", headers=owner,
+                         json={"trusted_sources": ["pastebin.com", "pypi.org"]})
+    assert r.status_code == 200, r.text
+
+
 async def test_a_code_host_already_trusted_does_not_block_the_list(
         client: httpx.AsyncClient, priv, monkeypatch) -> None:  # noqa: ANN001, F811
     """A team that trusted github.com before it was refused still edits its
