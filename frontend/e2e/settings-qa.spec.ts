@@ -260,6 +260,108 @@ test.describe("settings (QA, 0.7.2)", () => {
     await expect(page.getByText("● signed in", { exact: true })).toHaveCount(0);
     await expect(page.getByText(/^can: /)).toHaveCount(0);
   });
+
+  test("cosmetics: audit words for vault tokens, an e-mail in key history, \"As an admin\" (QA-070)", async ({ page }) => {
+    await page.route("**/v1/audit?*", (r) => r.fulfill({ json: { total: 3, actions: ["vault_token", "vault_token_dropped"], items: [
+      { id: "a3", ts: "2026-11-27T10:03:00Z", kind: "control", action: "vault_token_dropped", who: "ada@acme.io", role: "owner", target: "signing", detail: {} },
+      { id: "a2", ts: "2026-11-27T10:02:00Z", kind: "control", action: "vault_token", who: "ada@acme.io", role: "owner", target: "signing", detail: { replaced: true } },
+      { id: "a1", ts: "2026-11-27T10:01:00Z", kind: "control", action: "vault_token", who: "ada@acme.io", role: "owner", target: "signing", detail: {} },
+    ] } }));
+    await goHash(page, "settings?tab=audit");
+    const rows = page.getByTestId("audit-row");
+    await expect(rows.nth(0)).toContainText("dropped the workspace's vault token for");
+    await expect(rows.nth(1)).toContainText("made the workspace's vault token for");
+    await expect(rows.nth(1)).toContainText("replacing the one before");
+    await expect(rows.nth(2)).not.toContainText("replacing");
+    await expect(page.getByTestId("audit-action")).not.toContainText("vault_token");
+
+    // key history: the person, not their user id
+    await page.route("**/v1/auth/status", (r) => r.fulfill({ json: {
+      auth_enabled: true, authenticated: true, scopes: ["read", "ingest", "operate", "admin"] } }));
+    await page.route("**/v1/keys", (r) => r.fulfill({ json: [] }));
+    await page.route("**/v1/keys/audit?*", (r) => r.fulfill({ json: [{ audit_id: 1, action: "mint",
+      ts: "2026-11-27T10:00:00Z", key_id: "k_1", scopes: ["ingest"], node_id: null, label: "x",
+      by: { kind: "user", id: "usr_1a2b3c", email: "ada@acme.io" } }] }));
+    await goHash(page, "settings?tab=connect");
+    const history = page.getByTestId("key-lifecycle-audit");
+    await history.locator("summary").click();
+    await expect(history).toContainText("by ada@acme.io");
+    await expect(history).not.toContainText("usr_1a2b3c");
+  });
+
+  test("cosmetics: \"As an admin\" when a viewer is promoted on the free plan (QA-070)", async ({ page }) => {
+    await signInAsOwner(page);
+    await page.route("**/identity/v1/orgs/org_1/members", (r) => r.fulfill({ json: { members: [
+      { user_id: "usr_1", email: "ada@acme.io", role: "owner", since: "2026-01-01" },
+      { user_id: "usr_2", email: "max@acme.io", role: "viewer", since: "2026-01-02" }] } }));
+    await page.route("**/identity/v1/orgs/org_1/invites", (r) => r.fulfill({ json: { invites: [] } }));
+    await page.route("**/v1/license/entitlements", (r) => r.fulfill({ json: {
+      tier: "community", free: true, developers: 1, agent_families: 1, agent_family: null,
+      locked: {}, locked_trees: {}, reasons: {} } }));
+    await logIn(page);
+    await page.getByLabel("role of max@acme.io").selectOption("admin");
+    await expect(page.getByTestId("promote-upgrade")).toContainText("As an admin, max@acme.io");
+  });
+
+  test("cosmetics: the invitation page shows no guest \"too many visitors\" notice (QA-070)", async ({ page }) => {
+    await page.route("**/v1/auth/status", (r) => r.fulfill({ json: {
+      auth_enabled: true, authenticated: false, guest_sessions: true, scopes: [] } }));
+    await page.route("**/v1/auth/guest", (r) => r.fulfill({ status: 429, headers: { "retry-after": "60" },
+      json: { detail: "too many guests from this address" } }));
+    await page.route("**/identity/v1/invites/tok-busy", (r) => r.fulfill({ json: {
+      org_name: "Acme", role: "member", for_email: null, expires_ts: "2026-12-04T12:00:00Z" } }));
+    await goHash(page, "invite/tok-busy");
+    await expect(page.getByTestId("invite")).toContainText("Acme");
+    await page.waitForTimeout(500);
+    await expect(page.getByTestId("guest-busy")).toHaveCount(0);
+    await goHash(page, "home");
+    await expect(page.getByTestId("guest-busy")).toBeVisible();
+  });
+
+  test("cosmetics: at 390px the signing-key fields are not cut off (QA-070)", async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await goHash(page, "settings?tab=security");
+    const controls = page.getByTestId("signing-controls");
+    await expect(controls).toBeVisible();
+    expect((await controls.getByLabel("signing key operators").boundingBox())!.width).toBeGreaterThan(150);
+    const fits = (label: string) => controls.getByLabel(label).evaluate((el) => {
+      const input = el as HTMLInputElement;
+      const cs = getComputedStyle(input);
+      const ctx = document.createElement("canvas").getContext("2d")!;
+      ctx.font = `${cs.fontSize} ${cs.fontFamily}`;
+      const room = input.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight);
+      return ctx.measureText(input.placeholder).width <= room;
+    });
+    expect(await fits("vault signing-token")).toBe(true);
+    expect(await fits("signing key operators")).toBe(true);
+  });
+
+  test("cosmetics: the sign-up note covers nothing, the header's connect among them (QA-070)", async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.route("**/v1/auth/status", (r) => r.fulfill({ json: { auth_enabled: true, authenticated: false, scopes: [] } }));
+    await page.route("**/identity/v1/signup-mode", (r) => r.fulfill({ json: { mode: "open", signup: true } }));
+    await page.route("**/identity/v1/signup", (r) => r.fulfill({ status: 201, json: SESSION }));
+    await setConnection(page, { mode: "none" });
+    await goHash(page, "home");
+    await page.getByRole("button", { name: "sign in", exact: true }).click();
+    const dialog = page.getByRole("dialog", { name: "sign in" });
+    await dialog.getByRole("button", { name: "new? create a workspace" }).click();
+    await dialog.getByLabel("email").fill("ada@acme.io");
+    await dialog.getByLabel("password").fill("correct horse");
+    await dialog.getByLabel("organization name").fill("Acme");
+    await dialog.getByRole("button", { name: "create workspace" }).click();
+    const note = page.getByTestId("signup-done");
+    await expect(note).toBeVisible();
+    await expect(page).toHaveURL(/#\/connect/);
+    const box = (await note.boundingBox())!;
+    for (const b of await page.locator("button:visible").all()) {
+      if (await note.locator("button").evaluate((own, other) => own === other, await b.elementHandle())) continue;
+      const o = await b.boundingBox();
+      if (!o) continue;
+      const overlap = o.x < box.x + box.width && box.x < o.x + o.width && o.y < box.y + box.height && box.y < o.y + o.height;
+      expect(overlap, `the note covers "${await b.innerText()}"`).toBe(false);
+    }
+  });
 });
 
 const SESSION = {

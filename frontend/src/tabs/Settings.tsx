@@ -783,7 +783,7 @@ function Team({ orgId, isAdmin }: { orgId: string; isAdmin: boolean }) {
       {promote && (
         <div data-testid="promote-upgrade" className="mt-2 p-3" style={{ background: C.panel2, border: `1px solid ${C.amber}`, borderRadius: 6 }}>
           <div style={{ color: C.text, marginBottom: 4 }}>
-            As a {promote.to}, {promote.email} is a second developer — that is the Coding plan.
+            As {promote.to === "admin" ? "an" : "a"} {promote.to}, {promote.email} is a second developer — that is the Coding plan.
           </div>
           <div style={{ color: C.mut, marginBottom: 8 }}>
             $25 per developer per month — every developer's agents governed, shared skills and team memory.
@@ -2163,7 +2163,7 @@ function AgentKeys({ journey, menuAll }: { journey: Journey | null; menuAll: boo
                 {(a.scopes ?? []).join(",")}{a.node_id ? ` @${a.node_id}` : ""}
               </span>
               <span style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim, flex: 1, textAlign: "right" }}>
-                by {a.by.id ?? a.by.kind} · {localTime(a.ts, true)}
+                by {a.by.email ?? a.by.id ?? a.by.kind} · {localTime(a.ts, true)}
               </span>
             </div>
           ))}
@@ -2463,7 +2463,7 @@ function FederationVault() {
               type="password"
               value={vaultSigningToken}
               onChange={(e) => setVaultSigningToken(e.target.value)}
-              placeholder="vault signing-token (X-Vault-Signing-Token)"
+              placeholder="vault signing-token"
               aria-label="vault signing-token"
               style={{ background: C.bg, border: `1px solid ${C.line}`, borderRadius: 4, color: C.text, fontFamily: MONO, fontSize: 11, padding: "5px 8px", outline: "none" }}
             />
@@ -2474,7 +2474,7 @@ function FederationVault() {
                 aria-label="signing key id"
                 style={{ background: C.bg, border: `1px solid ${C.line}`, borderRadius: 4, color: C.text, fontFamily: MONO, fontSize: 11, padding: "5px 8px", outline: "none", flex: 1 }}
               >
-                <option value="">— unsigned (a plane on your own machine only) —</option>
+                <option value="">— unsigned —</option>
                 {(keys.data ?? []).map((k) => (
                   <option key={k.key_id} value={k.key_id}>{k.key_id}</option>
                 ))}
@@ -2491,9 +2491,9 @@ function FederationVault() {
               <input
                 value={newKeyOps}
                 onChange={(e) => setNewKeyOps(e.target.value)}
-                placeholder="operators (comma-sep)"
+                placeholder="operators, comma-separated"
                 aria-label="signing key operators"
-                style={{ background: C.bg, border: `1px solid ${C.line}`, borderRadius: 4, color: C.text, fontFamily: MONO, fontSize: 11, padding: "5px 8px", flex: 1, outline: "none" }}
+                style={{ background: C.bg, border: `1px solid ${C.line}`, borderRadius: 4, color: C.text, fontFamily: MONO, fontSize: 11, padding: "5px 8px", flex: "1 1 200px", outline: "none" }}
               />
               <button
                 onClick={() => createKeyOnce()}

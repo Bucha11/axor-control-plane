@@ -30,7 +30,9 @@ function describeMoved(moved: Record<string, number>): string {
   return parts.length ? parts.join(", ") : "";
 }
 
-export default function GuestSession() {
+// `invite`: the invitation page, where the guests' "too many visitors" notice
+// is about nothing the person came for (QA-070)
+export default function GuestSession({ invite = false }: { invite?: boolean } = {}) {
   const qc = useQueryClient();
   const apiToken = useApp((s) => s.apiToken);
   const refreshToken = useApp((s) => s.refreshToken);
@@ -118,7 +120,7 @@ export default function GuestSession() {
             style={btn({ fontSize: 10.5, padding: "2px 8px", color: C.mut })}>ok</button>
         </div>
       )}
-      {busyFor > 0 && !apiToken && (
+      {busyFor > 0 && !apiToken && !invite && (
         <div data-testid="guest-busy" style={{
           maxWidth: 1040, margin: "0 auto 12px", fontFamily: MONO, fontSize: 11.5, color: C.amber,
           border: `1px solid ${C.amber}`, borderRadius: 8, padding: "8px 12px", lineHeight: 1.6 }}>

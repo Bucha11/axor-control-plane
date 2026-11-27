@@ -210,7 +210,7 @@ export default function App() {
   const body = (
     <>
       {welcome && <SignedUpNote onDismiss={() => setWelcome(false)} />}
-      <GuestSession />
+      <GuestSession invite={key === "invite"} />
       <AuthReturn />
       {key === "home" && <Home />}
       {key === "chaos" && <ChaosTests />}
@@ -487,8 +487,10 @@ function TopBar({ section, view, connectPage, settingsPage, onSignedUp }: {
 function SignedUpNote({ onDismiss }: { onDismiss: () => void }) {
   const email = useApp((s) => s.identityEmail);
   return (
+    // in the page's flow, above it: fixed at the top it covered the header's
+    // "connect" (QA-070)
     <div role="status" data-testid="signup-done" style={{
-      position: "fixed", top: 12, left: "50%", transform: "translateX(-50%)", zIndex: 60,
+      maxWidth: 1040, margin: "0 auto 12px", borderRadius: 8,
       background: C.panel, border: `1px solid ${C.green}`, padding: "8px 14px",
       fontFamily: MONO, fontSize: 11.5, color: C.green,
       display: "flex", gap: 12, alignItems: "center",

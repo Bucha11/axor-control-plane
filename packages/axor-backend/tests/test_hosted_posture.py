@@ -110,3 +110,12 @@ async def test_a_deployment_token_rules_and_a_workspace_one_is_refused(
         assert (await c.post("/v1/vault/tokens/creds")).status_code == 409
         assert (await c.get("/v1/vault/creds/sealing-key",
                             headers={"X-Vault-Creds-Token": "deploy"})).status_code == 200
+
+
+async def test_the_trail_tells_a_replaced_vault_token_from_a_first_one(
+        client: httpx.AsyncClient) -> None:
+    """QA-070: making a token and replacing it read the same on the trail."""
+    assert (await client.post("/v1/vault/tokens/signing")).status_code == 201
+    assert (await client.post("/v1/vault/tokens/signing")).status_code == 201
+    rows = (await client.get("/v1/audit", params={"action": "vault_token"})).json()["items"]
+    assert [r.get("detail") or {} for r in rows] == [{"replaced": True}, {}]

@@ -2481,7 +2481,7 @@ export const api = {
           scopes?: string[];
           node_id?: string | null;
           label?: string;
-          by: { kind: string; id: string | null };
+          by: { kind: string; id: string | null; email?: string };
         }[]
       >(r),
     ),
