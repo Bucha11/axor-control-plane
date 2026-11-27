@@ -42,12 +42,27 @@ export function AskHost() {
 
   useEffect(() => {
     if (!req) return;
+    // what had focus before the dialog gets it back after (QA-085)
+    const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     const el = box.current?.querySelector<HTMLElement>("input, button[type=submit]");
     el?.focus();
     if (el instanceof HTMLInputElement) el.select();
-    const esc = (e: KeyboardEvent) => { if (e.key === "Escape") { e.preventDefault(); done(req, null); } };
-    window.addEventListener("keydown", esc);
-    return () => window.removeEventListener("keydown", esc);
+    const keys = (e: KeyboardEvent) => {
+      if (e.key === "Escape") { e.preventDefault(); done(req, null); return; }
+      // Tab and Shift-Tab go round the dialog, never to the page behind it (QA-085)
+      if (e.key !== "Tab" || !box.current) return;
+      const all = [...box.current.querySelectorAll<HTMLElement>("input, button")];
+      if (!all.length) return;
+      const first = all[0], last = all[all.length - 1];
+      const inside = box.current.contains(document.activeElement);
+      if (e.shiftKey && (!inside || document.activeElement === first)) { e.preventDefault(); last.focus(); }
+      else if (!e.shiftKey && (!inside || document.activeElement === last)) { e.preventDefault(); first.focus(); }
+    };
+    window.addEventListener("keydown", keys);
+    return () => {
+      window.removeEventListener("keydown", keys);
+      if (opener?.isConnected) opener.focus();
+    };
   }, [req]);
 
   if (!req) return null;
