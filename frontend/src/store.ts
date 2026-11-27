@@ -82,6 +82,14 @@ interface AppState {
   // them and by a test run, so nobody classifies the same tools twice.
   toolPolicy: Record<string, ToolClass>;
   setToolClass: (name: string, patch: Partial<ToolClass>) => void;
+  // the workspace's copy of it could not be read, or was saved by someone
+  // else since this tab read it: nothing here is saved until it is read again
+  // (QA-212, QA-231). Not kept across a reload.
+  policyNotice: { kind: "read_failed" | "stale"; words: string } | null;
+  setPolicyNotice: (n: { kind: "read_failed" | "stale"; words: string } | null) => void;
+  // bumped to read the workspace's policy again
+  policyLoads: number;
+  reloadPolicy: () => void;
   // Guided tour position: index into TOUR (components/Tour.tsx), null = not
   // running. Persisted, so a mid-tour reload resumes where the user was.
   tourStep: number | null;
@@ -253,6 +261,10 @@ export const useApp = create<AppState>()(
           [name]: { ...({ klass: guessKlass(name), outside: false } as ToolClass), ...s.toolPolicy[name], ...patch } } })),
       tourStep: null,
       tourSide: "production",
+      policyNotice: null,
+      setPolicyNotice: (n) => set({ policyNotice: n }),
+      policyLoads: 0,
+      reloadPolicy: () => set((s) => ({ policyNotice: null, policyLoads: s.policyLoads + 1 })),
       connect: (mode, tools) =>
         set((s) => ({
           connection: {
@@ -307,7 +319,7 @@ export const useApp = create<AppState>()(
       // The trade: opening the app in a new tab asks you to sign in again.
       // For a governance console that is the right side of the trade.
       storage: createJSONStorage(() => splitStorage),
-      partialize: ({ sessionEnded, ...s }) => s,
+      partialize: ({ sessionEnded, policyNotice, policyLoads, ...s }) => s,
     },
   ),
 );

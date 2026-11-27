@@ -64,8 +64,16 @@ def _tool(name: str, raw: object) -> dict[str, Any]:
 async def get_policy(store: StoreDep) -> dict:
     saved = await store.get_setting(SETTING)
     if not isinstance(saved, dict):
-        return {"tools": {}, "updated_ts": None}
-    return {"tools": saved.get("tools") or {}, "updated_ts": saved.get("updated_ts")}
+        return {"tools": {}, "updated_ts": None, "version": 0}
+    return {"tools": saved.get("tools") or {}, "updated_ts": saved.get("updated_ts"),
+            "version": int(saved.get("version") or 0)}
+
+
+# Saved from two browsers, the policy each read went back whole: the one read
+# before would put back a tool's rules the other changed (QA-212). The screen
+# sends the version it read; a save of a change from an older one is refused
+# with the tools changed since. No version (a script, an older screen): as before.
+MAX_CHANGED_IN = 2000
 
 
 @router.put("")
@@ -73,13 +81,34 @@ async def put_policy(body: dict, request: Request, store: StoreDep) -> dict:
     tools = body.get("tools")
     if not isinstance(tools, dict) or len(tools) > MAX_TOOLS:
         raise HTTPException(400, f"tools must be an object of at most {MAX_TOOLS} tools")
+    seen = body.get("version")
+    if seen is not None and (not isinstance(seen, int) or isinstance(seen, bool)):
+        raise HTTPException(400, "version is the policy's version as read (an integer)")
     clean = {str(name)[:200]: _tool(str(name), raw) for name, raw in tools.items()}
     before = await store.get_setting(SETTING)
-    prior = (before or {}).get("tools") or {} if isinstance(before, dict) else {}
+    before = before if isinstance(before, dict) else {}
+    prior = before.get("tools") or {}
+    version = int(before.get("version") or 0)
     changed = sorted(n for n in set(prior) | set(clean) if prior.get(n) != clean.get(n))
     if not changed:
-        return {"tools": clean, "updated_ts": (before or {}).get("updated_ts"), "changed": []}
+        return {"tools": clean, "updated_ts": before.get("updated_ts"), "changed": [],
+                "version": version}
+    changed_in: dict[str, int] = dict(before.get("changed_in") or {})
+    if seen is not None and seen != version:
+        since = sorted(n for n, v in changed_in.items() if v > seen)
+        words = ", ".join(since[:10]) + (" …" if len(since) > 10 else "")
+        raise HTTPException(409, {
+            "code": "stale", "changed": since, "version": version,
+            "ts": before.get("updated_ts"),
+            "detail": f"someone changed the policy since you opened it"
+                      f"{f' ({words})' if words else ''} — reload to see it; "
+                      "nothing was saved"})
     ts = now()
-    await store.set_setting(SETTING, {"tools": clean, "updated_ts": ts})
+    version += 1
+    changed_in.update({n: version for n in changed})
+    if len(changed_in) > MAX_CHANGED_IN:
+        changed_in = dict(sorted(changed_in.items(), key=lambda kv: kv[1])[-MAX_CHANGED_IN:])
+    await store.set_setting(SETTING, {"tools": clean, "updated_ts": ts, "version": version,
+                                      "changed_in": changed_in})
     await audit.record(store, request, "policy_saved", ", ".join(changed)[:300])
-    return {"tools": clean, "updated_ts": ts, "changed": changed}
+    return {"tools": clean, "updated_ts": ts, "changed": changed, "version": version}

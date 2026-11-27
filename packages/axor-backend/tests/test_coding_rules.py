@@ -168,3 +168,46 @@ async def test_a_public_suffix_or_a_blog_platform_is_never_a_trusted_source(
     r = await client.put("/v1/coding/exceptions", headers=owner,
                          json={"trusted_sources": ["*.github.io", "dev.to", "pypi.org"]})
     assert r.status_code == 200, r.text
+
+
+async def test_a_save_from_a_stale_screen_is_refused_naming_what_changed(
+        client: httpx.AsyncClient, priv) -> None:  # noqa: ANN001, F811
+    """QA-212: in two tabs, B's exception replaced A's, B's toggle reverted
+    A's, B's "trust pypi.org" brought back the dev source A removed — and B
+    was told "saved" each time. A save from what was read before is refused."""
+    owner = _bearer(_mint(priv, role="owner"))
+    read = (await client.get("/v1/coding/rules", headers=owner)).json()
+    assert read["version"] == 0
+    r = await client.put("/v1/coding/rules", headers=owner, json={
+        "allow": [], "mode": "enforce", "trusted_sources": ["docs.python.org"],
+        "version": 0})
+    assert r.status_code == 200 and r.json()["version"] == 1
+    a = b = (await client.get("/v1/coding/rules", headers=owner)).json()
+    # tab A: an exception, then a source removed
+    r = await client.put("/v1/coding/exceptions", headers=owner, json={
+        "exceptions": [{"rule": "secrets", "path": "tests/a/*"}], "version": a["version"]})
+    assert r.status_code == 200
+    r = await client.put("/v1/coding/exceptions", headers=owner, json={
+        "trusted_sources": [], "version": r.json()["version"]})
+    assert r.status_code == 200
+    # tab B, still on what it read: an exception, a source, a toggle
+    for path, body in (
+            ("/v1/coding/exceptions", {"exceptions": [{"rule": "secrets", "path": "tests/b/*"}]}),
+            ("/v1/coding/exceptions", {"trusted_sources": ["docs.python.org", "pypi.org"]}),
+            ("/v1/coding/rules", {"allow": ["secrets"], "mode": "enforce"})):
+        r = await client.put(path, headers=owner, json={**body, "version": b["version"]})
+        assert r.status_code == 409, (path, r.text)
+        detail = r.json()["detail"]
+        assert detail["code"] == "stale"
+        assert detail["changed"] == ["exceptions", "trusted_sources"]
+        assert "the exceptions and the trusted sources" in detail["detail"]
+        assert "reload" in detail["detail"]
+    now = (await client.get("/v1/coding/rules", headers=owner)).json()
+    assert [e["path"] for e in now["exceptions"]] == ["tests/a/*"]
+    assert now["trusted_sources"] == [] and now["allow"] == []
+    # read again, B's toggle goes through; no version (a script): as before
+    r = await client.put("/v1/coding/rules", headers=owner, json={
+        "allow": ["secrets"], "mode": "enforce", "version": now["version"]})
+    assert r.status_code == 200 and r.json()["allow"] == ["secrets"]
+    r = await client.put("/v1/coding/rules", headers=owner, json={"allow": [], "mode": "enforce"})
+    assert r.status_code == 200

@@ -4,7 +4,7 @@
 // what the team refuses. Until an admin saves, each repository decides.
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { api, CodingException, CodingRules } from "../api";
+import { api, ApiError, CodingException, CodingRules } from "../api";
 import { C, MONO, btn } from "../theme";
 import { errorWords } from "../refusal";
 import { useCanAdmin, useMay } from "../team";
@@ -23,7 +23,7 @@ export default function CodingPolicy() {
     if (q.data) { setAllow(new Set(q.data.allow)); setMode(q.data.mode); }
   }, [q.data]);
   const save = useMutation({
-    mutationFn: () => api.setCodingRules([...allow], mode),
+    mutationFn: () => api.setCodingRules([...allow], mode, {}, q.data?.version),
     onSuccess: () => void qc.invalidateQueries({ queryKey: ["coding-rules"] }),
   });
   const d = q.data;
@@ -102,7 +102,7 @@ export default function CodingPolicy() {
         )}
         {d?.set && <span style={{ color: C.dim }}>the team's policy · by {d.by || "—"} · {localTime(d.ts)}</span>}
         {save.isSuccess && <span style={{ color: C.green }}>saved — every sidecar picks it up within a minute</span>}
-        {save.isError && <span style={{ color: C.red }}>{errorWords((save.error as Error).message)}</span>}
+        {save.isError && <SaveError error={save.error} reset={save.reset} />}
       </div>
       {d && <Exceptions d={d} canEdit={canGrant} />}
       {d && <TrustedSources d={d} canEdit={canGrant} />}
@@ -123,7 +123,7 @@ function useSaveMore() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: ({ d, more }: { d: CodingRules; more: { exceptions?: CodingException[]; trusted_sources?: string[] } }) =>
-      api.setCodingExceptions(more),
+      api.setCodingExceptions(more, d.version),
     onSuccess: () => void qc.invalidateQueries({ queryKey: ["coding-rules"] }),
   });
 }
@@ -188,7 +188,7 @@ function Exceptions({ d, canEdit }: { d: CodingRules; canEdit: boolean }) {
           adding one saves the team's policy as shown above
         </div>
       )}
-      {save.isError && <div style={{ fontFamily: MONO, fontSize: 11, color: C.red, marginTop: 6 }}>{errorWords((save.error as Error).message)}</div>}
+      {save.isError && <div style={{ fontFamily: MONO, fontSize: 11, marginTop: 6 }}><SaveError error={save.error} reset={save.reset} /></div>}
     </div>
   );
 }
@@ -233,8 +233,24 @@ function TrustedSources({ d, canEdit }: { d: CodingRules; canEdit: boolean }) {
             style={btn({ fontSize: 11, padding: "4px 12px" })}>trust</button>
         </div>
       )}
-      {save.isError && <div style={{ fontFamily: MONO, fontSize: 11, color: C.red, marginTop: 6 }}>{errorWords((save.error as Error).message)}</div>}
+      {save.isError && <div style={{ fontFamily: MONO, fontSize: 11, marginTop: 6 }}><SaveError error={save.error} reset={save.reset} /></div>}
     </div>
+  );
+}
+
+/** A save refused because someone saved the policy since this screen read
+ *  it (QA-212) says so, with a way to see theirs — never "saved". */
+function SaveError({ error, reset }: { error: unknown; reset: () => void }) {
+  const qc = useQueryClient();
+  const stale = error instanceof ApiError && error.status === 409 && error.code === "stale";
+  return (
+    <span data-testid={stale ? "policy-stale" : undefined} style={{ color: stale ? C.amber : C.red }}>
+      {errorWords((error as Error).message)}
+      {stale && (
+        <button data-testid="policy-reload" onClick={() => { reset(); void qc.invalidateQueries({ queryKey: ["coding-rules"] }); }}
+          style={btn({ fontSize: 10.5, padding: "2px 8px", marginLeft: 8 })}>reload</button>
+      )}
+    </span>
   );
 }
 

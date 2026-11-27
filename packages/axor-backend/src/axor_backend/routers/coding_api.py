@@ -121,12 +121,53 @@ async def _rules(store: object) -> dict:
     value = await store.get_setting(RULES)  # type: ignore[attr-defined]
     if not isinstance(value, dict):
         return {"set": False, "allow": [], "mode": "enforce", "exceptions": [],
-                "trusted_sources": [], "by": "", "ts": ""}
+                "trusted_sources": [], "by": "", "ts": "", "version": 0, "changed_in": {}}
     return {"set": True, "allow": sorted(value.get("allow") or []),
             "mode": value.get("mode") if value.get("mode") in MODES else "enforce",
             "exceptions": list(value.get("exceptions") or []),
             "trusted_sources": list(value.get("trusted_sources") or []),
-            "by": value.get("by", ""), "ts": value.get("ts", "")}
+            "by": value.get("by", ""), "ts": value.get("ts", ""),
+            "version": int(value.get("version") or 0),
+            "changed_in": dict(value.get("changed_in") or {})}
+
+
+# Two people (or two tabs) edit the policy: each save sends whole lists built
+# from what that screen read. A save from a screen that read an older policy
+# would put back what was removed since, and take out what was added (QA-212).
+# The screen sends the version it read; a save from an older one is refused
+# with what changed since, and the screen says to reload. A caller that sends
+# no version (a script, an older CLI) saves as before.
+_PARTS = {"allow": "the rules", "mode": "the mode", "exceptions": "the exceptions",
+          "trusted_sources": "the trusted sources"}
+
+
+def _stale(body: dict, held: dict) -> None:
+    if "version" not in body:
+        return
+    seen = body["version"]
+    if not isinstance(seen, int) or isinstance(seen, bool):
+        raise HTTPException(400, "version is the policy's version as read (an integer)")
+    if seen == held["version"]:
+        return
+    changed = [p for p in _PARTS if held["changed_in"].get(p, 0) > seen]
+    words = " and ".join(_PARTS[p] for p in changed) or "the policy"
+    who = f" ({held['by']})" if held["by"] else ""
+    raise HTTPException(409, {
+        "code": "stale", "changed": changed, "version": held["version"],
+        "by": held["by"], "ts": held["ts"],
+        "detail": f"someone changed {words} since you opened this{who} — "
+                  "reload to see it; nothing was saved"})
+
+
+async def _save_rules(store: Any, held: dict, principal: object, now_ts: str,  # noqa: ANN401
+                      **parts: object) -> None:
+    version = held["version"] + 1
+    changed_in = dict(held["changed_in"])
+    for p, value in parts.items():
+        if value != held[p]:
+            changed_in[p] = version
+    await store.set_setting(RULES, {**parts, "by": _by(principal), "ts": now_ts,
+                                    "version": version, "changed_in": changed_in})
 
 
 MAX_EXCEPTIONS, MAX_SOURCES = 100, 30
@@ -256,6 +297,7 @@ async def set_rules(body: dict, request: Request, store: StoreDep,
     if mode not in MODES:
         raise HTTPException(400, f"mode is one of {list(MODES)}")
     held = await _rules(store)
+    _stale(body, held)
     now_ts = datetime.now(UTC).isoformat()
     # left out of the body: kept as they were (the screen saves rules and mode)
     exceptions = (_exceptions(body["exceptions"], known) if "exceptions" in body
@@ -265,9 +307,8 @@ async def set_rules(body: dict, request: Request, store: StoreDep,
         e["ts"] = e["ts"] or now_ts
     sources = (_sources(body["trusted_sources"], held["trusted_sources"])
                if "trusted_sources" in body else held["trusted_sources"])
-    await store.set_setting(RULES, {"allow": sorted(set(allow)), "mode": mode,
-                                    "exceptions": exceptions, "trusted_sources": sources,
-                                    "by": _by(principal), "ts": now_ts})
+    await _save_rules(store, held, principal, now_ts, allow=sorted(set(allow)), mode=mode,
+                      exceptions=exceptions, trusted_sources=sources)
     await _audit_rules(store, request, held, sorted(set(allow)), mode, exceptions, sources)
     return await _rules(store)
 
@@ -290,6 +331,7 @@ async def set_exceptions(body: dict, request: Request, store: StoreDep,
     await _permitted(store, principal, "exceptions")
     known = {r["id"] for r in _catalog()}
     held = await _rules(store)
+    _stale(body, held)
     now_ts = datetime.now(UTC).isoformat()
     exceptions = (_exceptions(body["exceptions"], known) if "exceptions" in body
                   else held["exceptions"])
@@ -298,9 +340,8 @@ async def set_exceptions(body: dict, request: Request, store: StoreDep,
         e["ts"] = e["ts"] or now_ts
     sources = (_sources(body["trusted_sources"], held["trusted_sources"])
                if "trusted_sources" in body else held["trusted_sources"])
-    await store.set_setting(RULES, {"allow": held["allow"], "mode": held["mode"],
-                                    "exceptions": exceptions, "trusted_sources": sources,
-                                    "by": _by(principal), "ts": now_ts})
+    await _save_rules(store, held, principal, now_ts, allow=held["allow"], mode=held["mode"],
+                      exceptions=exceptions, trusted_sources=sources)
     await _audit_rules(store, request, held, held["allow"], held["mode"], exceptions, sources)
     return await _rules(store)
 
