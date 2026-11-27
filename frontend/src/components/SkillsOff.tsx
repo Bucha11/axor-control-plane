@@ -34,11 +34,12 @@ const day = (ts: string) => localTime(ts);
 const SKILL_NAME = /^[A-Za-z0-9_.:-]{1,64}$/;
 
 /** Shared skills waiting for someone's decision: never turned on, or a newer
- * upload than the version on — the menu says how many. */
+ * upload than the version on — the menu says how many. The product's example
+ * waits for nobody: it is never turned on for a team (QA-216). */
 export function usePendingSkills(): number {
   const q = useQuery({ queryKey: ["coding-skills"], queryFn: api.codingSkills, refetchInterval: 30000, retry: false });
   const off = new Set((q.data?.off ?? []).map((o) => o.skill));
-  return (q.data?.team ?? []).filter((t) => !off.has(t.name)
+  return (q.data?.team ?? []).filter((t) => !off.has(t.name) && !t.example
     && (!t.live || t.live.version !== t.latest.version)).length;
 }
 
