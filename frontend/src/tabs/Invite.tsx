@@ -16,7 +16,10 @@ const INPUT = {
 
 export default function Invite({ token }: { token: string }) {
   const qc = useQueryClient();
-  const info = useQuery({ queryKey: ["invite", token], queryFn: () => inviteInfo(token), retry: false });
+  // read once: after joining the invitation is used, and asking again only
+  // earns a 404 (QA-157)
+  const info = useQuery({ queryKey: ["invite", token], queryFn: () => inviteInfo(token), retry: false,
+                          staleTime: Infinity });
   const identityEmail = useApp((s) => s.identityEmail);
   const setSession = useApp((s) => s.setSession);
   const [mode, setMode] = useState<"signup" | "login">("signup");
@@ -28,7 +31,9 @@ export default function Invite({ token }: { token: string }) {
   // joined: straight to connecting their own machine, for what the team does
   const joined = async (access: string, refresh: string, who: string) => {
     setSession(access, refresh, who);
-    void qc.invalidateQueries();
+    // everything read under the old session again — but not the invitation,
+    // which is used now (QA-157)
+    void qc.invalidateQueries({ predicate: (q) => q.queryKey[0] !== "invite" });
     const journey = await api.workspace().then((w) => w.journey).catch(() => null);
     navigate("connect", journey ? { for: journey } : {});
   };
@@ -71,6 +76,10 @@ export default function Invite({ token }: { token: string }) {
   }
   if (!info.data) return null;
   const i = info.data;
+  // QA-155: an invitation for another address is said up front, from the
+  // invitation's own data — not refused only after "join as <me>" is clicked
+  const otherAddress = !!identityEmail && !!i.for_email
+    && i.for_email.toLowerCase() !== identityEmail.toLowerCase();
   return (
     <div data-testid="invite" style={{ maxWidth: 480, margin: "40px auto" }}>
       <h1 style={{ fontSize: 22, fontWeight: 650, margin: "0 0 6px" }}>Join {i.org_name || "a workspace"}</h1>
@@ -79,7 +88,12 @@ export default function Invite({ token }: { token: string }) {
         {i.for_email ? <> — for <span style={{ color: C.text }}>{i.for_email}</span></> : null}. The link works once,
         until {localDate(i.expires_ts)}.
       </div>
-      {identityEmail ? (
+      {otherAddress ? (
+        <div data-testid="invite-other-address" style={{ fontSize: 14, color: C.amber, lineHeight: 1.6 }}>
+          This invitation is for another address, {i.for_email} — you are signed in as {identityEmail}.
+          Sign in as {i.for_email} to join, or ask whoever sent it for an invitation to your address.
+        </div>
+      ) : identityEmail ? (
         <div className="flex flex-col" style={{ gap: 10 }}>
           <button onClick={() => void join("accept")} disabled={busy} data-testid="invite-join"
             style={btn({ color: C.text, borderColor: C.steel, fontSize: 12, padding: "8px 14px" })}>

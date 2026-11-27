@@ -105,7 +105,7 @@ export async function inviteInfo(token: string): Promise<InviteInfo> {
 /** This page, as a way back for an e-mailed link or a provider sign-in. */
 export function here(): string {
   const params = new URLSearchParams(window.location.search);
-  for (const k of ["axor_login", "axor_login_error", "axor_verify", "axor_reset", "axor_org"]) params.delete(k);
+  for (const k of ["axor_login", "axor_login_error", "axor_verify", "axor_reset", "axor_org", "axor_invite"]) params.delete(k);
   const query = params.toString();
   return window.location.pathname + (query ? `?${query}` : "") + window.location.hash;
 }
@@ -135,10 +135,13 @@ export function verifyEmail(token: string): Promise<{ email: string }> {
 
 /** Exchange a refresh token for a new access token, rotating it. Returns the
  * new session, or null if the refresh token is no longer valid. */
-export async function refresh(refreshToken: string): Promise<Session | null> {
+export async function refresh(refreshToken: string, refused?: (why: string) => void): Promise<Session | null> {
   try {
     return await post<Session>("/v1/refresh", { refresh_token: refreshToken });
-  } catch {
+  } catch (e) {
+    // the service's reason, when it gave one ("you are no longer a member of
+    // Acme" — QA-154); not for a network failure
+    if (refused && e instanceof IdentityError && e.status === 401) refused(e.message);
     return null;
   }
 }
@@ -220,7 +223,7 @@ export function ssoStartUrl(email: string): string {
 
 /** What a provider sign-in or an e-mailed link left in the address bar,
  * removed from it so a reload or a copied link does not carry it. */
-export function takeAuthReturn(): { code?: string; org?: string; error?: string; verify?: string; reset?: string; invite?: string } | null {
+export function takeAuthReturn(): { code?: string; org?: string; error?: string; verify?: string; reset?: string } | null {
   const params = new URLSearchParams(window.location.search);
   const got = {
     code: params.get("axor_login") ?? undefined,
@@ -228,9 +231,43 @@ export function takeAuthReturn(): { code?: string; org?: string; error?: string;
     error: params.get("axor_login_error") ?? undefined,
     verify: params.get("axor_verify") ?? undefined,
     reset: params.get("axor_reset") ?? undefined,
-    invite: params.get("axor_invite") ?? undefined,
   };
-  if (!got.code && !got.error && !got.verify && !got.reset && !got.invite) return null;
+  if (!got.code && !got.error && !got.verify && !got.reset) return null;
   window.history.replaceState(null, "", here());
   return got;
+}
+
+/** The invitation link identity e-mails is `/?axor_invite=<token>`. Turned
+ * into `#/invite/<token>` before the app first renders (QA-150): run from an
+ * effect it lost to the "no route → Home" redirect, and an anonymous visitor
+ * landed on Home with the token still in the address bar. */
+export function openInviteLink(): void {
+  const params = new URLSearchParams(window.location.search);
+  const token = params.get("axor_invite");
+  if (!token) return;
+  params.delete("axor_invite");
+  const query = params.toString();
+  window.history.replaceState(null, "", window.location.pathname + (query ? `?${query}` : "")
+    + `#/invite/${encodeURIComponent(token)}`);
+}
+
+// What a failed provider or SSO sign-in is said with (QA-235). The reason
+// arrives in the address (`?axor_login_error=`), so anyone can write one into a
+// link: it is never shown as it came. A reason this app knows is shown in its
+// own fixed words; anything else is the generic sentence.
+const LOGIN_ERRORS: [RegExp, string][] = [
+  [/cancel|access_denied/i, "sign-in was cancelled"],
+  [/could not be reached|unreachable|temporarily_unavailable/i, "the sign-in provider could not be reached — try again"],
+  [/not verified|no verified|has not verified/i, "the provider has not verified that e-mail address"],
+  [/does not take new ones|signup is closed/i, "this installation does not take new accounts"],
+  [/single sign-on — use|sso_required/i, "your workspace signs in with single sign-on — use “Sign in with SSO”"],
+  [/no single sign-on/i, "no single sign-on for that address — sign in with your password"],
+  [/single sign-on was (changed|turned off)/i, "single sign-on was changed for this workspace — start again"],
+  [/not at a domain/i, "that address is not one this workspace signs in with single sign-on"],
+  [/no organization membership|no workspace/i, "this account has no workspace yet — sign up with the same address and password to create one"],
+];
+const LOGIN_ERROR_GENERIC = "sign-in did not complete — try again";
+
+export function loginErrorWords(reason: string): string {
+  return LOGIN_ERRORS.find(([pattern]) => pattern.test(reason))?.[1] ?? LOGIN_ERROR_GENERIC;
 }

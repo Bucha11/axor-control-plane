@@ -4,6 +4,10 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import App from "./App";
 import { AskHost } from "./components/Ask";
 import { load as loadOperatorKey } from "./opKey";
+import { openInviteLink } from "./identity";
+
+// an e-mailed invitation link opens the invitation, before anything routes
+openInviteLink();
 
 // this browser's operator key, if it has one: read before the first command
 void loadOperatorKey();

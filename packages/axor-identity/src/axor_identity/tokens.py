@@ -23,7 +23,8 @@ ALGORITHM = "EdDSA"
 
 def issue_access(signing_key: SigningKey, *, user_id: str, email: str, org: str,
                  role: str, tier: str, ttl: int, now: int | None = None,
-                 email_verified: bool = False) -> str:
+                 email_verified: bool = False, session_id: str | None = None,
+                 epoch: int = 0) -> str:
     issued = int(time.time()) if now is None else now
     claims = {
         "iss": ISSUER,
@@ -36,7 +37,14 @@ def issue_access(signing_key: SigningKey, *, user_id: str, email: str, org: str,
         "evf": bool(email_verified),
         "iat": issued,
         "exp": issued + ttl,
+        # which membership epoch it was issued at: a removal or a role change
+        # bumps it, and the control plane refuses a token below the current
+        # one (QA-154; see /v1/revocations)
+        "ep": epoch,
     }
+    if session_id:
+        # the sign-in it belongs to, so logging out ends this token too (QA-240)
+        claims["sid"] = session_id
     return jwt.encode(claims, signing_key.private_key, algorithm=ALGORITHM,
                       headers={"kid": signing_key.kid})
 

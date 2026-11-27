@@ -114,3 +114,66 @@ async def test_a_removed_member_s_sign_in_ends_at_once(c, app) -> None:  # noqa:
     assert r.status_code == 200
     assert (await c.post("/v1/refresh",
                          json={"refresh_token": petr["refresh_token"]})).status_code == 401
+
+
+async def test_signing_everyone_else_out_ends_the_owner_s_own_other_sessions(
+        c, app) -> None:  # noqa: ANN001
+    """QA-156: the owner's second browser kept a working refresh. Every
+    session ends but the one that asked — the owner's own others included —
+    and their access tokens stop at once."""
+    olga, petr = await _team(c, app)
+    org = olga["org"]["org_id"]
+    laptop = (await c.post("/v1/login", json={"email": "olga@acme.dev", "password": PW,
+                                              "org_id": org})).json()
+    r = await c.post(f"/v1/orgs/{org}/sessions/end", headers=_h(olga))
+    assert r.status_code == 200 and r.json()["ended"] == 1  # one other person
+    assert (await c.post("/v1/refresh",
+                         json={"refresh_token": laptop["refresh_token"]})).status_code == 401
+    assert (await c.get("/v1/me", headers=_h(laptop))).status_code == 401
+    assert (await c.get("/v1/me", headers=_h(petr))).status_code == 401
+    # the session that asked goes on
+    assert (await c.get("/v1/me", headers=_h(olga))).status_code == 200
+    assert (await c.post("/v1/refresh",
+                         json={"refresh_token": olga["refresh_token"]})).status_code == 200
+
+
+async def test_a_removed_member_is_refused_on_the_org_routes_at_once(c, app) -> None:  # noqa: ANN001
+    """QA-154: after removal the old access token still listed the team's
+    e-mail addresses until it expired. The org routes read the membership
+    now, and say in words that the person is no longer in the workspace."""
+    olga, petr = await _team(c, app)
+    org = olga["org"]["org_id"]
+    assert (await c.get(f"/v1/orgs/{org}/members", headers=_h(petr))).status_code == 200
+    await c.delete(f"/v1/orgs/{org}/members/{petr['user']['user_id']}", headers=_h(olga))
+    r = await c.get(f"/v1/orgs/{org}/members", headers=_h(petr))
+    assert r.status_code == 403
+    assert r.json()["detail"]["detail"] == "you are no longer a member of Acme"
+    r = await c.post("/v1/refresh", json={"refresh_token": petr["refresh_token"]})
+    assert r.status_code == 401 and r.json()["detail"] == "you are no longer a member of Acme"
+    # the feed tells the control plane, naming nobody
+    from axor_identity.storage import member_key
+    feed = (await c.get("/v1/revocations")).json()
+    assert {"key": member_key(petr["user"]["user_id"], org), "epoch": 1,
+            "reason": "removed"} in feed["members"]
+    assert "petr" not in str(feed)
+
+
+async def test_a_role_downgrade_is_the_role_used_at_once(c, app) -> None:  # noqa: ANN001
+    """QA-154, role change: an admin made viewer kept the admin's token. The
+    org routes use the role held now; the next token carries it and the new
+    epoch, and the feed bumps the old one."""
+    olga, petr = await _team(c, app)
+    org = olga["org"]["org_id"]
+    uid = petr["user"]["user_id"]
+    await c.put(f"/v1/orgs/{org}/members/{uid}", json={"role": "admin"}, headers=_h(olga))
+    admin = (await c.post("/v1/login", json={"email": "petr@acme.dev", "password": PW,
+                                             "org_id": org})).json()
+    assert (await c.get(f"/v1/orgs/{org}/invites", headers=_h(admin))).status_code == 200
+    await c.put(f"/v1/orgs/{org}/members/{uid}", json={"role": "viewer"}, headers=_h(olga))
+    assert (await c.get(f"/v1/orgs/{org}/invites", headers=_h(admin))).status_code == 403
+    fresh = (await c.post("/v1/refresh", json={"refresh_token": admin["refresh_token"]})).json()
+    from axor_identity.verify import verify_access_token
+    jwks = (await c.get("/.well-known/jwks.json")).json()
+    claims = verify_access_token(fresh["access_token"], jwks)
+    assert claims.role == "viewer" and claims.epoch == 2
+    assert claims.session_id == verify_access_token(admin["access_token"], jwks).session_id

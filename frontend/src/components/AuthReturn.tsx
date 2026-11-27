@@ -1,13 +1,14 @@
 // What the identity service sends the browser back with, finished here:
 // - ?axor_login=<code>      a GitHub / Google sign-in → traded for a session
 //                           (guest work is then claimed by GuestSession)
-// - ?axor_login_error=<why> that sign-in failed → said so
+// - ?axor_login_error=<why> that sign-in failed → said so, in this app's words
+//                           (the address is anyone's to write: QA-235)
 // - ?axor_verify=<token>    the link from the verification e-mail
 // - ?axor_reset=<token>     the link from a reset e-mail → choose a new password
 import { useEffect, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useApp } from "../store";
-import { IdentityError, oauthExchange, resetPassword, takeAuthReturn, verifyEmail } from "../identity";
+import { IdentityError, loginErrorWords, oauthExchange, resetPassword, takeAuthReturn, verifyEmail } from "../identity";
 import { track } from "../funnel";
 import { renewSession } from "../api";
 import { C, MONO, btn } from "../theme";
@@ -32,10 +33,9 @@ export default function AuthReturn() {
   useEffect(() => {
     const back = takeAuthReturn();
     if (!back) return;
-    if (back.error) setNote({ text: back.error, ok: false });
+    // never the text as it came in the address: fixed words (QA-235)
+    if (back.error) setNote({ text: loginErrorWords(back.error), ok: false });
     if (back.reset) setResetToken(back.reset);
-    // an e-mailed invitation opens its page
-    if (back.invite) window.location.hash = `#/invite/${encodeURIComponent(back.invite)}`;
     if (back.verify) {
       verifyEmail(back.verify)
         .then((r) => {

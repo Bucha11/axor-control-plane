@@ -35,13 +35,18 @@ class Claims:
     org: str
     role: str
     tier: str
+    # the sign-in (refresh-token family) and the membership epoch the token was
+    # issued at — absent from tokens minted before they existed
+    session_id: str | None = None
+    epoch: int = 0
 
     @classmethod
     def from_payload(cls, payload: dict[str, Any]) -> Claims:
         try:
             return cls(user_id=payload["sub"], email=payload["eml"],
                        org=payload["org"], role=payload["role"],
-                       tier=payload["tier"])
+                       tier=payload["tier"], session_id=payload.get("sid"),
+                       epoch=int(payload.get("ep") or 0))
         except KeyError as exc:
             raise IdentityError(f"token missing claim {exc}") from exc
 
