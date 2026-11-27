@@ -6,6 +6,7 @@
 //
 // Every command goes through the node's one door (`api.command`, signed when
 // the deployment signs); nothing here writes desired state any other way.
+import { askConfirm, askPrompt } from "../components/Ask";
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { FlaskConical, Pause, Play, Square, Syringe } from "lucide-react";
@@ -165,7 +166,7 @@ export default function RunControl({ runId }: { runId: string }) {
           </Tooltip>
           <Tooltip content="End the agent for good — it finishes no further turns.">
             <button
-              onClick={() => { if (window.confirm(`Stop ${nodeId}?\n\nIts running process cannot be resumed — every tool call is refused (the proxy answers 503; a wrapped agent's call raises AdmissionHeld). To bring it back, start it again on its agent card and restart the agent's process.`)) send({ stopped: true }); }}
+              onClick={async () => { if (await askConfirm(`Stop ${nodeId}?\n\nIts running process cannot be resumed — every tool call is refused (the proxy answers 503; a wrapped agent's call raises AdmissionHeld). To bring it back, start it again on its agent card and restart the agent's process.`)) send({ stopped: true }); }}
               disabled={stopped || command.isPending}
               style={btn({ fontSize: 12, padding: "6px 12px", color: stopped ? C.dim : C.red, borderColor: stopped ? C.line : C.red })}>
               <Square size={12} /> Stop{live ? "" : " agent"}
@@ -213,8 +214,8 @@ export default function RunControl({ runId }: { runId: string }) {
               ? "Insert text into the agent's next model call to see how it handles it. Marked untrusted; test-bench only."
               : NOT_A_TEST_BENCH}>
               <button
-                onClick={() => {
-                  const text = window.prompt("Injection text — the agent sees it in its next model call:");
+                onClick={async () => {
+                  const text = await askPrompt("Injection text — the agent sees it in its next model call:");
                   if (!text) return;
                   send({ pending_injection: { id: `inj_${Date.now()}`, text, reason: "", operator: "op_ui" } });
                 }}
@@ -259,8 +260,8 @@ export default function RunControl({ runId }: { runId: string }) {
                   <div className="mt-1" style={{ color: C.amber }}>cut sent: {pendingCut.join(", ")} — waiting for the node</div>
                 ) : (
                   <button className="mt-2"
-                    onClick={() => {
-                      const reason = window.prompt("Apply the proposed cut — reason (recorded):");
+                    onClick={async () => {
+                      const reason = await askPrompt("Apply the proposed cut — reason (recorded):");
                       if (reason && reason.trim()) heal.mutate(reason.trim());
                     }}
                     disabled={heal.isPending || stopped}

@@ -3,7 +3,7 @@
 // nodes, the context between them — and cutting an item sends a signed
 // pending_excision to the tree's own node.
 import { expect, test } from "@playwright/test";
-import { BACKEND, goHash, seedNode, setConnection, uniqueNode } from "./helpers";
+import { answerAsk, BACKEND, goHash, seedNode, setConnection, uniqueNode } from "./helpers";
 
 function snapshot(status: string, readAgent = "claude-code", readModel = "claude-haiku-5-5") {
   return {
@@ -55,8 +55,8 @@ test.describe("agent trees", () => {
     await expect(page.getByTestId("tree-item-read#1/f0")).toContainText("withheld · untrusted");
     await expect(page.getByTestId("tree-item-read#0/f1")).toContainText("unverified");
 
-    page.once("dialog", (d) => d.accept("ghost file is not in the repo"));
     await page.getByTestId("tree-item-read#0/f1").getByRole("button", { name: "cut" }).click();
+    await answerAsk(page, "ghost file is not in the repo");
     await expect(page.getByTestId("tree-item-read#0/f1")).toContainText("cut sent");
     // the command reached the tree's node as a pending excision
     const nodes = await (await request.get(`${BACKEND}/v1/plane/nodes`)).json();

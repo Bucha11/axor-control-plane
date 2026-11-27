@@ -5,7 +5,7 @@
 // axor-core IntentLoop + plane), the rest use a seeded node for determinism.
 import { expect, request, test } from "@playwright/test";
 import snapshotFixture from "./fixtures/reputation-snapshot.json" with { type: "json" };
-import { BACKEND, goHash, seedDegradedNode, seedNode, setConnection, uniqueNode } from "./helpers";
+import { answerAsk, BACKEND, goHash, seedDegradedNode, seedNode, setConnection, uniqueNode } from "./helpers";
 
 // With agents already on the plane the example tools are folded under one
 // line; with none they are open. Either way, open them.
@@ -81,9 +81,9 @@ test.describe("control", () => {
     await page.getByTestId(`agent-row-${node}`).click();
 
     // Set an initial cap of 5 (the first cap is confirmed: it cannot be raised).
-    page.once("dialog", (d) => void d.accept());
     await page.getByPlaceholder("set / lower").fill("5");
     await page.getByRole("button", { name: /apply/ }).click();
+    await answerAsk(page);
     await expect(page.getByText("5 calls")).toBeVisible();
 
     // Raising it past the current cap is refused before it ever hits the plane.
@@ -141,13 +141,15 @@ test.describe("control", () => {
     await page.getByTestId(`agent-row-${node}`).click();
 
     // declining the confirm sends nothing
-    page.once("dialog", (d) => void d.dismiss());
     await page.getByRole("button", { name: "more…" }).click();
     await page.getByRole("button", { name: "Stop", exact: true }).click();
+    await page.getByTestId("ask").getByRole("button", { name: "cancel" }).click();
+    await expect(page.getByTestId("ask")).toHaveCount(0);
     await expect(page.getByTestId("stopped-note")).toHaveCount(0);
 
-    page.once("dialog", (d) => { expect(d.message()).toContain("cannot be resumed"); void d.accept(); });
     await page.getByRole("button", { name: "Stop", exact: true }).click();
+    await expect(page.getByTestId("ask")).toContainText("cannot be resumed");
+    await answerAsk(page);
     await expect(page.getByTestId("stopped-note")).toBeVisible();
 
     await page.getByRole("button", { name: /Start it again/ }).click();
@@ -157,12 +159,43 @@ test.describe("control", () => {
     expect(desired.stopped).toBe(false);
 
     // and a cap can be removed for the next session
-    page.once("dialog", (d) => void d.accept());
     await page.getByPlaceholder("set / lower").fill("2");
     await page.getByRole("button", { name: /apply/ }).click();
+    await answerAsk(page);
     await expect(page.getByText("2 calls")).toBeVisible();
     await page.getByTestId("cap-remove").click();
     await expect(page.getByText("unlimited")).toBeVisible();
+  });
+
+  test("a stop asks in the page: Escape sends nothing, Enter sends it", async ({ page, request }) => {
+    // QA-034: native confirm() blocked the page and automation. The question is
+    // now an in-app dialog that takes focus and the keyboard.
+    const node = uniqueNode("gov-ask");
+    await seedNode(request, node);
+    await setConnection(page, { mode: "adapter" });
+    await goHash(page, "control");
+    await page.getByTestId(`agent-row-${node}`).click();
+    const commands: string[] = [];
+    page.on("request", (r) => { if (r.method() === "POST" && r.url().includes(`/${node}/command`)) commands.push(r.url()); });
+
+    await page.getByRole("button", { name: "more…" }).click();
+    const stop = page.getByRole("button", { name: "Stop", exact: true });
+    const ask = page.getByTestId("ask");
+    await stop.click();
+    await expect(ask).toBeVisible();
+    await expect(ask).toContainText(`Stop ${node}?`);
+    await expect(ask.getByRole("button", { name: "ok" })).toBeFocused();
+    await page.keyboard.press("Escape");
+    await expect(ask).toHaveCount(0);
+    await expect(page.getByTestId("stopped-note")).toHaveCount(0);
+    expect(commands).toEqual([]);
+
+    await stop.click();
+    await expect(ask).toBeVisible();
+    await page.keyboard.press("Enter");
+    await expect(ask).toHaveCount(0);
+    await expect(page.getByTestId("stopped-note")).toBeVisible();
+    expect(commands).toHaveLength(1);
   });
 
   test("the intervention menu gates inject behind test-bench", async ({ page, request }) => {
@@ -193,8 +226,8 @@ test.describe("control", () => {
     await expect(page.getByText(/with coverage: RESTRICTED/)).toBeVisible();
 
     // The reason is required and recorded (decision 8).
-    page.once("dialog", (d) => d.accept("verified by e2e: our own canary"));
     await page.getByRole("button", { name: /attest this/ }).click();
+    await answerAsk(page, "verified by e2e: our own canary");
 
     // Discharged: the level recomputes, and the node's own report is unchanged
     // until it applies the fact off its stream.
@@ -234,8 +267,8 @@ test.describe("control", () => {
     await page.getByRole("button", { name: "more…" }).click();
 
     const sent = page.waitForRequest((r) => r.url().includes("/cascade-stop"));
-    page.once("dialog", (d) => void d.accept());
     await page.getByRole("button", { name: /Cascade stop/ }).click();
+    await answerAsk(page);
     const body = JSON.parse((await sent).postData() ?? "{}");
 
     // The three fields a signed deployment reads. Without them it 409s before
@@ -378,8 +411,8 @@ test.describe("cross-session reputation", () => {
     await answer.click();
     await expect(page.getByTestId("replay-step")).toContainText("fetch answered — marked as outside text");
     await expect(page.getByText("IGNORE PREVIOUS INSTRUCTIONS")).toBeVisible();
-    page.once("dialog", (d) => d.accept("poisoned page"));
     await page.getByRole("button", { name: "remove this text from the agent's memory" }).click();
+    await answerAsk(page, "poisoned page");
     await expect(page.getByText(new RegExp(`cut sent to ${node}`))).toBeVisible();
     const nodes = await (await request.get(`${BACKEND}/v1/plane/nodes`)).json();
     const desired = nodes.find((n: { node_id: string }) => n.node_id === node).desired.state;
@@ -442,8 +475,8 @@ test.describe("cross-session reputation", () => {
     await expect(page.getByText("drift detected · 3 escaped")).toBeVisible();
 
     // apply the localizer's cut from here: it reaches desired state
-    page.once("dialog", (d) => d.accept("poisoned page"));
     await page.getByTestId("proposed-cut").getByRole("button", { name: "apply proposed cut" }).click();
+    await answerAsk(page, "poisoned page");
     await expect(page.getByText(/cut sent: tc9/)).toBeVisible();
 
     // and pausing the agent from the run's controls

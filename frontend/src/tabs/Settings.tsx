@@ -2,6 +2,7 @@
 // 16) plus connection and license. Notifications emit-and-route (webhook), with
 // the dead-letter log surfaced honestly; a notification system that fails
 // silently is worse than none.
+import { askConfirm } from "../components/Ask";
 import { useEffect, useState } from "react";
 import { track } from "../funnel";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -200,7 +201,7 @@ function OperatorKeys() {
                 style={btn({ fontSize: 10.5, padding: "1px 8px", color: C.green, borderColor: C.green })}>vouch for it</button>
             )}
             <button data-testid="op-key-revoke"
-              onClick={() => { if (confirm(`Revoke ${k.operator_id}? Machines stop trusting it.`)) revoke.mutate(k.operator_id); }}
+              onClick={async () => { if (await askConfirm(`Revoke ${k.operator_id}? Machines stop trusting it.`)) revoke.mutate(k.operator_id); }}
               style={{ ...btn({ fontSize: 10.5, padding: "1px 8px" }), color: C.dim }}>revoke</button>
           </div>
         );
@@ -287,7 +288,7 @@ function Sessions({ orgId }: { orgId: string }) {
       </div>
       <div className="flex gap-3 items-center flex-wrap">
         <button data-testid="sessions-end" disabled={end.isPending}
-          onClick={() => { if (window.confirm("Sign everyone out of this workspace? You stay signed in.")) end.mutate(); }}
+          onClick={async () => { if (await askConfirm("Sign everyone out of this workspace? You stay signed in.")) end.mutate(); }}
           style={{ background: "none", border: "none", padding: 0, cursor: "pointer", color: C.amber, fontFamily: MONO, fontSize: 11 }}>
           sign everyone else out
         </button>
@@ -360,12 +361,12 @@ function Provisioning({ orgId }: { orgId: string }) {
           )}
           <div className="flex gap-3">
             <button data-testid="scim-make" disabled={make.isPending} style={{ ...link, color: C.steel }}
-              onClick={() => { if (!d.enabled || window.confirm("Make a new token? The one your provider has stops working.")) makeOnce(); }}>
+              onClick={async () => { if (!d.enabled || await askConfirm("Make a new token? The one your provider has stops working.")) makeOnce(); }}>
               {d.enabled ? "make a new token" : "make a token"}
             </button>
             {d.enabled && (
               <button style={{ ...link, color: C.dim }} disabled={revoke.isPending}
-                onClick={() => { if (window.confirm("Turn provisioning off? The provider's token stops working.")) revoke.mutate(); }}>
+                onClick={async () => { if (await askConfirm("Turn provisioning off? The provider's token stops working.")) revoke.mutate(); }}>
                 turn off
               </button>
             )}
@@ -468,7 +469,7 @@ function SingleSignOn({ orgId }: { orgId: string }) {
               style={{ background: "none", border: "none", padding: 0, cursor: "pointer", color: C.steel, fontFamily: MONO, fontSize: 11 }}>
               change
             </button>
-            <button onClick={() => { if (window.confirm("Turn single sign-on off? People sign in with passwords again.")) remove.mutate(); }}
+            <button onClick={async () => { if (await askConfirm("Turn single sign-on off? People sign in with passwords again.")) remove.mutate(); }}
               style={{ background: "none", border: "none", padding: 0, cursor: "pointer", color: C.dim, fontFamily: MONO, fontSize: 11 }}>
               turn off
             </button>
@@ -764,7 +765,7 @@ function Team({ orgId, isAdmin }: { orgId: string; isAdmin: boolean }) {
                   {["admin", "member", "viewer"].map((r) => <option key={r} value={r}>{r}</option>)}
                 </select>
                 <button aria-label={`remove ${m.email}`} disabled={remove.isPending}
-                  onClick={() => { if (window.confirm(`Take ${m.email} off this workspace? Their keys are revoked too.`)) remove.mutate(m.user_id); }}
+                  onClick={async () => { if (await askConfirm(`Take ${m.email} off this workspace? Their keys are revoked too.`)) remove.mutate(m.user_id); }}
                   style={{ background: "none", border: "none", padding: 0, cursor: "pointer", color: C.dim, fontFamily: MONO, fontSize: 11 }}>
                   remove
                 </button>
@@ -2092,8 +2093,8 @@ function AgentKeys({ journey, menuAll }: { journey: Journey | null; menuAll: boo
             {k.label}{k.node_id ? ` · only for ${k.node_id}` : ""}
           </span>
           <button aria-label={`revoke ${k.key_id}`} disabled={revoke.isPending}
-            onClick={() => {
-              if (window.confirm(`Revoke ${k.key_id}? Anything using it loses access.`)) revoke.mutate(k.key_id);
+            onClick={async () => {
+              if (await askConfirm(`Revoke ${k.key_id}? Anything using it loses access.`)) revoke.mutate(k.key_id);
             }}
             style={{ background: "none", border: "none", padding: 0, cursor: "pointer" }}>
             <Trash2 size={12} color={C.dim} />

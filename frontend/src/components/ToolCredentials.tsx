@@ -16,6 +16,7 @@
 // on the machine that will hold them, and only public halves reach this form —
 // pasting a private key into a browser would hand over the one thing the mode
 // exists to keep away from the backend.
+import { askPrompt } from "./Ask";
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Lock, LockOpen, Plus, RotateCw, Slash } from "lucide-react";
@@ -213,8 +214,8 @@ export default function ToolCredentials() {
             <Tooltip content="New secret, same scope. A revoked credential refuses rotation — granting it again is enrolment, deliberately.">
               <button
                 aria-label={`rotate ${e.tool}`}
-                onClick={() => {
-                  const secret = window.prompt(`New secret for ${e.tool} — ${e.endpoint}:`);
+                onClick={async () => {
+                  const secret = await askPrompt(`New secret for ${e.tool} — ${e.endpoint}:`);
                   if (secret) rotate.mutate({ e, secret });
                 }}
                 style={btn({ color: C.mut, fontSize: 10, padding: "2px 7px" })}
