@@ -82,6 +82,38 @@ test.describe("on a phone", () => {
     }
   });
 
+  // QA-030: signed in, the e-mail chip pushed the header 32px past the screen
+  // on every page, and opening the account menu shifted the page ("XOR").
+  test("signed in, the header and the open account menu fit a 390px screen", async ({ page }) => {
+    // a new workspace: nothing connected yet, so the header carries "connect" too
+    await setConnection(page, { mode: "none" });
+    const email = "axor-qa3-bb8542-long-name@example.com";
+    await page.route("**/identity/v1/login", (route) => route.fulfill({
+      status: 200, contentType: "application/json",
+      body: JSON.stringify({ access_token: "acc-token", refresh_token: "ref-token", token_type: "Bearer",
+        expires_in: 900, user: { user_id: "usr_1", email }, org: { org_id: "org_1", role: "owner", tier: "community" } }),
+    }));
+    await goHash(page, "settings");
+    await page.getByLabel("email", { exact: true }).fill(email);
+    await page.getByLabel("password").fill("correct horse");
+    await page.getByRole("button", { name: "log in", exact: true }).click();
+    await goHash(page, "govern");
+    const chip = page.getByRole("button", { name: email });
+    await expect(chip).toBeVisible();
+    await page.waitForLoadState("networkidle");
+    const scroll = () => page.evaluate(() => document.documentElement.scrollWidth);
+    expect(await scroll()).toBeLessThanOrEqual(390);
+    await chip.click();
+    const menu = page.getByRole("dialog", { name: "account" });
+    await expect(menu).toBeVisible();
+    expect(await scroll()).toBeLessThanOrEqual(390);
+    const box = (await menu.boundingBox())!;
+    expect(box.x).toBeGreaterThanOrEqual(0);
+    expect(box.x + box.width).toBeLessThanOrEqual(390);
+    // the page did not slide under the menu: the logo still starts on screen
+    expect((await page.locator(".app-logo").boundingBox())!.x).toBeGreaterThanOrEqual(0);
+  });
+
   test("a connected, signed-out phone still fits (demo badge + sign in)", async ({ page }) => {
     await setConnection(page, { mode: "demo" });
     await page.route("**/v1/auth/status", (route) =>

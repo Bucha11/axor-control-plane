@@ -9,6 +9,7 @@ import { api, TeamSkill } from "../api";
 import { C, MONO, btn } from "../theme";
 import { HowItWorks, MachineCommand } from "./MachineCommand";
 import { useWorkStarted } from "../workStarted";
+import { localTime } from "../time";
 
 export function useSkillsOff() {
   const qc = useQueryClient();
@@ -26,7 +27,11 @@ export function useSkillsOff() {
            error: (set.error ?? team.error) as Error | null, shared: q.data?.team ?? [], team };
 }
 
-const day = (ts: string) => ts.slice(0, 16).replace("T", " ");
+const day = (ts: string) => localTime(ts);
+
+// the plane's rule for a skill's name (coding_api._NAME): checked here before
+// sending, since a "/" in it never reaches the route at all (QA-026)
+const SKILL_NAME = /^[A-Za-z0-9_.:-]{1,64}$/;
 
 /** Shared skills waiting for someone's decision: never turned on, or a newer
  * upload than the version on — the menu says how many. */
@@ -215,9 +220,10 @@ export function SkillSwitch({ name }: { name: string }) {
 export function SkillsOffPanel() {
   const { list, attempts, set, error } = useSkillsOff();
   const [name, setName] = useState("");
+  const n = name.trim();
+  const bad = !!n && !SKILL_NAME.test(n);
   const add = () => {
-    const n = name.trim();
-    if (n) set.mutate({ name: n, off: true }, { onSuccess: () => setName("") });
+    if (n && !bad) set.mutate({ name: n, off: true }, { onSuccess: () => setName("") });
   };
   return (
     <section data-testid="skills-off" className="mb-8">
@@ -239,7 +245,7 @@ export function SkillsOffPanel() {
               style={{ borderTop: i ? `1px solid ${C.line}` : "none", fontFamily: MONO, fontSize: 11.5 }}>
               <span style={{ color: C.text }}>{s.skill}</span>
               <span style={{ color: C.dim }}>
-                since {s.ts.slice(0, 16).replace("T", " ")}{s.by ? ` · by ${s.by}` : ""}
+                since {localTime(s.ts)}{s.by ? ` · by ${s.by}` : ""}
               </span>
               <span style={{ color: attempts[s.skill] ? C.amber : C.dim }}>
                 {attempts[s.skill] ?? 0} refused attempt{attempts[s.skill] === 1 ? "" : "s"}
@@ -255,9 +261,11 @@ export function SkillsOffPanel() {
           placeholder="skill name ⏎" aria-label="skill to turn off"
           style={{ width: 200, background: C.bg, border: `1px solid ${C.line}`, borderRadius: 4, color: C.text,
                    fontFamily: MONO, fontSize: 11.5, padding: "5px 8px", outline: "none" }} />
-        <button onClick={add} disabled={!name.trim() || set.isPending}
-          style={btn({ color: name.trim() ? C.text : C.dim, fontSize: 11, padding: "5px 10px" })}>turn off</button>
-        {error && <span style={{ fontFamily: MONO, fontSize: 11, color: C.red }}>{error.message}</span>}
+        <button onClick={add} disabled={!n || bad || set.isPending}
+          style={btn({ color: n && !bad ? C.text : C.dim, fontSize: 11, padding: "5px 10px" })}>turn off</button>
+        {bad
+          ? <span style={{ fontFamily: MONO, fontSize: 11, color: C.red }}>a skill name is a plain id (letters, digits, - _ . :), at most 64</span>
+          : error && <span style={{ fontFamily: MONO, fontSize: 11, color: C.red }}>{error.message}</span>}
       </div>
     </section>
   );

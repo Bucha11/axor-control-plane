@@ -66,6 +66,21 @@ async def test_master_token_has_all_scopes(secured: httpx.AsyncClient) -> None:
     assert set(status["scopes"]) == {"read", "ingest", "operate", "admin"}
 
 
+async def test_auth_status_says_who_is_the_operator(secured: httpx.AsyncClient,
+                                                    open_client: httpx.AsyncClient) -> None:
+    """QA-042: Settings asked every owner for the operator's funnel and got a
+    403 each load; the status says whose it is, so it is asked only then."""
+    master = (await secured.get("/v1/auth/status", headers=_bearer(TOKEN))).json()
+    assert master["operator"] is True
+    minted = (await secured.post("/v1/keys", headers=_bearer(TOKEN),
+                                 json={"scopes": ["read", "admin"], "label": "owner"})).json()
+    owner = (await secured.get("/v1/auth/status", headers=_bearer(minted["secret"]))).json()
+    assert owner["authenticated"] is True and owner["operator"] is False
+    assert (await secured.get("/v1/auth/status")).json()["operator"] is False
+    # an open plane is its own operator
+    assert (await open_client.get("/v1/auth/status")).json()["operator"] is True
+
+
 async def test_bad_token_rejected(secured: httpx.AsyncClient) -> None:
     assert (await secured.get("/v1/runs", headers=_bearer("nope"))).status_code == 401
 

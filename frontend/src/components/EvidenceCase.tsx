@@ -13,6 +13,7 @@ import CausalSubgraph from "./CausalSubgraph";
 import { navigate } from "../router";
 import { C, MONO } from "../theme";
 import Tooltip from "./Tooltip";
+import { localTime } from "../time";
 
 const HEADLINE: Record<string, string> = {
   fabrication_contained: "contained a fabrication at the boundary",
@@ -270,7 +271,7 @@ export default function EvidenceCase({
         <div key={l.token} data-testid="share-link" className="px-4 py-2 flex items-center gap-2"
           style={{ borderTop: `1px solid ${C.line}` }}>
           <span style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim }}>
-            shared {l.created_ts.slice(0, 16).replace("T", " ")} · still opens · {window.location.origin}{l.url}
+            shared {localTime(l.created_ts)} · still opens · {window.location.origin}{l.url}
           </span>
           <button onClick={() => revoked.mutate(l.token)} disabled={revoked.isPending}
             style={{ ...action(C.mut), fontSize: 10 }}>

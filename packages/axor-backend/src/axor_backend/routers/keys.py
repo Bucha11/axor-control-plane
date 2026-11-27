@@ -68,8 +68,10 @@ async def security_posture(config: ConfigDep) -> dict:
         {"id": "vault_signing_token", "ok": config.vault_signing_token is not None,
          "what": "requesting a signature needs its own token, not just admin",
          "fix": "set AXOR_VAULT_SIGNING_TOKEN"},
-        {"id": "retention", "ok": config.retention_days is not None,
-         "what": (f"runs are kept {config.retention_days:g} days" if config.retention_days
+        # on the hosted plane each plan has its window (ee.entitlements.RETENTION_DAYS)
+        {"id": "retention", "ok": config.hosted or config.retention_days is not None,
+         "what": ("runs are kept as long as each workspace's plan says" if config.hosted
+                  else f"runs are kept {config.retention_days:g} days" if config.retention_days
                   else "runs are kept forever"),
          "fix": "set AXOR_RETENTION_DAYS"},
     ]
@@ -89,6 +91,7 @@ async def auth_status(request: Request, config: ConfigDep) -> dict:
             "auth_enabled": False,
             "authenticated": True,
             "scopes": sorted(auth_mod.SCOPES),
+            "operator": True,
         }
     principal = await resolve_principal(request)
     if principal is None and _presented_a_token(request):
@@ -109,6 +112,10 @@ async def auth_status(request: Request, config: ConfigDep) -> dict:
         # whether a visitor can start as a guest, and whether this caller is one
         "guest_sessions": getattr(request.app.state, "guests", None) is not None,
         "guest": principal is not None and principal.kind == "guest",
+        # the deployment's operator (the master token): what only they may read,
+        # such as the sign-up funnel, is asked for only then — not tried and
+        # refused with a 403 on every Settings load (QA-042)
+        "operator": principal is not None and principal.kind == "master",
     }
 
 

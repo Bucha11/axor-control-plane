@@ -10,6 +10,7 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import { Check, Copy } from "lucide-react";
 import { api } from "../api";
 import { navigate } from "../router";
+import { CARD } from "../quote";
 import { isGuestToken, useApp } from "../store";
 import { C, MONO, btn } from "../theme";
 import { IdentityLogin } from "../tabs/Settings";
@@ -134,7 +135,10 @@ export default function CodingOnboarding({ then }: { then?: () => void }) {
         {then ? (
           <>
             <span style={{ color: C.green }}>free: 1 developer, 1 agent family and 1 production agent</span>.
-            <br />Team Workspace, $299 / month: 10 production agents and 5 developers — more developers $25 each.{" "}
+            {/* from the rate card, as the Pricing cards are: Team includes no
+                developers, each is a Business seat on top (QA-012) */}
+            <br />Team Workspace, ${CARD.team.base} / month: {CARD.team.nodes} production agents — each
+            developer who runs coding agents is a Business seat on top, ${CARD.team.perSeat}.{" "}
           </>
         ) : (
           <>

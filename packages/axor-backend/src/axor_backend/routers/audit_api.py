@@ -100,10 +100,12 @@ async def read_audit(request: Request, store: StoreDep, principal: PrincipalDep,
     if window:
         floor = (datetime.now(UTC) - timedelta(days=window)).isoformat()
         since = max(since, floor) if since else floor
-    rows = [r for r in await _all(store, _kinds(kinds), since, until, EXPORT_MAX)
-            if _matches(r, action, who, target)]
+    every = await _all(store, _kinds(kinds), since, until, EXPORT_MAX)
+    rows = [r for r in every if _matches(r, action, who, target)]
+    # the filter's choices: every act on the trail, not only those the current
+    # filter kept — picking one used to leave only that one to pick (QA-020)
     return {"items": rows[:limit], "total": len(rows),
-            "actions": sorted({r["action"] for r in rows}), "window_days": window}
+            "actions": sorted({r["action"] for r in every}), "window_days": window}
 
 
 @router.get("/retention")

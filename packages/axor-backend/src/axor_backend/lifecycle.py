@@ -24,7 +24,7 @@ from typing import Any
 from fastapi import FastAPI
 
 from axor_backend.corpus import record_corpus_run, regression_report
-from axor_backend.licensing import active_license, load_licenses
+from axor_backend.licensing import active_license, load_licenses, stored_license
 from axor_backend.monitor import running_stale_monitor
 from axor_backend.storage import VAULT_AUDIT_KINDS, init_db
 from axor_backend.tenancy import PUBLIC_ORG, set_current_org
@@ -187,14 +187,16 @@ async def prune_once(state: Any) -> None:  # noqa: ANN401
     un-flushable: writing rows cannot accelerate the clock, so the surface a log
     records cannot be used to erase the record of having used it.
     """
-    days = state.config.retention_days
-    cutoff = (
-        (datetime.now(UTC) - timedelta(days=days)).isoformat()
-        if days and days > 0 else None
-    )
+    from axor_backend.compliance import open_holds
+
     try:
         for org in await state.store.list_orgs():
             set_current_org(org)
+            days = retention_days(state, org)
+            cutoff = (
+                (datetime.now(UTC) - timedelta(days=days)).isoformat()
+                if days and days > 0 else None
+            )
             for kind in VAULT_AUDIT_KINDS:
                 dropped = await state.store.trim_vault_audit_to(kind)
                 if dropped:
@@ -206,7 +208,9 @@ async def prune_once(state: Any) -> None:  # noqa: ANN401
                         dropped, kind, org,
                     )
             await prune_audit_trail(state.store)
-            if cutoff is None:
+            # a legal hold outranks retention here too: nothing is pruned
+            # while one is open
+            if cutoff is None or await open_holds(state.store):
                 continue
             pruned = await state.store.prune_runs_older_than(cutoff)
             if pruned:
@@ -222,6 +226,21 @@ async def prune_once(state: Any) -> None:  # noqa: ANN401
                 )
     finally:
         set_current_org(PUBLIC_ORG)
+
+
+def retention_days(state: Any, org: str) -> float | None:  # noqa: ANN401
+    """How long one workspace's runs are kept. On the hosted plane it is the
+    plan's (ee.entitlements.RETENTION_DAYS), never longer than the
+    deployment's own window when one is set; self-hosted, the deployment's."""
+    days = state.config.retention_days
+    if not state.config.hosted:
+        return days
+    from axor_backend.ee.entitlements import plan_retention_days
+
+    plan = plan_retention_days(stored_license(state, org))
+    if plan is None:
+        return days
+    return min(plan, days) if days and days > 0 else plan
 
 
 async def prune_audit_trail(store: Any) -> int:  # noqa: ANN401

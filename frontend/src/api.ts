@@ -2,7 +2,7 @@ import type { ToolClass } from "./store";
 import { canonicalize } from "./jcs";
 import * as opKey from "./opKey";
 import { IDENTITY_BASE, refresh } from "./identity";
-import { useApp } from "./store";
+import { isGuestToken, useApp } from "./store";
 import { track } from "./funnel";
 
 // Backend client. Vite dev-proxies /v1 -> backend :8400 and /axor -> proxy :8401.
@@ -912,6 +912,11 @@ function apiToken(): string {
   return useApp.getState().apiToken;
 }
 
+async function guestHasNone<T>(none: T, ask: () => Promise<T>): Promise<T> {
+  if (!apiToken()) await sessionSettled();
+  return isGuestToken(apiToken()) ? none : ask();
+}
+
 /** Whose workspace a demo node, tree or run the proxy uploads belongs to: the
  *  page's own sign-in (or guest) token, which the proxy uploads with (QA-001). */
 function uploadAs(): Record<string, string> {
@@ -949,6 +954,7 @@ function commandRefusal(e: unknown): unknown {
 // clears the session. Operator/API tokens have no refresh token and fall
 // through unchanged.
 async function af(path: string, init: RequestInit = {}, retried = false): Promise<Response> {
+  if (!apiToken() && path !== "/v1/auth/status") await sessionSettled();
   const token = apiToken();
   const headers = new Headers(init.headers);
   if (token) headers.set("Authorization", `Bearer ${token}`);
@@ -981,6 +987,32 @@ async function af(path: string, init: RequestInit = {}, retried = false): Promis
 }
 
 // ── hosted guest sessions ─────────────────────────────────────────────────────
+
+// Whose requests these are, known once: with no token yet, the plane is asked
+// whether it needs one (auth off, or a session already there: no) and, where
+// guests are offered, a guest session is started. Until then a request
+// without a token waits — every screen used to fire its reads first and get a
+// burst of 401s before the guest token arrived (QA-042). Signing out (the
+// token gone) asks again.
+let session: Promise<void> | null = null;
+useApp.subscribe((s, prev) => {
+  if (prev.apiToken && !s.apiToken) session = null;
+});
+
+/** Settles once the session is known: a token is there, or none is needed,
+ *  or the plane refused a guest for now (`again` asks once more). */
+export function sessionSettled(again = false): Promise<void> {
+  if (!session || again) {
+    session = api.authStatus()
+      .then((st) => {
+        if (st.auth_enabled && st.guest_sessions && !st.authenticated && !apiToken()) {
+          return startGuest().then(() => undefined);
+        }
+      })
+      .catch(() => undefined);
+  }
+  return session;
+}
 
 let renewing: Promise<boolean> | null = null;
 // Seconds the plane asked a refused guest to wait (429 Retry-After), or 0.
@@ -1277,6 +1309,9 @@ export interface Entitlements {
   agent_family_chosen?: boolean;
   // a paid plan's seat limit (an admin's), and the seats this month used
   seat_cap?: number | null; seats_used?: number;
+  // days this workspace's runs are kept (its plan's, on the hosted plane);
+  // null: as long as it keeps them
+  retention_days?: number | null;
   locked: Record<string, LockReason[]>;
   locked_trees: Record<string, LockReason[]>;
   reasons: Record<LockReason, string>;
@@ -1767,8 +1802,12 @@ export const api = {
     }).then((r) => j<{ skills_off: string[] }>(r)),
   skillEvals: () => af("/v1/skill-evals").then((r) => j<{ evals: SkillEvalRow[] }>(r)),
   // a developer's own `axor-wrap worker`s, and the jobs queued for them
-  machines: () => af("/v1/machines").then((r) => j<{ machines: Machine[] }>(r)),
-  machineJobs: () => af("/v1/machine-jobs?limit=10").then((r) => j<{ jobs: MachineJob[] }>(r)),
+  // a guest has no account, so no machine: not asked once the session turns
+  // out to be a guest's — the page may ask before the token is there (QA-042)
+  machines: () => guestHasNone({ machines: [] as Machine[] },
+    () => af("/v1/machines").then((r) => j<{ machines: Machine[] }>(r))),
+  machineJobs: () => guestHasNone({ jobs: [] as MachineJob[] },
+    () => af("/v1/machine-jobs?limit=10").then((r) => j<{ jobs: MachineJob[] }>(r))),
   queueSkillEval: (machineId: string, spec: SkillEvalSpec) =>
     af("/v1/machine-jobs", {
       method: "POST", headers: { "content-type": "application/json" },
@@ -2349,7 +2388,7 @@ export const api = {
   authStatus: () =>
     af("/v1/auth/status").then((r) =>
       j<{ auth_enabled: boolean; authenticated: boolean; scopes: string[];
-          guest_sessions?: boolean; guest?: boolean }>(r),
+          guest_sessions?: boolean; guest?: boolean; operator?: boolean }>(r),
     ),
   listKeys: () =>
     af("/v1/keys").then((r) =>

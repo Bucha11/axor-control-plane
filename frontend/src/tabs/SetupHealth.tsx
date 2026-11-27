@@ -16,6 +16,7 @@ import { C, MONO, btn } from "../theme";
 import { HowItWorks, MachineCommand } from "../components/MachineCommand";
 import { SkillSwitch } from "../components/SkillsOff";
 import { useWorkStarted } from "../workStarted";
+import { localTime } from "../time";
 
 
 const label: React.CSSProperties = {
@@ -23,7 +24,7 @@ const label: React.CSSProperties = {
 };
 const panel: React.CSSProperties = { background: C.panel, border: `1px solid ${C.line}`, borderRadius: 8 };
 
-const day = (ts: string) => ts.slice(0, 16).replace("T", " ");
+const day = (ts: string) => localTime(ts);
 const ofRuns = (c: [number, number] | null) => (c ? `${c[0]} of ${c[1]}` : "—");
 
 const pieceName = (kind: string, name: string) =>

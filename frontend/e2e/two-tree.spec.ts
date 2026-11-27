@@ -34,3 +34,40 @@ test.describe("two-tree containment", () => {
     await expect(tt.getByText("CONTAINED", { exact: true })).toBeVisible();
   });
 });
+
+// QA-033: the node labels ran off the two-tree panes ("tree-scrap",
+// "tree-resea"), and the causal subgraph's dashed edges ran through the node
+// names and roles ("tree-research", "conduit").
+test("graph labels fit their pane, and edges do not cross them", async ({ page }) => {
+  const ctx = await request.newContext();
+  await ctx.post(`${BACKEND}/v1/demo/seed-tree-run`);
+  await ctx.dispose();
+  await setConnection(page, { mode: "demo" });
+  await goHash(page, "eval/ex_tree");
+  const tt = page.getByTestId("two-tree");
+  await expect(tt).toBeVisible({ timeout: 15_000 });
+  await expect(page.getByTestId("causal-subgraph")).toBeVisible();
+
+  const clipped = await tt.locator("svg").evaluateAll((svgs) => svgs.flatMap((svg) => {
+    const box = svg.getBoundingClientRect();
+    return Array.from(svg.querySelectorAll("text"))
+      .filter((t) => t.getBoundingClientRect().right > box.right + 0.5)
+      .map((t) => t.textContent);
+  }));
+  expect(clipped).toEqual([]);
+
+  const crossed = await page.getByTestId("causal-subgraph").locator("svg").first().evaluate((svg) => {
+    // the shield sits on the consequence edge on purpose: it is the gate
+    const texts = Array.from(svg.querySelectorAll("text")).filter((t) => t.textContent !== "🛡")
+      .map((t) => ({ s: t.textContent, r: t.getBoundingClientRect() }));
+    const out: string[] = [];
+    for (const p of Array.from(svg.querySelectorAll("path"))) {
+      const e = p.getBoundingClientRect();
+      for (const { s, r } of texts) {
+        if (e.left <= r.right && e.right >= r.left && e.top < r.bottom - 1 && e.bottom > r.top + 1) out.push(s ?? "");
+      }
+    }
+    return out;
+  });
+  expect(crossed).toEqual([]);
+});

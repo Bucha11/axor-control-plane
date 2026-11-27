@@ -18,6 +18,25 @@ test.describe("settings", () => {
     await expect(page.getByRole("button", { name: "subscribed" })).toBeVisible();
   });
 
+  test("a double-click on Subscribe subscribes once, and the trail has one row", async ({ page, request }) => {
+    // QA-020: one subscription, two "subscribed alerts to" rows on the audit trail
+    let posts = 0;
+    await page.route("**/v1/notifications/subscribe", async (route) => {
+      posts += 1;
+      await new Promise((ok) => setTimeout(ok, 300));
+      await route.continue();
+    });
+    await goHash(page, "settings?tab=alerts");
+    const url = `https://sink.e2e/once-${Date.now()}`;
+    await page.getByPlaceholder(/https:\/\/hooks.example\/…/).fill(url);
+    await page.getByRole("checkbox").first().check();
+    await page.getByRole("button", { name: /Subscribe/ }).dblclick();
+    await expect(page.getByRole("button", { name: "subscribed" })).toBeVisible();
+    expect(posts).toBe(1);
+    const trail = await (await request.get(`${BACKEND}/v1/audit`, { params: { action: "alert_subscribed", target: url } })).json();
+    expect(trail.total).toBe(1);
+  });
+
   test("a subscribed webhook can be unsubscribed", async ({ page }) => {
     // A registered webhook fired forever: removing one meant editing the
     // database, while the body it receives carries node ids, levels and a
@@ -77,6 +96,25 @@ test.describe("settings", () => {
     await expect(page.getByLabel(/the license is about to expire/)).toHaveCount(0);
   });
 
+  test("an owner's Settings does not ask for what they cannot have (QA-042)", async ({ page }) => {
+    // every load: GET /v1/funnel (the operator's) → 403, GET /v1/license/invoice
+    // with no license → 404
+    await page.route("**/v1/auth/status", (r) => r.fulfill({ status: 200, contentType: "application/json",
+      body: JSON.stringify({ auth_enabled: true, authenticated: true, scopes: ["read", "ingest", "operate", "admin"],
+                             guest_sessions: false, guest: false, operator: false }) }));
+    const asked: string[] = [];
+    page.on("request", (r) => {
+      const path = new URL(r.url()).pathname;
+      if (r.method() === "GET" && (path === "/v1/funnel" || path === "/v1/license/invoice")) asked.push(path);
+    });
+    await goHash(page, "settings?tab=billing");
+    const usage = page.getByTestId("usage-billing");
+    await expect(usage.getByText(/there is nothing to bill/)).toBeVisible();
+    await page.getByTestId("settings-tab-workspace").click();
+    await expect(page.getByTestId("license-fold")).toBeVisible();
+    expect(asked).toEqual([]);
+  });
+
   test("the meter and the statement drawn from it are visible", async ({ page }) => {
     // Measured, priced, tested — and reachable only by curl, so a customer
     // could not see their own fleet history or their own bill.
@@ -102,6 +140,49 @@ test.describe("settings", () => {
     await expect(page.getByText("no license active on this deployment")).toBeVisible();
     await expect(page.getByText(/no auto-renewal/)).toBeVisible();
     await expect(page.getByText(/usage not reported/)).toBeVisible();
+  });
+
+  test("license and billing words that do not contradict themselves (QA-035)", async ({ page }) => {
+    // "no license active" sat beside "auto-renewal configured (AXOR_LICENSE_RENEWAL_URL)";
+    // the paid-plan estimate called Team's $299 base "so far this month" with nothing used
+    await page.route("**/v1/license/status", (r) => r.fulfill({ status: 200, contentType: "application/json",
+      body: JSON.stringify({ active: false, vendor_key_configured: true, licensed_to: "Acme",
+                             auto_renewal: true, usage_reporting: false, hosted: true }) }));
+    await page.route("**/v1/license/billing", (r) => r.fulfill({ status: 200, contentType: "application/json",
+      body: JSON.stringify({
+        plan: { tier: "community", licensed: false, organization: null, expires_at: null, base: "$0.00",
+                base_cents: 0, per_node_cents: 0, seat: "$0.00", seat_cents: 0, included_nodes: 1,
+                included_developers: 1, priced: true },
+        current: null, history: [], forecast: null,
+        if_paid: [{
+          tier: "team", month: "2026-11", workspace_tier: "team", base: "$299.00", base_cents: 29900,
+          included_nodes: 10, peak_nodes: 0, peak_day: null, billable_nodes: 0, overage: "$0.00",
+          overage_cents: 0, included_developers: 0, active_developers: 0, billable_developers: 0,
+          seats: "$0.00", seat_cents: 0, total: "$299.00", total_cents: 29900, provisional: true,
+          priced: true, note: "", computed_on: "2026-11-27", developers: [] }],
+      }) }));
+    await goHash(page, "settings");
+    const fold = page.getByTestId("license-fold");
+    await fold.locator("summary").click();
+    await expect(fold).toContainText("no license active on this deployment");
+    await expect(fold).toContainText("a license applied here will renew itself before it expires");
+    await expect(fold).not.toContainText("AXOR_");
+    await page.getByTestId("settings-tab-billing").click();
+    const team = page.getByTestId("if-paid-team");
+    await expect(team).toContainText("the plan's price alone — nothing used yet");
+    await expect(team).not.toContainText("so far this month");
+  });
+
+  test("tabs follow the journey:a coding team sees no security tab, plain alerts, keys with the lines to use them", async ({ page }) => {
+});
+
+  test("billing says how long the plan keeps runs", async ({ page }) => {
+    await page.route("**/v1/license/entitlements", (r) => r.fulfill({ json: {
+      tier: "community", free: true, developers: 1, agent_families: 1, agent_family: null,
+      locked: {}, locked_trees: {}, reasons: {}, retention_days: 7 } }));
+    await goHash(page, "settings");
+    await page.getByTestId("settings-tabs").getByRole("tab", { name: "billing" }).click();
+    await expect(page.getByTestId("billing-retention")).toContainText("runs are kept 7 days — a higher plan keeps more");
   });
 
   test("tabs follow the journey: a coding team sees no security tab, plain alerts, keys with the lines to use them", async ({ page }) => {
@@ -175,6 +256,29 @@ test.describe("settings", () => {
     expect(put).toEqual({ scopes: ["read", "ingest"] });
   });
 
+  test("a double-click on make a key makes one key", async ({ page }) => {
+    // QA-017: the second click got through before the button turned disabled —
+    // two keys minted, the second secret never shown
+    await page.route("**/v1/auth/status", (r) => r.fulfill({ status: 200, contentType: "application/json",
+      body: JSON.stringify({ auth_enabled: true, authenticated: true, scopes: ["read", "ingest", "operate", "admin"] }) }));
+    let posts = 0;
+    await page.route("**/v1/keys", async (r) => {
+      if (r.request().method() !== "POST") {
+        return r.fulfill({ status: 200, contentType: "application/json", body: "[]" });
+      }
+      posts += 1;
+      await new Promise((ok) => setTimeout(ok, 300));
+      await r.fulfill({ status: 201, contentType: "application/json",
+        body: JSON.stringify({ key_id: `k_${posts}`, secret: `ak_secret${posts}`, scopes: ["ingest"], node_id: null }) });
+    });
+    await goHash(page, "settings?tab=connect");
+    await page.getByTestId("key-mint").dblclick();
+    await expect(page.getByTestId("key-minted")).toContainText("ak_secret1");
+    expect(posts).toBe(1);
+    // QA-041: the "shown once" box had no padding — its text touched the border
+    expect(await page.getByTestId("key-minted").evaluate((el) => getComputedStyle(el).paddingLeft)).toBe("8px");
+  });
+
   test("production sees how the plane is protected, wall by wall", async ({ page }) => {
     await goHash(page, "settings?tab=security");
     const posture = page.getByTestId("security-posture");
@@ -182,6 +286,29 @@ test.describe("settings", () => {
     await expect(posture.getByTestId("posture-auth")).toContainText("set AXOR_API_TOKEN");
     await expect(posture.getByTestId("posture-command_signing")).toContainText("AXOR_OPERATOR_KEYS");
     await expect(page.getByTestId("federation-vault")).toBeVisible();
+  });
+
+  test("security: the cards stay in the column, the enrol error sits under enrol (QA-041)", async ({ page }) => {
+    // SIGNING COMMANDS stuck out past the column's right edge, and a refused
+    // enrolment was said under PUBLIC KEYS, a section below the form
+    await page.setViewportSize({ width: 1366, height: 900 });
+    await page.route("**/v1/vault/creds/enroll", (r) => r.fulfill({ status: 400, contentType: "application/json",
+      body: JSON.stringify({ detail: "needs at least one node in scope_nodes" }) }));
+    await goHash(page, "settings?tab=security");
+    const row = page.getByTestId("federation-vault");
+    await expect(row).toBeVisible();
+    const right = (await row.boundingBox())!;
+    for (const card of await row.locator(":scope > div").all()) {
+      const box = (await card.boundingBox())!;
+      expect(box.x + box.width).toBeLessThanOrEqual(right.x + right.width + 0.5);
+    }
+    await page.getByRole("button", { name: "enrol a credential" }).click();
+    const form = page.getByTestId("enrol-form");
+    await form.getByLabel("tool", { exact: true }).fill("qa2tool");
+    await form.getByLabel("endpoint").fill("https://api.example.com");
+    await form.getByLabel("secret").fill("s3cret");
+    await form.getByRole("button", { name: "enrol", exact: true }).click();
+    await expect(form).toContainText("needs at least one node in scope_nodes");
   });
 
   test("billing for production: the plan, and what this month would cost on Team and Security", async ({ page }) => {

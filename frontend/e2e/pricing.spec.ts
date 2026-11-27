@@ -34,6 +34,31 @@ test("both ways in: the calculator names the cheapest plan and what the next one
   await expect(page.getByTestId("tier-business")).toContainText("$40 / developer / mo");
 });
 
+test("the upsell only climbs the ladder, the cap is said, a large fleet is Enterprise (QA-013)", async ({ page }) => {
+  await goHash(page, "pricing?for=both");
+  const calc = page.getByTestId("pricing-calculator");
+  const set = async (devs: number | string, agents: number | string) => {
+    await calc.getByTestId("calc-devs").fill(String(devs));
+    await calc.getByTestId("calc-agents").fill(String(agents));
+  };
+  // Team is cheapest; its seats already are Business, so the next rung is Security
+  await set(10, 10);
+  await expect(calc.getByTestId("calc-best")).toContainText("Team Workspace — $699 / month");
+  await expect(calc.getByTestId("calc-next")).toContainText("Security Workspace is $1,201 more");
+  await expect(calc.getByTestId("calc-next")).not.toContainText("Business");
+  // past the threshold: no five-figure month, a contract
+  await set(10, 201);
+  await expect(calc.getByTestId("calc-best")).toContainText("talk to us — Enterprise");
+  await expect(calc.getByTestId("calc-lines")).toHaveCount(0);
+  await set(101, 1);
+  await expect(calc.getByTestId("calc-best")).toContainText("talk to us — Enterprise");
+  // a number past the cap is held at it, and said so
+  await expect(calc.getByTestId("calc-capped")).toHaveCount(0);
+  await set(1, 1_000_000);
+  await expect(calc.getByTestId("calc-agents")).toHaveValue("10000");
+  await expect(calc.getByTestId("calc-capped")).toContainText("counts up to 10,000");
+});
+
 test("only one way in shows no calculator", async ({ page }) => {
   await goHash(page, "pricing?for=coding");
   await expect(page.getByTestId("tier-coding")).toBeVisible();
@@ -72,6 +97,28 @@ test("a paid plan opens card checkout naming who the license is for", async ({ p
       ["open", { items: [{ priceId: "pri_coding", quantity: 1 }],
                  customData: { org: "Acme Inc", hosted: false } }],
     ]);
+});
+
+test("a per-developer checkout says why nothing is due today, and knows who is paying (QA-014)", async ({ page }) => {
+  await licensedTo(page, "Acme Inc");
+  // signed in: who is signed in lives in the session half of the store
+  await page.addInitScript(() => {
+    window.localStorage.setItem("axor-app", JSON.stringify({ state: {}, version: 0 }));
+    window.sessionStorage.setItem("axor-app", JSON.stringify(
+      { state: { identityEmail: "buyer@acme.test" }, version: 0 }));
+  });
+  await goHash(page, "pricing?for=both");
+  // Coding and Business bill per developer later; Team and Security charge today
+  await expect(page.getByTestId("tier-coding").getByTestId("card-billed-later"))
+    .toContainText("billed per developer at the end of each month");
+  await expect(page.getByTestId("tier-business").getByTestId("card-billed-later")).toBeVisible();
+  await expect(page.getByTestId("tier-team").getByTestId("card-billed-later")).toHaveCount(0);
+  await page.getByTestId("cta-business").click();
+  await expect.poll(() => page.evaluate(() =>
+    ((window as unknown as { __paddle?: unknown[] }).__paddle ?? []).at(-1)))
+    .toEqual(["open", { items: [{ priceId: "pri_business", quantity: 1 }],
+                        customData: { org: "Acme Inc", hosted: false },
+                        customer: { email: "buyer@acme.test" } }]);
 });
 
 test("with nobody to issue a license to, it says what is missing", async ({ page }) => {
@@ -127,4 +174,29 @@ test("back and forward move the tabs with the URL (QA-009)", async ({ page }) =>
   await expect(page.getByTestId("tier-coding")).toBeVisible();
   await page.goForward();
   await expect(page.getByTestId("tier-coding")).toHaveCount(0);
+});
+
+test("the Connect copy and the Enterprise floor quote the same prices as the cards (QA-012)", async ({ page }) => {
+  await goHash(page, "pricing?for=production");
+  // the floor is Security's fleet: 50 nodes, $50 past them — not 10 and $75
+  const floor = page.getByTestId("enterprise-floor");
+  await expect(floor).toContainText("Control Plane for 50 governed nodes");
+  await expect(floor).toContainText("Additional governed nodes: $50 / node / month");
+  await expect(page.getByTestId("tier-security")).toContainText("+$50 / governed node / mo beyond 50");
+  // Team includes no developers: each is a $40 Business seat, as its card says
+  await setConnection(page, { mode: "none" });
+  await page.route("**/v1/plane/nodes", (route) => route.fulfill({ json: [] }));
+  await goHash(page, "connect?for=both");
+  const free = page.getByTestId("coding-free");
+  await expect(free).toContainText("Team Workspace, $299 / month: 10 production agents");
+  await expect(free).toContainText("Business seat on top, $40");
+  await expect(free).not.toContainText("$25");
+});
+
+test("each rung keeps more run history", async ({ page }) => {
+  await goHash(page, "pricing?for=both");
+  for (const words of ["runs kept 7 days", "runs kept 30 days", "runs kept 90 days", "runs kept a year",
+                       "runs kept as long as you choose"]) {
+    await expect(page.getByText(words).first()).toBeVisible();
+  }
 });

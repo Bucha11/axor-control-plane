@@ -94,6 +94,9 @@ services:
       AXOR_USAGE_REPORTING: ${AXOR_USAGE_REPORTING:-}
       AXOR_VAULT_CREDS_TOKEN: ${AXOR_VAULT_CREDS_TOKEN:-}
       AXOR_VAULT_SIGNING_TOKEN: ${AXOR_VAULT_SIGNING_TOKEN:-}
+      # alert e-mails (Settings → alerts); the login service has its own below
+      AXOR_SMTP_URL: ${AXOR_SMTP_URL:-}
+      AXOR_MAIL_FROM: ${AXOR_MAIL_FROM:-}
       AXOR_IDENTITY_JWKS_URL: http://identity:8402/.well-known/jwks.json
       AXOR_LOG_JSON: ${AXOR_LOG_JSON:-1}
       SENTRY_DSN: ${SENTRY_DSN:-}
