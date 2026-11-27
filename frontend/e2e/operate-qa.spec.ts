@@ -176,3 +176,10 @@ test("a cap is a whole number in range, and says so (QA-084, QA-034)", async ({ 
   await answerAsk(page);
   await expect(page.getByTestId("agent-panel")).toContainText(/budget cap\s*1 call(?!s)/);
 });
+
+test("the example test opened by its address runs, as the Chaos link does (QA-086)", async ({ page }) => {
+  // a fresh browser: nothing connected yet
+  await goHash(page, "catch?auto=1");
+  await expect(page.getByText("fabricated a tool result").first()).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByText("Not connected.")).toHaveCount(0);
+});

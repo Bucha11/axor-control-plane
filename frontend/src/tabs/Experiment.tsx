@@ -81,6 +81,7 @@ function eventLabel(e: KernelEvent): string {
 
 export default function Experiment({ runId, autostart }: { runId?: string; autostart?: boolean }) {
   const { mode, tools } = useApp((s) => s.connection);
+  const connect = useApp((s) => s.connect);
   const setLastRun = useApp((s) => s.setLastRun);
   const lastRunId = useApp((s) => s.lastRunId);
   const qc = useQueryClient();
@@ -213,8 +214,13 @@ export default function Experiment({ runId, autostart }: { runId?: string; autos
   // down at once (React's StrictMode does exactly that) must not start the run
   // on an observer nobody renders, or the button spins forever beside the
   // result.
+  // ?auto=1 is "test the example agent": every link to it switches to the
+  // example first, so the address opened directly does the same (QA-086)
   useEffect(() => {
-    if (!autostart || autoFired.current || !isConnected(mode)) return;
+    if (autostart && mode !== "demo" && !autoFired.current) connect("demo");
+  }, [autostart, mode, connect]);
+  useEffect(() => {
+    if (!autostart || autoFired.current || mode !== "demo") return;
     const t = window.setTimeout(() => {
       autoFired.current = true;
       start.mutate();
@@ -237,7 +243,7 @@ export default function Experiment({ runId, autostart }: { runId?: string; autos
     enabled: Boolean(focusRun?.run_id && (runId || focusRun.evidence.some((c) => c.deviation))),
   });
   const nodesQ = useQuery({ queryKey: ["nodes"], queryFn: api.nodes });
-  if (!isConnected(mode) && !runId) {
+  if (!isConnected(mode) && !runId && !autostart) {
     return (
       <Center>
         <div style={{ fontFamily: MONO, fontSize: 12.5, color: C.mut }}>
