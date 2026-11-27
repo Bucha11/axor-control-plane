@@ -329,15 +329,16 @@ export default function ControlTab({ focusNode }: { focusNode?: string }) {
         onClick={() => navigate("connect?for=production")}>connect →</span>)
     </>
   );
+  const noteShown = !isAdapter(mode) && fleet.isSuccess && !codingTeam
+    && !codingExampleOnly((fleet.data ?? []).map((n) => n.node_id))
+    && !fleetExampleOnly((fleet.data ?? []).map((n) => n.node_id))
+    // the workspace's own agents are on screen: no example agents to offer
+    && !(workStarted && hasAgents);
   return (
     <>
       {/* decided once the list is in: a note that unfolds and then folds
           itself takes the button out from under the pointer */}
-      {!isAdapter(mode) && fleet.isSuccess && !codingTeam
-        && !codingExampleOnly((fleet.data ?? []).map((n) => n.node_id))
-        && !fleetExampleOnly((fleet.data ?? []).map((n) => n.node_id))
-        // the workspace's own agents are on screen: no example agents to offer
-        && !(workStarted && hasAgents) && (hasAgents ? (
+      {noteShown && (hasAgents ? (
         // agents are already on screen: one line, the example tools folded away
         <div data-testid="adapter-note" style={{ fontFamily: MONO, fontSize: 11, color: C.mut,
                                                   lineHeight: 1.6, marginBottom: 14 }}>
@@ -366,12 +367,43 @@ export default function ControlTab({ focusNode }: { focusNode?: string }) {
           {note}.
         </div>
       ))}
-      <ControlBody focusNode={focusNode} testBench={testBench} />
+      <ControlBody focusNode={focusNode} testBench={testBench}
+        examplesOffered={(noteShown && hasAgents) || codingTeam} />
     </>
   );
 }
 
-function ControlBody({ focusNode, testBench }: { focusNode?: string; testBench: boolean }) {
+// The examples, one folded line under the list: after the first demo node the
+// tree, a second node, the canned tree and the fleet were offered nowhere
+// (QA-174). Folded, so a real fleet is not crowded by them.
+function MoreExamples({ nodes }: { nodes: NodeInfo[] }) {
+  const [open, setOpen] = useState(false);
+  const apiTokenNow = useApp((st) => st.apiToken);
+  const wsQ = useQuery({ queryKey: ["workspace", apiTokenNow], queryFn: api.workspace, retry: false });
+  const workStarted = Boolean(wsQ.data?.work_started);
+  const fleetLoaded = nodes.some((n) => n.node_id === "tree-orch");
+  return (
+    <div data-testid="more-examples" style={{ fontFamily: MONO, fontSize: 11, color: C.mut, marginTop: 10 }}>
+      <button onClick={() => setOpen((v) => !v)}
+        style={{ background: "none", border: "none", padding: 0, cursor: "pointer",
+                 fontFamily: MONO, fontSize: 11, color: C.steel }}>
+        {open ? "try more examples ▴" : "try more examples ▾"}
+      </button>
+      {open && (
+        <div style={{ border: `1px solid ${C.line}`, borderRadius: 8, padding: "10px 12px", marginTop: 8 }}>
+          {/* once the workspace's own agents report the example fleet is
+              hidden: loading it then would do nothing visible */}
+          {!fleetLoaded && !workStarted && <ExampleFleet />}
+          <SpawnGoverned />
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ControlBody({ focusNode, testBench, examplesOffered }: {
+  focusNode?: string; testBench: boolean; examplesOffered: boolean;
+}) {
   const hasTeam = useHasTeam();
   const mine = useMine();
   // a teammate's session: an owner or admin, or whoever the workspace lets
@@ -847,6 +879,7 @@ function ControlBody({ focusNode, testBench }: { focusNode?: string; testBench: 
           return out;
         })()}
       </div>
+      {!examplesOffered && <MoreExamples nodes={nodes.data ?? []} />}
 
     </div>
     <aside className="fleet-sticky" data-testid={node ? "agent-panel" : "fleet-activity"}>

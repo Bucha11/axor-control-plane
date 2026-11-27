@@ -79,3 +79,20 @@ async def test_the_topology_says_which_nodes_are_examples(tmp_path: pathlib.Path
         assert (await c.post("/v1/demo/seed-fleet")).status_code == 200
         nodes = {n["node_id"]: n for n in (await c.get("/v1/plane/topology")).json()["nodes"]}
         assert nodes[demo.TREE_RESEARCH]["example"] is True
+
+
+async def test_qa174_the_demo_node_is_not_the_workspaces_own_work(tmp_path: pathlib.Path) -> None:
+    """QA-174: the first demo node counted as the workspace's own agents
+    reporting, so the tree, a second node, the canned tree, the example fleet
+    and the example chaos test were no longer offered."""
+    from axor_backend.examples import is_real_node
+
+    assert not is_real_node("governed-0a1b2c") and not is_real_node("gov-tree-0a1b-orch")
+    assert is_real_node("governed-support-bot")   # a name of the team's own
+    app = create_app(database_url=f"sqlite+aiosqlite:///{tmp_path}/d.db",
+                     operator_keys={}, allow_unsigned=True)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app),
+                                 base_url="http://cp.test") as c, app.router.lifespan_context(app):
+        await app.state.store.upsert_reported("governed-0a1b2c", applied_version=0,
+                                              level="NORMAL", budget_remaining=None, ts=now())
+        assert (await c.get("/v1/workspace")).json()["work_started"] is False

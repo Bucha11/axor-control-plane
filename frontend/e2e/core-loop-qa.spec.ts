@@ -45,3 +45,15 @@ test.describe("Govern (QA-171)", () => {
     await page.unrouteAll({ behavior: "ignoreErrors" });
   });
 });
+
+test("after the first demo node the other examples are still one click away (QA-174)", async ({ page, request }) => {
+  await seedNode(request, `governed-${hex6()}`);
+  // spawning switched this browser to the adapter: the fold above the list is gone
+  await setConnection(page, { mode: "adapter" });
+  await goHash(page, "govern");
+  const more = page.getByTestId("more-examples");
+  await more.getByRole("button", { name: "try more examples ▾" }).click();
+  await expect(more.getByRole("button", { name: "Spawn a governed demo node" })).toBeVisible();
+  await expect(more.getByRole("button", { name: "Spawn a governed demo TREE" })).toBeVisible();
+  await expect(more.getByRole("button", { name: /load the canned tree/ })).toBeVisible();
+});
