@@ -102,7 +102,8 @@ async def vault_enroll(body: dict, request: Request, store: StoreDep) -> dict:
     from axor_backend.vault_creds import EnrollmentInvalid, ToolCredentialVault
 
     try:
-        return await ToolCredentialVault(store).enroll(
+        return await ToolCredentialVault(
+            store, plaintext_allowed=not request.app.state.config.hosted).enroll(
             str(body.get("tool", "")),
             str(body.get("endpoint", "")),
             str(body.get("secret", "")),
@@ -176,7 +177,8 @@ async def vault_rotate(body: dict, request: Request, store: StoreDep) -> dict:
     )
 
     try:
-        return await ToolCredentialVault(store).rotate(
+        return await ToolCredentialVault(
+            store, plaintext_allowed=not request.app.state.config.hosted).rotate(
             str(body.get("tool", "")),
             str(body.get("endpoint", "")),
             str(body.get("secret", "")),

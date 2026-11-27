@@ -23,6 +23,8 @@ about after the fact.
 """
 from __future__ import annotations
 
+from typing import Any
+
 from fastapi import APIRouter, HTTPException, Request
 
 from axor_backend import auth as auth_mod
@@ -44,6 +46,31 @@ MAX_LABEL = 200
 
 AUDIT_PAGE = 200
 AUDIT_PAGE_MAX = 1000
+
+
+def _hosted(items: list[dict], config: Any) -> list[dict]:  # noqa: ANN401 - AppConfig
+    """The vendor's hosted plane has its walls per workspace, not per
+    deployment. A deployment operator key would sign for every tenant, and a
+    deployment vault token would be one secret handed to all of them — so the
+    items say what holds there instead of asking for those."""
+    by_id = {i["id"]: i for i in items}
+    by_id["command_signing"] = {
+        "id": "command_signing", "ok": not config.allow_unsigned,
+        "what": "commands to agents (pause, stop, cap) are signed by a key the "
+                "workspace registers itself; unsigned ones are refused",
+        "fix": "turn AXOR_ALLOW_UNSIGNED off"}
+    for which, act in (("creds", "dispensing tool credentials"),
+                       ("signing", "requesting a signature")):
+        by_id[f"vault_{which}_token"] = {
+            "id": f"vault_{which}_token", "ok": False,
+            "what": f"{act} needs the workspace's admin, not a token of its own "
+                    "— a token per workspace is not offered here yet",
+            "fix": "nothing to set: it comes with the per-workspace token"}
+    return [*by_id.values(), {
+        "id": "sealed_credentials", "ok": True,
+        "what": "tool credentials are kept only sealed to the workspace's own key: "
+                "this plane cannot read them",
+        "fix": ""}]
 
 
 @router.get("/security/posture")
@@ -75,7 +102,9 @@ async def security_posture(config: ConfigDep) -> dict:
                   else "runs are kept forever"),
          "fix": "set AXOR_RETENTION_DAYS"},
     ]
-    if config.vendor_pubkey:
+    if config.hosted:
+        items = _hosted(items, config)
+    elif config.vendor_pubkey:
         items.append({"id": "licensed_org", "ok": bool(config.org),
                       "what": "only a license issued to this organization activates here",
                       "fix": "set AXOR_ORG to the name on your license"})
