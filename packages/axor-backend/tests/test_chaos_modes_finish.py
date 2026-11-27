@@ -13,7 +13,8 @@ import httpx
 import pytest
 from axor_backend.app import create_app
 from axor_backend.chaos import MODES
-from axor_proxy.app import ProxyState, create_app as create_proxy
+from axor_proxy.app import ProxyState
+from axor_proxy.app import create_app as create_proxy
 from axor_proxy.upload import BackendUploader
 from starlette.applications import Starlette
 from starlette.responses import JSONResponse
