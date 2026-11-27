@@ -466,6 +466,11 @@ async def license_billing(state: StateDep, store: StoreDep) -> dict:
             on = (on - timedelta(days=1)).replace(day=1)
             out["history"].append(await _month_statement(
                 store, on.strftime("%Y-%m"), name, tier, lic.governed_node_ceiling))
+        # months before anything ran here are not months of this workspace: a
+        # workspace made yesterday listed half a year of $0.00 statements (QA-137)
+        while out["history"] and not out["history"][-1].get("peak_nodes") \
+                and not out["history"][-1].get("developers"):
+            out["history"].pop()
     else:
         # what this month would cost on each paid rung — the user's own usage,
         # the list prices; an estimate, said so

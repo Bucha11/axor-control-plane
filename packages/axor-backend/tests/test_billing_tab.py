@@ -63,7 +63,9 @@ async def test_licensed_shows_this_month_and_the_closed_ones(
         cur = body["current"]
         assert cur["provisional"] is True and cur["active_developers"] == 2
         assert cur["total"] == "$50.00" and len(cur["developers"]) == 2
-        assert len(body["history"]) == 6 and all(not h["provisional"] for h in body["history"])
+        # nothing ran here before this month: no closed months to list (QA-137 —
+        # a workspace made yesterday listed half a year of $0.00 statements)
+        assert body["history"] == []
         assert body["if_paid"] == []
 
 

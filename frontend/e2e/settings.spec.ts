@@ -388,6 +388,12 @@ test.describe("developer seats on a paid plan", () => {
     await expect(seats.getByTestId("seats-forecast")).toContainText("cy@acme.io ran agents in the last 30 days");
     await expect(seats.getByTestId("seats-list")).toContainText("ada@acme.io");
     await seats.getByTestId("seat-cap-edit").click();
+    // the preview read "$-25.00" and "$25000000000.00" (QA-138)
+    await seats.getByTestId("seat-cap-input").fill("-1");
+    await expect(seats.getByTestId("seat-cap")).toContainText("a whole number of seats, 1 to 10,000");
+    await expect(seats.getByTestId("seat-cap")).not.toContainText("$-");
+    await seats.getByTestId("seat-cap-input").fill("1000000000");
+    await expect(seats.getByTestId("seat-cap")).toContainText("a whole number of seats, 1 to 10,000");
     await seats.getByTestId("seat-cap-input").fill("2");
     await expect(seats.getByTestId("seat-cap")).toContainText("at most $25.00 × 2 = $50.00 a month");
     await seats.getByTestId("seat-cap-save").click();
@@ -420,4 +426,14 @@ test("the audit trail: who did what to which agent; its export is the Business p
   // the trail is a hash chain, and it is untouched
   await trail.getByTestId("trail-verify").click();
   await expect(trail.getByTestId("trail-ok")).toContainText("untouched");
+});
+
+test("on the hosted plane, a card plan has nothing to paste (QA-139)", async ({ page }) => {
+  await page.route("**/v1/license/status", (r) => r.fulfill({ json: {
+    active: true, vendor_key_configured: true, hosted: true, auto_renewal: true,
+    licensed_to: "org_acme", workspace_tier: "coding", expires_at: "2999-01-01" } }));
+  await goHash(page, "settings?tab=workspace");
+  // an active license opens the fold by itself
+  await expect(page.getByText(/installed and renewed by itself — there is nothing to/)).toBeVisible();
+  await expect(page.getByText(/nothing calls us/)).toHaveCount(0);
 });

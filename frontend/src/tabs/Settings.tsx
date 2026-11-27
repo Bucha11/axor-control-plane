@@ -1235,10 +1235,14 @@ export default function Settings({ tab = "workspace" }: { tab?: string } = {}) {
               </summary>
               <div className="mt-3">
         <div style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim, marginBottom: 10 }}>
-          Paste the license file you were sent after an upgrade (it is issued to your workspace id, shown
-          above). It is checked
-          here, offline — nothing calls us. When it expires the paid features turn read-only;
-          what gets blocked never depends on a license.
+          {/* on the hosted plane a card plan installs itself (QA-139) */}
+          {licenseStatus.data?.hosted
+            ? <>A plan bought here by card is installed and renewed by itself — there is nothing to
+              paste. Paste a license file only if you were sent one (a contracted plan). When it
+              expires the paid features turn read-only; what gets blocked never depends on a license.</>
+            : <>Paste the license file you were sent after an upgrade (it is issued to your workspace
+              id, shown above). It is checked here, offline — nothing calls us. When it expires the paid
+              features turn read-only; what gets blocked never depends on a license.</>}
         </div>
         {/* The ACTIVE license, from /v1/license/status. The panel used to show
             only the response to a paste, so a deployment that had been licensed
@@ -1875,11 +1879,14 @@ function Seats({ report }: { report: BillingReport }) {
             const n = Number(edit);
             if (Number.isInteger(n) && n >= 1) save.mutate(n);
           }}>
-            <input type="number" min={Math.max(1, f.developers_so_far)} value={edit} aria-label="seat limit"
+            <input type="number" min={Math.max(1, f.developers_so_far)} max={10000} step={1} value={edit} aria-label="seat limit"
               onChange={(e) => setEdit(e.target.value)} data-testid="seat-cap-input"
               style={{ ...INPUT_STYLE, width: 70 }} />
             <span style={{ color: C.dim }}>
-              at most {seat} × {Number(edit) || 0} = ${((Number(edit) || 0) * (report.plan.seat_cents ?? 0) / 100).toFixed(2)} a month for seats
+              {/* the preview read "$-25.00" and "$25000000000.00" (QA-138) */}
+              {Number.isInteger(Number(edit)) && Number(edit) >= 1 && Number(edit) <= 10000
+                ? `at most ${seat} × ${Number(edit)} = $${(Number(edit) * (report.plan.seat_cents ?? 0) / 100).toFixed(2)} a month for seats`
+                : "a whole number of seats, 1 to 10,000"}
             </span>
             <button type="submit" disabled={save.isPending} data-testid="seat-cap-save"
               style={btn({ color: C.text, borderColor: C.steel, fontSize: 11, padding: "3px 10px" })}>
