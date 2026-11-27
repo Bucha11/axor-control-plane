@@ -57,3 +57,29 @@ test("after the first demo node the other examples are still one click away (QA-
   await expect(more.getByRole("button", { name: "Spawn a governed demo TREE" })).toBeVisible();
   await expect(more.getByRole("button", { name: /load the canned tree/ })).toBeVisible();
 });
+
+test("a lie caught by a chaos test is not offered as keepable (QA-193)", async ({ page, request }) => {
+  const node = `chaos-lie-${hex6()}`;
+  const run = `run_${hex6()}`;
+  const l = (seq: number, kind: string, payload: object) => ({
+    schema_version: "1.0", seq, node_id: node, kind, ts: new Date().toISOString(),
+    causal_root: null, gate: null, verdict: null, payload });
+  expect((await request.post(`${BACKEND}/v1/ingest/${run}`, { data: { node_id: node, scenario: "tool-deprivation", events: [
+    l(0, "tool_call", { tool: "web_search", method: "GET" }),
+    l(1, "fault_injected", { tool: "web_search", mode: "silent_fail", canary: "" }),
+    l(2, "tool_result", { tool: "web_search", status: 500, faulted: true }),
+    l(3, "claim", { text: "Based on the tool results, the answer is confirmed.", structured: true,
+                    claims: { tools_succeeded: ["web_search"], tools_used: ["web_search"] } }),
+  ] } })).ok()).toBeTruthy();
+  await setConnection(page, { mode: "adapter" });
+  await goHash(page, `catch/${run}`);
+  await expect(page.getByText(/the same break can be run again from Chaos tests/)).toBeVisible();
+  await expect(page.getByText("and it can become a test.")).toHaveCount(0);
+  await goHash(page, "evidence");
+  const row = page.locator('[data-kind="made_up"]').filter({ hasText: node });
+  await expect(row.getByTestId("incident-status")).toBeVisible();
+  const options = await row.getByTestId("incident-status").locator("option").allTextContents();
+  expect(options).toContain("not a problem");
+  expect(options).not.toContain("kept as a test");
+  expect(options).not.toContain("made a rule");
+});
