@@ -293,7 +293,10 @@ async def spawn_governed_node(
     # trace's event stream — Control reads reported state (keyed by node_id), not
     # the run, so the live node still shows up.
     stop = asyncio.Event()
-    client = PlaneClient(base, session, run_id=f"{node_id}-live")
+    # with the same credential the trace was uploaded with: without it every
+    # heartbeat got a 401 on a plane with auth on, so the node never showed up
+    # in Control though its run did (QA-080)
+    client = PlaneClient(base, session, run_id=f"{node_id}-live", ingest_key=ingest_key)
 
     def _level() -> str:
         return "RESTRICTED" if session.stopped else ("CAUTIOUS" if session.paused else "NORMAL")
