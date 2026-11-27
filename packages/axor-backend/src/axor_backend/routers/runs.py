@@ -71,6 +71,12 @@ async def ingest(
         derived = len(cases)
         if cases:
             await store_evidence(store, notifier, run_id, node_id, scenario, cases)
+        else:
+            # The answer is in and nothing was caught: the run is finished all
+            # the same. Only a case marked it so, and a chaos test that caught
+            # nothing (poisoned results, a hidden instruction the agent did not
+            # take up) read "Run in progress" for good (QA-192).
+            await store.mark_completed(run_id)  # type: ignore[attr-defined]
     # A refused call pages the same whichever way the run came in: only the
     # telemetry route (the proxy's) did, so a wrapped agent posting its finished
     # run here refused an exfiltration and nobody was told.

@@ -2005,6 +2005,16 @@ class Store:
                 )
             )
 
+    async def mark_completed(self, run_id: str) -> None:
+        """The run's answer is in: finished, whatever evidence it holds."""
+        async with self.engine.begin() as conn:
+            await conn.execute(
+                update(runs).where(
+                    runs.c.run_id == run_id,
+                    runs.c.org_id == current_org_id(),
+                ).values(completed=True)
+            )
+
     async def mark_intervened(self, run_id: str) -> None:
         async with self.engine.begin() as conn:
             await conn.execute(
