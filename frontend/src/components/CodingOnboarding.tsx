@@ -14,6 +14,7 @@ import { CARD } from "../quote";
 import { isGuestToken, useApp } from "../store";
 import { C, MONO, btn } from "../theme";
 import { IdentityLogin } from "../tabs/Settings";
+import { useOneAtATime } from "../oneAtATime";
 
 type Agent = "claude-code" | "codex";
 const AGENTS: { id: Agent; label: string; note: string }[] = [
@@ -92,6 +93,7 @@ export default function CodingOnboarding({ then }: { then?: () => void }) {
     mutationFn: () => api.createMyKey(),
     onSuccess: (k) => setKey(k.secret),
   });
+  const mintOnce = useOneAtATime(mint);
   // the role as stored, not as this access token remembers it
   const me = useQuery({ queryKey: ["identity-me"], queryFn: api.identityMe, enabled: !!email, retry: false });
   const myRole = me.data?.memberships.find((m) => m.org_id === me.data?.active_org)?.role ?? me.data?.role;
@@ -204,7 +206,7 @@ export default function CodingOnboarding({ then }: { then?: () => void }) {
         <>
           <Block id="connect" copied={copied} onCopy={copy} text={connectCmd} unready={needsKey && !key} />
           {needsKey && !key && (
-            <button onClick={() => mint.mutate()} disabled={mint.isPending} data-testid="mint-coding-key"
+            <button onClick={() => mintOnce()} disabled={mint.isPending} data-testid="mint-coding-key"
               style={btn({ color: C.steel, borderColor: C.steel, fontSize: 10.5, padding: "4px 10px" })}>
               {mint.isPending ? "…" : "create the key"}
             </button>
