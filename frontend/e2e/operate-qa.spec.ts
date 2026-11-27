@@ -362,3 +362,27 @@ test.describe("operating screens say what is going on (QA-090, QA-091)", () => {
     expect(fits).toBe(true);
   });
 });
+
+test("the agent map names a spawned tree's agents in full, over the edges (QA-033)", async ({ page }) => {
+  const ids = ["gov-tree-3914-orch", "gov-tree-3914-research", "gov-tree-3914-scraper"];
+  await page.route("**/v1/plane/nodes", (r) => r.fulfill({ json: [] }));
+  await page.route("**/v1/plane/topology", (r) => r.fulfill({ json: {
+    nodes: ids.map((node_id) => ({ node_id, kind: "self" })),
+    edges: [
+      { from: ids[0], to: ids[1], kind: "delegation", messages: 1, denied: 0, last_gate: null },
+      { from: ids[1], to: ids[2], kind: "delegation", messages: 1, denied: 0, last_gate: null },
+      { from: ids[2], to: ids[0], kind: "lateral", messages: 1, denied: 1, last_gate: "taint_floor" },
+    ] } }));
+  await setConnection(page, { mode: "adapter" });
+  await goHash(page, "control");
+  for (const id of ids) {
+    const label = page.getByTestId(`topo-node-${id}`).locator("text").first();
+    await expect(label).toBeVisible();
+    // the drawn text, not its <title>
+    expect(await label.evaluate((el) => [...el.childNodes].filter((n) => n.nodeType === 3)
+      .map((n) => n.textContent).join(""))).toBe(id);
+    // drawn with a halo of the panel's colour: a line under it does not cross its letters
+    expect(await label.evaluate((el) => getComputedStyle(el).paintOrder)).toMatch(/^stroke/);
+  }
+  await page.unrouteAll({ behavior: "ignoreErrors" });
+});
