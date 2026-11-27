@@ -208,3 +208,18 @@ async def test_on_the_free_plan_the_one_developer_gets_their_memory(
     body = (await client.get("/v1/memory")).json()
     repo = next(r for r in body["repos"] if r["repo"] == REPO)
     assert repo["given"] is True and "uv run pytest -q" in repo["preview"]
+
+
+async def test_the_example_memory_is_read_not_changed(client: httpx.AsyncClient) -> None:
+    """QA-005: on the example repository "turn on for the team" and a note
+    wrote into the workspace's own records. The example is there to look at."""
+    from axor_backend import demo
+
+    await client.post("/v1/demo/seed-memory")
+    repo = next(r for r in (await client.get("/v1/memory")).json()["repos"]
+                if r["repo"] == demo.CODING_REPO)
+    items = repo["items"]
+    r = await client.put(f"/v1/memory/{items[0]['id']}", json={"status": "off"})
+    assert r.status_code == 409 and "example" in r.json()["detail"]
+    r = await client.post("/v1/memory/notes", json={"repo": demo.CODING_REPO, "text": "mine"})
+    assert r.status_code == 409

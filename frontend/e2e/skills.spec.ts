@@ -366,19 +366,18 @@ test.describe("coding agents: their menu, and trying a skill", () => {
     await expect(kept.getByTestId("memory-reason")).toContainText("it came from a web page");
     await expect(kept.getByRole("button", { name: /turn on/ })).toHaveCount(0);
     await expect(view.getByTestId("memory-stale")).toContainText("make typecheck");
-    // a suggested fix, turned on: now every agent gets it
+    // the example is read, never changed (QA-005): no switches, no rotation,
+    // no note — those wrote into the real workspace
     const suggested = view.getByTestId("memory-suggested");
-    const fix = suggested.locator("[data-testid^=memory-item-]", { hasText: "fails here" });
-    await fix.getByRole("button", { name: "turn on for the team" }).click();
-    await expect(view.getByTestId("memory-preview")).toContainText("`pytest -q` fails here — `uv run pytest -q` works");
+    await expect(suggested).toContainText("fails here");
+    await expect(view.getByRole("button", { name: /turn on for the team|turn off|still true/ })).toHaveCount(0);
+    await expect(view.getByTestId("memory-fresh")).toHaveCount(0);
+    await expect(view.getByTestId("memory-note")).toHaveCount(0);
+    await expect(view.getByTestId("memory-is-example")).toContainText("to look at, not to change");
     // what a sidecar fetches is the same text
     const given = await (await request.get(`${B}/v1/coding/memory?repo=r-example-acme-api`)).json();
-    expect(given.text).toContain("`pytest -q` fails here");
+    expect(given.text).toContain("uv run pytest -q");
     expect(given.text).not.toContain("make test-all-integration");
-    // a note from a person
-    await view.getByLabel("note for every agent").fill("The payments module is frozen until the audit — don't touch it.");
-    await view.getByRole("button", { name: "add the note" }).click();
-    await expect(view.getByTestId("memory-preview")).toContainText("payments module is frozen");
     // back to where it passed
     await view.getByTestId("memory-on").getByRole("button", { name: "see where it passed →" }).first().click();
     await expect(page).toHaveURL(/#\/explain\/ex_mem_/);
@@ -387,12 +386,11 @@ test.describe("coding agents: their menu, and trying a skill", () => {
   test("team memory drift: agents did worse after a change — on the memory page, in Incidents, context health and Replay", async ({ page, request }) => {
     const B = "http://127.0.0.1:8400";
     const tag = Math.random().toString(36).slice(2, 8);
-    // the example repository: it is given on any plan (this plane has no license)
-    await request.post(`${B}/v1/demo/seed-memory`);
-    const repo = "r-example-acme-api";
+    // a repository of the test's own: the product's example is read-only (QA-005)
+    const repo = `r-drift-${tag}`;
     const session = async (node: string, dev: string, command: string, passed: boolean) => {
       await request.post(`${B}/v1/plane/${node}/profile`, { data: {
-        kind: "coding", agent: "claude-code", developer: `dev-${dev}`, repo, repo_label: "acme/api" } });
+        kind: "coding", agent: "claude-code", developer: `dev-${dev}`, repo, repo_label: `drift/${tag}` } });
       const given = await (await request.get(`${B}/v1/coding/memory?repo=${repo}`)).json();
       await request.post(`${B}/v1/coding/memory/given`, { data: { node_id: node, repo, ids: given.ids } });
       const ts = new Date().toISOString();
@@ -413,19 +411,19 @@ test.describe("coding agents: their menu, and trying a skill", () => {
     await setConnection(page, { mode: "demo" });
     await goHash(page, "memory");
     const view = page.getByTestId("team-memory");
-    { const t = view.getByRole("tab", { name: "acme/api" }); if (await t.isVisible()) await t.click(); }
+    { const t = view.getByRole("tab", { name: `drift/${tag}` }); if (await t.isVisible()) await t.click(); }
     const drift = view.getByTestId("memory-drift");
     await expect(drift).toContainText("Agents did worse after the team memory changed");
     await expect(drift).toContainText("added: Always run the tests with -x --lf.");
     await expect(view.getByTestId("memory-changes")).toContainText("worse after");
     // Incidents
     await goHash(page, "evidence");
-    const row = page.locator("[data-kind=memory_worse]", { hasText: "acme/api" }).first();
+    const row = page.locator("[data-kind=memory_worse]", { hasText: `drift/${tag}` }).first();
     await expect(row).toContainText("agents did worse after the team memory changed");
     await expect(row).toContainText("Always run the tests with -x --lf.");
     // context health points at it
     await goHash(page, "health");
-    await expect(page.getByTestId("setup-health-memory-drift").filter({ hasText: "acme/api" })).toBeVisible();
+    await expect(page.getByTestId("setup-health-memory-drift").filter({ hasText: `drift/${tag}` })).toBeVisible();
     // Replay: what the session was given
     await goHash(page, `explain/e2e-${tag}-bad0-r`);
     const mem = page.getByTestId("replay-memory");
@@ -434,7 +432,7 @@ test.describe("coding agents: their menu, and trying a skill", () => {
     await expect(mem).toContainText("Always run the tests with -x --lf.");
     // turned off from the drift card; the incident is set aside so it does not count for other tests
     await goHash(page, "memory");
-    { const t = view.getByRole("tab", { name: "acme/api" }); if (await t.isVisible()) await t.click(); }
+    { const t = view.getByRole("tab", { name: `drift/${tag}` }); if (await t.isVisible()) await t.click(); }
     await view.getByTestId("memory-drift").getByRole("button", { name: "turn off" }).click();
     await expect(view.getByTestId("memory-preview")).not.toContainText("Always run the tests with -x --lf.");
     await expect(view.getByTestId("memory-drift")).toHaveCount(0);

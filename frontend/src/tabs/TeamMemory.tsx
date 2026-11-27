@@ -124,11 +124,14 @@ function RepoMemory({ repo, freshDays }: { repo: MemoryRepo; freshDays: number }
     onSuccess: () => { setNote(""); void qc.invalidateQueries({ queryKey: ["memory"] }); },
   });
   const given = new Set(repo.given_ids);
+  // the product's example is read, never changed: its switches, the
+  // workspace-wide rotation and a note all wrote into the real workspace (QA-005)
+  const example = repo.repo === EXAMPLE_REPO;
   return (
     <>
-      {repo.repo === EXAMPLE_REPO && (
+      {example && (
         <div data-testid="memory-is-example" className="mb-4" style={{ fontFamily: MONO, fontSize: 11.5, color: C.amber }}>
-          example · made-up sessions and a note, not your team's
+          example · made-up sessions and a note, not your team's — to look at, not to change
         </div>
       )}
       {!repo.given && (
@@ -144,7 +147,7 @@ function RepoMemory({ repo, freshDays }: { repo: MemoryRepo; freshDays: number }
           </div>
         </section>
       )}
-      {repo.drift && <Drift change={repo.drift} onOff={(id) => set.mutate({ id, status: "off" })} />}
+      {repo.drift && <Drift change={repo.drift} onOff={example ? undefined : (id) => set.mutate({ id, status: "off" })} />}
       <section className="mb-8" data-testid="memory-preview">
         <div style={label}>{repo.given ? "WHAT YOUR AGENTS GET AT SESSION START" : "WHAT AGENTS WOULD GET ON THE CODING PLAN"} · {repo.label}</div>
         {repo.preview ? (
@@ -170,7 +173,7 @@ function RepoMemory({ repo, freshDays }: { repo: MemoryRepo; freshDays: number }
             <div style={panel}>
               {items.map((i, n) => (
                 <Item key={i.id} item={i} first={n === 0} overLimit={i.status === "on" && !given.has(i.id)}
-                  onSet={(status) => set.mutate({ id: i.id, status })} busy={set.isPending} />
+                  onSet={example ? undefined : (status) => set.mutate({ id: i.id, status })} busy={set.isPending} />
               ))}
             </div>
           </section>
@@ -179,6 +182,7 @@ function RepoMemory({ repo, freshDays }: { repo: MemoryRepo; freshDays: number }
 
       {repo.changes.length > 0 && <Changes changes={repo.changes} />}
 
+      {!example && <>
       <section className="mb-8" data-testid="memory-fresh">
         <div style={label}>ROTATION</div>
         <div className="flex items-center gap-2 flex-wrap" style={{ fontSize: 12.5, color: C.mut, lineHeight: 1.6 }}>
@@ -212,6 +216,7 @@ function RepoMemory({ repo, freshDays }: { repo: MemoryRepo; freshDays: number }
         )}
         {add.error && <div style={{ fontFamily: MONO, fontSize: 11, color: C.red, marginTop: 6 }}>{(add.error as Error).message}</div>}
       </section>
+      </>}
     </>
   );
 }
@@ -219,7 +224,8 @@ function RepoMemory({ repo, freshDays }: { repo: MemoryRepo; freshDays: number }
 const daysSince = (ts?: string) => (ts ? Math.floor((Date.now() - new Date(ts).getTime()) / 86400000) : 0);
 
 function Item({ item, first, onSet, busy, overLimit }: {
-  item: MemoryItem; first: boolean; onSet: (s: "on" | "off") => void; busy: boolean; overLimit: boolean;
+  // no onSet: the example's items, which are read, never changed (QA-005)
+  item: MemoryItem; first: boolean; onSet?: (s: "on" | "off") => void; busy: boolean; overLimit: boolean;
 }) {
   const d = item.doc;
   const noteAge = item.kind === "note" ? daysSince(d.vouched_ts || d.last_ok_ts) : 0;
@@ -239,20 +245,20 @@ function Item({ item, first, onSet, busy, overLimit }: {
         <span style={{ flex: 1, minWidth: 240, fontSize: 13.5, color: item.status === "kept_out" ? C.mut : C.text, lineHeight: 1.5 }}>
           <MemoryText text={d.text} />
         </span>
-        {["suggested", "off", "stale", "dormant", "replaced"].includes(item.status) && (
+        {onSet && ["suggested", "off", "stale", "dormant", "replaced"].includes(item.status) && (
           <button onClick={() => onSet("on")} disabled={busy} data-testid={`memory-on-${item.id}`}
             style={btn({ color: C.green, borderColor: C.green, fontSize: 10.5, padding: "3px 10px" })}>
             {item.status === "suggested" || item.status === "off" ? "turn on for the team"
               : item.status === "dormant" ? "still true — vouch for it" : "turn back on"}
           </button>
         )}
-        {item.status === "on" && noteAge >= 90 && (
+        {onSet && item.status === "on" && noteAge >= 90 && (
           <button onClick={() => onSet("on")} disabled={busy} data-testid={`memory-vouch-${item.id}`}
             style={btn({ color: C.amber, borderColor: C.amber, fontSize: 10.5, padding: "3px 10px" })}>
             still true
           </button>
         )}
-        {item.status === "on" && (
+        {onSet && item.status === "on" && (
           <button onClick={() => onSet("off")} disabled={busy} data-testid={`memory-off-${item.id}`}
             style={btn({ fontSize: 10.5, padding: "3px 10px" })}>turn off</button>
         )}
@@ -277,7 +283,7 @@ function Item({ item, first, onSet, busy, overLimit }: {
 }
 
 /** Agents did significantly worse after a change of what they get. */
-function Drift({ change, onOff }: { change: MemoryChange; onOff: (id: number) => void }) {
+function Drift({ change, onOff }: { change: MemoryChange; onOff?: (id: number) => void }) {
   const c = change.compare!;
   return (
     <section data-testid="memory-drift" className="mb-8 p-4"
@@ -293,8 +299,8 @@ function Drift({ change, onOff }: { change: MemoryChange; onOff: (id: number) =>
       {change.added.map((a) => (
         <div key={a.id} className="flex items-center gap-3 flex-wrap" style={{ padding: "3px 0" }}>
           <span style={{ fontSize: 13, color: C.text, flex: 1 }}>added: <MemoryText text={a.text} /></span>
-          <button onClick={() => onOff(a.id)} data-testid={`memory-drift-off-${a.id}`}
-            style={btn({ fontSize: 10.5, padding: "3px 10px" })}>turn off</button>
+          {onOff && <button onClick={() => onOff(a.id)} data-testid={`memory-drift-off-${a.id}`}
+            style={btn({ fontSize: 10.5, padding: "3px 10px" })}>turn off</button>}
         </div>
       ))}
       {change.removed.map((r) => (
