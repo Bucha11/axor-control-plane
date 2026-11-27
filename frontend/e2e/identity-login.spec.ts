@@ -816,6 +816,46 @@ test.describe("an e-mailed invitation link", () => {
   }
 });
 
+test.describe("invitations, signed in", () => {
+  test.beforeEach(async ({ page }) => {
+    await setConnection(page, { mode: "adapter" });
+    await page.route("**/identity/v1/login", jsonRoute(200, SESSION));
+    await goHash(page, "settings");
+    await page.getByLabel("email", { exact: true }).fill("ada@acme.io");
+    await page.getByLabel("password").fill("correct horse");
+    await page.getByRole("button", { name: "log in", exact: true }).click();
+    await expect(page.getByText("signed in as ada@acme.io")).toBeVisible();
+  });
+
+  test("one for another address says so up front, with no join button (QA-155)", async ({ page }) => {
+    await page.route("**/identity/v1/invites/tok-sam", jsonRoute(200, {
+      org_name: "Beta", role: "member", for_email: "sam@beta.io", expires_ts: "2026-12-01T00:00:00Z" }));
+    await page.evaluate(() => { window.location.hash = "#/invite/tok-sam"; });
+    await expect(page.getByTestId("invite-other-address"))
+      .toContainText("This invitation is for another address, sam@beta.io");
+    await expect(page.getByTestId("invite-join")).toHaveCount(0);
+  });
+
+  test("after joining, the used invitation is not fetched again (QA-157)", async ({ page }) => {
+    await page.route("**/v1/workspace", jsonRoute(200, { journey: "coding" }));
+    let reads = 0;
+    await page.route("**/identity/v1/invites/tok-acc", (r) => {
+      reads += 1;
+      return reads === 1
+        ? r.fulfill({ json: { org_name: "Beta", role: "member", for_email: "ada@acme.io",
+                              expires_ts: "2026-12-01T00:00:00Z" } })
+        : r.fulfill({ status: 404, json: { detail: "this invitation has expired, was used, or was withdrawn" } });
+    });
+    await page.route("**/identity/v1/invites/tok-acc/accept", jsonRoute(200, {
+      ...SESSION, org: { org_id: "org_2", role: "member", tier: "community" } }));
+    await page.evaluate(() => { window.location.hash = "#/invite/tok-acc"; });
+    await page.getByTestId("invite-join").click();
+    await expect(page).toHaveURL(/#\/connect/);
+    await page.waitForTimeout(1000);
+    expect(reads).toBe(1);
+  });
+});
+
 // QA-154: a member taken off the team kept reading until the access token
 // expired. The plane now refuses the token; the refresh says why, and so does
 // the page.
