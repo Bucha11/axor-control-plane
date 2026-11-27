@@ -5,6 +5,57 @@ The Control Plane ships as three packages from one tag (`axor-backend`,
 images (`axor-platform`, `axor-frontend`). Self-hosted operators upgrade by
 tag; `deploy/offline` carries the same release to a machine with no network.
 
+## 0.7.0 — 2026-11-27
+
+### Added
+
+- **Run history by plan on the hosted plane.** A workspace's runs are kept for
+  its plan's window: Free 7 days, Coding and Business 30, Team 90, Security a
+  year, Enterprise as long as it chooses. The window follows the license held,
+  even an expired one, so a renewal that slips by a day does not cut history
+  short; `AXOR_RETENTION_DAYS`, when set, is a ceiling. Self-hosted planes keep
+  their own `AXOR_RETENTION_DAYS` as before. Pricing and Settings → billing say
+  what is kept; `/v1/license/entitlements` carries `retention_days`.
+
+### Changed
+
+- **An open legal hold stops run pruning too**, not only the audit trail's.
+- **Trusted sources refuse a newly added code host** (github.com, gitlab.com,
+  bitbucket.org, codeberg.org, githubusercontent.com and their subdomains). One
+  a team already trusted stays until it is removed.
+- **One install command for axor-wrap across the app**; the worker's is
+  `uv tool install --upgrade 'axor-wrap[plane,eval]'`.
+- **Times are shown in the viewer's local time** everywhere.
+- The prod compose file passes `AXOR_SMTP_URL` / `AXOR_MAIL_FROM` to the plane.
+
+### Fixed
+
+From an exploratory QA pass over the hosted plane:
+
+- A demo node or tree spawned from the page lands in the spawner's workspace
+  (`X-Axor-Upload-Token`), and the in-app experiment finishes on a proxy that
+  guards its control surface; a refused upload or claim is reported in words.
+- A refused request shows the plane's own reason, never a raw body — every
+  screen. A 403 is retried after a token refresh only for a scope refusal, so
+  failed POSTs are no longer sent twice.
+- A new tab signs in instead of showing "signed in" while every request fails.
+- The product's example skill can never be turned on for the real team.
+- A guest refused for too many visitors (429 now carries `Retry-After`) is told
+  so and let in when allowed; requests wait for the session instead of firing
+  a burst of 401s on load.
+- Back / forward move Connect and Pricing; Replay keeps `?cursor=` in step.
+- Prices agree between Pricing, Connect and Enterprise; the calculator only
+  climbs the ladder and sends very large fleets to Enterprise; the $0.00 card
+  checkout explains itself.
+- Form validation: numeric fields hold what is typed and refuse what is
+  invalid; long values carry their limits and wrap; double-clicks make one key,
+  invite or subscription.
+- Layout: the topology graph is as tall as its rows, graph labels are not
+  clipped, the signed-in header fits a phone, Settings → security cards stay in
+  their column.
+- Smaller fixes to Settings, audit, alerts, Safe to ship?, Control, the example
+  fleet and Incidents.
+
 ## 0.6.2 — 2026-11-26
 
 ### Added
