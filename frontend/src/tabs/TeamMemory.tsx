@@ -187,12 +187,14 @@ function RepoMemory({ repo, freshDays }: { repo: MemoryRepo; freshDays: number }
       {!example && <>
       <section className="mb-8" data-testid="memory-fresh">
         <div style={label}>ROTATION</div>
-        <div className="flex items-center gap-2 flex-wrap" style={{ fontSize: 12.5, color: C.mut, lineHeight: 1.6 }}>
-          A fact nobody's agent confirmed for
+        {/* one sentence that flows around its select: as flex items the words
+            after it fell to their own line (QA-106) */}
+        <div data-testid="memory-fresh-sentence" style={{ fontSize: 12.5, color: C.mut, lineHeight: 1.9 }}>
+          A fact nobody's agent confirmed for{" "}
           <select value={freshDays} onChange={(e) => fresh.mutate(Number(e.target.value))} aria-label="freshness window"
-            style={{ background: C.bg, border: `1px solid ${C.line}`, borderRadius: 4, color: C.text, fontFamily: MONO, fontSize: 11.5, padding: "2px 6px" }}>
+            style={{ background: C.bg, border: `1px solid ${C.line}`, borderRadius: 4, color: C.text, fontFamily: MONO, fontSize: 11.5, padding: "2px 6px", verticalAlign: "middle" }}>
             {[7, 14, 30, 60, 90].map((d) => <option key={d} value={d}>{d} days</option>)}
-          </select>
+          </select>{" "}
           is no longer given. Suggestions nobody confirmed are dropped after 14 days; people's notes ask "still true?" after 90.
         </div>
       </section>

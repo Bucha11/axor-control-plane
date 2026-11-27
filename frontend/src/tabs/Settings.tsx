@@ -73,14 +73,14 @@ function EmailStatus() {
   const resendOnce = useOneAtATime(resend);  // a double-click sent two links (QA-069)
   if (!canMail || me.data?.user.email_verified !== false) return null;
   return (
-    <div className="flex items-center gap-2 mb-2" data-testid="email-unverified"
+    <div className="flex items-center gap-2 mb-2 flex-wrap" data-testid="email-unverified"
       style={{ fontFamily: MONO, fontSize: 11, color: C.amber }}>
       e-mail not confirmed — alert mail goes only to a confirmed address
       {resend.isSuccess ? (
         <span style={{ color: C.green }}>· link sent to {resend.data.sent_to}</span>
       ) : (
         <button onClick={() => resendOnce()} disabled={resend.isPending}
-          style={btn({ color: C.mut, fontSize: 10.5, padding: "2px 8px" })}>
+          style={btn({ color: C.mut, fontSize: 10.5, padding: "2px 8px", whiteSpace: "nowrap" })}>
           {resend.isPending ? "…" : "resend link"}
         </button>
       )}
@@ -169,9 +169,11 @@ function OperatorKeys() {
   const err = (make.error ?? vouch.error ?? revoke.error) as Error | null;
   return (
     <div data-testid="operator-keys" style={{ marginTop: 6 }}>
-      <div style={{ color: C.text, marginBottom: 4 }}>signing keys</div>
+      {/* one name, the one a refused command points to (QA-083) */}
+      <div style={{ color: C.text, marginBottom: 4 }}>operator keys</div>
       <div style={{ color: C.dim, fontSize: 10.5, marginBottom: 6 }}>
-        your agents' machines take the team's rules, skills and notes only when an operator signed them.
+        a workspace with operator keys takes pause, stop, cap and replan only when an operator signed them,
+        and your agents' machines take the team's rules, skills and notes the same way.
         The key is made in this browser and never leaves it.
       </div>
       {registered ? (
@@ -185,7 +187,7 @@ function OperatorKeys() {
       ) : (
         <button data-testid="op-key-make" onClick={() => makeOnce()} disabled={make.isPending}
           style={btn({ fontSize: 11, padding: "3px 10px", color: C.text })}>
-          {make.isPending ? "…" : "make a signing key in this browser"}
+          {make.isPending ? "…" : "make an operator key in this browser"}
         </button>
       )}
       {keys.map((k) => {
@@ -935,8 +937,9 @@ export function IdentityLogin({ onDone, onSignedUp, initialMode = "login", compa
   if (identityEmail) {
     return (
       <>
-      <div className="flex items-center gap-2 mb-3" style={{ fontFamily: MONO, fontSize: 11.5 }}>
-        <span style={{ color: C.green }}>● signed in as {identityEmail}</span>
+      {/* the button keeps its label on one line: "log / out" (QA-052) */}
+      <div className="flex items-center gap-2 mb-3 flex-wrap" style={{ fontFamily: MONO, fontSize: 11.5 }}>
+        <span style={{ color: C.green, minWidth: 0, overflowWrap: "anywhere" }}>● signed in as {identityEmail}</span>
         <button
           onClick={() => {
             void logout(useApp.getState().refreshToken);
@@ -945,7 +948,7 @@ export function IdentityLogin({ onDone, onSignedUp, initialMode = "login", compa
             qc.clear();
             onDone?.();
           }}
-          style={btn({ color: C.mut, fontSize: 10.5, padding: "3px 10px" })}>
+          style={btn({ color: C.mut, fontSize: 10.5, padding: "3px 10px", whiteSpace: "nowrap" })}>
           log out
         </button>
       </div>
@@ -990,10 +993,18 @@ export function IdentityLogin({ onDone, onSignedUp, initialMode = "login", compa
   const canSubmit = mode === "forgot" ? email : email && password && (mode === "login" || orgName);
 
   return (
+    // noValidate: the browser's own bubble for a bad address showed nothing
+    // here and sent nothing — the check is ours, with words (QA-053)
     <form
+      noValidate
       onSubmit={(e) => {
         e.preventDefault();
-        if (canSubmit && !busy) submit();
+        if (!canSubmit || busy) return;
+        if (!/^[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+$/.test(email.trim())) {
+          setError("that is not an e-mail address we can send to");
+          return;
+        }
+        submit();
       }}
       className="mb-3"
       style={{ display: "flex", flexDirection: "column", gap: 8 }}

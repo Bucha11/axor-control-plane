@@ -3,12 +3,23 @@
 // ("2026-11-26T20:07" → "2026-11-26 20:07") showed UTC with no label, beside
 // screens in local time (QA-037).
 
-/** "2026-11-26 21:07" (with `seconds`, "2026-11-26 21:07:42") in local time. */
+/** The instant an ISO-8601 stamp names, or null for anything else. The browser
+ *  reads "seq:3" as a date in 2001 (QA-081); a stamp that is not ISO is never
+ *  shown or sorted as one. */
+export function isoDate(ts: string | null | undefined): Date | null {
+  if (!ts || !/^\d{4}-\d\d-\d\d([T ]\d\d:\d\d(:\d\d(\.\d+)?)?([zZ]|[+-]\d\d:?\d\d)?)?$/.test(ts)) return null;
+  const t = ts.replace(" ", "T");
+  // a stamp without a zone is UTC, as every stored one is
+  const d = new Date(/T.*([zZ]|[+-]\d\d:?\d\d)$/.test(t) || !t.includes("T") ? t : `${t}Z`);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
+/** "2026-11-26 21:07" (with `seconds`, "2026-11-26 21:07:42") in local time.
+ *  A stamp that is not ISO-8601 is returned as written, never as a date. */
 export function localTime(ts: string | null | undefined, seconds = false): string {
   if (!ts) return "";
-  // a stamp without a zone is UTC, as every stored one is
-  const d = new Date(/T.*([zZ]|[+-]\d\d:?\d\d)$/.test(ts) || !ts.includes("T") ? ts : `${ts}Z`);
-  if (Number.isNaN(d.getTime())) return ts;
+  const d = isoDate(ts);
+  if (!d) return ts;
   const p = (n: number) => String(n).padStart(2, "0");
   const day = `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
   const time = `${p(d.getHours())}:${p(d.getMinutes())}${seconds ? `:${p(d.getSeconds())}` : ""}`;

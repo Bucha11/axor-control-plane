@@ -933,12 +933,19 @@ async function scopeRefusal(resp: Response): Promise<boolean> {
 
 /** A command the plane refused for its signature, said with what to do: the
  *  raw "no operator keys registered" left an operator nowhere to go (QA-003). */
-function commandRefusal(e: unknown): unknown {
+function commandRefusal(e: unknown, hasKey = true): unknown {
   if (!(e instanceof ApiError) || e.status !== 403) return e;
   if (/no operator keys registered/.test(e.message)) {
     return new ApiError(403, "operator_key_needed",
       "this workspace signs every command, and it has no operator key yet — an owner or admin "
       + "makes one for this browser in Settings → workspace → operator keys");
+  }
+  // this browser has no key at all: it sent no operator, and saying its key
+  // is unknown read as if it had one (QA-083)
+  if (!hasKey && /sig_invalid|unknown operator|operator=/.test(e.message)) {
+    return new ApiError(403, "operator_key_needed",
+      "this workspace signs every command, and this browser has no operator key — make one in "
+      + "Settings → workspace → operator keys");
   }
   if (/sig_invalid|unknown operator|operator=/.test(e.message)) {
     return new ApiError(403, "operator_key_unknown",
@@ -1295,6 +1302,28 @@ async function signedStatement(payload: Record<string, unknown>):
 // deployment's signing custody (the vault) as before; null when neither.
 // Everything newer — notes, the coding policy, vouches — is signed by this
 // browser's key alone (opKey.sign).
+/** Who signs this browser's commands: its own operator key, else the vault's
+ *  operator; null when it signs nothing. */
+async function signingOperator(): Promise<string | null> {
+  const own = await opKey.load();
+  if (own?.operatorId) return own.operatorId;
+  return useApp.getState().signingKeyId ? "op_ui" : null;
+}
+
+// A command's own record of who asked (a replan's, a cut's, an injection's) is
+// the operator who signs it: "op_ui" inside a command signed by another key
+// recorded the wrong person (QA-083).
+const RECORDS_OPERATOR = ["replan", "pending_injection", "pending_excision", "pending_experiment"];
+function withOperator(state: Record<string, unknown>, who: string | null): Record<string, unknown> {
+  if (!who) return state;
+  const out = { ...state };
+  for (const k of RECORDS_OPERATOR) {
+    const v = out[k];
+    if (v && typeof v === "object" && !Array.isArray(v)) out[k] = { ...v, operator: who };
+  }
+  return out;
+}
+
 async function operatorSign(payload: unknown): Promise<{ operator: string; sig: string } | null> {
   const own = await opKey.sign(payload);
   if (own) return own;
@@ -1662,15 +1691,18 @@ export const api = {
     // One timestamp, signed and sent — the adapter reconstructs the exact bytes
     // from (node_id, version, body=state, timestamp), so they must match.
     const timestamp = new Date().toISOString();
+    state = withOperator(state, await signingOperator());
     const signed = await operatorSign({ node_id: nodeId, version, body: state, timestamp });
+    // no key, no operator: a made-up "op_ui" was refused as an unknown
+    // operator, and read as if this browser had a key (QA-083)
     const r = await af(`/v1/plane/${encodeURIComponent(nodeId)}/command`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ version, state, operator: signed?.operator ?? "op_ui", timestamp,
+      body: JSON.stringify({ version, state, operator: signed?.operator ?? "", timestamp,
                              sig: signed?.sig ?? "" }),
     });
     return j<{ node_id: string; version: number; state: Record<string, unknown> }>(r)
-      .catch((e: unknown) => { throw commandRefusal(e); });
+      .catch((e: unknown) => { throw commandRefusal(e, !!signed); });
   },
   // `mustRefuse` names the calls a must_block pin holds — needed when the run
   // was recorded ungoverned and refused nothing (else it can't be checked)

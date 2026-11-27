@@ -95,7 +95,10 @@ test.describe("onboarding", () => {
     await add("nourl", "not a url");
     await expect(page.getByTestId("guard-add-error")).toContainText("not an http:// or https:// address");
     await expect(page.getByTestId("guard-tool-nourl")).toHaveCount(0);
-    await add("A".repeat(3000), "https://" + "b".repeat(3000) + ".example");
+    // QA-050: a name is at most 64 characters, as a plain id; the address may be long
+    await add("A".repeat(3000), "https://b.example");
+    await expect(page.getByTestId("guard-add-error")).toContainText("a tool name is at most 64 characters (this one has 3000)");
+    await add("A".repeat(64), "https://" + "b".repeat(3000) + ".example");
     await expect(page.getByTestId("guard-add-error")).toHaveCount(0);
     await expect(page.getByTestId("guard-urls")).toContainText("AAAA");
     expect(await fitsTheWindow(page)).toBe(true);
@@ -138,6 +141,8 @@ test.describe("onboarding", () => {
     await add("nourl", "ftp://files.example");
     await expect(page.getByTestId("proxy-add-error")).toContainText("not an http:// or https:// address");
     await add("L".repeat(3000), "https://c.example");
+    await expect(page.getByTestId("proxy-add-error")).toContainText("a tool name is at most 64 characters");
+    await add("L".repeat(64), "https://c.example");
     expect(await fitsTheWindow(page)).toBe(true);
     await page.getByRole("button", { name: /Continue/ }).click();
     await expect(page.getByTestId("proxied-web search")).toHaveText("http://127.0.0.1:8401/t/web%20search/");

@@ -13,6 +13,7 @@ import Coach from "../components/Coach";
 import { agentLabel, liveAgents } from "../agentName";
 import { useWorkStarted } from "../workStarted";
 import { useOneAtATime } from "../oneAtATime";
+import { localTime } from "../time";
 
 export const MODE_WORDS: Record<string, string> = {
   silent_fail: "returning an error",
@@ -140,7 +141,7 @@ function Row({ r, odd }: { r: ChaosRun; odd: boolean }) {
     <div data-testid="chaos-row" style={{ display: "grid", gridTemplateColumns: "130px 1fr 130px", gap: 12,
       padding: "10px 12px", background: odd ? C.panel : C.panel2, borderLeft: `3px solid ${v.color}` }}>
       <div style={{ fontFamily: MONO, fontSize: 11, color: C.mut }}>
-        {new Date(r.created_ts).toLocaleString(undefined, { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", hourCycle: "h23" })}
+        {localTime(r.created_ts)}
         <div style={{ color: C.text, marginTop: 2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={r.node_id}>{agentLabel(r.node_id)}</div>
       </div>
       <div style={{ minWidth: 0 }}>
@@ -285,7 +286,7 @@ function Schedule({ agents, modes, current, onSaved }: {
         {save.isError && <span style={{ color: C.red }}>{(save.error as Error).message}</span>}
         {current.last_run_ts && (
           <span style={{ color: C.dim }}>
-            last: {new Date(current.last_run_ts).toLocaleString()} —{" "}
+            last: {localTime(current.last_run_ts)} —{" "}
             {current.last_armed.length
               ? current.last_armed.map((a) => `${a.node_id}: ${a.tool}`).join(", ")
               : "nothing armed"}

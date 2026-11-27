@@ -26,6 +26,7 @@ import asyncio
 import contextlib
 import inspect
 import secrets
+from datetime import UTC, datetime
 from typing import Any
 
 import httpx
@@ -173,7 +174,9 @@ def _ev(seq: int, node_id: str, kind: str, verdict: str | None, **payload: Any) 
         # line whose major it cannot read (limits.check_batch), so a hardcoded
         # "1.0" would turn the next kernel bump into a silent upload outage.
         "schema_version": SCHEMA_VERSION, "seq": seq, "node_id": node_id, "kind": kind,
-        "ts": f"seq:{seq}", "causal_root": None,
+        # a real time: "seq:N" was read as a date (2000, 2001) and fell outside
+        # Replay's default range (QA-081)
+        "ts": datetime.now(UTC).isoformat(), "causal_root": None,
         "gate": payload.pop("gate", None), "verdict": verdict, "payload": payload,
     }
 

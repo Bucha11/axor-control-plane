@@ -173,7 +173,7 @@ export default function EvidenceCase({
           {(c.deviation ?? "no deviation").toUpperCase().replaceAll("_", " ")} · {c.verdict_source} ·
           confidence {c.confidence}
         </span>
-        <div className="flex gap-2 items-center">
+        <div className="flex gap-2 items-center flex-wrap">
           <Tooltip content="Jump to the exact step in Replay where this discrepancy happened — scrub around it, fork a counterfactual.">
             <button
               onClick={() => navigate(`explain/${runId}`, { seq: replayStep, node: replayNode })}
@@ -316,5 +316,7 @@ function action(color: string): React.CSSProperties {
     fontSize: 11,
     padding: "5px 10px",
     cursor: "pointer",
+    // a narrow screen wraps whole buttons, never a label inside one (QA-091)
+    whiteSpace: "nowrap",
   };
 }

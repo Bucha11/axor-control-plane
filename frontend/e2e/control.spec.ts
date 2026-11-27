@@ -117,10 +117,10 @@ test.describe("control", () => {
     const input = page.getByPlaceholder("set / lower");
 
     await input.fill("-5");
-    await page.getByRole("button", { name: /apply/ }).click();
-    await expect(page.getByText("cap must be a non-negative integer")).toBeVisible();
+    await expect(page.getByText(/cap must be a whole number/)).toBeVisible();
+    await expect(page.getByRole("button", { name: /apply/ })).toBeDisabled();
     await input.fill("5");
-    await expect(page.getByText("cap must be a non-negative integer")).toHaveCount(0);
+    await expect(page.getByText(/cap must be a whole number/)).toHaveCount(0);
 
     // 1e309 is no number an input can hold: apply is off, and it says why
     await input.fill("");

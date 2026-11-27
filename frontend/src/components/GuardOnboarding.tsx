@@ -55,7 +55,11 @@ const input = {
 /** Why a tool cannot be added as typed, or null when it can. A second tool
  *  under a name already listed was dropped without a word, and anything was
  *  taken for an address — the proxy forwards to http(s) only (QA-015). */
+export const MAX_TOOL_NAME = 64;
 export function toolDraftError(name: string, url: string, names: string[]): string | null {
+  // a 5000-character name made every step a wall of text (QA-050)
+  if (name.length > MAX_TOOL_NAME)
+    return `a tool name is at most ${MAX_TOOL_NAME} characters (this one has ${name.length})`;
   if (names.includes(name)) return `${name} is already listed — give this tool another name`;
   let protocol = "";
   try { protocol = new URL(url).protocol; } catch { /* not a URL at all */ }

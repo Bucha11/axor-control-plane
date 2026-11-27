@@ -136,6 +136,16 @@ _HOST = re.compile(r"^(?:\*\.)?(?:[a-z0-9-]+\.)+[a-z]{2,}$")
 # and their subdomains: never a trusted source, as the screen says
 _CODE_HOSTS = ("github.com", "githubusercontent.com", "gitlab.com", "bitbucket.org",
                "codeberg.org")
+# paste sites and Q&A forums: anyone can post there too (QA-100)
+_OPEN_HOSTS = ("pastebin.com", "paste.ee", "hastebin.com", "dpaste.org", "dpaste.com",
+               "ghostbin.com", "rentry.co", "justpaste.it", "controlc.com", "paste.debian.net",
+               "stackoverflow.com", "stackexchange.com", "superuser.com", "serverfault.com",
+               "askubuntu.com", "reddit.com", "quora.com", "news.ycombinator.com",
+               "discourse.org", "discord.com")
+
+
+def _matches(host: str, names: tuple[str, ...]) -> bool:
+    return any(host.removeprefix("*.") == c or host.endswith("." + c) for c in names)
 
 
 def _exceptions(raw: object, known: set[str]) -> list[dict]:
@@ -173,11 +183,14 @@ def _sources(raw: object, held: tuple[str, ...] | list[str] = ()) -> list[str]:
         raise HTTPException(400, f"not a host: {', '.join(bad)} (e.g. pypi.org, *.readthedocs.io)")
     # a code host the team already trusted stays until they remove it: a
     # refusal of their saved list would block every other edit of it
-    code = [h for h in hosts if h not in held and any(
-        h.removeprefix("*.") == c or h.endswith("." + c) for c in _CODE_HOSTS)]
+    code = [h for h in hosts if h not in held and _matches(h, _CODE_HOSTS)]
     if code:
         raise HTTPException(400, f"{', '.join(code)}: a code host is never a trusted source — "
                                  "anyone can write to it; name the project's docs site")
+    open_ = [h for h in hosts if h not in held and _matches(h, _OPEN_HOSTS)]
+    if open_:
+        raise HTTPException(400, f"{', '.join(open_)}: a forum or a pastebin is never a trusted "
+                                 "source — anyone can write to it; name the project's docs site")
     return hosts
 
 

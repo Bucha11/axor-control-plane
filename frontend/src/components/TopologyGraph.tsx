@@ -49,6 +49,11 @@ function drawn(id: string, members: Map<string, TreeMember> | undefined, selecte
   return pick?.tree.tree_run === tree.tree_run;
 }
 
+const LABEL_MAX = 30;
+// a label is drawn over the edges with a halo of the panel's colour, so a line
+// passing under it does not run through its letters (QA-033)
+const HALO = { stroke: C.panel, strokeWidth: 4, paintOrder: "stroke" } as const;
+
 /** What a node is called under its circle: a tree's agent by its node
  *  ("read 3"), a tree by its task, anything else by its id — cut short. */
 function shortLabel(id: string, members?: Map<string, TreeMember>, names?: Map<string, string>): string {
@@ -56,7 +61,9 @@ function shortLabel(id: string, members?: Map<string, TreeMember>, names?: Map<s
   if (m) return m.count > 1 ? `${m.node} ${m.index + 1}` : m.node;
   const tree = [...(members?.values() ?? [])].find((x) => x.tree.tree_run === id)?.tree;
   const name = tree?.task ? `tree: ${tree.task}` : names?.get(id) ?? id;
-  return name.length > 18 ? `${name.slice(0, 17)}…` : name;
+  // room for a spawned tree's names ("gov-tree-3914-research"): cut at 18 they
+  // all read "gov-tree-3914-res…" (QA-033); the full id is the label's title
+  return name.length > LABEL_MAX ? `${name.slice(0, LABEL_MAX - 1)}…` : name;
 }
 
 function layout(payload: TopologyPayload, members?: Map<string, TreeMember>,
@@ -98,7 +105,7 @@ function layout(payload: TopologyPayload, members?: Map<string, TreeMember>,
   const widest = Math.max(1, ...[...rows.values()].map((ids) => ids.length));
   // room for the longest label in the widest row; 260 is the old minimum
   const longest = Math.max(4, ...selfNodes.map((n) => shortLabel(n.node_id, members, names).length));
-  const per = Math.min(130, Math.max(70, longest * 6 + 14));
+  const per = Math.min(200, Math.max(70, longest * 6 + 14));
   const rowWidth = Math.max(260, (widest + 1) * per);
   // a run's place in its row: its tree, its node, its index — not its id
   const order = (id: string) => {
@@ -181,7 +188,7 @@ export default function TopologyGraph({
                 if (!a || !b) return null;
                 return (
                   <text x={(a.x + b.x) / 2 + 8} y={(a.y + b.y) / 2} fill={C.red}
-                    fontSize="8" fontFamily={MONO}>
+                    fontSize="8" fontFamily={MONO} {...HALO}>
                     DENIED{e.last_gate ? ` · ${e.last_gate}` : ""}
                   </text>
                 );
@@ -211,8 +218,8 @@ export default function TopologyGraph({
                   style={hot ? { filter: `drop-shadow(0 0 5px ${ring})` } : {}} />
               )}
               {isPeer && <Lock x={p.x - 5} y={p.y - 5} width={10} height={10} color={C.violet} />}
-              <text x={p.x} y={p.y + 30} textAnchor="middle"
-                fill={selected === n.node_id ? C.text : C.mut} fontSize="9.5" fontFamily={MONO}>
+              <text x={p.x} y={p.y + 30} textAnchor="middle" data-testid={`topo-label-${n.node_id}`}
+                fill={selected === n.node_id ? C.text : C.mut} fontSize="9.5" fontFamily={MONO} {...HALO}>
                 <title>{n.node_id}</title>
                 {labelOf(n.node_id)}
               </text>
