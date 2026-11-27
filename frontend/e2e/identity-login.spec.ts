@@ -768,3 +768,18 @@ test("the header's sign-in panel opens on log in, its buttons one line each (QA-
   await dialog.getByRole("button", { name: "new? create a workspace" }).click();
   await oneLine();
 });
+
+// QA-037: a day was cut from the UTC string ("until 2026-11-30"), so a viewer
+// far from UTC saw the wrong day near midnight. The day is the viewer's own.
+test.describe("days are the viewer's local day", () => {
+  test.use({ timezoneId: "Pacific/Kiritimati" });   // +14: noon UTC is the next day
+
+  test("an invitation says until which day, in local time", async ({ page }) => {
+    await setConnection(page, { mode: "adapter" });
+    await page.route("**/identity/v1/invites/tok-day", jsonRoute(200, {
+      org_name: "Acme", role: "member", for_email: null, expires_ts: "2026-11-30T12:00:00Z" }));
+    await goHash(page, "invite/tok-day");
+    const inv = page.getByTestId("invite");
+    await expect(inv).toContainText("until 2026-12-01.");
+  });
+});

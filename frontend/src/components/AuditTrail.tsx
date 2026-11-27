@@ -8,7 +8,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, type AuditItem, type Hold } from "../api";
 import { C, MONO, btn } from "../theme";
 import { errorWords } from "../refusal";
-import { localTime } from "../time";
+import { localDate, localTime } from "../time";
 
 // an act, as a person says it
 const WORDS: Record<string, string> = {
@@ -216,7 +216,7 @@ function ForTheReviewer({ field }: { field: React.CSSProperties }) {
         ) : open.map((h: Hold) => (
           <span key={h.hold_id} className="flex gap-2 items-center">
             <span style={{ color: C.amber }}>● {h.reason}</span>
-            <span style={{ color: C.dim }}>since {h.placed_ts.slice(0, 10)} · nothing is pruned</span>
+            <span style={{ color: C.dim }}>since {localDate(h.placed_ts)} · nothing is pruned</span>
             <button data-testid={`hold-release-${h.hold_id}`} disabled={release.isPending}
               onClick={async () => { if (await askConfirm("Lift the hold? Retention starts pruning again.")) release.mutate(h.hold_id); }}
               style={btn({ color: C.mut, fontSize: 11, padding: "2px 8px" })}>

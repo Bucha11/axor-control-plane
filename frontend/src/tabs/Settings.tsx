@@ -25,7 +25,7 @@ import AuditTrail from "../components/AuditTrail";
 import { useStartTour } from "../components/Tour";
 import { errorWords } from "../refusal";
 import { useOneAtATime } from "../oneAtATime";
-import { localTime } from "../time";
+import { localDate, localTime } from "../time";
 
 // Every trigger the backend emits, in words, and for whom. A trigger that fires
 // and cannot be subscribed to is a notification nobody receives — which is how
@@ -345,7 +345,7 @@ function Provisioning({ orgId }: { orgId: string }) {
           <div>
             SCIM base URL <span data-testid="scim-base" style={{ color: C.text }}>{d.base_url}</span>
             {d.enabled
-              ? <span style={{ color: C.dim }}> · token since {d.created_ts?.slice(0, 10)}
+              ? <span style={{ color: C.dim }}> · token since {localDate(d.created_ts)}
                   {d.last_used_ts ? `, last used ${localTime(d.last_used_ts)}` : ", not used yet"}</span>
               : <span style={{ color: C.dim }}> · no token yet</span>}
           </div>
@@ -867,7 +867,7 @@ function Team({ orgId, isAdmin }: { orgId: string; isAdmin: boolean }) {
               {(invites.data?.invites ?? []).map((i) => (
                 <div key={i.invite_id} className="flex gap-3" style={{ padding: "2px 0" }}>
                   <span style={{ flex: 1 }}>{i.email ?? "anyone with the link"} · {i.role}</span>
-                  <span style={{ color: C.dim }}>until {i.expires_ts.slice(0, 10)}</span>
+                  <span style={{ color: C.dim }}>until {localDate(i.expires_ts)}</span>
                   <button type="button" onClick={() => revoke.mutate(i.invite_id)}
                     style={{ background: "none", border: "none", padding: 0, cursor: "pointer", color: C.mut, fontFamily: MONO, fontSize: 11 }}>
                     withdraw
@@ -1506,7 +1506,7 @@ export default function Settings({ tab = "workspace" }: { tab?: string } = {}) {
           (deadLetters.data ?? []).map((d, i) => (
             <div key={i} style={{ fontFamily: MONO, fontSize: 11, color: C.amber, marginTop: 4 }}>
               {d.trigger} → {d.url} · {d.error} ({d.attempts} attempts)
-              {d.created_ts ? ` · ${d.created_ts.slice(0, 19)}` : ""}
+              {d.created_ts ? ` · ${localTime(d.created_ts, true)}` : ""}
             </div>
           ))
         )}
@@ -1978,7 +1978,7 @@ function MyKeys() {
       {(mine.data ?? []).map((k) => (
         <div key={k.key_id} className="flex gap-3 items-center" style={{ fontSize: 11, marginTop: 4 }}>
           <span style={{ color: C.text }}>{k.key_id}</span>
-          <span style={{ color: C.dim }}>{k.created_ts.slice(0, 10)}</span>
+          <span style={{ color: C.dim }}>{localDate(k.created_ts)}</span>
           <button onClick={() => revoke.mutate(k.key_id)} style={{ background: "none", border: "none", padding: 0,
             cursor: "pointer", fontFamily: MONO, fontSize: 11, color: C.steel }}>revoke</button>
         </div>
