@@ -263,4 +263,47 @@ test.describe("access (QA, 0.7.3)", () => {
     await page.waitForTimeout(3000);
     expect(reads).toEqual([]);
   });
+
+  test("Security asks for no vault or share-link read the caller cannot have (QA-214, QA-042)", async ({ page }) => {
+    const asked: string[] = [];
+    page.on("request", (r) => {
+      const path = new URL(r.url()).pathname;
+      if (r.method() === "GET" && (path.startsWith("/v1/vault/creds") || path.startsWith("/v1/vault/signing")
+          || path === "/v1/share-links")) asked.push(path);
+    });
+    // a viewer: none of it is theirs
+    await playRole(page, VIEWER);
+    await goHash(page, "settings?tab=security");
+    await expect(page.getByTestId("vault-viewer")).toBeVisible();
+    await page.waitForTimeout(1500);
+    expect(asked).toEqual([]);
+  });
+
+  test("the owner's Security asks for no vault read without the vault's own token (QA-214)", async ({ page }) => {
+    await playRole(page, ["read", "ingest", "operate", "admin"]);
+    await page.route("**/v1/security/posture", (r) => r.fulfill({ json: { items: [
+      { id: "auth", ok: true, what: "every request needs a token or a sign-in", fix: "" },
+      { id: "vault_creds_token", ok: true, what: "dispensing tool credentials needs its own token", fix: "" },
+      { id: "vault_signing_token", ok: true, what: "requesting a signature needs its own token", fix: "" },
+    ] } }));
+    const asked: string[] = [];
+    page.on("request", (r) => {
+      const path = new URL(r.url()).pathname;
+      if (r.method() === "GET" && (path.startsWith("/v1/vault/creds") || path.startsWith("/v1/vault/signing"))) asked.push(path);
+    });
+    await goHash(page, "settings?tab=security");
+    await expect(page.getByTestId("tool-credentials")).toBeVisible();
+    await page.waitForTimeout(1500);
+    expect(asked).toEqual([]);
+  });
+
+  test("below Enterprise the audit tab does not ask for legal holds (QA-214)", async ({ page }) => {
+    await page.route("**/v1/audit?*", (r) => r.fulfill({ json: { items: [], total: 0, actions: [] } }));
+    let holds = 0;
+    await page.route("**/v1/audit/holds", (r) => { holds += 1; return r.fulfill({ status: 402, json: {
+      detail: { error: "plan_required", plan: "enterprise", detail: "on Enterprise" } } }); });
+    await goHash(page, "settings?tab=audit");
+    await expect(page.getByTestId("audit-pack-note")).toBeVisible();
+    expect(holds).toBe(0);
+  });
 });

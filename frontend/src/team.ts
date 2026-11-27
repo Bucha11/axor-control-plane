@@ -73,3 +73,14 @@ export function useScopes(): string[] | null {
   const q = useQuery({ queryKey: ["auth-status", apiToken], queryFn: api.authStatus });
   return q.data && q.data.auth_enabled ? q.data.scopes : null;
 }
+
+/** Whether a vault subsystem's reads may go out: when the workspace gave it
+ *  its own token, only with that token in this browser. Asking without it
+ *  was a 403 on every Security load, the owner's too (QA-042, QA-214). */
+export function useVaultReadable(which: "creds" | "signing"): boolean {
+  const token = useApp((s) => (which === "creds" ? s.vaultCredsToken : s.vaultSigningToken));
+  const posture = useQuery({ queryKey: ["security-posture"], queryFn: api.securityPosture, retry: false });
+  if (posture.isPending) return false;
+  const guarded = posture.data?.items.find((i) => i.id === `vault_${which}_token`)?.ok === true;
+  return !guarded || !!token;
+}
