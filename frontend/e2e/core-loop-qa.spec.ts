@@ -155,3 +155,25 @@ test("an address naming no agent says there is none (QA-176)", async ({ page, re
   await goHash(page, "govern/no-such-node-qa");
   await expect(page.getByTestId("no-such-agent")).toContainText("There is no agent “no-such-node-qa” on the plane.");
 });
+
+test.describe("a skill too large to check (QA-217)", () => {
+  test("is refused in words before anything is sent", async ({ page }) => {
+    let sent = 0;
+    await page.route("**/v1/wrap/skill-check", (r) => { sent += 1; return r.continue(); });
+    await goHash(page, "skills");
+    await page.getByTestId("skill-files").setInputFiles({
+      name: "SKILL.md", mimeType: "text/markdown", buffer: Buffer.alloc(5_400_000, "a") });
+    await expect(page.getByText(/too large to check here: the file is 5\.4 MB/)).toBeVisible();
+    expect(sent).toBe(0);
+  });
+
+  test("a web server's 413 page is said in words, not shown", async ({ page }) => {
+    await page.route("**/v1/wrap/skill-check", (r) => r.fulfill({ status: 413, contentType: "text/html",
+      body: "<html><head><title>413 Request Entity Too Large</title></head><body><center><h1>413 Request Entity Too Large</h1></center><hr><center>nginx</center></body></html>" }));
+    await goHash(page, "skills");
+    await page.getByTestId("skill-files").setInputFiles({
+      name: "SKILL.md", mimeType: "text/markdown", buffer: Buffer.from("# a skill\n") });
+    await expect(page.getByText(/too large for the plane to take in one request/)).toBeVisible();
+    await expect(page.getByText(/Request Entity Too Large|<html>/)).toHaveCount(0);
+  });
+});

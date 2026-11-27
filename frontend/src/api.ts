@@ -897,6 +897,12 @@ export function apiError(status: number, text: string): ApiError {
     }
     if (!words && typeof body.error === "string") words = body.error.replace(/_/g, " ");
   } catch { /* not JSON */ }
+  // a web server's own page (nginx's "413 Request Entity Too Large") is HTML,
+  // not something to show (QA-217)
+  if (!words && /^\s*</.test(text)) {
+    words = status === 413 ? "that is too large for the plane to take in one request — send less at a time"
+      : `the request failed (HTTP ${status})`;
+  }
   if (!words) words = text.trim().slice(0, 300) || `the request failed (HTTP ${status})`;
   return new ApiError(status, code, words.length > 600 ? `${words.slice(0, 600)}…` : words);
 }
