@@ -8,7 +8,7 @@ import { track } from "../funnel";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Check, Copy, Loader2, Trash2 } from "lucide-react";
 import { api, BillingReport, BillingStatement, type Capability, type Permissions } from "../api";
-import { useCanAdmin } from "../team";
+import { useCanAdmin, useHasScope } from "../team";
 import {
   IdentityError, emailAvailable, forgotPassword, here, login, logout, oauthProviders,
   oauthStartUrl, signup, signupAvailable, ssoDiscover, ssoStartUrl, type OAuthProvider,
@@ -1155,6 +1155,7 @@ export default function Settings({ tab = "workspace" }: { tab?: string } = {}) {
   const funnel = useQuery({ queryKey: ["funnel", 30], queryFn: () => api.funnelReport(30), retry: false,
                             enabled: authStatus.data?.operator === true });
   const canAdmin = useCanAdmin();
+  const canOperate = useHasScope()("operate");
   const prod = !journey || menuAll || journey !== "coding";
   const coding = !journey || menuAll || journey !== "production";
   const tabs: [SettingsTab, string][] = [
@@ -1383,6 +1384,12 @@ export default function Settings({ tab = "workspace" }: { tab?: string } = {}) {
           where it gets loud.
         </div>
         <EmailStatus />
+        {/* a viewer is not offered what the plane refuses them (QA-064) */}
+        {!canOperate ? (
+          <div data-testid="alerts-viewer" style={{ fontFamily: MONO, fontSize: 11, color: C.dim, marginBottom: 6 }}>
+            as a viewer you see where alerts go — an owner, admin or member subscribes and sends a test alert
+          </div>
+        ) : (<>
         {identityEmail && canMail && verified && (
           <button data-testid="mail-me"
             onClick={() => {
@@ -1449,6 +1456,7 @@ export default function Settings({ tab = "workspace" }: { tab?: string } = {}) {
             {errorWords((subscribe.error as Error).message)}
           </div>
         )}
+        </>)}
 
         {(subscriptions.data ?? []).length > 0 && (
           <>
@@ -1463,6 +1471,7 @@ export default function Settings({ tab = "workspace" }: { tab?: string } = {}) {
                     .map((id) => TRIGGERS.find((t) => t.id === id)?.label.split(" — ")[0] ?? id).join("; ")}
                   {s.node_pattern !== "*" ? ` · nodes: ${s.node_pattern}` : ""}
                 </span>
+                {canOperate && <>
                 <button aria-label={`send a test alert to ${s.url}`} onClick={() => testAlert.mutate(s.url)}
                   disabled={testAlert.isPending}
                   style={btn({ color: C.steel, fontSize: 10, padding: "1px 7px" })}>
@@ -1476,6 +1485,7 @@ export default function Settings({ tab = "workspace" }: { tab?: string } = {}) {
                 >
                   unsubscribe
                 </button>
+                </>}
               </div>
             ))}
             {testAlert.isError && (
@@ -1522,7 +1532,12 @@ export default function Settings({ tab = "workspace" }: { tab?: string } = {}) {
           <Section title="LINKS SHARED OUTSIDE THE WORKSPACE">
             <SharedLinks />
           </Section>
-          <FederationVault />
+          {canOperate ? <FederationVault /> : (
+            <div data-testid="vault-viewer" className="mb-4" style={{ fontFamily: MONO, fontSize: 11, color: C.dim }}>
+              as a viewer you see how the plane is protected — tool credentials and command signing are set up
+              by the workspace&apos;s owner
+            </div>
+          )}
         </>
       )}
 
@@ -2039,6 +2054,15 @@ function AgentKeys({ journey, menuAll }: { journey: Journey | null; menuAll: boo
     );
   }
   if (!on) {
+    // a viewer has no key of their own: the plane refuses one (QA-064)
+    if (authStatus.data?.authenticated && !(authStatus.data.scopes ?? []).includes("ingest")) {
+      return (
+        <div data-testid="keys-viewer" style={{ fontFamily: MONO, fontSize: 11.5, color: C.mut }}>
+          As a viewer you watch the team&apos;s agents and connect none — an owner or admin can make you a
+          member, who makes a key for their own machine.
+        </div>
+      );
+    }
     return authStatus.data?.authenticated ? <MyKeys /> : (
       <div style={{ fontFamily: MONO, fontSize: 11.5, color: C.mut }}>
         Sign in to make a key for your machine.

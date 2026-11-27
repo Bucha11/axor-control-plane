@@ -77,4 +77,22 @@ test.describe("settings (QA, 0.7.2)", () => {
     await answerAsk(page);
     await expect(page.getByTestId("key-minted")).toHaveCount(0);
   });
+
+  test("a viewer is not offered what the plane refuses them, and is told who can (QA-064)", async ({ page }) => {
+    await page.route("**/v1/auth/status", (r) => r.fulfill({ json: {
+      auth_enabled: true, authenticated: true, scopes: ["read"] } }));
+    await page.route("**/v1/notifications/subscriptions", (r) => r.fulfill({ json: [
+      { url: "https://hooks.example/team", triggers: ["node_stale"], label: "", node_pattern: "*", debounce_seconds: 0 }] }));
+    await goHash(page, "settings?tab=connect");
+    await expect(page.getByTestId("keys-viewer")).toContainText("an owner or admin can make you a member");
+    await expect(page.getByTestId("my-key-create")).toHaveCount(0);
+    await page.getByTestId("settings-tab-alerts").click();
+    await expect(page.getByTestId("alerts-viewer")).toContainText("an owner, admin or member subscribes");
+    await expect(page.getByText("https://hooks.example/team")).toBeVisible();
+    await expect(page.getByRole("button", { name: /Subscribe/ })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: /send a test alert/ })).toHaveCount(0);
+    await page.getByTestId("settings-tab-security").click();
+    await expect(page.getByTestId("vault-viewer")).toBeVisible();
+    await expect(page.getByTestId("federation-vault")).toHaveCount(0);
+  });
 });
