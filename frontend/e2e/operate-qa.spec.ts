@@ -432,9 +432,15 @@ test.describe("layout at 390 and 1366 (QA-104, QA-106, QA-107)", () => {
   });
 
   test("Team memory: the rotation sentence goes on after its select", async ({ page, request }) => {
-    expect((await request.post(`${BACKEND}/v1/demo/seed-memory`)).ok()).toBeTruthy();
+    // a repository of the test's own: the product's example shows no rotation (QA-005)
+    const tag = Math.random().toString(36).slice(2, 8);
+    expect((await request.post(`${BACKEND}/v1/plane/e2e-rot-${tag}/profile`, { data: {
+      kind: "coding", agent: "claude-code", developer: `dev-rot-${tag}`,
+      repo: `r-rot-${tag}`, repo_label: `rot/${tag}` } })).ok()).toBeTruthy();
     await setConnection(page, { mode: "adapter" });
     await goHash(page, "memory");
+    const tab = page.getByRole("tab", { name: `rot/${tag}` });
+    if (await tab.isVisible()) await tab.click();
     const select = page.getByLabel("freshness window");
     await expect(select).toBeVisible();
     // the words after the select start on the select's line

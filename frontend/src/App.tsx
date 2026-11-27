@@ -262,7 +262,7 @@ export default function App() {
             view={key === "govern" && governView !== "govern"
               ? (GOVERN_VIEWS.find(([r]) => r === governView)?.[1] ?? "") : ""}
             connectPage={key === "connect"} settingsPage={key === "settings"} onSignedUp={signedUp} />
-          <div style={{ padding: "0 24px" }}><PageGuard key={route.raw}>{body}</PageGuard></div>
+          <div style={{ padding: "0 24px" }}><PageGuard route={route.raw}>{body}</PageGuard></div>
         </main>
         <Tour />
         <WorkspaceJourney />
@@ -275,7 +275,7 @@ export default function App() {
   return (
     <div style={{ minHeight: "100vh", background: C.bg, color: C.text, fontFamily: "Inter, system-ui, sans-serif", padding: "28px 20px" }}>
       {header}
-      <PageGuard key={route.raw}>{body}</PageGuard>
+      <PageGuard route={route.raw}>{body}</PageGuard>
       <Tour />
       <WorkspaceJourney />
       <RoleSync />

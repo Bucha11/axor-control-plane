@@ -1,13 +1,18 @@
 // One screen that throws while rendering must not take the whole app with it:
-// a URIError in one route blanked every page until a reload (QA-043). The
-// guard is keyed by the route, so moving to another page starts it afresh.
+// a URIError in one route blanked every page until a reload (QA-043). Moving
+// to another page clears the failure — without remounting what is inside, so
+// state that outlives a page (a guest's "moved into your account") stays.
 import { Component, type ReactNode } from "react";
 import { C, MONO, btn } from "../theme";
 
 interface State { error: Error | null }
 
-export default class PageGuard extends Component<{ children: ReactNode }, State> {
+export default class PageGuard extends Component<{ children: ReactNode; route: string }, State> {
   state: State = { error: null };
+
+  componentDidUpdate(prev: { route: string }): void {
+    if (prev.route !== this.props.route && this.state.error) this.setState({ error: null });
+  }
 
   static getDerivedStateFromError(error: Error): State {
     return { error };
