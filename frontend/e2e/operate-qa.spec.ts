@@ -439,7 +439,10 @@ test.describe("layout at 390 and 1366 (QA-104, QA-106, QA-107)", () => {
       repo: `r-rot-${tag}`, repo_label: `rot/${tag}` } })).ok()).toBeTruthy();
     await setConnection(page, { mode: "adapter" });
     await goHash(page, "memory");
+    // with several repositories it is a tab — wait for the list before choosing
     const tab = page.getByRole("tab", { name: `rot/${tag}` });
+    await expect(tab.or(page.getByTestId("memory-preview")).first()).toBeVisible();
+    await page.waitForLoadState("networkidle");
     if (await tab.isVisible()) await tab.click();
     const select = page.getByLabel("freshness window");
     await expect(select).toBeVisible();

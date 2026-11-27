@@ -351,7 +351,7 @@ test.describe("coding agents: their menu, and trying a skill", () => {
     await page.waitForLoadState("networkidle");   // the list decides whether the example button shows
     if (await example.isVisible()) await example.click();
     else { await request.post(`${B}/v1/demo/seed-memory`); await page.reload(); }
-    await expect(view.getByRole("tab", { name: "acme/api" }).or(view.getByTestId("memory-preview"))).toBeVisible();
+    await expect(view.getByRole("tab", { name: "acme/api" }).or(view.getByTestId("memory-preview")).first()).toBeVisible();
     const tab = view.getByRole("tab", { name: "acme/api" });
     if (await tab.isVisible()) await tab.click();
     // listed as the example it is (QA-005)
