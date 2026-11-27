@@ -4,6 +4,7 @@ import * as opKey from "./opKey";
 import { IDENTITY_BASE, refresh } from "./identity";
 import { isGuestToken, useApp } from "./store";
 import { track } from "./funnel";
+import { scopeWords } from "./refusal";
 
 // Backend client. Vite dev-proxies /v1 -> backend :8400 and /axor -> proxy :8401.
 
@@ -897,6 +898,11 @@ export function apiError(status: number, text: string): ApiError {
       code = String(o.code ?? o.error ?? code ?? "");
       words = String(o.detail ?? o.message ?? "");
     }
+    // a scope refusal: who the caller is and who can, not "forbidden" (QA-195)
+    if (!words && body.error === "forbidden" && typeof (body as { need?: unknown }).need === "string") {
+      const b = body as { need: string; have?: unknown };
+      words = scopeWords(b.need, Array.isArray(b.have) ? b.have.map(String) : []);
+    }
     if (!words && typeof body.error === "string") words = body.error.replace(/_/g, " ");
   } catch { /* not JSON */ }
   // not the plane's sentence: a proxy's or server's own page ("Internal Server
@@ -939,14 +945,6 @@ function uploadAs(): Record<string, string> {
   return apiToken() ? { "X-Axor-Upload-Token": apiToken() } : {};
 }
 
-async function scopeRefusal(resp: Response): Promise<boolean> {
-  try {
-    return ((await resp.clone().json()) as { error?: unknown }).error === "forbidden";
-  } catch {
-    return false;
-  }
-}
-
 /** A command the plane refused for its signature, said with what to do: the
  *  raw "no operator keys registered" left an operator nowhere to go (QA-003). */
 function commandRefusal(e: unknown, hasKey = true): unknown {
@@ -986,6 +984,11 @@ function commandRefusal(e: unknown, hasKey = true): unknown {
 async function af(path: string, init: RequestInit = {}, retried = false): Promise<Response> {
   if (!apiToken() && path !== "/v1/auth/status") await sessionSettled();
   const token = apiToken();
+  if (!token && signedOutHere && path.startsWith("/v1/") && !OPEN_PATHS.some((p) => path.startsWith(p))) {
+    // the plane's answer, without asking it again and again
+    return new Response(JSON.stringify({ error: "unauthorized", detail: "this tab is signed out — sign in" }),
+      { status: 401, headers: { "content-type": "application/json" } });
+  }
   const feature = isGuestToken(token) && (init.method ?? "GET").toUpperCase() === "GET" ? guestCannotRead(path) : null;
   if (feature) {
     // the plane's own answer, without asking it
@@ -1004,17 +1007,11 @@ async function af(path: string, init: RequestInit = {}, retried = false): Promis
   if (resp.status === 401 && !retried && token.startsWith("gs_") && (await renewGuest(token))) {
     return af(path, init, true);
   }
-  // Something the user DID was refused for their ROLE: it may have changed
-  // since this access token was issued (an owner made them a member). The
-  // refresh reads the role afresh; one retry, never for a background read.
-  // Only a scope refusal ({"error": "forbidden"}) — any other 403 is the
-  // plane's answer on the merits (a malformed license, no operator key), and
-  // retrying it sent every such request twice (QA-019).
-  if (resp.status === 403 && !retried && (init.method ?? "GET").toUpperCase() !== "GET"
-      && useApp.getState().refreshToken && (await scopeRefusal(resp))
-      && (await refreshSession(null))) {
-    return af(path, init, true);
-  }
+  // A 403 is never retried: it is the plane's answer for this caller — a
+  // scope refusal ({"error": "forbidden", "need", "have"}) or a refusal on the
+  // merits. Refreshing and resending sent every refused write twice and showed
+  // the bare word "forbidden" (QA-019, QA-195). Only a 401 (the token itself
+  // not accepted) refreshes, above.
   // only for something the user DID: a panel's background read that needs an
   // account shows that inline, it does not throw a sign-up in their face
   if (resp.status === 403 && (init.method ?? "GET").toUpperCase() !== "GET") {
@@ -1058,15 +1055,30 @@ useApp.subscribe((s, prev) => {
 export function sessionSettled(again = false): Promise<void> {
   if (!session || again) {
     session = api.authStatus()
-      .then((st) => {
+      .then(async (st) => {
         if (st.auth_enabled && st.guest_sessions && !st.authenticated && !apiToken()) {
-          return startGuest().then(() => undefined);
+          await startGuest();
         }
+        signedOutHere = st.auth_enabled && !st.authenticated && !apiToken();
       })
       .catch(() => undefined);
   }
   return session;
 }
+
+// The plane needs a sign-in and this tab has none (sign-ins are kept per tab;
+// no guest session, or one refused for now). Reads are not sent then: every
+// screen polled into a wall of 401s (QA-042, QA-170) — the page says to sign
+// in instead (GuestSession).
+let signedOutHere = false;
+
+/** Whether this tab is signed out of a plane that needs a sign-in. */
+export function tabSignedOut(): boolean {
+  return signedOutHere && !apiToken();
+}
+
+// what the plane serves without a credential (backend auth._OPEN_ROUTES)
+const OPEN_PATHS = ["/v1/auth/status", "/v1/auth/guest", "/v1/share/", "/v1/healthz", "/v1/funnel"];
 
 let renewing: Promise<boolean> | null = null;
 // Seconds the plane asked a refused guest to wait (429 Retry-After), or 0.

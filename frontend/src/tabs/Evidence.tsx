@@ -20,7 +20,8 @@ import { api, EvidenceCaseDto, IncidentItem, IncidentKind, IncidentStatus } from
 import { navigate } from "../router";
 import { isConnected, useApp } from "../store";
 import { C, MONO } from "../theme";
-import { useCanAdmin } from "../team";
+import { useCanAdmin, useHasScope } from "../team";
+import RoleNote from "../components/RoleNote";
 import { errorWords } from "../refusal";
 import { agentLabel } from "../agentName";
 import { useWorkStarted } from "../workStarted";
@@ -139,6 +140,7 @@ export default function Evidence({ agent: agentParam }: { agent?: string } = {})
   const { mode } = useApp((s) => s.connection);
   const journey = useApp((s) => s.journey);
   const connect = useApp((s) => s.connect);
+  const mayMark = useHasScope()("operate");
   // opens on "needs a look" — refusals included, the same kinds the menu's
   // count counts (it said 2 while this listed 1: QA-040)
   const [kind, setKind] = useState(KIND_CHIPS[0][0]);
@@ -241,6 +243,7 @@ export default function Evidence({ agent: agentParam }: { agent?: string } = {})
             <div className="flex flex-col gap-2" data-testid="evidence-list">
               <RefusalSummary items={listed} developerOf={developerOf} isSession={isSession}
                 cause={cause} setCause={setCause} />
+              {!mayMark && <RoleNote need="operate" what="mark incidents" testid="incidents-viewer" />}
               {items.map((i) => <Item key={i.id} item={i} who={labelOf(i.node_id)} />)}
             </div>
           )}
@@ -260,11 +263,21 @@ const brokenOnPurpose = (item: IncidentItem) => item.kind === "made_up"
 
 function StatusPick({ item }: { item: IncidentItem }) {
   const qc = useQueryClient();
+  // a viewer reads the status; the list says who marks it (QA-196)
+  const mayMark = useHasScope()("operate");
   const set = useMutation({
     mutationFn: (st: IncidentStatus) => api.setIncidentStatus(item.id, st),
     onSuccess: () => void qc.invalidateQueries({ queryKey: ["incidents"] }),
   });
+  if (!mayMark) {
+    return (
+      <span data-testid="incident-status-text" style={{ fontFamily: MONO, fontSize: 11, color: C.mut }}>
+        {STATUS_WORDS[item.status]}
+      </span>
+    );
+  }
   return (
+    <span className="inline-flex flex-col items-end gap-1">
     <select aria-label={`status of ${item.id}`} value={item.status} data-testid="incident-status"
       onChange={(e) => set.mutate(e.target.value as IncidentStatus)}
       style={{ background: C.panel2, border: `1px solid ${item.status === "new" ? C.steel : C.line}`, borderRadius: 5,
@@ -275,6 +288,13 @@ function StatusPick({ item }: { item: IncidentItem }) {
           || !["kept_as_test", "rule_made"].includes(st))
         .map((st) => <option key={st} value={st}>{STATUS_WORDS[st]}</option>)}
     </select>
+    {/* a refused change said in words, not a select that snaps back (QA-195) */}
+    {set.isError && (
+      <span data-testid="incident-status-error" style={{ fontFamily: MONO, fontSize: 10.5, color: C.red }}>
+        {(set.error as Error).message}
+      </span>
+    )}
+    </span>
   );
 }
 

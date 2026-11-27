@@ -10,6 +10,8 @@ import { C, MONO, btn } from "../theme";
 import { HowItWorks, MachineCommand } from "./MachineCommand";
 import { useWorkStarted } from "../workStarted";
 import { localTime } from "../time";
+import { useHasScope } from "../team";
+import RoleNote from "./RoleNote";
 
 export function useSkillsOff() {
   const qc = useQueryClient();
@@ -47,6 +49,8 @@ export function usePendingSkills(): number {
 export function TeamSwitch({ name }: { name: string }) {
   const { shared, team, off, set } = useSkillsOff();
   const [sure, setSure] = useState(false);
+  // a viewer decides no skill: the panel says who can (QA-213)
+  const mayDecide = useHasScope()("operate");
   const s = shared.find((t) => t.name === name);
   if (!s || off.has(name)) return null;
   if (s.example) {
@@ -60,6 +64,13 @@ export function TeamSwitch({ name }: { name: string }) {
   }
   const danger = s.latest.check?.summary.danger ?? 0;
   const newer = s.live && s.live.version !== s.latest.version;
+  if (!mayDecide) {
+    return (
+      <span data-testid={`team-state-${name}`} style={{ fontFamily: MONO, fontSize: 11, color: s.live ? C.green : C.dim }}>
+        {s.live ? "on for the team" : "not on"}
+      </span>
+    );
+  }
   if (s.live && !newer) {
     return (
       <span data-testid={`team-is-on-${name}`} style={{ fontFamily: MONO, fontSize: 11, color: C.green }}>
@@ -128,6 +139,7 @@ export function TeamSkillsPanel() {
   const { shared } = useSkillsOff();
   const [open, setOpen] = useState<string | null>(null);
   const started = useWorkStarted();
+  const mayDecide = useHasScope()("operate");
   const example = useMutation({
     mutationFn: api.seedTeamSkill,
     onSuccess: () => void qc.invalidateQueries({ queryKey: ["coding-skills"] }),
@@ -179,9 +191,10 @@ export function TeamSkillsPanel() {
           ))}
         </div>
       )}
+      {!mayDecide && <div className="mb-3"><RoleNote need="operate" what="turn skills on or off for the team" testid="team-skills-viewer" /></div>}
       <div style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim, marginBottom: 6 }}>share one</div>
       <MachineCommand testId="team-share-cmd" cmd="axor-wrap skill share ./.claude/skills/my-skill" />
-      {!shared.length && !started && (
+      {!shared.length && !started && mayDecide && (
         <button onClick={() => example.mutate()} data-testid="team-skill-example"
           style={{ ...link, fontSize: 11.5, marginTop: 8 }}>
           {example.isPending ? "loading…" : "see an example →"}
@@ -198,9 +211,11 @@ const link: React.CSSProperties = {
 /** The switch on one skill. */
 export function SkillSwitch({ name }: { name: string }) {
   const { off, attempts, set, shared } = useSkillsOff();
+  const mayDecide = useHasScope()("operate");
   const isOff = off.has(name);
   // on for the team, the way out is "take off the team" beside it
   if (!isOff && shared.some((t) => t.name === name && t.live)) return null;
+  if (!isOff && !mayDecide) return null;
   if (!isOff) {
     return (
       <button data-testid={`skill-off-${name}`} onClick={() => set.mutate({ name, off: true })}
@@ -211,8 +226,8 @@ export function SkillSwitch({ name }: { name: string }) {
   }
   return (
     <span data-testid={`skill-is-off-${name}`} style={{ fontFamily: MONO, fontSize: 11, color: C.amber }}>
-      turned off for the team{attempts[name] ? ` · ${attempts[name]} refused` : ""} ·{" "}
-      <button onClick={() => set.mutate({ name, off: false })} style={link}>turn back on</button>
+      turned off for the team{attempts[name] ? ` · ${attempts[name]} refused` : ""}
+      {mayDecide && <>{" "}·{" "}<button onClick={() => set.mutate({ name, off: false })} style={link}>turn back on</button></>}
     </span>
   );
 }
@@ -220,6 +235,7 @@ export function SkillSwitch({ name }: { name: string }) {
 /** The list, with a way to turn off a skill by name. */
 export function SkillsOffPanel() {
   const { list, attempts, set, error } = useSkillsOff();
+  const mayDecide = useHasScope()("operate");
   const [name, setName] = useState("");
   const n = name.trim();
   const bad = !!n && !SKILL_NAME.test(n);
@@ -252,11 +268,13 @@ export function SkillsOffPanel() {
                 {attempts[s.skill] ?? 0} refused attempt{attempts[s.skill] === 1 ? "" : "s"}
               </span>
               <span style={{ flex: 1 }} />
-              <button onClick={() => set.mutate({ name: s.skill, off: false })} style={link}>turn back on</button>
+              {mayDecide && <button onClick={() => set.mutate({ name: s.skill, off: false })} style={link}>turn back on</button>}
             </div>
           ))}
         </div>
       )}
+      {/* a viewer turns nothing off: the plane refuses it (QA-213) */}
+      {!mayDecide ? <RoleNote need="operate" what="turn a skill off for the team" testid="skills-off-viewer" /> : (
       <div className="flex gap-2 items-center flex-wrap">
         <input value={name} onChange={(e) => setName(e.target.value)} onKeyDown={(e) => e.key === "Enter" && add()}
           placeholder="skill name ⏎" aria-label="skill to turn off"
@@ -268,6 +286,7 @@ export function SkillsOffPanel() {
           ? <span style={{ fontFamily: MONO, fontSize: 11, color: C.red }}>a skill name is a plain id (letters, digits, - _ . :), at most 64</span>
           : error && <span style={{ fontFamily: MONO, fontSize: 11, color: C.red }}>{error.message}</span>}
       </div>
+      )}
     </section>
   );
 }

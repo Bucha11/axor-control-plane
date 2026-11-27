@@ -17,6 +17,8 @@ import { LAB_SHIPPED } from "../flags";
 import Tooltip from "../components/Tooltip";
 import { useWorkStarted } from "../workStarted";
 import { localTime } from "../time";
+import { useHasScope } from "../team";
+import RoleNote from "../components/RoleNote";
 
 // The example corpus's runs (backend demo.DEMO_RUN_IDS) and what each one is,
 // in words: their pins all carry the scenario as label, which tells two apart
@@ -71,6 +73,8 @@ function ScheduleAndHistory({ parseConfig }: { parseConfig: () => Record<string,
     enabled: ee,
   });
   const [hours, setHours] = useState("24");
+  // a viewer sees the schedule and changes nothing (QA-152)
+  const mayChange = useHasScope()("operate");
   const save = useMutation({
     mutationFn: (enabled: boolean) => {
       // Turning the schedule off must not depend on the editor holding a valid
@@ -110,6 +114,7 @@ function ScheduleAndHistory({ parseConfig }: { parseConfig: () => Record<string,
                 : "off"}
               {schedule.data.last_run_ts ? ` · last ${localTime(schedule.data.last_run_ts)}` : ""}
             </span>
+            {!mayChange ? <RoleNote inline need="operate" what="change the schedule" testid="schedule-viewer" /> : <>
             <span style={{ fontFamily: MONO, fontSize: 11, color: C.mut }}>every</span>
             <input
               value={hours}
@@ -130,6 +135,7 @@ function ScheduleAndHistory({ parseConfig }: { parseConfig: () => Record<string,
                 Disable
               </button>
             )}
+            </>}
             {save.isError && (
               <span style={{ fontFamily: MONO, fontSize: 11, color: C.red }}>
                 {(save.error as Error).message}
@@ -513,6 +519,8 @@ function Report({ report, open, setOpen, onRemoved, exampleRules }: {
   onRemoved: () => void; exampleRules: boolean;
 }) {
   const qc = useQueryClient();
+  // a viewer takes no case out of the check (QA-196)
+  const mayUnpin = useHasScope()("operate");
   // A case nothing can be checked against (or one kept by mistake) held every
   // release at "not safe" with no way to take it out.
   const unpin = useMutation({
@@ -575,6 +583,9 @@ function Report({ report, open, setOpen, onRemoved, exampleRules }: {
         </div>
       )}
 
+      {!mayUnpin && report.rows.some((r) => !r.demo) && (
+        <RoleNote need="operate" what="take a case out of the check" testid="unpin-viewer" />
+      )}
       <div className="mt-3" style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 8 }}>
         {report.rows.map((r, i) => {
           const knownRefusal = r.result === "passed" && (r.still_refused?.length ?? 0) > 0;
@@ -651,7 +662,7 @@ function Report({ report, open, setOpen, onRemoved, exampleRules }: {
                       style={btn({ color: C.steel, fontSize: 11, padding: "5px 10px" })}>
                       <Play size={11} /> show where
                     </button>
-                    {!r.demo && (
+                    {!r.demo && mayUnpin && (
                       <button data-testid={`unpin-${r.run_id}`} disabled={unpin.isPending}
                         onClick={async () => {
                           if (await askConfirm("Take this case out of the check? Releases will no longer be checked against it.")) {

@@ -15,6 +15,7 @@ import { Shield } from "lucide-react";
 import { api, DrivingFact } from "../api";
 import { C, MONO, btn } from "../theme";
 import Tooltip from "./Tooltip";
+import { useHasScope } from "../team";
 
 const LEVEL_COLOR: Record<string, string> = {
   NORMAL: C.green, CAUTIOUS: C.amber, RESTRICTED: C.amber,
@@ -25,10 +26,11 @@ function levelColor(level: string): string {
   return LEVEL_COLOR[level] ?? C.mut;
 }
 
-function Row({ fact, onAttest, pending }: {
+function Row({ fact, onAttest, pending, mayAttest }: {
   fact: DrivingFact;
   onAttest: (fact: DrivingFact) => void;
   pending: boolean;
+  mayAttest: boolean;
 }) {
   const covered = fact.covered_by.length > 0;
   return (
@@ -50,7 +52,7 @@ function Row({ fact, onAttest, pending }: {
         <div style={{ fontFamily: MONO, fontSize: 10, color: C.green, marginTop: 2 }}>
           discharged · attested by {fact.covered_by.join(", ")}
         </div>
-      ) : (
+      ) : mayAttest && (
         <button
           onClick={() => onAttest(fact)}
           disabled={pending}
@@ -73,6 +75,8 @@ export default function Coverage({ nodeId, refetchMs }: {
     refetchInterval: refetchMs,
   });
 
+  // a viewer vouches for nothing: the plane refuses it (QA-175)
+  const mayAttest = useHasScope()("operate");
   const attest = useMutation({
     mutationFn: ({ fact, reason }: { fact: DrivingFact; reason: string }) =>
       api.appendFact(nodeId, {
@@ -121,7 +125,7 @@ export default function Coverage({ nodeId, refetchMs }: {
         </div>
       </Tooltip>
       {facts.map((f) => (
-        <Row key={f.fact_id} fact={f} onAttest={onAttest} pending={attest.isPending} />
+        <Row key={f.fact_id} fact={f} onAttest={onAttest} pending={attest.isPending} mayAttest={mayAttest} />
       ))}
       <div style={{ fontFamily: MONO, fontSize: 10, color: C.mut, borderTop: `1px solid ${C.line}`, paddingTop: 6 }}>
         with coverage: <span style={{ color: levelColor(level) }}>{level}</span>

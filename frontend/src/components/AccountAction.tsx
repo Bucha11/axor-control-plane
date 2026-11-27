@@ -9,6 +9,7 @@ import { api } from "../api";
 import { navigate } from "../router";
 import { isGuestToken, useApp } from "../store";
 import { C, MONO } from "../theme";
+import { useHasScope } from "../team";
 
 export function askToSignUp(feature: string, title: string, why: string): void {
   window.dispatchEvent(new CustomEvent("axor:account-required", { detail: { feature, title, why } }));
@@ -36,6 +37,9 @@ export function KeepAsTest({ runId, testId = "keep-as-test" }: { runId: string; 
                             enabled: !guest && !runId.startsWith("ex_") });
   const refusedNothing = events.data !== undefined
     && !events.data.some((e) => e.kind === "tool_call" && e.verdict === "deny");
+  // a viewer keeps nothing: the plane refuses it; where it sits says who can (QA-196)
+  const mayKeep = useHasScope()("operate");
+  if (!mayKeep) return null;
   if (refusedNothing && !pin.isSuccess) {
     return (
       <span data-testid={testId} style={{ fontFamily: MONO, fontSize: 11, color: C.dim }}>

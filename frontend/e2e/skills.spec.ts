@@ -721,6 +721,11 @@ test.describe("session controls for coding agents", () => {
 
   test("the team's brake holds every agent, and lets them go", async ({ page, request }) => {
     await request.post(`${B}/v1/demo/seed-coding`);
+    // a paid plan: a team (on Free the brake holds your own agents)
+    await page.route("**/v1/license/entitlements", async (r) => {
+      const body = await (await r.fetch()).json();
+      await r.fulfill({ json: { ...body, free: false } });
+    });
     await setConnection(page, { mode: "demo" });
     await journey(page, "coding");
     await goHash(page, "govern");

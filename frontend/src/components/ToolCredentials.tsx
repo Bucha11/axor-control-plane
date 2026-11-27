@@ -22,6 +22,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Lock, LockOpen, Plus, RotateCw, Slash } from "lucide-react";
 import { api, VaultCredential } from "../api";
 import { useApp } from "../store";
+import { useVaultReadable } from "../team";
 import { C, MONO, btn } from "../theme";
 import Tooltip from "./Tooltip";
 import { useOneAtATime } from "../oneAtATime";
@@ -57,15 +58,17 @@ export default function ToolCredentials() {
 
   // Every read is gated by the creds token, so it is part of each key: typing
   // it refetches instead of leaving the 403 from before on screen.
-  const health = useQuery({ queryKey: ["vault-creds", credsToken], queryFn: api.vaultCredsHealth });
-  const sealing = useQuery({ queryKey: ["vault-sealing", credsToken], queryFn: api.vaultSealingKey });
+  // ...and not asked without it, where the workspace made one (QA-214)
+  const readable = useVaultReadable("creds");
+  const health = useQuery({ queryKey: ["vault-creds", credsToken], queryFn: api.vaultCredsHealth, enabled: readable });
+  const sealing = useQuery({ queryKey: ["vault-sealing", credsToken], queryFn: api.vaultSealingKey, enabled: readable });
   const audit = useQuery({
-    queryKey: ["vault-creds-audit", credsToken], queryFn: () => api.vaultCredsAudit(),
+    queryKey: ["vault-creds-audit", credsToken], queryFn: () => api.vaultCredsAudit(), enabled: readable,
   });
   // Which nodes sign their dispenses. Registering one was possible and seeing
   // what was registered was not, which makes "is this node signing?" a question
   // the panel could not answer about the deployment it is showing.
-  const nodeKeys = useQuery({ queryKey: ["vault-node-keys", credsToken], queryFn: api.vaultNodeKeys });
+  const nodeKeys = useQuery({ queryKey: ["vault-node-keys", credsToken], queryFn: api.vaultNodeKeys, enabled: readable });
   // a hosted plane refuses a plaintext credential outright (QA-060)
   const posture = useQuery({ queryKey: ["security-posture"], queryFn: api.securityPosture, retry: false });
   const sealedOnly = !!posture.data?.items.some((i) => i.id === "sealed_credentials");

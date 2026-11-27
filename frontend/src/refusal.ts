@@ -25,12 +25,39 @@ export function refusalWords(rawIn: string, gate = ""): string {
   return raw || "refused";
 }
 
+type Scope = "read" | "ingest" | "operate" | "admin";
+
+/** Who in a workspace holds a scope (backend auth.ROLE_SCOPES): a viewer reads;
+ *  a member and an admin also ingest and operate; only the owner administers. */
+export function whoCan(need: string): string {
+  if (need === "admin") return "only the owner";
+  if (need === "read" || need === "read|ingest") return "anyone in the workspace";
+  return "an owner, admin or member";
+}
+
+/** Who the caller is, by the scopes they hold. */
+export function whoIs(have: readonly string[]): string {
+  if (have.includes("admin")) return "the owner";
+  if (have.includes("operate")) return "a member or admin";
+  if (have.includes("read")) return "a viewer";
+  return "this sign-in";
+}
+
+/** A scope refusal ({"error": "forbidden", "need", "have"}) in words: who the
+ *  caller is and who can do it, never the bare word "forbidden" (QA-195). */
+export function scopeWords(need: Scope | string, have: readonly string[]): string {
+  return `${whoIs(have)} can't change this — ${whoCan(need)} can`;
+}
+
 /** A request's error as a person reads it: "403 {\"detail\": \"…\"}" → "…". */
 export function errorWords(message: string): string {
   const m = message.match(/^(\d{3})\s+(\{[\s\S]*\})$/);
   if (!m) return message;
   try {
-    const body = JSON.parse(m[2]) as { detail?: unknown; error?: unknown };
+    const body = JSON.parse(m[2]) as { detail?: unknown; error?: unknown; need?: unknown; have?: unknown };
+    if (body.error === "forbidden" && typeof body.need === "string" && body.detail === undefined) {
+      return scopeWords(body.need, Array.isArray(body.have) ? body.have.map(String) : []);
+    }
     const d = body.detail ?? body.error;
     if (typeof d === "string") return d;
     if (d && typeof d === "object" && typeof (d as { detail?: unknown }).detail === "string") {

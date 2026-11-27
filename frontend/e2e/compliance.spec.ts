@@ -24,6 +24,10 @@ test.describe("compliance pack and legal hold (Enterprise)", () => {
   });
 
   test("the pack is asked for by period, and a hold freezes the trail", async ({ page }) => {
+    await page.route("**/v1/license/entitlements", async (route) => {
+      const body = await (await route.fetch()).json();
+      await route.fulfill({ json: { ...body, tier: "enterprise", free: false } });
+    });
     let held: unknown[] = [];
     let asked = "";
     await page.route("**/v1/audit/holds", async (route) => {

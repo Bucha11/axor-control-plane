@@ -141,7 +141,11 @@ function KeepAndReport({ field }: { field: React.CSSProperties }) {
  *  retention from deleting the evidence under it. */
 function ForTheReviewer({ field }: { field: React.CSSProperties }) {
   const qc = useQueryClient();
-  const holds = useQuery({ queryKey: ["audit-holds"], queryFn: api.holds, retry: false });
+  // holds are Enterprise's: below it they are not asked for (a 402 on every
+  // load, QA-214) — the plan says so
+  const ent = useQuery({ queryKey: ["entitlements"], queryFn: api.entitlements, retry: false });
+  const enterprise = ent.data?.tier === "enterprise";
+  const holds = useQuery({ queryKey: ["audit-holds"], queryFn: api.holds, retry: false, enabled: enterprise });
   const place = useMutation({
     mutationFn: (reason: string) => api.placeHold(reason),
     onSuccess: () => { void qc.invalidateQueries({ queryKey: ["audit-holds"] });
@@ -165,7 +169,8 @@ function ForTheReviewer({ field }: { field: React.CSSProperties }) {
   const [error, setError] = useState<string | null>(null);
   // the pack is Enterprise's: below it the holds call says so, and this whole
   // section stays out of the way
-  if (holds.isError) {
+  if (ent.isPending) return null;
+  if (holds.isError || ent.isError || (ent.data && !enterprise)) {
     return (
       <div data-testid="audit-pack-note" style={{ color: C.dim, fontSize: 10.5, marginBottom: 10 }}>
         a compliance pack for auditors (a period of the trail as one document, with a legal hold) is on{" "}
