@@ -1948,15 +1948,19 @@ function MyKeys() {
   const qc = useQueryClient();
   const signedKeys = useOperatorKeys();
   const mine = useQuery({ queryKey: ["my-keys"], queryFn: api.myKeys, retry: false });
-  const [secret, setSecret] = useState<string | null>(null);
+  const [made, setMade] = useState<{ secret: string; keyId: string } | null>(null);
+  const secret = made?.secret ?? null;
   const mint = useMutation({
     mutationFn: api.createMyKey,
-    onSuccess: (r) => { setSecret(r.secret); void qc.invalidateQueries({ queryKey: ["my-keys"] }); },
+    onSuccess: (r) => { setMade({ secret: r.secret, keyId: r.key_id }); void qc.invalidateQueries({ queryKey: ["my-keys"] }); },
   });
   const mintOnce = useOneAtATime(mint);
   const revoke = useMutation({
     mutationFn: api.revokeMyKey,
-    onSuccess: () => void qc.invalidateQueries({ queryKey: ["my-keys"] }),
+    onSuccess: (_r, keyId) => {
+      setMade((m) => (m?.keyId === keyId ? null : m));  // QA-066
+      void qc.invalidateQueries({ queryKey: ["my-keys"] });
+    },
   });
   return (
     <div data-testid="my-keys" style={{ fontFamily: MONO, fontSize: 11.5, color: C.mut }}>
@@ -2002,13 +2006,13 @@ function AgentKeys({ journey, menuAll }: { journey: Journey | null; menuAll: boo
   const [scopes, setScopes] = useState<string[]>(p.scopes);
   const [label, setLabel] = useState("");
   const [node, setNode] = useState("");
-  const [minted, setMinted] = useState<{ secret: string; preset: string } | null>(null);
+  const [minted, setMinted] = useState<{ secret: string; preset: string; keyId: string } | null>(null);
   const keys = useQuery({ queryKey: ["api-keys"], queryFn: api.listKeys, enabled: on, retry: false });
   const keysAudit = useQuery({ queryKey: ["api-keys-audit"], queryFn: () => api.keysAudit(), enabled: on, retry: false });
   const mint = useMutation({
     mutationFn: () => api.createKey(preset === "custom" ? scopes : p.scopes, label || p.label, p.node ? node.trim() : undefined),
     onSuccess: (r) => {
-      setMinted({ secret: r.secret, preset });
+      setMinted({ secret: r.secret, preset, keyId: r.key_id });
       void qc.invalidateQueries({ queryKey: ["api-keys"] });
       void qc.invalidateQueries({ queryKey: ["api-keys-audit"] });
     },
@@ -2016,7 +2020,9 @@ function AgentKeys({ journey, menuAll }: { journey: Journey | null; menuAll: boo
   const mintOnce = useOneAtATime(mint);
   const revoke = useMutation({
     mutationFn: (keyId: string) => api.revokeKey(keyId),
-    onSuccess: () => {
+    onSuccess: (_r, keyId) => {
+      // its "shown once" command works no more: not left on screen (QA-066)
+      setMinted((m) => (m?.keyId === keyId ? null : m));
       void qc.invalidateQueries({ queryKey: ["api-keys"] });
       void qc.invalidateQueries({ queryKey: ["api-keys-audit"] });
     },
@@ -2090,7 +2096,8 @@ function AgentKeys({ journey, menuAll }: { journey: Journey | null; menuAll: boo
         <div key={k.key_id} className="flex items-center gap-2 py-1">
           <span style={{ fontFamily: MONO, fontSize: 11, color: C.text }}>{k.key_id}</span>
           <KeyRole keyId={k.key_id} scopes={k.scopes} />
-          <span style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim, flex: 1 }}>
+          {/* a long label wraps, not widens the page (QA-063) */}
+          <span style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim, flex: 1, minWidth: 0, overflowWrap: "anywhere" }}>
             {k.label}{k.node_id ? ` · only for ${k.node_id}` : ""}
           </span>
           <button aria-label={`revoke ${k.key_id}`} disabled={revoke.isPending}

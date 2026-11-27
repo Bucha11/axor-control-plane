@@ -1,7 +1,7 @@
 // Settings, identity and alerts: what exploratory QA found on 0.7.2 (QA-0xx
 // in each test). Stubbed where the shared test plane cannot take the state.
 import { expect, test, type Page } from "@playwright/test";
-import { goHash, setConnection } from "./helpers";
+import { answerAsk, goHash, setConnection } from "./helpers";
 
 const pageWidth = (page: Page) => page.evaluate(() => document.documentElement.scrollWidth);
 
@@ -41,5 +41,40 @@ test.describe("settings (QA, 0.7.2)", () => {
     await card.getByRole("button", { name: "enrol a credential" }).click();
     await expect(card.getByTestId("enrol-form")).toContainText("refused until a sealing key is registered");
     await expect(card.getByTestId("enrol-form")).not.toContainText("store it as-is");
+  });
+
+  test("a long key label wraps; the role and revoke stay on screen (QA-063)", async ({ page }) => {
+    // a ~180-character label made the page 1540px wide on a 1366px screen
+    await page.setViewportSize({ width: 1366, height: 900 });
+    await page.route("**/v1/auth/status", (r) => r.fulfill({ json: {
+      auth_enabled: true, authenticated: true, scopes: ["read", "ingest", "operate", "admin"] } }));
+    await page.route("**/v1/keys", (r) => r.fulfill({ json: [{ key_id: "k_long", scopes: ["ingest"],
+      label: "L".repeat(180), created_ts: "2026-11-21T18:00:00Z", node_id: null }] }));
+    await goHash(page, "settings?tab=connect");
+    await expect(page.getByLabel("role of k_long")).toBeVisible();
+    expect(await pageWidth(page)).toBeLessThanOrEqual(1366);
+    const revoke = (await page.getByRole("button", { name: "revoke k_long" }).boundingBox())!;
+    expect(revoke.x + revoke.width).toBeLessThanOrEqual(1366);
+    expect((await page.getByLabel("role of k_long").boundingBox())!.width).toBeGreaterThan(100);
+  });
+
+  test("a revoked key's shown-once command is cleared (QA-066)", async ({ page }) => {
+    await page.route("**/v1/auth/status", (r) => r.fulfill({ json: {
+      auth_enabled: true, authenticated: true, scopes: ["read", "ingest", "operate", "admin"] } }));
+    let keys: { key_id: string; scopes: string[]; label: string; created_ts: string; node_id: null }[] = [];
+    await page.route("**/v1/keys", (r) => {
+      if (r.request().method() === "POST") {
+        keys = [{ key_id: "k_gone", scopes: ["ingest"], label: "x", created_ts: "2026-11-21T18:00:00Z", node_id: null }];
+        return r.fulfill({ status: 201, json: { key_id: "k_gone", secret: "ak_gonesecret", scopes: ["ingest"], node_id: null } });
+      }
+      return r.fulfill({ json: keys });
+    });
+    await page.route("**/v1/keys/k_gone", (r) => { keys = []; return r.fulfill({ json: { revoked: "k_gone" } }); });
+    await goHash(page, "settings?tab=connect");
+    await page.getByTestId("key-mint").click();
+    await expect(page.getByTestId("key-minted")).toContainText("ak_gonesecret");
+    await page.getByRole("button", { name: "revoke k_gone" }).click();
+    await answerAsk(page);
+    await expect(page.getByTestId("key-minted")).toHaveCount(0);
   });
 });
