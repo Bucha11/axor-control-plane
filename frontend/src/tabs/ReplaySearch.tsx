@@ -74,6 +74,10 @@ const field: React.CSSProperties = {
   fontFamily: MONO, fontSize: 11.5, padding: "4px 8px",
 };
 
+// what a box may hold: its text goes into the search's address, and 1700
+// emoji made one the server dropped, shown as a raw "Failed to fetch" (QA-088)
+const MAX_TEXT = 200;
+
 export default function ReplaySearch({ query }: { query: Record<string, string> }) {
   const qc = useQueryClient();
   const runs = useQuery({ queryKey: ["runs"], queryFn: api.listRuns });
@@ -97,7 +101,7 @@ export default function ReplaySearch({ query }: { query: Record<string, string> 
 
   const q: StepQuery = useMemo(() => ({
     ...window_(when, query.from ?? "", query.to ?? ""),
-    agent: query.agent, tool: query.tool, text: query.text,
+    agent: query.agent, tool: query.tool?.slice(0, MAX_TEXT), text: query.text?.slice(0, MAX_TEXT),
     does: (query.does ?? "") as StepQuery["does"],
     outcome: (query.outcome ?? "") as StepQuery["outcome"],
   }), [when, query.from, query.to, query.agent, query.tool, query.text, query.does, query.outcome]);
@@ -197,12 +201,19 @@ export default function ReplaySearch({ query }: { query: Record<string, string> 
           </select>
           <span style={{ ...label, width: "auto", paddingTop: 0, marginLeft: 12 }}>tool</span>
           <input aria-label="tool" placeholder="bash, slack_post…" value={tool} onChange={(e) => setTool(e.target.value)}
-            style={{ ...field, width: 150 }} />
+            maxLength={MAX_TEXT} style={{ ...field, width: 150 }} />
         </div>
-        <div className="flex gap-2 items-center">
+        <div className="flex gap-2 items-center flex-wrap">
           <span style={label}>contains</span>
           <input aria-label="contains" placeholder="prod, DROP TABLE, rm -rf, a host, a file…" value={text}
-            onChange={(e) => setText(e.target.value)} style={{ ...field, flex: 1 }} />
+            onChange={(e) => setText(e.target.value.slice(0, MAX_TEXT))} maxLength={MAX_TEXT}
+            style={{ ...field, flex: 1, minWidth: 0 }} />
+          {/* full, or one short of it: an emoji is two units and is not split */}
+          {(text.length >= MAX_TEXT - 1 || tool.length >= MAX_TEXT - 1) && (
+            <span data-testid="search-text-limit" style={{ fontFamily: MONO, fontSize: 10.5, color: C.amber, flexBasis: "100%", paddingLeft: 100 }}>
+              a search box holds at most {MAX_TEXT} characters — a few words find the step
+            </span>
+          )}
         </div>
       </div>
 
@@ -217,7 +228,12 @@ export default function ReplaySearch({ query }: { query: Record<string, string> 
           )}
         </div>
       ) : found.isError ? (
-        <div style={{ color: C.red, fontSize: 13 }}>{(found.error as Error).message}</div>
+        <div data-testid="search-error" style={{ color: C.red, fontSize: 13 }}>
+          {/* the browser's own words for a request that never got an answer */}
+          {found.error instanceof TypeError
+            ? "the search did not reach the server — check the connection, or search for fewer words, and try again"
+            : (found.error as Error).message}
+        </div>
       ) : (
         <>
           <div className="flex items-center gap-3 mb-2" style={{ fontFamily: MONO, fontSize: 11, color: C.dim }}>

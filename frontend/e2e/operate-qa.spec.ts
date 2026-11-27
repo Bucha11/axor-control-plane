@@ -183,3 +183,17 @@ test("the example test opened by its address runs, as the Chaos link does (QA-08
   await expect(page.getByText("fabricated a tool result").first()).toBeVisible({ timeout: 20_000 });
   await expect(page.getByText("Not connected.")).toHaveCount(0);
 });
+
+test("Replay's search boxes have a limit that says so, and a failed search reads (QA-088)", async ({ page }) => {
+  await setConnection(page, { mode: "adapter" });
+  await goHash(page, "explain");
+  const box = page.getByLabel("contains");
+  await box.fill("Ж🚀".repeat(1700));
+  expect((await box.inputValue()).length).toBeLessThanOrEqual(200);
+  await expect(page.getByTestId("search-text-limit")).toContainText("at most 200 characters");
+  // a search that gets no answer at all
+  await page.route("**/v1/runs/search**", (r) => r.abort("connectionclosed"));
+  await box.fill("DROP TABLE");
+  await expect(page.getByTestId("search-error")).toContainText("the search did not reach the server");
+  await expect(page.getByText("Failed to fetch")).toHaveCount(0);
+});
