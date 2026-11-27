@@ -2263,14 +2263,17 @@ export const api = {
   appendFact: async (nodeId: string, fact: Record<string, unknown>) => {
     // Facts are signed with version=0 (they carry no optimistic version — the
     // adapter signs (node_id, 0, body=fact, timestamp)).
+    // signed like a command: this browser's own operator key first, else the
+    // vault's — and the fact's own "who" is that signer, not a fixed "op_ui"
+    // (QA-122)
     const timestamp = new Date().toISOString();
-    const sig = signingArmed()
-      ? await vaultSign({ node_id: nodeId, version: 0, body: fact, timestamp })
-      : "";
+    const who = await signingOperator();
+    const body = who && "operator" in fact ? { ...fact, operator: who } : fact;
+    const signed = await operatorSign({ node_id: nodeId, version: 0, body, timestamp });
     const r = await af(`/v1/plane/${encodeURIComponent(nodeId)}/facts`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ fact, operator: "op_ui", timestamp, sig }),
+      body: JSON.stringify({ fact: body, operator: signed?.operator ?? "", timestamp, sig: signed?.sig ?? "" }),
     });
     return j<{ appended: boolean }>(r);
   },
@@ -2286,18 +2289,13 @@ export const api = {
   // distributes the signal child-ward along spawn edges (spec v2 Ch.4 §6).
   cascadeStop: async (nodeId: string, version: number) => {
     const timestamp = new Date().toISOString();
-    const sig = signingArmed()
-      ? await vaultSign({
-          node_id: nodeId,
-          version,
-          body: { stopped: true, cascade: true },
-          timestamp,
-        })
-      : "";
+    // this browser's own operator key first, else the vault's (QA-122)
+    const signed = await operatorSign({
+      node_id: nodeId, version, body: { stopped: true, cascade: true }, timestamp });
     const r = await af(`/v1/plane/${encodeURIComponent(nodeId)}/cascade-stop`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ version, operator: "op_ui", timestamp, sig }),
+      body: JSON.stringify({ version, operator: signed?.operator ?? "", timestamp, sig: signed?.sig ?? "" }),
     });
     return j<{ stopped: string[]; count: number; mode?: string }>(r);
   },

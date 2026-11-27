@@ -135,6 +135,29 @@ test.describe("operator keys (QA-083)", () => {
     expect(body.state?.replan?.operator).toBe("ada@acme.io#qa083");
   });
 
+  test("a cascade stop is signed by this browser's own key, not the vault's op_ui (QA-122)", async ({ page, request }) => {
+    const node = uniqueNode("gov-cascade");
+    await seedNode(request, node);
+    let body: { operator?: string; sig?: string } = {};
+    await page.route(`**/v1/plane/${node}/cascade-stop`, (r) => {
+      body = r.request().postDataJSON();
+      return r.fulfill({ status: 403, json: { detail: "sig_invalid" } });
+    });
+    await setConnection(page, { mode: "adapter" });
+    await goHash(page, "control");
+    await page.evaluate(async () => {
+      const k = await import("/src/opKey.ts");
+      await k.create();
+      await k.setOperatorId("ada@acme.io#qa122");
+    });
+    await page.getByTestId(`agent-row-${node}`).click();
+    await page.getByRole("button", { name: "more…" }).click();
+    await page.getByRole("button", { name: /Cascade stop/ }).click();
+    await answerAsk(page);
+    await expect.poll(() => body.operator).toBe("ada@acme.io#qa122");
+    expect(body.sig).toBeTruthy();
+  });
+
   test("Settings calls them operator keys, as a refused command does", async ({ page }) => {
     const ok = (body: unknown) => (route: import("@playwright/test").Route) => route.fulfill({ json: body });
     const user = { user_id: "usr_1", email: "ada@acme.io" };
