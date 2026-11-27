@@ -58,13 +58,15 @@ test.describe("evidence", () => {
     await setConnection(page, { mode: "adapter" });
     await goHash(page, "evidence");
     await page.getByTestId("incident-filters").getByRole("button", { name: /dangerous, let through/ }).click();
-    const drop = page.locator('[data-kind="dangerous"]').filter({ hasText: "DROP TABLE orders" });
+    // the example's own: other specs record its events as an agent's own run
+    const drop = page.locator('[data-kind="dangerous"]').filter({ hasText: "DROP TABLE orders" })
+      .filter({ hasText: "support-agent-prod · example data" });
     await expect(drop).toContainText("deleted or wiped something");
     await expect(drop).toContainText("agent support-agent-prod · example data");
     await drop.getByTestId("incident-status").selectOption("not_a_problem");
-    await expect(page.locator('[data-kind="dangerous"]').filter({ hasText: "DROP TABLE orders" })).toHaveCount(0);
+    await expect(drop).toHaveCount(0);
     await page.getByRole("button", { name: "any status" }).click();
-    const again = page.locator('[data-kind="dangerous"]').filter({ hasText: "DROP TABLE orders" });
+    const again = drop;
     await expect(again.getByTestId("incident-status")).toHaveValue("not_a_problem");
     await again.getByRole("button", { name: /where it came from/ }).click();
     await expect(page).toHaveURL(/#\/explain\/ex_prod_drop\?seq=4/);

@@ -52,7 +52,9 @@ test.describe("replay", () => {
     await goHash(page, "explain?when=30d");
     await page.getByTestId("search-filters").getByRole("button", { name: "deleted or wiped" }).click();
     await page.getByLabel("contains").fill("orders");
-    const row = page.getByTestId("search-row").filter({ hasText: "DROP TABLE orders" });
+    // the example's own: other specs record its events as an agent's own run
+    const row = page.getByTestId("search-row").filter({ hasText: "DROP TABLE orders" })
+      .filter({ hasText: "support-agent-prod" });
     await expect(row).toHaveCount(1);
     await expect(row).toContainText("let through");
     await expect(row).toContainText("used text from outside");
@@ -65,7 +67,7 @@ test.describe("replay", () => {
     // and back to the same results
     await page.getByTestId("replay-back").click();
     await expect(page.getByLabel("contains")).toHaveValue("orders");
-    await expect(page.getByTestId("search-row").filter({ hasText: "DROP TABLE orders" })).toHaveCount(1);
+    await expect(row).toHaveCount(1);
   });
 
   // QA-031: scrubbing kept `?seq=4` in the URL, so a reload or a shared link
