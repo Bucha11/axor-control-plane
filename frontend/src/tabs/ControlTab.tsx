@@ -954,7 +954,7 @@ function ControlBody({ focusNode, testBench }: { focusNode?: string; testBench: 
             <span>budget cap</span>
             <span style={{ color: C.text }}>
               {typeof desired?.state.budget_cap_calls === "number"
-                ? `${desired.state.budget_cap_calls} calls`
+                ? `${desired.state.budget_cap_calls.toLocaleString("en-US")} call${desired.state.budget_cap_calls === 1 ? "" : "s"}`
                 : "unlimited"}
             </span>
             {typeof desired?.state.budget_cap_calls === "number" && (
@@ -972,14 +972,17 @@ function ControlBody({ focusNode, testBench }: { focusNode?: string; testBench: 
               </span>
             )}
             <input
-              type="number"
-              min={0}
+              // text, not number: a number field turned 1.5 into 1 and 1e309
+              // into nothing without a word (QA-034, QA-084)
+              type="text"
+              inputMode="numeric"
+              maxLength={12}
               value={budgetInput}
               onChange={(e) => {
                 setBudgetInput(e.target.value);
-                // a fixed value takes the complaint away; one the field cannot
-                // hold (1e309) reads as empty, so say why apply is off (QA-034)
-                setCmdError(e.target.validity.badInput ? "cap must be a whole number of calls, like 50" : null);
+                // a fixed value takes the complaint away; a bad one says why
+                // apply is off
+                setCmdError(e.target.value === "" || capOf(e.target.value) != null ? null : CAP_RULE);
               }}
               placeholder={isCodingNode(node) ? "N more calls" : "set / lower"}
               aria-label="budget"
@@ -989,19 +992,19 @@ function ControlBody({ focusNode, testBench }: { focusNode?: string; testBench: 
             <Tooltip content="Cap how many tool calls this agent may still make. While it runs a cap can only be lowered (the agent refuses a raise); remove it and restart the agent to lift it.">
               <button
                 onClick={async () => {
-                  const entered = parseInt(budgetInput, 10);
-                  if (Number.isNaN(entered) || entered < 0) { setCmdError("cap must be a non-negative integer"); return; }
+                  const entered = capOf(budgetInput);
+                  if (entered == null) { setCmdError(CAP_RULE); return; }
                   // a coding session: "N more calls" from where it is now
                   const n = isCodingNode(node) ? (fleetRows.get(node.node_id)?.calls ?? 0) + entered : entered;
                   const cur = typeof desired?.state.budget_cap_calls === "number" ? desired.state.budget_cap_calls : null;
                   if (cur != null && n > cur) { setCmdError(`can only lower the cap on a running agent — ${n} > current ${cur}. Remove it and restart the agent to start over.`); return; }
                   if (cur == null && !await askConfirm(
-                    `Cap ${node.node_id} at ${n} tool calls?\n\nWhile it runs the cap can only be lowered, never raised: when it is spent every call is refused (429) until you remove the cap and restart the agent.`)) return;
+                    `Cap ${node.node_id} at ${n.toLocaleString("en-US")} tool call${n === 1 ? "" : "s"}?\n\nWhile it runs the cap can only be lowered, never raised: when it is spent every call is refused (429) until you remove the cap and restart the agent.`)) return;
                   send({ budget_cap_calls: n });
                   setBudgetInput("");
                 }}
-                disabled={stopped || command.isPending || budgetInput === ""}
-                style={btn({ color: (stopped || budgetInput === "") ? C.dim : C.steel, borderColor: C.line, fontSize: 11, padding: "4px 10px" })}
+                disabled={stopped || command.isPending || capOf(budgetInput) == null}
+                style={btn({ color: (stopped || capOf(budgetInput) == null) ? C.dim : C.steel, borderColor: C.line, fontSize: 11, padding: "4px 10px" })}
               >
                 <Gauge size={12} /> apply
               </button>
@@ -1516,6 +1519,17 @@ function primary(st: Status[]): Status {
     if (st.includes(s)) return s;
   }
   return "idle";
+}
+
+const MAX_CAP = 1_000_000;
+const CAP_RULE = `cap must be a whole number of calls from 0 to ${MAX_CAP.toLocaleString("en-US")}, like 50`;
+/** The cap typed, or null for anything but a whole number in range: 1.5, -5,
+ *  1e309 and 23 digits each say so instead of turning into 1, nothing or 1e+23. */
+function capOf(text: string): number | null {
+  const t = text.trim();
+  if (!/^\d{1,7}$/.test(t)) return null;
+  const n = Number(t);
+  return n <= MAX_CAP ? n : null;
 }
 
 /** "40s ago" today; past a day, the day and time — "3d ago" says nothing about when. */

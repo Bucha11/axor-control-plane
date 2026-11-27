@@ -155,3 +155,24 @@ test.describe("operator keys (QA-083)", () => {
     await expect(panel).not.toContainText("signing keys");
   });
 });
+
+test("a cap is a whole number in range, and says so (QA-084, QA-034)", async ({ page, request }) => {
+  const node = uniqueNode("gov-capint");
+  await seedNode(request, node);
+  await setConnection(page, { mode: "adapter" });
+  await goHash(page, "control");
+  await page.getByTestId(`agent-row-${node}`).click();
+  const input = page.getByPlaceholder("set / lower");
+  const apply = page.getByRole("button", { name: /apply/ });
+  for (const bad of ["1.5", "12345678901234567890123", "1e309", "abc"]) {
+    await input.fill(bad);
+    await expect(page.getByText(/cap must be a whole number of calls from 0 to 1,000,000/), bad).toBeVisible();
+    await expect(apply, bad).toBeDisabled();
+  }
+  await input.fill("1");
+  await expect(page.getByText(/cap must be a whole number/)).toHaveCount(0);
+  await apply.click();
+  await expect(page.getByTestId("ask")).toContainText(`Cap ${node} at 1 tool call?`);
+  await answerAsk(page);
+  await expect(page.getByTestId("agent-panel")).toContainText(/budget cap\s*1 call(?!s)/);
+});
