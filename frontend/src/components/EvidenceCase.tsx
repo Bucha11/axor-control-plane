@@ -131,6 +131,13 @@ export default function EvidenceCase({
     onSuccess: () => void qc.invalidateQueries({ queryKey: ["share-links", runId] }),
   });
 
+  // The link just made is revoked when it was revoked — not when the list has
+  // not been read again yet: right after sharing, the old list made a fresh
+  // link read "revoked · this link no longer opens" until the refetch landed.
+  const shareGone = !!shareToken && (
+    (revoked.isSuccess && revoked.variables === shareToken)
+    || (links.data?.links ?? []).some((l) => l.token === shareToken && l.revoked));
+
   const share = useMutation({
     mutationFn: () => api.shareCase(runId, caseIndex),
     onSuccess: (r) => {
@@ -284,11 +291,10 @@ export default function EvidenceCase({
       {shareUrl && (
         <div className="px-4 py-2 flex items-center gap-2" style={{ borderTop: `1px solid ${C.line}` }}>
           <span style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim }}>
-            {shareToken && !active.some((l) => l.token === shareToken) && links.data
-              ? "revoked · this link no longer opens" : "revocable permalink"}
+            {shareGone ? "revoked · this link no longer opens" : "revocable permalink"}
             {" · observations only, no raw bodies · "}{shareUrl}
           </span>
-          {shareToken && (active.some((l) => l.token === shareToken) || !links.data) && (
+          {shareToken && !shareGone && (
             <button
               onClick={() => revoked.mutate(shareToken)}
               disabled={revoked.isPending}
