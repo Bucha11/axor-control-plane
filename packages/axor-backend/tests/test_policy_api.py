@@ -79,8 +79,8 @@ async def test_a_save_from_a_stale_screen_is_refused_naming_what_changed(
     assert got["tools"]["issue_refund"]["klass"] == "EXPORT"
     assert got["tools"]["send_email"]["outside"] is False
     # read again, B's change goes through
-    r = await client.put("/v1/policy", json={"tools": {**got["tools"], **{"send_email": b["send_email"]}},
-                                             "version": got["version"]})
+    mine = {**got["tools"], "send_email": b["send_email"]}
+    r = await client.put("/v1/policy", json={"tools": mine, "version": got["version"]})
     assert r.status_code == 200
     # a caller that sends no version saves as before
     assert (await client.put("/v1/policy", json={"tools": POLICY})).status_code == 200
