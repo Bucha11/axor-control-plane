@@ -26,4 +26,20 @@ test.describe("settings (QA, 0.7.2)", () => {
     await page.getByTestId("settings-tab-alerts").click();
     await page.getByRole("button", { name: `unsubscribe ${url}` }).click();
   });
+
+  test("a hosted plane's tool credentials card says they must be sealed, not PLAINTEXT (QA-060)", async ({ page }) => {
+    await page.route("**/v1/security/posture", (r) => r.fulfill({ json: { items: [
+      { id: "auth", ok: true, what: "every request needs a token or a sign-in", fix: "" },
+      { id: "sealed_credentials", ok: true, fix: "",
+        what: "tool credentials are kept only sealed to the workspace's own key: this plane cannot read them" },
+    ] } }));
+    await page.route("**/v1/vault/creds/sealing-key", (r) => r.fulfill({ json: { public_key_hex: null, envelope_mode: false } }));
+    await goHash(page, "settings?tab=security");
+    const card = page.getByTestId("tool-credentials");
+    await expect(card.getByTestId("sealed-only")).toContainText("a plaintext one is refused");
+    await expect(card).not.toContainText("PLAINTEXT");
+    await card.getByRole("button", { name: "enrol a credential" }).click();
+    await expect(card.getByTestId("enrol-form")).toContainText("refused until a sealing key is registered");
+    await expect(card.getByTestId("enrol-form")).not.toContainText("store it as-is");
+  });
 });
