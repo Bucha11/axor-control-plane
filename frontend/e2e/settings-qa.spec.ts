@@ -161,6 +161,37 @@ test.describe("settings (QA, 0.7.2)", () => {
     await page.getByLabel("invite email").fill("");
     await expect(page.getByText("that is not an e-mail address")).toHaveCount(0);
   });
+
+  test("a double-click on send a test alert, or on resend link, sends once (QA-069)", async ({ page }) => {
+    await signInAsOwner(page);
+    await page.route("**/identity/v1/me", (r) => r.fulfill({ json: {
+      user: { ...SESSION.user, email_verified: false }, active_org: "org_1", role: "owner",
+      memberships: [{ org_id: "org_1", role: "owner", name: "Acme", tier: "coding" }] } }));
+    await page.route("**/identity/v1/email", (r) => r.fulfill({ json: { available: true } }));
+    let resends = 0;
+    await page.route("**/identity/v1/email/verify/send", async (r) => {
+      resends += 1;
+      await new Promise((ok) => setTimeout(ok, 300));
+      await r.fulfill({ json: { sent_to: "ada@acme.io" } });
+    });
+    await page.route("**/v1/notifications/subscriptions", (r) => r.fulfill({ json: [
+      { url: "https://hooks.example/once", triggers: ["node_stale"], label: "", node_pattern: "*", debounce_seconds: 0 }] }));
+    let tests = 0;
+    await page.route("**/v1/notifications/test", async (r) => {
+      tests += 1;
+      await new Promise((ok) => setTimeout(ok, 300));
+      await r.fulfill({ json: { sent: "https://hooks.example/once" } });
+    });
+    await logIn(page);
+    await page.getByTestId("settings-tab-alerts").click();
+    await page.getByRole("button", { name: "send a test alert to https://hooks.example/once" }).dblclick();
+    await expect(page.getByText("test sent ✓")).toBeVisible();
+    expect(tests).toBe(1);
+    const status = page.getByTestId("email-unverified");
+    await status.getByRole("button", { name: "resend link" }).dblclick();
+    await expect(status).toContainText("link sent to ada@acme.io");
+    expect(resends).toBe(1);
+  });
 });
 
 const SESSION = {

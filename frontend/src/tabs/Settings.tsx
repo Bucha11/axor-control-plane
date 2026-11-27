@@ -70,6 +70,7 @@ function EmailStatus() {
   const [canMail, setCanMail] = useState(false);
   useEffect(() => { void emailAvailable().then(setCanMail); }, []);
   const resend = useMutation({ mutationFn: () => api.resendVerification(here()) });
+  const resendOnce = useOneAtATime(resend);  // a double-click sent two links (QA-069)
   if (!canMail || me.data?.user.email_verified !== false) return null;
   return (
     <div className="flex items-center gap-2 mb-2" data-testid="email-unverified"
@@ -78,7 +79,7 @@ function EmailStatus() {
       {resend.isSuccess ? (
         <span style={{ color: C.green }}>· link sent to {resend.data.sent_to}</span>
       ) : (
-        <button onClick={() => resend.mutate()} disabled={resend.isPending}
+        <button onClick={() => resendOnce()} disabled={resend.isPending}
           style={btn({ color: C.mut, fontSize: 10.5, padding: "2px 8px" })}>
           {resend.isPending ? "…" : "resend link"}
         </button>
@@ -1121,6 +1122,7 @@ export default function Settings({ tab = "workspace" }: { tab?: string } = {}) {
   });
   const subscribeOnce = useOneAtATime(subscribe);
   const testAlert = useMutation({ mutationFn: (target: string) => api.testNotification(target) });
+  const testAlertOnce = useOneAtATime(testAlert);  // a double-click sent two (QA-069)
   const unsubscribe = useMutation({
     mutationFn: (target: string) => api.unsubscribeNotifications(target),
     onSuccess: () => void qc.invalidateQueries({ queryKey: ["subscriptions"] }),
@@ -1477,7 +1479,7 @@ export default function Settings({ tab = "workspace" }: { tab?: string } = {}) {
                   {s.node_pattern !== "*" ? ` · nodes: ${s.node_pattern}` : ""}
                 </span>
                 {canOperate && <>
-                <button aria-label={`send a test alert to ${s.url}`} onClick={() => testAlert.mutate(s.url)}
+                <button aria-label={`send a test alert to ${s.url}`} onClick={() => testAlertOnce(s.url)}
                   disabled={testAlert.isPending}
                   style={btn({ color: C.steel, fontSize: 10, padding: "1px 7px" })}>
                   {testAlert.isSuccess && testAlert.variables === s.url ? "test sent ✓" : "send a test alert"}
