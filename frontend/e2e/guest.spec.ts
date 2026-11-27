@@ -64,6 +64,10 @@ test.describe("guest", () => {
 
   test("an account-only action asks for a sign-up right there", async ({ page }) => {
     await hosted(page);
+    // a guest holds what a member does (backend guests.GUEST_SCOPES): Share is offered
+    await page.route("**/v1/auth/status", (r) => r.fulfill({ json: (r.request().headers()["authorization"] ?? "").includes(GUEST)
+      ? { auth_enabled: true, authenticated: true, guest: true, guest_sessions: true, scopes: ["read", "ingest", "operate"] }
+      : { auth_enabled: true, authenticated: false, scopes: [], guest_sessions: true, guest: false } }));
     // the plane refuses a guest a share link: it outlives the guest session
     await page.route("**/v1/runs/*/cases/*/share", (r) => r.fulfill({ status: 403, json: {
       error: "account_required", feature: "share links",

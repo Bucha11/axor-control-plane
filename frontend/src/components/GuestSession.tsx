@@ -130,7 +130,7 @@ export default function GuestSession({ invite = false }: { invite?: boolean } = 
           display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
           <span style={{ flex: 1 }}>this tab is signed out — sign in to see your workspace (each tab signs in on its own)</span>
           <button onClick={() => navigate("settings", { tab: "workspace" })}
-            style={btn({ fontSize: 10.5, padding: "2px 8px", color: C.steel, borderColor: C.steel })}>sign in</button>
+            style={btn({ fontSize: 10.5, padding: "2px 8px", color: C.steel, borderColor: C.steel })}>sign in here</button>
         </div>
       )}
       {busyFor > 0 && !apiToken && !invite && (
