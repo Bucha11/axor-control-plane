@@ -8,6 +8,7 @@
 // is suggested; it turns on by itself once two developers' agents confirmed
 // it, and is marked "stopped working" after failing twice.
 import { useState } from "react";
+import ReadFailed from "../components/ReadFailed";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, MemoryChange, MemoryItem, MemoryRepo } from "../api";
 import { navigate } from "../router";
@@ -87,7 +88,8 @@ export default function TeamMemory() {
         </div>
       )}
 
-      {repo ? <RepoMemory repo={repo} freshDays={freshDays} /> : !q.isLoading && (
+      {repo ? <RepoMemory repo={repo} freshDays={freshDays} /> : q.isError
+        ? <ReadFailed what="the team memory" error={q.error} retry={() => void q.refetch()} /> : !q.isLoading && (
         <div data-testid="memory-empty" style={{ ...panel, padding: 16, fontSize: 13, color: C.mut, lineHeight: 1.6 }}>
           Nothing yet. It fills in as coding sessions with the axor hooks run checks in a repository.
           {!started && <>{" "}<button onClick={() => example.mutate()} data-testid="memory-example" style={{ ...link, fontSize: 13 }}>

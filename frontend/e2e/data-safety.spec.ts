@@ -100,3 +100,81 @@ test.describe("two tabs on one policy (QA-212)", () => {
     await request.put(`${BACKEND}/v1/policy`, { data: { tools: {} } });
   });
 });
+
+test.describe("a failed read is said, never shown as empty (QA-231, QA-233, QA-234)", () => {
+  const fail = (route: import("@playwright/test").Route) =>
+    route.fulfill({ status: 500, contentType: "text/plain", body: "Internal Server Error" });
+
+  test("QA-231: the coding policy unread offers no save and no 'no team policy yet'", async ({ page }) => {
+    await page.route("**/v1/coding/rules", fail);
+    await setConnection(page, { mode: "adapter" });
+    await journey(page, "coding");
+    await goHash(page, "policy");
+    await expect(page.getByTestId("read-failed")).toContainText("could not load the team's policy");
+    await expect(page.getByTestId("read-failed")).not.toContainText("Internal Server Error");
+    await expect(page.getByTestId("policy-not-set")).toHaveCount(0);
+    await expect(page.getByTestId("policy-save")).toHaveCount(0);
+    await page.unroute("**/v1/coding/rules");
+    await page.getByTestId("read-failed-retry").click();
+    await expect(page.getByTestId("rule-secrets")).toBeVisible();
+    await expect(page.getByTestId("read-failed")).toHaveCount(0);
+  });
+
+  test("QA-231: the tool policy unread is said on Policy, and nothing is saved over it", async ({ page, request }) => {
+    await request.put(`${BACKEND}/v1/policy`, { data: { tools: { kept_tool: { klass: "EXPORT", outside: false } } } });
+    const puts: string[] = [];
+    page.on("request", (r) => { if (r.method() === "PUT" && r.url().endsWith("/v1/policy")) puts.push(r.url()); });
+    await page.route("**/v1/policy", (route) => route.request().method() === "GET" ? fail(route) : route.continue());
+    await setConnection(page, { mode: "adapter" });
+    await journey(page, "production");
+    await goHash(page, "connect?for=production");
+    await page.getByTestId("prod-way-proxy").click();
+    await page.getByTestId("proxy-mode-test").click();
+    await page.getByPlaceholder("tool name ⏎").fill("local_tool");
+    await page.getByPlaceholder("https://endpoint ⏎").fill("https://local.example/api");
+    await page.getByPlaceholder("https://endpoint ⏎").press("Enter");
+    await page.waitForTimeout(1500);   // the save would have gone by now
+    expect(puts).toEqual([]);
+    await page.evaluate(() => { window.location.hash = "#/policy"; });
+    await expect(page.getByTestId("policy-read-failed")).toContainText("could not read the workspace's policy");
+    await expect(page.getByTestId("policy-read-failed")).not.toContainText("Internal Server Error");
+    const held = await (await request.get(`${BACKEND}/v1/policy`)).json();
+    expect(Object.keys(held.tools)).toEqual(["kept_tool"]);
+    await page.unroute("**/v1/policy");
+    await page.getByTestId("policy-reload").click();
+    await expect(page.getByTestId("policy-read-failed")).toHaveCount(0);
+    await request.put(`${BACKEND}/v1/policy`, { data: { tools: {} } });
+  });
+
+  test("QA-233: a failed fleet read says so with a retry, not 'no agents yet'", async ({ page }) => {
+    await page.route("**/v1/plane/fleet", fail);
+    await setConnection(page, { mode: "adapter" });
+    await goHash(page, "govern");
+    await expect(page.getByTestId("read-failed")).toContainText("could not load the agents");
+    await expect(page.getByText("No agents on the plane yet")).toHaveCount(0);
+    await expect(page.getByText("Load an example fleet")).toHaveCount(0);
+    await page.unroute("**/v1/plane/fleet");
+    await page.getByTestId("read-failed-retry").click();
+    await expect(page.getByTestId("read-failed")).toHaveCount(0);
+  });
+
+  test("QA-233: a failed read of the agents themselves says so too", async ({ page }) => {
+    await page.route("**/v1/plane/nodes", fail);
+    await setConnection(page, { mode: "adapter" });
+    await goHash(page, "govern");
+    await expect(page.getByTestId("read-failed")).toContainText("could not load the agents", { timeout: 15_000 });
+    await expect(page.getByText("No agents on the plane yet")).toHaveCount(0);
+  });
+
+  test("QA-234: a failed incidents read is said in words, not 'Internal Server Error'", async ({ page }) => {
+    await page.route("**/v1/incidents**", fail);
+    await setConnection(page, { mode: "adapter" });
+    await goHash(page, "evidence");
+    await expect(page.getByTestId("read-failed")).toContainText(
+      "could not load the incidents — the plane could not answer (HTTP 500)", { timeout: 15_000 });
+    await expect(page.getByText("Internal Server Error")).toHaveCount(0);
+    await page.unroute("**/v1/incidents**");
+    await page.getByTestId("read-failed-retry").click();
+    await expect(page.getByTestId("read-failed")).toHaveCount(0);
+  });
+});

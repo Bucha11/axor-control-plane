@@ -4,6 +4,7 @@
 // come from Policy (the shared record), the example, or JSON by hand.
 import { askConfirm } from "../components/Ask";
 import { useRef, useState } from "react";
+import ReadFailed from "../components/ReadFailed";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { CalendarClock, ChevronDown, ChevronRight, Circle, FlaskConical, Loader2, Lock, Play, Upload } from "lucide-react";
 import { api, LabDeployResult, RegressionReport, RegressionRow } from "../api";
@@ -398,7 +399,9 @@ export default function Regression({ rules: rulesParam }: { rules?: string } = {
       {/* the cases */}
       <div style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim, letterSpacing: "0.1em", marginBottom: 6 }}>THE CASES</div>
       <div data-testid="cases" style={{ fontFamily: MONO, fontSize: 12, color: C.mut, lineHeight: 1.7, marginBottom: 20 }}>
-        {pins.length === 0 ? (
+        {corpus.isError ? (
+          <ReadFailed what="the kept cases" error={corpus.error} retry={() => void corpus.refetch()} />
+        ) : pins.length === 0 ? (
           <>No cases kept yet. On a caught case, <span style={{ color: C.text }}>keep it as a test</span> adds
             it here — or{" "}
             <button onClick={() => pick("example")} style={link}>load the example →</button></>

@@ -7,6 +7,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, ApiError, CodingException, CodingRules } from "../api";
 import { C, MONO, btn } from "../theme";
 import { errorWords } from "../refusal";
+import ReadFailed from "../components/ReadFailed";
 import { useCanAdmin, useMay } from "../team";
 import { localTime } from "../time";
 
@@ -40,6 +41,9 @@ export default function CodingPolicy() {
         What every developer's Claude Code and Codex is refused, whoever asked — the same rules on
         every machine of the team. A repository may refuse more; it cannot allow what is refused here.
       </div>
+      {/* a failed read is not "no team policy yet": saving then would put the
+          defaults over the team's (QA-231) — said, with a retry, and no save */}
+      {q.isError && !d && <ReadFailed what="the team's policy" error={q.error} retry={() => void q.refetch()} />}
       {d && canEdit && <PolicySignature signed={d.signed} />}
       {d && !d.set && (
         <div data-testid="policy-not-set" className="mb-4 p-3" style={{ border: `1px solid ${C.line}`, borderRadius: 8,
@@ -81,7 +85,7 @@ export default function CodingPolicy() {
           );
         })}
       </div>
-      <div className="mt-4 flex items-center gap-3 flex-wrap" style={{ fontFamily: MONO, fontSize: 11.5, color: C.mut }}>
+      {d && <div className="mt-4 flex items-center gap-3 flex-wrap" style={{ fontFamily: MONO, fontSize: 11.5, color: C.mut }}>
         <span>the hooks</span>
         {([["enforce", "refuse it"], ["observe", "only record it (nothing is refused)"]] as const).map(([v, words]) => (
           <label key={v} className="flex items-center gap-1" style={{ cursor: canEdit ? "pointer" : "default" }}>
@@ -90,9 +94,9 @@ export default function CodingPolicy() {
             {words}
           </label>
         ))}
-      </div>
+      </div>}
       <div className="mt-4 flex items-center gap-3 flex-wrap" style={{ fontFamily: MONO, fontSize: 11.5 }}>
-        {canEdit ? (
+        {!d ? null : canEdit ? (
           <button data-testid="policy-save" onClick={() => save.mutate()} disabled={!changed || save.isPending}
             style={btn({ color: changed ? C.text : C.dim, borderColor: changed ? C.steel : C.line, fontSize: 12, padding: "6px 14px" })}>
             {save.isPending ? "…" : "save for the team"}

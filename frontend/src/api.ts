@@ -899,7 +899,13 @@ export function apiError(status: number, text: string): ApiError {
     }
     if (!words && typeof body.error === "string") words = body.error.replace(/_/g, " ");
   } catch { /* not JSON */ }
-  if (!words) words = text.trim().slice(0, 300) || `the request failed (HTTP ${status})`;
+  // not the plane's sentence: a proxy's or server's own page ("Internal Server
+  // Error", nginx's HTML) is said in words, never shown raw (QA-234)
+  if (!words) {
+    words = status >= 500 ? `the plane could not answer (HTTP ${status}) — try again in a moment`
+      : /^\s*</.test(text) || !text.trim() ? `the request was refused (HTTP ${status})`
+        : text.trim().slice(0, 300);
+  }
   return new ApiError(status, code, words.length > 600 ? `${words.slice(0, 600)}…` : words);
 }
 

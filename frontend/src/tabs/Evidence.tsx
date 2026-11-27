@@ -12,6 +12,7 @@
 // has a start and an inventory: catch produces these, explain opens one,
 // prevent pins them.
 import { useState } from "react";
+import ReadFailed from "../components/ReadFailed";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AlertTriangle, ArrowRight, Play, Zap } from "lucide-react";
 import { refusalWords } from "../refusal";
@@ -230,7 +231,7 @@ export default function Evidence({ agent: agentParam }: { agent?: string } = {})
           {feed.isPending ? (
             <div style={{ fontFamily: MONO, fontSize: 12, color: C.dim }}>loading…</div>
           ) : feed.isError ? (
-            <div style={{ fontFamily: MONO, fontSize: 12, color: C.red }}>{(feed.error as Error).message}</div>
+            <ReadFailed what="the incidents" error={feed.error} retry={() => void feed.refetch()} />
           ) : items.length === 0 ? (
             <div data-testid="incidents-none" style={{ fontFamily: MONO, fontSize: 12, color: C.mut, padding: "10px 0" }}>
               {status === "new" ? "Nothing new here — " : "Nothing here — "}
