@@ -31,3 +31,28 @@ test("QA-216: the example skill does not count as waiting in the menu; the team'
   await page.reload();
   await expect(page.getByTestId("skills-pending")).toHaveText("1");
 });
+
+test("QA-215: Settings → start tour on a coding workspace runs the coding tour and leaves the workspace as it was", async ({ page }) => {
+  await setConnection(page, { mode: "adapter" });
+  await page.addInitScript(() => {
+    const data = JSON.parse(localStorage.getItem("axor-app") ?? '{"state":{},"version":0}');
+    if (!data.state.tourSetUp) {   // only the first load: the app's own writes count after it
+      Object.assign(data.state, { journey: "coding", menuAll: false, tourSide: "production", tourSetUp: true });
+      localStorage.setItem("axor-app", JSON.stringify(data));
+    }
+  });
+  await goHash(page, "settings?tab=learn");
+  await page.getByRole("button", { name: "start tour", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "guided tour" });
+  await expect(dialog.getByText("Your coding agents, on one plane")).toBeVisible({ timeout: 15_000 });
+  await expect(page.getByTestId("sidebar").getByRole("button", { name: /^Skills/ })).toBeVisible();
+  await dialog.getByRole("button", { name: "skip tour" }).click();
+  await expect(dialog).toHaveCount(0);
+  const state = await page.evaluate(() => JSON.parse(localStorage.getItem("axor-app") ?? "{}").state);
+  expect(state.journey).toBe("coding");
+  expect(state.connection.mode).toBe("adapter");
+  await expect(page.getByTestId("sidebar").getByRole("button", { name: /^Skills/ })).toBeVisible();
+  await page.reload();
+  await expect(page.getByTestId("sidebar").getByRole("button", { name: /^Skills/ })).toBeVisible();
+  await expect(page.getByTestId("sidebar").getByRole("button", { name: /^Safe to ship/ })).toHaveCount(0);
+});

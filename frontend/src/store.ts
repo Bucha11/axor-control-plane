@@ -93,6 +93,9 @@ interface AppState {
   // Guided tour position: index into TOUR (components/Tour.tsx), null = not
   // running. Persisted, so a mid-tour reload resumes where the user was.
   tourStep: number | null;
+  // the connection before the tour switched it to the example data: put back
+  // when the tour ends, so real views do not stay on the example (QA-215)
+  tourRestore: ConnectionState | null;
   // which tour: the kind of agent the visitor was looking at on Home
   tourSide: "coding" | "production";
   connect: (mode: ConnectionMode, tools?: { name: string; url: string }[]) => void;
@@ -260,6 +263,7 @@ export const useApp = create<AppState>()(
         set((s) => ({ toolPolicy: { ...s.toolPolicy,
           [name]: { ...({ klass: guessKlass(name), outside: false } as ToolClass), ...s.toolPolicy[name], ...patch } } })),
       tourStep: null,
+      tourRestore: null,
       tourSide: "production",
       policyNotice: null,
       setPolicyNotice: (n) => set({ policyNotice: n }),
@@ -301,7 +305,9 @@ export const useApp = create<AppState>()(
             : [...s.coachDismissed, id],
         })),
       resetCoach: () => set({ coachDismissed: [] }),
-      setTourStep: (step) => set({ tourStep: step }),
+      setTourStep: (step) => set((s) => (step === null && s.tourRestore
+        ? { tourStep: null, connection: s.tourRestore, tourRestore: null }
+        : { tourStep: step })),
       setTourSide: (side) => set({ tourSide: side }),
     }),
     {
