@@ -66,6 +66,9 @@ export default function ToolCredentials() {
   // what was registered was not, which makes "is this node signing?" a question
   // the panel could not answer about the deployment it is showing.
   const nodeKeys = useQuery({ queryKey: ["vault-node-keys", credsToken], queryFn: api.vaultNodeKeys });
+  // a hosted plane refuses a plaintext credential outright (QA-060)
+  const posture = useQuery({ queryKey: ["security-posture"], queryFn: api.securityPosture, retry: false });
+  const sealedOnly = !!posture.data?.items.some((i) => i.id === "sealed_credentials");
 
   const [open, setOpen] = useState(false);
   const [draft, setDraft] = useState({
@@ -169,6 +172,12 @@ export default function ToolCredentials() {
                 </span>
               )}
             </span>
+          ) : sealedOnly ? (
+            <span data-testid="sealed-only">
+              this plane takes tool credentials only sealed — a plaintext one is refused. Make a
+              sealing key with <span style={{ color: C.text }}>axor-proxy vault keygen</span> and register
+              its public half below: then each credential is sealed in this browser before it is sent.
+            </span>
           ) : (
             <span>
               this plane stores tool credentials in PLAINTEXT — readable by whoever reads its
@@ -261,7 +270,9 @@ export default function ToolCredentials() {
           <div style={{ fontFamily: MONO, fontSize: 9.5, color: sealingKey ? C.green : C.amber, margin: "6px 0" }}>
             {sealingKey
               ? "sealed in this browser before it is sent — the plaintext never leaves this machine"
-              : "sent as plaintext: no sealing key is registered, so this deployment will store it as-is"}
+              : sealedOnly
+                ? "refused until a sealing key is registered (below): this plane stores no plaintext"
+                : "sent as plaintext: no sealing key is registered, so this deployment will store it as-is"}
           </div>
           <button
             onClick={() => enrollOnce()}

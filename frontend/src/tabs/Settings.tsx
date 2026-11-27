@@ -8,13 +8,13 @@ import { track } from "../funnel";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Check, Copy, Loader2, Trash2 } from "lucide-react";
 import { api, BillingReport, BillingStatement, type Capability, type Permissions } from "../api";
-import { useCanAdmin } from "../team";
+import { useCanAdmin, useHasScope } from "../team";
 import {
   IdentityError, emailAvailable, forgotPassword, here, login, logout, oauthProviders,
   oauthStartUrl, signup, signupAvailable, ssoDiscover, ssoStartUrl, type OAuthProvider,
 } from "../identity";
 import { navigate } from "../router";
-import { MODE_LABEL, useApp } from "../store";
+import { MODE_LABEL, isGuestToken, useApp } from "../store";
 import { C, MONO, btn } from "../theme";
 import { useOperatorKeys } from "../signedConnect";
 import * as opKey from "../opKey";
@@ -70,6 +70,7 @@ function EmailStatus() {
   const [canMail, setCanMail] = useState(false);
   useEffect(() => { void emailAvailable().then(setCanMail); }, []);
   const resend = useMutation({ mutationFn: () => api.resendVerification(here()) });
+  const resendOnce = useOneAtATime(resend);  // a double-click sent two links (QA-069)
   if (!canMail || me.data?.user.email_verified !== false) return null;
   return (
     <div className="flex items-center gap-2 mb-2" data-testid="email-unverified"
@@ -78,7 +79,7 @@ function EmailStatus() {
       {resend.isSuccess ? (
         <span style={{ color: C.green }}>· link sent to {resend.data.sent_to}</span>
       ) : (
-        <button onClick={() => resend.mutate()} disabled={resend.isPending}
+        <button onClick={() => resendOnce()} disabled={resend.isPending}
           style={btn({ color: C.mut, fontSize: 10.5, padding: "2px 8px" })}>
           {resend.isPending ? "…" : "resend link"}
         </button>
@@ -671,9 +672,14 @@ const inviteUrl = (token: string) =>
  * install sends mail. */
 function Team({ orgId, isAdmin }: { orgId: string; isAdmin: boolean }) {
   const qc = useQueryClient();
-  const members = useQuery({ queryKey: ["org-members", orgId], queryFn: () => api.orgMembers(orgId), retry: false });
+  // while an invite waits, whoever accepts it shows up here by themselves —
+  // asked again every 15 s and when the page is back in view (QA-067)
   const invites = useQuery({ queryKey: ["org-invites", orgId], queryFn: () => api.orgInvites(orgId),
-                             enabled: isAdmin, retry: false });
+                             enabled: isAdmin, retry: false, refetchOnWindowFocus: true,
+                             refetchInterval: (q) => (q.state.data?.invites.length ? 15_000 : false) });
+  const waiting = (invites.data?.invites.length ?? 0) > 0;
+  const members = useQuery({ queryKey: ["org-members", orgId], queryFn: () => api.orgMembers(orgId), retry: false,
+                             refetchOnWindowFocus: true, refetchInterval: waiting ? 15_000 : false });
   const [email, setEmail] = useState("");
   const [role, setRole] = useState("member");
   const [made, setMade] = useState<{ link: string; mailed: boolean; email: string | null } | null>(null);
@@ -777,7 +783,7 @@ function Team({ orgId, isAdmin }: { orgId: string; isAdmin: boolean }) {
       {promote && (
         <div data-testid="promote-upgrade" className="mt-2 p-3" style={{ background: C.panel2, border: `1px solid ${C.amber}`, borderRadius: 6 }}>
           <div style={{ color: C.text, marginBottom: 4 }}>
-            As a {promote.to}, {promote.email} is a second developer — that is the Coding plan.
+            As {promote.to === "admin" ? "an" : "a"} {promote.to}, {promote.email} is a second developer — that is the Coding plan.
           </div>
           <div style={{ color: C.mut, marginBottom: 8 }}>
             $25 per developer per month — every developer's agents governed, shared skills and team memory.
@@ -806,9 +812,9 @@ function Team({ orgId, isAdmin }: { orgId: string; isAdmin: boolean }) {
           }}
             className="flex items-center gap-2 mt-2">
             <input type="email" value={email} placeholder="their e-mail (optional — or send the link yourself)"
-              onChange={(e) => setEmail(e.target.value)} aria-label="invite email"
+              onChange={(e) => { setEmail(e.target.value); invite.reset(); }} aria-label="invite email"
               style={{ ...INPUT_STYLE, flex: 1 }} />
-            <select value={role} onChange={(e) => setRole(e.target.value)} aria-label="invite role"
+            <select value={role} onChange={(e) => { setRole(e.target.value); invite.reset(); }} aria-label="invite role"
               style={{ ...INPUT_STYLE, width: 100 }}>
               {["member", "admin", "viewer"].map((r) => <option key={r} value={r}>{r}</option>)}
             </select>
@@ -1116,6 +1122,7 @@ export default function Settings({ tab = "workspace" }: { tab?: string } = {}) {
   });
   const subscribeOnce = useOneAtATime(subscribe);
   const testAlert = useMutation({ mutationFn: (target: string) => api.testNotification(target) });
+  const testAlertOnce = useOneAtATime(testAlert);  // a double-click sent two (QA-069)
   const unsubscribe = useMutation({
     mutationFn: (target: string) => api.unsubscribeNotifications(target),
     onSuccess: () => void qc.invalidateQueries({ queryKey: ["subscriptions"] }),
@@ -1155,6 +1162,7 @@ export default function Settings({ tab = "workspace" }: { tab?: string } = {}) {
   const funnel = useQuery({ queryKey: ["funnel", 30], queryFn: () => api.funnelReport(30), retry: false,
                             enabled: authStatus.data?.operator === true });
   const canAdmin = useCanAdmin();
+  const canOperate = useHasScope()("operate");
   const prod = !journey || menuAll || journey !== "coding";
   const coding = !journey || menuAll || journey !== "production";
   const tabs: [SettingsTab, string][] = [
@@ -1383,6 +1391,12 @@ export default function Settings({ tab = "workspace" }: { tab?: string } = {}) {
           where it gets loud.
         </div>
         <EmailStatus />
+        {/* a viewer is not offered what the plane refuses them (QA-064) */}
+        {!canOperate ? (
+          <div data-testid="alerts-viewer" style={{ fontFamily: MONO, fontSize: 11, color: C.dim, marginBottom: 6 }}>
+            as a viewer you see where alerts go — an owner, admin or member subscribes and sends a test alert
+          </div>
+        ) : (<>
         {identityEmail && canMail && verified && (
           <button data-testid="mail-me"
             onClick={() => {
@@ -1449,6 +1463,7 @@ export default function Settings({ tab = "workspace" }: { tab?: string } = {}) {
             {errorWords((subscribe.error as Error).message)}
           </div>
         )}
+        </>)}
 
         {(subscriptions.data ?? []).length > 0 && (
           <>
@@ -1457,12 +1472,14 @@ export default function Settings({ tab = "workspace" }: { tab?: string } = {}) {
             </div>
             {(subscriptions.data ?? []).map((s, i) => (
               <div key={i} className="flex items-center gap-2" style={{ fontFamily: MONO, fontSize: 11, color: C.mut, marginTop: 4 }}>
-                <span>
+                {/* a long address wraps, not widens the page (QA-062) */}
+                <span style={{ flex: 1, minWidth: 0, overflowWrap: "anywhere" }}>
                   {s.label ? `[${s.label}] ` : ""}{s.url} · {s.triggers
                     .map((id) => TRIGGERS.find((t) => t.id === id)?.label.split(" — ")[0] ?? id).join("; ")}
                   {s.node_pattern !== "*" ? ` · nodes: ${s.node_pattern}` : ""}
                 </span>
-                <button aria-label={`send a test alert to ${s.url}`} onClick={() => testAlert.mutate(s.url)}
+                {canOperate && <>
+                <button aria-label={`send a test alert to ${s.url}`} onClick={() => testAlertOnce(s.url)}
                   disabled={testAlert.isPending}
                   style={btn({ color: C.steel, fontSize: 10, padding: "1px 7px" })}>
                   {testAlert.isSuccess && testAlert.variables === s.url ? "test sent ✓" : "send a test alert"}
@@ -1475,6 +1492,7 @@ export default function Settings({ tab = "workspace" }: { tab?: string } = {}) {
                 >
                   unsubscribe
                 </button>
+                </>}
               </div>
             ))}
             {testAlert.isError && (
@@ -1504,7 +1522,7 @@ export default function Settings({ tab = "workspace" }: { tab?: string } = {}) {
           </div>
         ) : (
           (deadLetters.data ?? []).map((d, i) => (
-            <div key={i} style={{ fontFamily: MONO, fontSize: 11, color: C.amber, marginTop: 4 }}>
+            <div key={i} style={{ fontFamily: MONO, fontSize: 11, color: C.amber, marginTop: 4, overflowWrap: "anywhere" }}>
               {d.trigger} → {d.url} · {d.error} ({d.attempts} attempts)
               {d.created_ts ? ` · ${localTime(d.created_ts, true)}` : ""}
             </div>
@@ -1521,7 +1539,12 @@ export default function Settings({ tab = "workspace" }: { tab?: string } = {}) {
           <Section title="LINKS SHARED OUTSIDE THE WORKSPACE">
             <SharedLinks />
           </Section>
-          <FederationVault />
+          {canOperate ? <FederationVault /> : (
+            <div data-testid="vault-viewer" className="mb-4" style={{ fontFamily: MONO, fontSize: 11, color: C.dim }}>
+              as a viewer you see how the plane is protected — tool credentials and command signing are set up
+              by the workspace&apos;s owner
+            </div>
+          )}
         </>
       )}
 
@@ -1574,26 +1597,30 @@ function TokenFold() {
   const setApiToken = useApp((s) => s.setApiToken);
   const identityEmail = useApp((s) => s.identityEmail);
   const authStatus = useQuery({ queryKey: ["auth-status", apiToken], queryFn: api.authStatus });
+  // a guest session is nobody's token: not shown here as "signed in" beside the
+  // sign-in form (QA-102)
+  const own = isGuestToken(apiToken) ? "" : apiToken;
+  const signedIn = !!authStatus.data?.authenticated && !authStatus.data.guest;
   // signed in with an account: its token is not a thing to show or paste
   if (identityEmail) return null;
   return (
-    <details className="mt-3" open={!!apiToken || undefined}>
+    <details className="mt-3" open={!!own || undefined}>
       <summary style={{ cursor: "pointer", fontFamily: MONO, fontSize: 11, color: C.dim }}>
-        use an access token instead {authStatus.data?.authenticated && apiToken ? "· signed in with one" : ""}
+        use an access token instead {signedIn && own ? "· signed in with one" : ""}
       </summary>
       <div className="mt-2">
         <div style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim, marginBottom: 8 }}>
           the operator token of a plane you run yourself, or an API key — sent with every request from this browser
         </div>
         <div className="flex items-center gap-2 mb-2">
-          <input type="password" value={apiToken} onChange={(e) => setApiToken(e.target.value)}
+          <input type="password" value={own} onChange={(e) => setApiToken(e.target.value)}
             placeholder="access token" aria-label="access token" style={INPUT_STYLE} />
           <span style={{ fontFamily: MONO, fontSize: 11, whiteSpace: "nowrap",
-            color: authStatus.data?.authenticated ? C.green : C.red }}>
-            {authStatus.data?.authenticated ? "● signed in" : "○ not signed in"}
+            color: signedIn ? C.green : C.red }}>
+            {signedIn ? "● signed in" : "○ not signed in"}
           </span>
         </div>
-        {authStatus.data?.authenticated && (
+        {signedIn && authStatus.data && (
           <div style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim }}>
             can: {(authStatus.data.scopes ?? []).join(", ") || "nothing"}
           </div>
@@ -1947,15 +1974,19 @@ function MyKeys() {
   const qc = useQueryClient();
   const signedKeys = useOperatorKeys();
   const mine = useQuery({ queryKey: ["my-keys"], queryFn: api.myKeys, retry: false });
-  const [secret, setSecret] = useState<string | null>(null);
+  const [made, setMade] = useState<{ secret: string; keyId: string } | null>(null);
+  const secret = made?.secret ?? null;
   const mint = useMutation({
     mutationFn: api.createMyKey,
-    onSuccess: (r) => { setSecret(r.secret); void qc.invalidateQueries({ queryKey: ["my-keys"] }); },
+    onSuccess: (r) => { setMade({ secret: r.secret, keyId: r.key_id }); void qc.invalidateQueries({ queryKey: ["my-keys"] }); },
   });
   const mintOnce = useOneAtATime(mint);
   const revoke = useMutation({
     mutationFn: api.revokeMyKey,
-    onSuccess: () => void qc.invalidateQueries({ queryKey: ["my-keys"] }),
+    onSuccess: (_r, keyId) => {
+      setMade((m) => (m?.keyId === keyId ? null : m));  // QA-066
+      void qc.invalidateQueries({ queryKey: ["my-keys"] });
+    },
   });
   return (
     <div data-testid="my-keys" style={{ fontFamily: MONO, fontSize: 11.5, color: C.mut }}>
@@ -2001,13 +2032,13 @@ function AgentKeys({ journey, menuAll }: { journey: Journey | null; menuAll: boo
   const [scopes, setScopes] = useState<string[]>(p.scopes);
   const [label, setLabel] = useState("");
   const [node, setNode] = useState("");
-  const [minted, setMinted] = useState<{ secret: string; preset: string } | null>(null);
+  const [minted, setMinted] = useState<{ secret: string; preset: string; keyId: string } | null>(null);
   const keys = useQuery({ queryKey: ["api-keys"], queryFn: api.listKeys, enabled: on, retry: false });
   const keysAudit = useQuery({ queryKey: ["api-keys-audit"], queryFn: () => api.keysAudit(), enabled: on, retry: false });
   const mint = useMutation({
     mutationFn: () => api.createKey(preset === "custom" ? scopes : p.scopes, label || p.label, p.node ? node.trim() : undefined),
     onSuccess: (r) => {
-      setMinted({ secret: r.secret, preset });
+      setMinted({ secret: r.secret, preset, keyId: r.key_id });
       void qc.invalidateQueries({ queryKey: ["api-keys"] });
       void qc.invalidateQueries({ queryKey: ["api-keys-audit"] });
     },
@@ -2015,7 +2046,9 @@ function AgentKeys({ journey, menuAll }: { journey: Journey | null; menuAll: boo
   const mintOnce = useOneAtATime(mint);
   const revoke = useMutation({
     mutationFn: (keyId: string) => api.revokeKey(keyId),
-    onSuccess: () => {
+    onSuccess: (_r, keyId) => {
+      // its "shown once" command works no more: not left on screen (QA-066)
+      setMinted((m) => (m?.keyId === keyId ? null : m));
       void qc.invalidateQueries({ queryKey: ["api-keys"] });
       void qc.invalidateQueries({ queryKey: ["api-keys-audit"] });
     },
@@ -2032,7 +2065,16 @@ function AgentKeys({ journey, menuAll }: { journey: Journey | null; menuAll: boo
     );
   }
   if (!on) {
-    return authStatus.data?.authenticated ? <MyKeys /> : (
+    // a viewer has no key of their own: the plane refuses one (QA-064)
+    if (authStatus.data?.authenticated && !(authStatus.data.scopes ?? []).includes("ingest")) {
+      return (
+        <div data-testid="keys-viewer" style={{ fontFamily: MONO, fontSize: 11.5, color: C.mut }}>
+          As a viewer you watch the team&apos;s agents and connect none — an owner or admin can make you a
+          member, who makes a key for their own machine.
+        </div>
+      );
+    }
+    return authStatus.data?.authenticated && !authStatus.data.guest ? <MyKeys /> : (
       <div style={{ fontFamily: MONO, fontSize: 11.5, color: C.mut }}>
         Sign in to make a key for your machine.
       </div>
@@ -2089,7 +2131,8 @@ function AgentKeys({ journey, menuAll }: { journey: Journey | null; menuAll: boo
         <div key={k.key_id} className="flex items-center gap-2 py-1">
           <span style={{ fontFamily: MONO, fontSize: 11, color: C.text }}>{k.key_id}</span>
           <KeyRole keyId={k.key_id} scopes={k.scopes} />
-          <span style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim, flex: 1 }}>
+          {/* a long label wraps, not widens the page (QA-063) */}
+          <span style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim, flex: 1, minWidth: 0, overflowWrap: "anywhere" }}>
             {k.label}{k.node_id ? ` · only for ${k.node_id}` : ""}
           </span>
           <button aria-label={`revoke ${k.key_id}`} disabled={revoke.isPending}
@@ -2120,7 +2163,7 @@ function AgentKeys({ journey, menuAll }: { journey: Journey | null; menuAll: boo
                 {(a.scopes ?? []).join(",")}{a.node_id ? ` @${a.node_id}` : ""}
               </span>
               <span style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim, flex: 1, textAlign: "right" }}>
-                by {a.by.id ?? a.by.kind} · {localTime(a.ts, true)}
+                by {a.by.email ?? a.by.id ?? a.by.kind} · {localTime(a.ts, true)}
               </span>
             </div>
           ))}
@@ -2253,7 +2296,9 @@ function VaultTokens() {
   const make = useMutation({ mutationFn: api.makeVaultToken,
     onSuccess: (r) => { setShown({ which: r.subsystem, token: r.token, header: r.header }); done(); } });
   const makeOnce = useOneAtATime(make);
-  const drop = useMutation({ mutationFn: api.dropVaultToken, onSuccess: () => { setShown(null); done(); } });
+  // dropping one token hides only its own just-shown value (QA-065)
+  const drop = useMutation({ mutationFn: api.dropVaultToken,
+    onSuccess: (_r, w) => { setShown((s) => (s?.which === w ? null : s)); done(); } });
   if (!tokens.data) return null;
   return (
     <div data-testid="vault-tokens" className="mt-3" style={{ fontFamily: MONO, fontSize: 11, lineHeight: 1.7 }}>
@@ -2268,9 +2313,12 @@ function VaultTokens() {
             ) : t.set ? (
               <>
                 <span style={{ color: C.green }}>token since {t.since ? localTime(t.since) : "—"}{t.by ? ` · ${t.by}` : ""}</span>
-                <button onClick={() => makeOnce(w)} data-testid={`vault-token-${w}-replace`}
+                {/* each cuts off whoever holds the token now: asked first (QA-065) */}
+                <button data-testid={`vault-token-${w}-replace`}
+                  onClick={async () => { if (await askConfirm(`Replace the token for ${VAULT_WORDS[w]}? Whatever uses the current one is cut off until it gets the new one.`)) makeOnce(w); }}
                   style={btn({ color: C.text, borderColor: C.steel, fontSize: 10.5, padding: "2px 8px" })}>replace</button>
-                <button onClick={() => drop.mutate(w)} data-testid={`vault-token-${w}-drop`}
+                <button data-testid={`vault-token-${w}-drop`}
+                  onClick={async () => { if (await askConfirm(`Drop the token for ${VAULT_WORDS[w]}? From then on an admin alone may do it.`)) drop.mutate(w); }}
                   style={btn({ color: C.mut, borderColor: C.line, fontSize: 10.5, padding: "2px 8px" })}>drop</button>
               </>
             ) : (
@@ -2415,7 +2463,7 @@ function FederationVault() {
               type="password"
               value={vaultSigningToken}
               onChange={(e) => setVaultSigningToken(e.target.value)}
-              placeholder="vault signing-token (X-Vault-Signing-Token)"
+              placeholder="vault signing-token"
               aria-label="vault signing-token"
               style={{ background: C.bg, border: `1px solid ${C.line}`, borderRadius: 4, color: C.text, fontFamily: MONO, fontSize: 11, padding: "5px 8px", outline: "none" }}
             />
@@ -2426,7 +2474,7 @@ function FederationVault() {
                 aria-label="signing key id"
                 style={{ background: C.bg, border: `1px solid ${C.line}`, borderRadius: 4, color: C.text, fontFamily: MONO, fontSize: 11, padding: "5px 8px", outline: "none", flex: 1 }}
               >
-                <option value="">— unsigned (a plane on your own machine only) —</option>
+                <option value="">— unsigned —</option>
                 {(keys.data ?? []).map((k) => (
                   <option key={k.key_id} value={k.key_id}>{k.key_id}</option>
                 ))}
@@ -2443,9 +2491,9 @@ function FederationVault() {
               <input
                 value={newKeyOps}
                 onChange={(e) => setNewKeyOps(e.target.value)}
-                placeholder="operators (comma-sep)"
+                placeholder="operators, comma-separated"
                 aria-label="signing key operators"
-                style={{ background: C.bg, border: `1px solid ${C.line}`, borderRadius: 4, color: C.text, fontFamily: MONO, fontSize: 11, padding: "5px 8px", flex: 1, outline: "none" }}
+                style={{ background: C.bg, border: `1px solid ${C.line}`, borderRadius: 4, color: C.text, fontFamily: MONO, fontSize: 11, padding: "5px 8px", flex: "1 1 200px", outline: "none" }}
               />
               <button
                 onClick={() => createKeyOnce()}

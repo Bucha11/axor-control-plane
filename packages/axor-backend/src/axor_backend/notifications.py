@@ -72,10 +72,12 @@ _ALLOWED_SCHEMES = frozenset({"http", "https"})
 
 # The refusals below reach the person typing the address (Settings → alerts),
 # so they say what is wrong with it in words: no resolver errno, and no
-# deployment setting they cannot change (QA-018).
+# deployment setting they cannot change (QA-018). A name is not echoed back
+# with the address it resolved to: that told whoever typed it how the plane's
+# own network is laid out (QA-061).
 def _refuse(host: str, address: object, why: str) -> None:
-    where = host if host == str(address) else f"{host} points at {address}, which"
-    raise WebhookRefused(f"{where} is {why}")
+    where = f"{host} is" if host == str(address) else f"{host} points at"
+    raise WebhookRefused(f"{where} {why}")
 
 
 def check_webhook_url(url: str, block_private: bool = False) -> None:

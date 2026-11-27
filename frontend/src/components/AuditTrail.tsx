@@ -44,6 +44,7 @@ const WORDS: Record<string, string> = {
   scim_role: "changed the role of", scim_renamed: "changed the address of",
   sessions_limit: "set how long a sign-in lasts:", sessions_ended: "signed out",
   plan_activated: "activated the plan", plan_renewed: "renewed the plan",
+  vault_token: "made the workspace's vault token for", vault_token_dropped: "dropped the workspace's vault token for",
   hold_placed: "put a legal hold on the trail", hold_released: "lifted the legal hold",
 };
 
@@ -68,6 +69,7 @@ function detailWords(it: AuditItem): string {
   if (d.by_group === true) parts.push("by the provider's groups");
   if (Array.isArray(d.scopes)) parts.push(d.scopes.join(", "));
   if (d.guest) parts.push("a guest");
+  if (d.replaced === true) parts.push("replacing the one before — whoever held it is cut off");
   return parts.join(" · ");
 }
 
@@ -350,9 +352,9 @@ export default function AuditTrail() {
             <span style={{ color: C.text }}>{it.who || "—"}</span>
             <span>{WORDS[it.action] ?? it.action}</span>
             {it.target && (
-              <span style={{ color: C.steel }} title={it.target}>{titleOf.get(it.target) ?? it.target}</span>
+              <span style={{ color: C.steel, overflowWrap: "anywhere" }} title={it.target}>{titleOf.get(it.target) ?? it.target}</span>
             )}
-            {detailWords(it) && <span style={{ color: C.dim }}>{detailWords(it)}</span>}
+            {detailWords(it) && <span style={{ color: C.dim, overflowWrap: "anywhere" }}>{detailWords(it)}</span>}
           </div>
         ))}
       </div>

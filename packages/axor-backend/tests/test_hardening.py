@@ -227,3 +227,30 @@ async def test_unsubscribing_something_that_is_not_there_says_so(
     r = await client.post("/v1/notifications/unsubscribe",
                           headers=_bearer(TOKEN), json={"url": "http://nope.example"})
     assert r.status_code == 404
+
+
+def test_a_private_target_is_refused_without_its_address(monkeypatch: pytest.MonkeyPatch) -> None:
+    """QA-061: a name that resolved into a private network was refused with the
+    address it resolved to — how the plane's own network is laid out."""
+    monkeypatch.setattr("socket.getaddrinfo",
+                        lambda *a, **k: [(2, 1, 6, "", ("10.1.2.3", 0))])
+    with pytest.raises(WebhookRefused) as excinfo:
+        check_webhook_url("http://internal-service:8400/v1", block_private=True)
+    said = str(excinfo.value)
+    assert said == ("internal-service points at an address inside a private network — "
+                    "this plane sends alerts only to public addresses")
+    assert "10.1.2.3" not in said
+
+
+async def test_an_overlong_webhook_address_is_a_400(client: httpx.AsyncClient) -> None:
+    """QA-062: an address past the stored column's 500 characters reached the
+    INSERT and came back as a bare 500."""
+    url = "https://hook.example/" + "a" * 1000
+    r = await client.post("/v1/notifications/subscribe", headers=_bearer(TOKEN),
+                          json={"url": url, "triggers": ["node_stale"]})
+    assert r.status_code == 400, r.text
+    assert "at most 500" in r.json()["detail"]
+    ok = await client.post("/v1/notifications/subscribe", headers=_bearer(TOKEN),
+                           json={"url": "https://hook.example/" + "a" * 470,
+                                 "triggers": ["node_stale"]})
+    assert ok.status_code == 200, ok.text

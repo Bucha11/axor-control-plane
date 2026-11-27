@@ -147,3 +147,63 @@ def test_the_smtp_url_is_read_or_refused() -> None:
     assert mailer_from_url("smtps://mail.example.com").tls == "ssl"
     with pytest.raises(ValueError):
         mailer_from_url("mail.example.com")
+
+
+class _RefusingSmtp:
+    """A fake SMTP server that takes the login and refuses every recipient."""
+
+    def __init__(self) -> None:
+        import socket
+        import threading
+
+        self.sock = socket.socket()
+        self.sock.bind(("127.0.0.1", 0))
+        self.sock.listen(1)
+        self.port = self.sock.getsockname()[1]
+        threading.Thread(target=self._serve, daemon=True).start()
+
+    def _serve(self) -> None:
+        conn, _ = self.sock.accept()
+        f = conn.makefile("rwb")
+
+        def say(line: str) -> None:
+            f.write(line.encode() + b"\r\n")
+            f.flush()
+
+        say("220 fake ESMTP")
+        for raw in f:
+            verb = raw.decode().strip().split(" ")[0].upper()
+            if verb == "EHLO":
+                say("250-fake")
+                say("250 AUTH PLAIN")
+            elif verb == "AUTH":
+                say("235 2.7.0 accepted")
+            elif verb == "MAIL":
+                say("250 2.1.0 ok")
+            elif verb == "RCPT":
+                say("550 5.7.1 sender domain not verified")
+            elif verb == "QUIT":
+                say("221 bye")
+                break
+            else:
+                say("250 ok")
+        conn.close()
+
+
+async def test_a_refused_message_is_logged_with_the_servers_words(
+        caplog: pytest.LogCaptureFixture) -> None:
+    """QA-120: the API said only "the mail server did not take the message",
+    and the log said nothing — why had to be found by hand."""
+    import logging
+    import smtplib
+
+    server = _RefusingSmtp()
+    m = SmtpMailer(host="127.0.0.1", port=server.port, tls="none",
+                   username="mailer", password="s3cret-pass", sender="no-reply@example.com")
+    with caplog.at_level(logging.ERROR, logger="axor_identity.mail"), \
+            pytest.raises(smtplib.SMTPException):
+        await m.send("ada@acme.io", "hi", "body")
+    logged = caplog.text
+    assert "550" in logged and "sender domain not verified" in logged
+    assert "ada@acme.io" in logged
+    assert "s3cret-pass" not in logged

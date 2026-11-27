@@ -956,6 +956,13 @@ function commandRefusal(e: unknown): unknown {
 async function af(path: string, init: RequestInit = {}, retried = false): Promise<Response> {
   if (!apiToken() && path !== "/v1/auth/status") await sessionSettled();
   const token = apiToken();
+  const feature = isGuestToken(token) && (init.method ?? "GET").toUpperCase() === "GET" ? guestCannotRead(path) : null;
+  if (feature) {
+    // the plane's own answer, without asking it
+    return new Response(JSON.stringify({ error: "account_required", feature,
+      detail: `${feature} need an account — sign up free; your guest work comes with you` }),
+      { status: 403, headers: { "content-type": "application/json" } });
+  }
   const headers = new Headers(init.headers);
   if (token) headers.set("Authorization", `Bearer ${token}`);
   const resp = await fetch(path, { ...init, headers });
@@ -987,6 +994,23 @@ async function af(path: string, init: RequestInit = {}, retried = false): Promis
 }
 
 // ── hosted guest sessions ─────────────────────────────────────────────────────
+
+// What the plane answers a guest only with 403 account_required
+// (backend guests.ACCOUNT_ONLY). Not asked for: every screen that read one
+// put a 403 in the console, Settings most of all (QA-049). A write still
+// goes, so the plane's answer can offer the sign-up.
+const GUEST_CANNOT_READ: [string, string][] = [
+  ["/v1/notifications", "notifications"], ["/v1/regression", "the regression corpus"],
+  ["/v1/lab/", "Lab deploys"], ["/v1/vault", "the vault"], ["/v1/keys", "API and node keys"],
+  ["/v1/license", "licences"], ["/v1/pair", "pair sessions"], ["/v1/machine", "machines"],
+];
+
+/** The feature a guest's read of `path` needs an account for, or null. */
+function guestCannotRead(path: string): string | null {
+  const p = path.split("?")[0];
+  if (p === "/v1/license/entitlements") return null;
+  return GUEST_CANNOT_READ.find(([x]) => p.startsWith(x))?.[1] ?? null;
+}
 
 // Whose requests these are, known once: with no token yet, the plane is asked
 // whether it needs one (auth off, or a session already there: no) and, where
@@ -1085,6 +1109,7 @@ async function refreshSession(staleToken: string | null): Promise<boolean> {
           return true;
         }
         useApp.getState().clearSession();
+        useApp.getState().setSessionEnded(true);
         return false;
       })
       .finally(() => {
@@ -2456,7 +2481,7 @@ export const api = {
           scopes?: string[];
           node_id?: string | null;
           label?: string;
-          by: { kind: string; id: string | null };
+          by: { kind: string; id: string | null; email?: string };
         }[]
       >(r),
     ),

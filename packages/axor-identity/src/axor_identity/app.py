@@ -305,8 +305,14 @@ def create_app(database_url: str | None = None, *,
             raise HTTPException(
                 403, "signup is closed: this installation already has an account")
         email = _norm_email(body.email)
+        # Log-in and "forgot password" do not say whether an address has an
+        # account; sign-up does, deliberately (QA-048). It signs the new account
+        # in at once, so an answer that looked the same as success would need
+        # sign-up to wait for a mailed link first — and an install without mail
+        # could not sign anyone up. So it says so, and what to do instead.
         if await store.get_user_by_email(email):
-            raise HTTPException(409, "email already registered")
+            raise HTTPException(409, "that address already has an account — log in, "
+                                     "or reset the password if you forgot it")
         user_id = "usr_" + secrets.token_hex(8)
         org_id = "org_" + secrets.token_hex(6)
         ts = _now_iso()
