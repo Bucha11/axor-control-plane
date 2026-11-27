@@ -5,6 +5,18 @@ The Control Plane ships as three packages from one tag (`axor-backend`,
 images (`axor-platform`, `axor-frontend`). Self-hosted operators upgrade by
 tag; `deploy/offline` carries the same release to a machine with no network.
 
+## 0.7.1 — 2026-11-27
+
+### Changed
+
+- **A hosted plane takes only sealed tool credentials.** With `AXOR_HOSTED`,
+  vault enrol and rotate refuse a plaintext `secret`: a credential comes sealed
+  to the workspace's own key (`axor-proxy vault keygen`, then `sealed_secret`).
+- **The security posture fits a plane with many tenants.** On a hosted plane it
+  reports command signing by each workspace's own keys, sealed credentials,
+  and vault tokens per workspace as not offered yet — instead of asking for a
+  deployment operator key, deployment vault tokens and `AXOR_ORG`.
+
 ## 0.7.0 — 2026-11-27
 
 ### Added
