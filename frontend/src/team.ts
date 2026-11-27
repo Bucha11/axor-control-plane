@@ -28,12 +28,18 @@ export function useMay(): (cap: Capability) => boolean {
 }
 
 /** Whether the person here decides the team's policy: an owner or admin — or
- *  anyone on an open plane, which has no roles (whoever runs it decides). */
+ *  anyone on an open plane, which has no roles (whoever runs it decides).
+ *  Nobody signed in on a plane that needs a sign-in is not an admin: a guest
+ *  was offered the audit tab and got a 403 (QA-238). A token that carries the
+ *  admin scope (the deployment's own) still is. */
 export function useCanAdmin(): boolean {
   const email = useApp((s) => s.identityEmail);
+  const apiToken = useApp((s) => s.apiToken);
   const me = useQuery({ queryKey: ["identity-me"], queryFn: api.identityMe, enabled: !!email, retry: false });
+  const st = useQuery({ queryKey: ["auth-status", apiToken], queryFn: api.authStatus, enabled: !email });
   const role = me.data?.memberships.find((m) => m.org_id === me.data?.active_org)?.role ?? me.data?.role;
-  return !email || role === "owner" || role === "admin";
+  if (email) return role === "owner" || role === "admin";
+  return !!st.data && (!st.data.auth_enabled || st.data.scopes.includes("admin"));
 }
 
 /** Whether a coding session is the signed-in person's own: its developer is
