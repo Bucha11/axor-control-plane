@@ -232,4 +232,35 @@ test.describe("access (QA, 0.7.3)", () => {
     await goHash(page, "govern");
     await expect(page.getByTestId("brake-pull")).toHaveText("⏸ hold all your agents…");
   });
+
+  test("a tab with no sign-in on a plane that needs one says so, and does not poll into 401s (QA-170)", async ({ page }) => {
+    // credentials are per tab: a second tab of a signed-in browser has none
+    await page.route("**/v1/auth/status", (r) => r.fulfill({ json: {
+      auth_enabled: true, authenticated: false, guest_sessions: false, scopes: [] } }));
+    const reads: string[] = [];
+    page.on("request", (r) => {
+      const path = new URL(r.url()).pathname;
+      if (path.startsWith("/v1/") && path !== "/v1/auth/status" && path !== "/v1/funnel") reads.push(path);
+    });
+    await goHash(page, "govern");
+    await expect(page.getByTestId("tab-signed-out")).toContainText("this tab is signed out — sign in");
+    await page.waitForTimeout(3000);
+    expect(reads).toEqual([]);
+  });
+
+  test("a refused guest's screens wait instead of hammering the plane with 401s (QA-042, QA-214)", async ({ page }) => {
+    await page.route("**/v1/auth/status", (r) => r.fulfill({ json: {
+      auth_enabled: true, authenticated: false, guest_sessions: true, scopes: [] } }));
+    await page.route("**/v1/auth/guest", (r) => r.fulfill({ status: 429, headers: { "retry-after": "60" },
+      json: { detail: "too many guest sessions" } }));
+    const reads: string[] = [];
+    page.on("request", (r) => {
+      const path = new URL(r.url()).pathname;
+      if (path.startsWith("/v1/") && !["/v1/auth/status", "/v1/auth/guest", "/v1/funnel"].includes(path)) reads.push(path);
+    });
+    await goHash(page, "govern");
+    await expect(page.getByTestId("guest-busy")).toBeVisible();
+    await page.waitForTimeout(3000);
+    expect(reads).toEqual([]);
+  });
 });

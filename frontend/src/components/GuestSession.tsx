@@ -9,7 +9,7 @@
 //   and says what moved.
 import { useEffect, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { api, guestRetryAfter, sessionSettled } from "../api";
+import { api, guestRetryAfter, sessionSettled, tabSignedOut } from "../api";
 import { isGuestToken, useApp } from "../store";
 import { C, MONO, btn } from "../theme";
 import { IdentityLogin } from "../tabs/Settings";
@@ -44,6 +44,8 @@ export default function GuestSession({ invite = false }: { invite?: boolean } = 
   // the plane refused a guest session for now (too many from this address):
   // said, and tried again when it allows — not every screen failing silently
   const [busyFor, setBusyFor] = useState(0);
+  // this tab has no sign-in and the plane needs one (QA-170)
+  const [signedOut, setSignedOut] = useState(false);
   const [attempt, setAttempt] = useState(0);
 
   useEffect(() => {
@@ -58,6 +60,7 @@ export default function GuestSession({ invite = false }: { invite?: boolean } = 
     let retry: ReturnType<typeof setTimeout> | undefined;
     void sessionSettled(attempt > 0).then(() => {
       if (!alive) return;
+      setSignedOut(tabSignedOut());
       if (useApp.getState().apiToken) {
         setBusyFor(0);
         void qc.invalidateQueries();
@@ -118,6 +121,16 @@ export default function GuestSession({ invite = false }: { invite?: boolean } = 
             style={btn({ fontSize: 10.5, padding: "2px 8px", color: C.steel, borderColor: C.steel })}>sign in</button>
           <button onClick={() => useApp.getState().setSessionEnded(false)}
             style={btn({ fontSize: 10.5, padding: "2px 8px", color: C.mut })}>ok</button>
+        </div>
+      )}
+      {signedOut && !apiToken && !sessionEnded && busyFor === 0 && !invite && (
+        <div data-testid="tab-signed-out" style={{
+          maxWidth: 1040, margin: "0 auto 12px", fontFamily: MONO, fontSize: 11.5, color: C.amber,
+          border: `1px solid ${C.amber}`, borderRadius: 8, padding: "8px 12px",
+          display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+          <span style={{ flex: 1 }}>this tab is signed out — sign in to see your workspace (each tab signs in on its own)</span>
+          <button onClick={() => navigate("settings", { tab: "workspace" })}
+            style={btn({ fontSize: 10.5, padding: "2px 8px", color: C.steel, borderColor: C.steel })}>sign in</button>
         </div>
       )}
       {busyFor > 0 && !apiToken && !invite && (

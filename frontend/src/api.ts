@@ -961,6 +961,11 @@ function commandRefusal(e: unknown, hasKey = true): unknown {
 async function af(path: string, init: RequestInit = {}, retried = false): Promise<Response> {
   if (!apiToken() && path !== "/v1/auth/status") await sessionSettled();
   const token = apiToken();
+  if (!token && signedOutHere && path.startsWith("/v1/") && !OPEN_PATHS.some((p) => path.startsWith(p))) {
+    // the plane's answer, without asking it again and again
+    return new Response(JSON.stringify({ error: "unauthorized", detail: "this tab is signed out — sign in" }),
+      { status: 401, headers: { "content-type": "application/json" } });
+  }
   const feature = isGuestToken(token) && (init.method ?? "GET").toUpperCase() === "GET" ? guestCannotRead(path) : null;
   if (feature) {
     // the plane's own answer, without asking it
@@ -1027,15 +1032,30 @@ useApp.subscribe((s, prev) => {
 export function sessionSettled(again = false): Promise<void> {
   if (!session || again) {
     session = api.authStatus()
-      .then((st) => {
+      .then(async (st) => {
         if (st.auth_enabled && st.guest_sessions && !st.authenticated && !apiToken()) {
-          return startGuest().then(() => undefined);
+          await startGuest();
         }
+        signedOutHere = st.auth_enabled && !st.authenticated && !apiToken();
       })
       .catch(() => undefined);
   }
   return session;
 }
+
+// The plane needs a sign-in and this tab has none (sign-ins are kept per tab;
+// no guest session, or one refused for now). Reads are not sent then: every
+// screen polled into a wall of 401s (QA-042, QA-170) — the page says to sign
+// in instead (GuestSession).
+let signedOutHere = false;
+
+/** Whether this tab is signed out of a plane that needs a sign-in. */
+export function tabSignedOut(): boolean {
+  return signedOutHere && !apiToken();
+}
+
+// what the plane serves without a credential (backend auth._OPEN_ROUTES)
+const OPEN_PATHS = ["/v1/auth/status", "/v1/auth/guest", "/v1/share/", "/v1/healthz", "/v1/funnel"];
 
 let renewing: Promise<boolean> | null = null;
 // Seconds the plane asked a refused guest to wait (429 Retry-After), or 0.
