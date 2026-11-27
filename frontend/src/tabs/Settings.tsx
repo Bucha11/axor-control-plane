@@ -2070,7 +2070,7 @@ function AgentKeys({ journey, menuAll }: { journey: Journey | null; menuAll: boo
         </div>
       );
     }
-    return authStatus.data?.authenticated ? <MyKeys /> : (
+    return authStatus.data?.authenticated && !authStatus.data.guest ? <MyKeys /> : (
       <div style={{ fontFamily: MONO, fontSize: 11.5, color: C.mut }}>
         Sign in to make a key for your machine.
       </div>

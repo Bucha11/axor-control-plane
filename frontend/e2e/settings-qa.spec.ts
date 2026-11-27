@@ -192,6 +192,45 @@ test.describe("settings (QA, 0.7.2)", () => {
     await expect(status).toContainText("link sent to ada@acme.io");
     expect(resends).toBe(1);
   });
+
+  test("a guest's Settings asks for nothing a guest cannot have; after log-in it asks with the new token (QA-049)", async ({ page }) => {
+    await page.route("**/v1/auth/status", (r) => {
+      const bearer = r.request().headers()["authorization"] ?? "";
+      return r.fulfill({ json: bearer.includes("gs_")
+        ? { auth_enabled: true, authenticated: true, guest: true, guest_sessions: true, scopes: ["read", "ingest", "operate"] }
+        : bearer.includes("acc-token")
+          ? { auth_enabled: true, authenticated: true, guest: false, scopes: ["read", "ingest", "operate", "admin"] }
+          : { auth_enabled: true, authenticated: false, guest_sessions: true, scopes: [] } });
+    });
+    await page.route("**/v1/auth/guest", (r) => r.fulfill({ status: 201, json: {
+      token: "gs_e2e_guest_token", org: "guest_e2e", ttl_seconds: 1800,
+      expires_at: new Date(Date.now() + 29 * 60_000).toISOString() } }));
+    await page.route("**/v1/auth/claim-guest", (r) => r.fulfill({ json: { moved: {} } }));
+    await signInAsOwner(page);
+    const asGuest: string[] = [];
+    const license: string[] = [];
+    page.on("request", (r) => {
+      const path = new URL(r.url()).pathname;
+      const bearer = r.headers()["authorization"] ?? "";
+      if (/^\/v1\/(keys|notifications|license|vault)/.test(path) && path !== "/v1/license/entitlements"
+          && bearer.includes("gs_")) asGuest.push(path);
+      if (path === "/v1/license/status") license.push(bearer);
+    });
+    await goHash(page, "settings?tab=connect");
+    await page.waitForFunction(() => (sessionStorage.getItem("axor-app") ?? "").includes("gs_e2e_guest_token"));
+    await expect(page.getByTestId("connections")).toBeVisible();
+    await expect(page.getByText("Sign in to make a key for your machine.")).toBeVisible();
+    await page.getByTestId("settings-tab-alerts").click();
+    await expect(page.getByText("ALERTS THAT COULD NOT BE DELIVERED")).toBeVisible();
+    await page.getByTestId("settings-tab-workspace").click();
+    await page.getByLabel("email", { exact: true }).fill("ada@acme.io");
+    await page.getByLabel("password").fill("correct horse");
+    await page.getByRole("button", { name: "log in", exact: true }).click();
+    await expect(page.getByText("signed in as ada@acme.io")).toBeVisible();
+    await expect.poll(() => license).toContain("Bearer acc-token");
+    expect(asGuest).toEqual([]);
+    expect(license.filter((b) => b.includes("gs_"))).toEqual([]);
+  });
 });
 
 const SESSION = {
