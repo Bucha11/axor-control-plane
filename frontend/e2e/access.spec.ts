@@ -166,4 +166,17 @@ test.describe("access (QA, 0.7.3)", () => {
       .toHaveText("as a viewer you can't change the schedule — an owner, admin or member can");
     await expect(page.getByRole("button", { name: /Schedule with the rules above/ })).toHaveCount(0);
   });
+
+  test("a viewer gets no Skills \"turn off\" form, and is told who can (QA-213)", async ({ page }) => {
+    await playRole(page, VIEWER);
+    await page.route("**/v1/coding/skills", (r) => r.fulfill({ json: {
+      off: [{ skill: "old-skill", ts: "2026-11-27T10:00:00Z", by: "ada@acme.io" }], attempts: {}, team: [] } }));
+    await goHash(page, "skills");
+    const panel = page.getByTestId("skills-off");
+    await expect(panel.getByTestId("skills-off-viewer"))
+      .toHaveText("as a viewer you can't turn a skill off for the team — an owner, admin or member can");
+    await expect(panel.getByTestId("off-row-old-skill")).toBeVisible();
+    await expect(panel.getByLabel("skill to turn off")).toHaveCount(0);
+    await expect(panel.getByRole("button", { name: /turn off|turn back on/ })).toHaveCount(0);
+  });
 });
