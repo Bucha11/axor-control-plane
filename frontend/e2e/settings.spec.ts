@@ -360,6 +360,8 @@ test.describe("settings", () => {
     await expect(page.getByTestId("billing-month-2026-09")).toBeVisible();
     await page.getByTestId("billing-month-2026-10").getByRole("button").click();
     await expect(page.getByTestId("billing-month-2026-10")).toContainText("dev-aaaaaaaa");
+    // Free's seats cost nothing: no per-seat price written into the line
+    await expect(page.getByTestId("billing-month-2026-10")).not.toContainText("×");
     // one plan, the cheapest that fits — not three side by side
     const hint = page.getByTestId("billing-upgrade-hint");
     await expect(hint).toContainText("On Coding, this month would come to $200.00");

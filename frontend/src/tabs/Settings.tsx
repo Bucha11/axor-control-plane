@@ -1662,7 +1662,11 @@ function StatementLines({ st, coding, prod, estimate = false }: {
       {(coding || devs > 0) && row(
         <>developers whose agents ran: <span style={{ color: C.text }}>{devs}</span>
           {st.included_developers ? ` · ${st.included_developers} included` : ""}
-          {st.billable_developers ? ` · ${st.billable_developers} × $25` : ""}</>,
+          {/* the seat's own price, from the statement: "× $25" was written
+              into every plan, Free's $0 seats included */}
+          {st.billable_developers && (st.seat_cents ?? 0) > 0
+            ? ` · ${st.billable_developers} × $${((st.seat_cents ?? 0) / st.billable_developers / 100).toFixed(2)}`
+            : ""}</>,
         st.priced ? st.seats : "—", "bill-developers")}
       {(prod || st.peak_nodes > 0) && row(
         <>governed nodes at the peak: <span style={{ color: C.text }}>{st.peak_nodes}</span>
