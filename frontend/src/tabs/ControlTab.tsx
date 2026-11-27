@@ -18,7 +18,7 @@ import Coach from "../components/Coach";
 import { incidentWhat } from "./Evidence";
 import Tooltip from "../components/Tooltip";
 import { isoDate, localTime } from "../time";
-import { codingExampleOnly, fleetExampleOnly, isCodingSession } from "../components/CodingOnboarding";
+import { FLEET_EXAMPLE, codingExampleOnly, fleetExampleOnly, isCodingSession } from "../components/CodingOnboarding";
 import { AlertMe, KeepAsTest, SignUpForYourAgent } from "../components/AccountAction";
 import { NOT_A_TEST_BENCH, behindProxy, cannotCut, isTestBench } from "../agentName";
 
@@ -258,9 +258,11 @@ function SpawnGoverned({ switchToAdapter }: { switchToAdapter?: boolean }) {
  * another — built by those libraries, posted through the plane's own routes. */
 export function ExampleFleet({ compact = false }: { compact?: boolean }) {
   const qc = useQueryClient();
+  const unhide = useApp((s) => s.setFleetExampleHidden);
   const seed = useMutation({
     mutationFn: api.seedFleet,
     onSuccess: () => {
+      unhide(false);
       // "fleet" too: until it is read again the cards fell back to the seeding
       // time and the 24h totals to nothing, beside a feed of the run (QA-039)
       for (const key of ["nodes", "topology", "probe-report", "repair", "reputation", "fleet"]) {
@@ -377,8 +379,11 @@ function ControlBody({ focusNode, testBench }: { focusNode?: string; testBench: 
   // lives on Try a skill
   // once the workspace's own agents report, the examples loaded before stop
   // showing beside them (an example asked for after that still shows)
+  // ...and the example fleet once "hide the example" was clicked (QA-082)
+  const fleetHidden = useApp((st) => st.fleetExampleHidden);
+  const hiddenExample = (id: string) => fleetHidden && FLEET_EXAMPLE.includes(id);
   const everyone = (nodes.data ?? []).filter((n) => !n.node_id.startsWith("skill-try.")
-    && !n.example_hidden);
+    && !n.example_hidden && !(n.example && hiddenExample(n.node_id)));
   // the menu's side: coding agents (sessions and their tree runs) or
   // production agents — everything when no side was chosen or all was asked for
   const journey = useApp((st) => st.journey);
@@ -414,9 +419,13 @@ function ControlBody({ focusNode, testBench }: { focusNode?: string; testBench: 
   // which is not an agent to operate (see `everyone` above)
   const topoData = topo.data && {
     ...topo.data,
-    nodes: topo.data.nodes.filter((n) => !n.node_id.startsWith("skill-try.")
+    nodes: topo.data.nodes.filter((n) => !n.node_id.startsWith("skill-try.") && !hiddenExample(n.node_id)
+      // a peer only the hidden example talked to goes with it
+      && !(fleetHidden && n.kind === "peer" && topo.data!.edges.filter((e) => e.to === n.node_id)
+        .every((e) => hiddenExample(e.from)))
       && !(nodes.data ?? []).some((x) => x.node_id === n.node_id && x.example_hidden)),
-    edges: topo.data.edges.filter((e) => !e.from.startsWith("skill-try.") && !e.to.startsWith("skill-try.")),
+    edges: topo.data.edges.filter((e) => !e.from.startsWith("skill-try.") && !e.to.startsWith("skill-try.")
+      && !hiddenExample(e.from) && !hiddenExample(e.to)),
   };
   const [more, setMore] = useState(false);
   const [cmdError, setCmdError] = useState<string | null>(null);
@@ -1571,6 +1580,7 @@ function StatusChips({ units, filter, setFilter }: {
  * made-up answer passed up the tree and refused on its way out, a leak only
  * visible across sessions, a context gone bad — each a link to where it is. */
 function FleetExampleStory({ onPick, onGraph }: { onPick: (id: string) => void; onGraph: () => void }) {
+  const hide = useApp((s) => s.setFleetExampleHidden);
   const row = (n: string, testId: string, go: () => void, text: React.ReactNode, act?: React.ReactNode) => (
     <div style={{ padding: "3px 0", fontFamily: MONO, fontSize: 11.5, color: C.mut, lineHeight: 1.6 }}>
       <span style={{ color: C.amber }}>{n}</span> {text}{" "}
@@ -1583,8 +1593,11 @@ function FleetExampleStory({ onPick, onGraph }: { onPick: (id: string) => void; 
   return (
     <div data-testid="fleet-example-story" style={{ border: `1px solid ${C.line}`, borderRadius: 8,
       padding: "12px 16px", marginBottom: 18, background: C.panel }}>
-      <div style={{ fontFamily: MONO, fontSize: 10.5, color: C.steel, letterSpacing: "0.06em", marginBottom: 4 }}>
-        EXAMPLE · A RESEARCH AGENT AND ITS HELPERS
+      <div className="flex items-center" style={{ fontFamily: MONO, fontSize: 10.5, color: C.steel, letterSpacing: "0.06em", marginBottom: 4 }}>
+        <span style={{ flex: 1 }}>EXAMPLE · A RESEARCH AGENT AND ITS HELPERS</span>
+        <button onClick={() => hide(true)} data-testid="story-hide"
+          style={{ background: "none", border: "none", padding: 0, cursor: "pointer", fontFamily: MONO,
+                   fontSize: 10.5, color: C.steel, letterSpacing: 0 }}>hide the example ×</button>
       </div>
       <div style={{ fontSize: 13, color: C.text, lineHeight: 1.6, marginBottom: 6 }}>
         <span style={{ fontFamily: MONO }}>tree-orch</span> hands the work to{" "}
@@ -1614,6 +1627,8 @@ function FleetExampleStory({ onPick, onGraph }: { onPick: (id: string) => void; 
         style={btn({ color: C.text, borderColor: C.steel, fontSize: 11.5, padding: "5px 12px", marginTop: 10 })}>
         Govern my production agent →
       </button>
+      {/* the spawn actions stay reachable beside the example (QA-082) */}
+      <SpawnGoverned switchToAdapter />
       <SignUpForYourAgent />
     </div>
   );
@@ -2253,6 +2268,7 @@ function ActivityFeed({ only }: { only?: Set<string> }) {
   const nodesQ = useQuery({ queryKey: ["nodes"], queryFn: api.nodes });
   const treesQ = useQuery({ queryKey: ["trees"], queryFn: api.trees });
   const examples = new Set((nodesQ.data ?? []).filter((n) => n.example_hidden).map((n) => n.node_id));
+  const fleetHidden = useApp((st) => st.fleetExampleHidden);
   // a coding session reads as its task: the developer's first request in it;
   // a tree's agent as its node ("read 3 of 6"); a tree as its task
   const titleOf = new Map((nodesQ.data ?? []).filter((n) => n.profile?.title)
@@ -2267,6 +2283,7 @@ function ActivityFeed({ only }: { only?: Set<string> }) {
     // a skill's dry run is shown on Try a skill, not among the agents' work
     if (e.node_id.startsWith("skill-try.")) return false;
     if (examples.has(e.node_id)) return false;
+    if (fleetHidden && FLEET_EXAMPLE.includes(e.node_id)) return false;
     if (only && !only.has(e.node_id)) return false;
     return true;
   });

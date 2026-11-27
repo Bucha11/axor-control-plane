@@ -54,3 +54,42 @@ test.describe("times on the operating screens", () => {
     await expect(page.getByTestId("fleet-activity")).not.toContainText(/2000|2001|\b(Sat|Mon|Thu)\b/);
   });
 });
+
+// other specs share this plane: show the page only what a visitor's plane holds
+async function onlyTheExampleFleet(page: import("@playwright/test").Page,
+                                   request: import("@playwright/test").APIRequestContext) {
+  const fleet = ["tree-orch", "tree-research", "tree-scraper", "tree-writer"];
+  await page.route("**/v1/plane/nodes", async (route) => {
+    const all = await (await request.get(`${BACKEND}/v1/plane/nodes`)).json() as { node_id: string }[];
+    await route.fulfill({ json: all.filter((n) => fleet.includes(n.node_id)) });
+  });
+  await page.route("**/v1/plane/topology", async (route) => {
+    const t = await (await request.get(`${BACKEND}/v1/plane/topology`)).json() as
+      { nodes: { node_id: string; kind: string }[]; edges: { from: string; to: string }[] };
+    const keep = (id: string) => fleet.includes(id) || id === "partner-agent";
+    await route.fulfill({ json: { ...t, nodes: t.nodes.filter((n) => keep(n.node_id)),
+                                  edges: t.edges.filter((e) => keep(e.from) && keep(e.to)) } });
+  });
+}
+
+test("the example fleet keeps the spawn actions and can be hidden (QA-082)", async ({ page, request }) => {
+  expect((await request.post(`${BACKEND}/v1/demo/seed-fleet`)).ok()).toBeTruthy();
+  await onlyTheExampleFleet(page, request);
+  await setConnection(page, { mode: "adapter" });
+  await goHash(page, "control");
+  const story = page.getByTestId("fleet-example-story");
+  await expect(story).toBeVisible();
+  await expect(page.getByRole("button", { name: "Spawn a governed demo node" })).toBeVisible();
+  await expect(page.getByRole("button", { name: /load the canned tree/ })).toBeVisible();
+
+  await story.getByTestId("story-hide").click();
+  await expect(story).toHaveCount(0);
+  await expect(page.getByTestId("agent-row-tree-orch")).toHaveCount(0);
+  await expect(page.getByTestId("topo-node-tree-orch")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Spawn a governed demo node" })).toBeVisible();
+  // hidden for good (the store keeps it), until asked for again
+  expect(await page.evaluate(() => JSON.parse(localStorage.getItem("axor-app")!).state.fleetExampleHidden)).toBe(true);
+  await page.getByRole("button", { name: "Load an example fleet" }).click();
+  await expect(page.getByTestId("fleet-example-story")).toBeVisible();
+  await page.unrouteAll({ behavior: "ignoreErrors" });
+});

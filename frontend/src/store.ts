@@ -69,6 +69,10 @@ interface AppState {
   // "show everything" from a journey's menu
   menuAll: boolean;
   setMenuAll: (v: boolean) => void;
+  // the example fleet, hidden from Agents by "hide the example" (QA-082);
+  // loading it again shows it again
+  fleetExampleHidden: boolean;
+  setFleetExampleHidden: (v: boolean) => void;
   // What each of the agent's tools does — one record, written wherever it is
   // decided (the wrap's and the proxy's onboarding, Policy) and read by all of
   // them and by a test run, so nobody classifies the same tools twice.
@@ -235,6 +239,8 @@ export const useApp = create<AppState>()(
       setJourney: (j) => set({ journey: j }),
       menuAll: false,
       setMenuAll: (v) => set({ menuAll: v }),
+      fleetExampleHidden: false,
+      setFleetExampleHidden: (v) => set({ fleetExampleHidden: v }),
       toolPolicy: {},
       setToolClass: (name, patch) =>
         set((s) => ({ toolPolicy: { ...s.toolPolicy,
