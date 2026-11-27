@@ -197,3 +197,25 @@ test("Replay's search boxes have a limit that says so, and a failed search reads
   await expect(page.getByTestId("search-error")).toContainText("the search did not reach the server");
   await expect(page.getByText("Failed to fetch")).toHaveCount(0);
 });
+
+test.describe("Replay addresses (QA-089)", () => {
+  test("a cursor the run does not have opens the nearest step and says so", async ({ page, request }) => {
+    expect((await request.post(`${BACKEND}/v1/demo/seed-adapter-runs`)).ok()).toBeTruthy();
+    await setConnection(page, { mode: "adapter" });
+    await goHash(page, "explain/ex_block?cursor=-3");
+    await expect(page.getByText(/STEP 1 OF \d+/)).toBeVisible();
+    await expect(page.getByTestId("replay-cursor-missing")).toContainText("no step at position -3 — opened at step 1");
+    await expect(page).toHaveURL(/cursor=0/);
+  });
+
+  test("a bad run id is asked for once, encoded once", async ({ page }) => {
+    const asked: string[] = [];
+    page.on("request", (r) => { if (r.url().includes("/v1/replay/")) asked.push(r.url()); });
+    await setConnection(page, { mode: "adapter" });
+    await goHash(page, "explain/no%20such%20run");
+    await expect(page.getByTestId("replay-title")).toContainText("no such run");
+    await page.waitForTimeout(2500);   // a retry would have gone by now
+    expect(asked).toHaveLength(1);
+    expect(asked[0]).toContain("/v1/replay/no%20such%20run");
+  });
+});
