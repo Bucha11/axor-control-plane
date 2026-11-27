@@ -220,4 +220,16 @@ test.describe("access (QA, 0.7.3)", () => {
     await expect(page.getByRole("button", { name: /Verify license/ })).toHaveCount(0);
     await expect(fold).not.toContainText("AXOR_");
   });
+
+  test("on Free the brake says it holds your agents, not the team's (product decision on T-GOV-18)", async ({ page, request }) => {
+    expect((await request.post(`${BACKEND}/v1/demo/seed-coding`)).ok()).toBeTruthy();
+    await page.route("**/v1/license/entitlements", async (r) => {
+      const body = await (await r.fetch()).json();
+      await r.fulfill({ json: { ...body, free: true } });
+    });
+    await page.route("**/v1/coding/brake", (r) => r.fulfill({ json: { on: false } }));
+    await setConnection(page, { mode: "demo" });
+    await goHash(page, "govern");
+    await expect(page.getByTestId("brake-pull")).toHaveText("⏸ hold all your agents…");
+  });
 });

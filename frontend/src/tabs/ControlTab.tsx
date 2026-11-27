@@ -1493,6 +1493,9 @@ function TeamBrake() {
   const canAdmin = useMay()("brake");
   const journey = useApp((s) => s.journey);
   const brake = useQuery({ queryKey: ["brake"], queryFn: api.brake, refetchInterval: 10000, retry: false });
+  // Free keeps one developer: the brake holds YOUR agents there, not a team's
+  const ent = useQuery({ queryKey: ["entitlements"], queryFn: api.entitlements, retry: false });
+  const solo = ent.data?.free === true;
   const set = useMutation({
     mutationFn: ({ on, reason }: { on: boolean; reason: string }) => api.setBrake(on, reason),
     onSuccess: () => void qc.invalidateQueries({ queryKey: ["brake"] }),
@@ -1503,7 +1506,7 @@ function TeamBrake() {
       <div data-testid="brake-on" className="mb-3 px-3 py-2 flex items-center gap-3 flex-wrap"
         style={{ border: `1px solid ${C.amber}`, borderRadius: 6, fontFamily: MONO, fontSize: 11.5, color: C.amber }}>
         <span style={{ flex: 1 }}>
-          every coding agent of the team is held{brake.data.by ? ` — ${brake.data.by}` : ""}
+          {solo ? "every coding agent of yours is held" : "every coding agent of the team is held"}{brake.data.by ? ` — ${brake.data.by}` : ""}
           {brake.data.reason ? `: ${brake.data.reason}` : ""}. Held calls wait and go on when it is lifted.
         </span>
         {canAdmin && (
@@ -1518,11 +1521,13 @@ function TeamBrake() {
     <div className="mb-2" style={{ fontFamily: MONO, fontSize: 11 }}>
       <button data-testid="brake-pull" disabled={set.isPending}
         onClick={async () => {
-          const reason = await askPrompt("Hold every coding agent of the team — why (they see it)?");
+          const reason = await askPrompt(solo
+            ? "Hold all your coding agents — why (they see it)?"
+            : "Hold every coding agent of the team — why (they see it)?");
           if (reason != null) set.mutate({ on: true, reason });
         }}
         style={{ background: "none", border: "none", padding: 0, cursor: "pointer", color: C.dim, fontFamily: MONO, fontSize: 11 }}>
-        ⏸ hold every agent of the team…
+        {solo ? "⏸ hold all your agents…" : "⏸ hold every agent of the team…"}
       </button>
     </div>
   );
