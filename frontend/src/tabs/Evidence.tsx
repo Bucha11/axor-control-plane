@@ -256,6 +256,7 @@ function StatusPick({ item }: { item: IncidentItem }) {
     onSuccess: () => void qc.invalidateQueries({ queryKey: ["incidents"] }),
   });
   return (
+    <span className="inline-flex flex-col items-end gap-1">
     <select aria-label={`status of ${item.id}`} value={item.status} data-testid="incident-status"
       onChange={(e) => set.mutate(e.target.value as IncidentStatus)}
       style={{ background: C.panel2, border: `1px solid ${item.status === "new" ? C.steel : C.line}`, borderRadius: 5,
@@ -265,6 +266,13 @@ function StatusPick({ item }: { item: IncidentItem }) {
         .filter((st) => item.kind !== "refused" || st === item.status || !["kept_as_test", "rule_made"].includes(st))
         .map((st) => <option key={st} value={st}>{STATUS_WORDS[st]}</option>)}
     </select>
+    {/* a refused change said in words, not a select that snaps back (QA-195) */}
+    {set.isError && (
+      <span data-testid="incident-status-error" style={{ fontFamily: MONO, fontSize: 10.5, color: C.red }}>
+        {(set.error as Error).message}
+      </span>
+    )}
+    </span>
   );
 }
 

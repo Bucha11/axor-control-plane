@@ -4,6 +4,7 @@ import * as opKey from "./opKey";
 import { IDENTITY_BASE, refresh } from "./identity";
 import { isGuestToken, useApp } from "./store";
 import { track } from "./funnel";
+import { scopeWords } from "./refusal";
 
 // Backend client. Vite dev-proxies /v1 -> backend :8400 and /axor -> proxy :8401.
 
@@ -895,6 +896,11 @@ export function apiError(status: number, text: string): ApiError {
       code = String(o.code ?? o.error ?? code ?? "");
       words = String(o.detail ?? o.message ?? "");
     }
+    // a scope refusal: who the caller is and who can, not "forbidden" (QA-195)
+    if (!words && body.error === "forbidden" && typeof (body as { need?: unknown }).need === "string") {
+      const b = body as { need: string; have?: unknown };
+      words = scopeWords(b.need, Array.isArray(b.have) ? b.have.map(String) : []);
+    }
     if (!words && typeof body.error === "string") words = body.error.replace(/_/g, " ");
   } catch { /* not JSON */ }
   if (!words) words = text.trim().slice(0, 300) || `the request failed (HTTP ${status})`;
@@ -921,14 +927,6 @@ async function guestHasNone<T>(none: T, ask: () => Promise<T>): Promise<T> {
  *  page's own sign-in (or guest) token, which the proxy uploads with (QA-001). */
 function uploadAs(): Record<string, string> {
   return apiToken() ? { "X-Axor-Upload-Token": apiToken() } : {};
-}
-
-async function scopeRefusal(resp: Response): Promise<boolean> {
-  try {
-    return ((await resp.clone().json()) as { error?: unknown }).error === "forbidden";
-  } catch {
-    return false;
-  }
 }
 
 /** A command the plane refused for its signature, said with what to do: the
@@ -981,17 +979,11 @@ async function af(path: string, init: RequestInit = {}, retried = false): Promis
   if (resp.status === 401 && !retried && token.startsWith("gs_") && (await renewGuest(token))) {
     return af(path, init, true);
   }
-  // Something the user DID was refused for their ROLE: it may have changed
-  // since this access token was issued (an owner made them a member). The
-  // refresh reads the role afresh; one retry, never for a background read.
-  // Only a scope refusal ({"error": "forbidden"}) — any other 403 is the
-  // plane's answer on the merits (a malformed license, no operator key), and
-  // retrying it sent every such request twice (QA-019).
-  if (resp.status === 403 && !retried && (init.method ?? "GET").toUpperCase() !== "GET"
-      && useApp.getState().refreshToken && (await scopeRefusal(resp))
-      && (await refreshSession(null))) {
-    return af(path, init, true);
-  }
+  // A 403 is never retried: it is the plane's answer for this caller — a
+  // scope refusal ({"error": "forbidden", "need", "have"}) or a refusal on the
+  // merits. Refreshing and resending sent every refused write twice and showed
+  // the bare word "forbidden" (QA-019, QA-195). Only a 401 (the token itself
+  // not accepted) refreshes, above.
   // only for something the user DID: a panel's background read that needs an
   // account shows that inline, it does not throw a sign-up in their face
   if (resp.status === 403 && (init.method ?? "GET").toUpperCase() !== "GET") {
