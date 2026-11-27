@@ -17,7 +17,8 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Circle, GraduationCap, Plug, Settings as SettingsIcon } from "lucide-react";
 import { api, renewSession } from "./api";
 import { C, MONO, btn } from "./theme";
-import { navigate, useRoute } from "./router";
+import { navigate, safeDecode, useRoute } from "./router";
+import PageGuard from "./components/PageGuard";
 import { MODE_LABEL, isConnected, isGuestToken, useApp } from "./store";
 import GuestSession, { guestTimeLeft } from "./components/GuestSession";
 import { track } from "./funnel";
@@ -229,7 +230,7 @@ export default function App() {
             : head === "memory" ? <TeamMemory />
             : head === "pair" ? <Pair token={runIdParam} withToken={route.query.with} node={route.query.node} />
             : runIdParam === "run" && route.segments[2]
-              ? <RunControl runId={decodeURIComponent(route.segments[2])} />
+              ? <RunControl runId={safeDecode(route.segments[2])} />
               : <ControlTab focusNode={runIdParam} />}
         </>
       )}
@@ -237,11 +238,11 @@ export default function App() {
         : menu.journey === "both" ? <><CodingPolicy /><div style={{ height: 40 }} /><ConfigBuilder /></>
           : <ConfigBuilder />)}
       {key === "skills" && <Skills />}
-      {key === "skill-evals" && <SkillEvals evalId={runIdParam ? decodeURIComponent(runIdParam) : undefined} />}
+      {key === "skill-evals" && <SkillEvals evalId={runIdParam ? safeDecode(runIdParam) : undefined} />}
       {key === "connect" && <Onboarding />}
       {key === "pricing" && <Pricing />}
       {key === "settings" && <Settings tab={route.query.tab} />}
-      {key === "invite" && runIdParam && <Invite token={decodeURIComponent(runIdParam)} />}
+      {key === "invite" && runIdParam && <Invite token={safeDecode(runIdParam)} />}
       {!KNOWN.includes(key) && (
         <div style={{ maxWidth: 640, margin: "0 auto", fontFamily: MONO, fontSize: 12.5, color: C.mut }}>
           No page at <span style={{ color: C.text }}>#/{route.segments.join("/")}</span>.{" "}
@@ -261,7 +262,7 @@ export default function App() {
             view={key === "govern" && governView !== "govern"
               ? (GOVERN_VIEWS.find(([r]) => r === governView)?.[1] ?? "") : ""}
             connectPage={key === "connect"} settingsPage={key === "settings"} onSignedUp={signedUp} />
-          <div style={{ padding: "0 24px" }}>{body}</div>
+          <div style={{ padding: "0 24px" }}><PageGuard key={route.raw}>{body}</PageGuard></div>
         </main>
         <Tour />
         <WorkspaceJourney />
@@ -274,7 +275,7 @@ export default function App() {
   return (
     <div style={{ minHeight: "100vh", background: C.bg, color: C.text, fontFamily: "Inter, system-ui, sans-serif", padding: "28px 20px" }}>
       {header}
-      {body}
+      <PageGuard key={route.raw}>{body}</PageGuard>
       <Tour />
       <WorkspaceJourney />
       <RoleSync />

@@ -11,6 +11,17 @@ export interface Route {
   raw: string;
 }
 
+/** decodeURIComponent that keeps a malformed escape as written: a link cut
+ *  short by a mail client ("%E0%A4%A") threw a URIError while rendering and
+ *  blanked the whole app (QA-043). */
+export function safeDecode(s: string): string {
+  try {
+    return decodeURIComponent(s);
+  } catch {
+    return s;
+  }
+}
+
 function parse(hash: string): Route {
   const raw = hash.replace(/^#\/?/, "");
   const [pathPart, queryPart] = raw.split("?");
@@ -19,7 +30,7 @@ function parse(hash: string): Route {
   if (queryPart) {
     for (const pair of queryPart.split("&")) {
       const [k, v] = pair.split("=");
-      if (k) query[decodeURIComponent(k)] = decodeURIComponent(v ?? "");
+      if (k) query[safeDecode(k)] = safeDecode(v ?? "");
     }
   }
   return { segments, query, raw };

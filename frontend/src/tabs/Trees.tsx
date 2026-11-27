@@ -10,7 +10,7 @@ import { askConfirm, askPrompt } from "../components/Ask";
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, type TreeItem, type TreeNode, type TreeRun } from "../api";
-import { navigate } from "../router";
+import { navigate, safeDecode } from "../router";
 import { errorWords } from "../refusal";
 import { useApp } from "../store";
 import { C, MONO, btn } from "../theme";
@@ -28,7 +28,7 @@ function Shell({ children }: { children: React.ReactNode }) {
 }
 
 export default function Trees({ treeRun }: { treeRun?: string }) {
-  return treeRun ? <TreeView treeRun={decodeURIComponent(treeRun)} /> : <TreeList />;
+  return treeRun ? <TreeView treeRun={safeDecode(treeRun)} /> : <TreeList />;
 }
 
 function TreeList() {
