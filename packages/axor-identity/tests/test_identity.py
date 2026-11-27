@@ -68,6 +68,10 @@ async def test_duplicate_email_is_409(client: httpx.AsyncClient) -> None:
                          json={"email": "DUP@acme.io", "password": PW,
                                "org_name": "Other"})
     assert r.status_code == 409  # email normalized to lower-case
+    # QA-048: sign-up says an address has an account (it signs in at once, so
+    # it cannot answer like a success) — and says what to do instead
+    assert r.json()["detail"] == ("that address already has an account — log in, "
+                                  "or reset the password if you forgot it")
 
 
 # ── login ─────────────────────────────────────────────────────────────────────
