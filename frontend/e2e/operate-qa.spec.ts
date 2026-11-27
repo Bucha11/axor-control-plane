@@ -219,3 +219,25 @@ test.describe("Replay addresses (QA-089)", () => {
     expect(asked[0]).toContain("/v1/replay/no%20such%20run");
   });
 });
+
+test("the proxy's test run keeps its setup and tools across a reload; a long name is refused (QA-050, QA-051)", async ({ page, request }) => {
+  await request.put(`${BACKEND}/v1/policy`, { data: { tools: {} } });
+  await goHash(page, "connect?for=production");
+  await page.getByTestId("prod-way-proxy").click();
+  await page.getByTestId("proxy-mode-test").click();
+  const name = page.getByPlaceholder("tool name ⏎");
+  const url = page.getByPlaceholder("https://endpoint ⏎");
+  await name.fill("x".repeat(5000));
+  await url.fill("https://long.example");
+  await url.press("Enter");
+  await expect(page.getByTestId("proxy-add-error")).toContainText("a tool name is at most 64 characters (this one has 5000)");
+  await name.fill("kept_tool");
+  await url.fill("https://kept.example/api");
+  await url.press("Enter");
+  await expect(page.getByTestId("proxy-add-error")).toHaveCount(0);
+  await page.reload();
+  await expect(page.getByTestId("proxy-mode-test")).toHaveAttribute("aria-pressed", "true");
+  await expect(page.getByText("https://kept.example/api")).toBeVisible();
+  await expect(page.getByTestId("prod-way-chooser")).toHaveCount(0);
+  await request.put(`${BACKEND}/v1/policy`, { data: { tools: {} } });
+});
