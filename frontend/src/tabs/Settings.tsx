@@ -1457,7 +1457,8 @@ export default function Settings({ tab = "workspace" }: { tab?: string } = {}) {
             </div>
             {(subscriptions.data ?? []).map((s, i) => (
               <div key={i} className="flex items-center gap-2" style={{ fontFamily: MONO, fontSize: 11, color: C.mut, marginTop: 4 }}>
-                <span>
+                {/* a long address wraps, not widens the page (QA-062) */}
+                <span style={{ flex: 1, minWidth: 0, overflowWrap: "anywhere" }}>
                   {s.label ? `[${s.label}] ` : ""}{s.url} · {s.triggers
                     .map((id) => TRIGGERS.find((t) => t.id === id)?.label.split(" — ")[0] ?? id).join("; ")}
                   {s.node_pattern !== "*" ? ` · nodes: ${s.node_pattern}` : ""}
@@ -1504,7 +1505,7 @@ export default function Settings({ tab = "workspace" }: { tab?: string } = {}) {
           </div>
         ) : (
           (deadLetters.data ?? []).map((d, i) => (
-            <div key={i} style={{ fontFamily: MONO, fontSize: 11, color: C.amber, marginTop: 4 }}>
+            <div key={i} style={{ fontFamily: MONO, fontSize: 11, color: C.amber, marginTop: 4, overflowWrap: "anywhere" }}>
               {d.trigger} → {d.url} · {d.error} ({d.attempts} attempts)
               {d.created_ts ? ` · ${localTime(d.created_ts, true)}` : ""}
             </div>

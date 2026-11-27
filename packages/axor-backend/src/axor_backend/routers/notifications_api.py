@@ -21,6 +21,11 @@ from axor_backend.tenancy import current_org_id
 
 router = APIRouter(prefix="/v1/notifications", tags=["notifications"])
 
+# The stored column is 500 characters (storage.subscriptions.url). A longer
+# address reached the INSERT and came back as a bare 500 (QA-062); a real
+# webhook address is far shorter.
+MAX_WEBHOOK_URL = 500
+
 
 def _text(body: dict, field: str, *, required: bool = False) -> str:
     """One string field, or a 400 naming it.
@@ -121,6 +126,9 @@ async def notif_subscribe(
     from axor_backend.notifications import WebhookRefused
 
     url = _text(body, "url", required=True)
+    if len(url) > MAX_WEBHOOK_URL:
+        raise HTTPException(400, f"the address is {len(url)} characters long — "
+                                 f"an alert address can be at most {MAX_WEBHOOK_URL}")
     _mail_allowed(request, url)
     triggers = _triggers(body)
     debounce = _debounce(body)

@@ -350,9 +350,9 @@ export default function AuditTrail() {
             <span style={{ color: C.text }}>{it.who || "—"}</span>
             <span>{WORDS[it.action] ?? it.action}</span>
             {it.target && (
-              <span style={{ color: C.steel }} title={it.target}>{titleOf.get(it.target) ?? it.target}</span>
+              <span style={{ color: C.steel, overflowWrap: "anywhere" }} title={it.target}>{titleOf.get(it.target) ?? it.target}</span>
             )}
-            {detailWords(it) && <span style={{ color: C.dim }}>{detailWords(it)}</span>}
+            {detailWords(it) && <span style={{ color: C.dim, overflowWrap: "anywhere" }}>{detailWords(it)}</span>}
           </div>
         ))}
       </div>
