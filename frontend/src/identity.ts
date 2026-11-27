@@ -105,7 +105,7 @@ export async function inviteInfo(token: string): Promise<InviteInfo> {
 /** This page, as a way back for an e-mailed link or a provider sign-in. */
 export function here(): string {
   const params = new URLSearchParams(window.location.search);
-  for (const k of ["axor_login", "axor_login_error", "axor_verify", "axor_reset", "axor_org"]) params.delete(k);
+  for (const k of ["axor_login", "axor_login_error", "axor_verify", "axor_reset", "axor_org", "axor_invite"]) params.delete(k);
   const query = params.toString();
   return window.location.pathname + (query ? `?${query}` : "") + window.location.hash;
 }
@@ -223,7 +223,7 @@ export function ssoStartUrl(email: string): string {
 
 /** What a provider sign-in or an e-mailed link left in the address bar,
  * removed from it so a reload or a copied link does not carry it. */
-export function takeAuthReturn(): { code?: string; org?: string; error?: string; verify?: string; reset?: string; invite?: string } | null {
+export function takeAuthReturn(): { code?: string; org?: string; error?: string; verify?: string; reset?: string } | null {
   const params = new URLSearchParams(window.location.search);
   const got = {
     code: params.get("axor_login") ?? undefined,
@@ -231,10 +231,23 @@ export function takeAuthReturn(): { code?: string; org?: string; error?: string;
     error: params.get("axor_login_error") ?? undefined,
     verify: params.get("axor_verify") ?? undefined,
     reset: params.get("axor_reset") ?? undefined,
-    invite: params.get("axor_invite") ?? undefined,
   };
-  if (!got.code && !got.error && !got.verify && !got.reset && !got.invite) return null;
+  if (!got.code && !got.error && !got.verify && !got.reset) return null;
   window.history.replaceState(null, "", here());
   return got;
+}
+
+/** The invitation link identity e-mails is `/?axor_invite=<token>`. Turned
+ * into `#/invite/<token>` before the app first renders (QA-150): run from an
+ * effect it lost to the "no route → Home" redirect, and an anonymous visitor
+ * landed on Home with the token still in the address bar. */
+export function openInviteLink(): void {
+  const params = new URLSearchParams(window.location.search);
+  const token = params.get("axor_invite");
+  if (!token) return;
+  params.delete("axor_invite");
+  const query = params.toString();
+  window.history.replaceState(null, "", window.location.pathname + (query ? `?${query}` : "")
+    + `#/invite/${encodeURIComponent(token)}`);
 }
 

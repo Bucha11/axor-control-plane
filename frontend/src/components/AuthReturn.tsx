@@ -34,8 +34,6 @@ export default function AuthReturn() {
     if (!back) return;
     if (back.error) setNote({ text: back.error, ok: false });
     if (back.reset) setResetToken(back.reset);
-    // an e-mailed invitation opens its page
-    if (back.invite) window.location.hash = `#/invite/${encodeURIComponent(back.invite)}`;
     if (back.verify) {
       verifyEmail(back.verify)
         .then((r) => {

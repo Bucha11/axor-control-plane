@@ -785,6 +785,24 @@ test.describe("days are the viewer's local day", () => {
 });
 
 
+// QA-150: the link identity e-mails is /?axor_invite=<token>; an anonymous
+// visitor landed on Home, the token still in the address bar.
+test.describe("an e-mailed invitation link", () => {
+  for (const [form, url] of [["?axor_invite=", "/?axor_invite=tok-mail"], ["#/invite/", "/#/invite/tok-mail"]]) {
+    test(`opens the invitation for anyone (${form})`, async ({ page }) => {
+      await page.route("**/identity/v1/invites/tok-mail", jsonRoute(200, {
+        org_name: "Acme", role: "member", for_email: null, expires_ts: "2026-12-01T00:00:00Z" }));
+      await page.goto(url);
+      await expect(page.getByTestId("invite")).toContainText("Join Acme");
+      await expect(page).toHaveURL(/#\/invite\/tok-mail$/);
+      expect(page.url()).not.toContain("axor_invite");
+      // and it stays there: nothing routes it on to Home afterwards
+      await page.waitForTimeout(1000);
+      await expect(page.getByTestId("invite")).toBeVisible();
+    });
+  }
+});
+
 // QA-154: a member taken off the team kept reading until the access token
 // expired. The plane now refuses the token; the refresh says why, and so does
 // the page.
