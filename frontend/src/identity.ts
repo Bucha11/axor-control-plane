@@ -251,3 +251,23 @@ export function openInviteLink(): void {
     + `#/invite/${encodeURIComponent(token)}`);
 }
 
+// What a failed provider or SSO sign-in is said with (QA-235). The reason
+// arrives in the address (`?axor_login_error=`), so anyone can write one into a
+// link: it is never shown as it came. A reason this app knows is shown in its
+// own fixed words; anything else is the generic sentence.
+const LOGIN_ERRORS: [RegExp, string][] = [
+  [/cancel|access_denied/i, "sign-in was cancelled"],
+  [/could not be reached|unreachable|temporarily_unavailable/i, "the sign-in provider could not be reached — try again"],
+  [/not verified|no verified|has not verified/i, "the provider has not verified that e-mail address"],
+  [/does not take new ones|signup is closed/i, "this installation does not take new accounts"],
+  [/single sign-on — use|sso_required/i, "your workspace signs in with single sign-on — use “Sign in with SSO”"],
+  [/no single sign-on/i, "no single sign-on for that address — sign in with your password"],
+  [/single sign-on was (changed|turned off)/i, "single sign-on was changed for this workspace — start again"],
+  [/not at a domain/i, "that address is not one this workspace signs in with single sign-on"],
+  [/no organization membership|no workspace/i, "this account has no workspace yet — sign up with the same address and password to create one"],
+];
+const LOGIN_ERROR_GENERIC = "sign-in did not complete — try again";
+
+export function loginErrorWords(reason: string): string {
+  return LOGIN_ERRORS.find(([pattern]) => pattern.test(reason))?.[1] ?? LOGIN_ERROR_GENERIC;
+}

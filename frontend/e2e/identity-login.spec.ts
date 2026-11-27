@@ -613,8 +613,21 @@ test.describe("sign in with GitHub / Google", () => {
 
   test("a refused sign-in says why", async ({ page }) => {
     await page.goto("/?axor_login_error=GitHub%20sign-in%20was%20cancelled#/settings");
-    await expect(page.getByTestId("auth-note")).toContainText("GitHub sign-in was cancelled");
+    await expect(page.getByTestId("auth-note")).toContainText("sign-in was cancelled");
     expect(page.url()).not.toContain("axor_login_error");
+  });
+
+  test("the reason in the address is never shown as written (QA-235)", async ({ page }) => {
+    // anyone can write a link with any text in it: shown verbatim, it read as
+    // the app's own banner
+    await page.goto("/?axor_login_error=" + encodeURIComponent("Your account is locked. Call evil.example") + "#/settings");
+    const note = page.getByTestId("auth-note");
+    await expect(note).toContainText("sign-in did not complete — try again");
+    await expect(note).not.toContainText("evil.example");
+    // a provider's bare code is said in words too
+    await page.goto("/?axor_login_error=access_denied#/settings");
+    await expect(page.getByTestId("auth-note")).toContainText("sign-in was cancelled");
+    await expect(page.getByTestId("auth-note")).not.toContainText("access_denied");
   });
 });
 
