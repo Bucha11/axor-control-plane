@@ -283,3 +283,82 @@ test.describe("signing in (QA-052, QA-053)", () => {
     expect(sent).toBe(0);
   });
 });
+
+test.describe("operating screens say what is going on (QA-090, QA-091)", () => {
+  test("an example node commanded says it takes no commands", async ({ page, request }) => {
+    expect((await request.post(`${BACKEND}/v1/demo/seed-fleet`)).ok()).toBeTruthy();
+    // a pause sent to it earlier: commanded, never applied
+    await page.route("**/v1/plane/nodes", async (route) => {
+      const all = await (await request.get(`${BACKEND}/v1/plane/nodes`)).json() as
+        { node_id: string; example?: boolean; desired: unknown; reported: { applied_version?: number } | null }[];
+      for (const n of all) {
+        if (n.node_id === "tree-writer") n.desired = { version: 99, state: { paused: true } };
+      }
+      await route.fulfill({ json: all });
+    });
+    await setConnection(page, { mode: "adapter" });
+    await goHash(page, "govern/tree-writer");
+    await expect(page.getByTestId("example-no-commands")).toContainText("example node — it takes no commands");
+    await expect(page.getByText(/applying pause/)).toHaveCount(0);
+    await page.unrouteAll({ behavior: "ignoreErrors" });
+  });
+
+  test("inject, when it is off, says why", async ({ page, request }) => {
+    const node = uniqueNode("gov-inject");
+    await seedNode(request, node);
+    await setConnection(page, { mode: "adapter" });
+    await goHash(page, "control");
+    await page.getByTestId(`agent-row-${node}`).click();
+    await page.getByRole("button", { name: "more…" }).click();
+    await expect(page.getByRole("button", { name: /Inject next turn/ })).toBeDisabled();
+    await expect(page.getByTestId("inject-why")).toContainText("test-bench agents only");
+  });
+
+  test("the governed demo's incident is the demo's, not a chaos test", async ({ page, request }) => {
+    expect((await request.post(`${BACKEND}/v1/demo/seed-tree-run`)).ok()).toBeTruthy();
+    await page.route("**/v1/incidents**", async (route) => {
+      const body = await (await route.fetch()).json();
+      body.items = body.items.slice(0, 1).map((i: Record<string, unknown>) => ({ ...i, scenario: "governed" }));
+      await route.fulfill({ json: body });
+    });
+    await setConnection(page, { mode: "adapter" });
+    await goHash(page, "evidence");
+    const list = page.getByTestId("evidence-list");
+    await expect(list).toContainText("the governed demo");
+    await expect(list).not.toContainText("a chaos test");
+  });
+
+  test("the header says example data for the example, whichever link switched the connection", async ({ page }) => {
+    await setConnection(page, { mode: "demo" });
+    await goHash(page, "evidence");
+    await expect(page.getByRole("button", { name: "connection: example data" })).toBeVisible();
+    await expect(page.getByText("demo-mode · mock tools")).toHaveCount(0);
+  });
+
+  test("at 390 the case's buttons and the cap field fit their labels", async ({ page, request }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await goHash(page, "catch?auto=1");
+    const replay = page.getByRole("button", { name: /Replay this moment/ });
+    await expect(replay).toBeVisible({ timeout: 20_000 });
+    for (const b of [replay, page.getByTestId("case-export")]) {
+      expect((await b.boundingBox())!.height).toBeLessThan(30);
+    }
+    const node = uniqueNode("gov-cap390");
+    await seedNode(request, node);
+    await setConnection(page, { mode: "adapter" });
+    await goHash(page, `govern/${node}`);
+    const cap = page.getByPlaceholder("set / lower");
+    await expect(cap).toBeVisible();
+    const fits = await cap.evaluate((el: HTMLInputElement) => {
+      const s = getComputedStyle(el);
+      const probe = document.createElement("span");
+      probe.style.font = s.font;
+      probe.textContent = el.placeholder;
+      document.body.appendChild(probe);
+      const need = probe.getBoundingClientRect().width;
+      probe.remove();
+      return need <= el.clientWidth - parseFloat(s.paddingLeft) - parseFloat(s.paddingRight);
+    });
+    expect(fits).toBe(true);
+  });
+});

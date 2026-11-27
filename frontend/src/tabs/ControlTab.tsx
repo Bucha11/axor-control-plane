@@ -882,7 +882,13 @@ function ControlBody({ focusNode, testBench }: { focusNode?: string; testBench: 
               <span style={{ color: node.profile?.title ? C.dim : C.text, fontSize: node.profile?.title ? 11 : 13 }}>{node.node_id}</span>
             </span>
             )}
-            {applying ? (
+            {applying && node.example ? (
+              // nothing runs behind an example: "applying pause…" waited
+              // forever (QA-090)
+              <span data-testid="example-no-commands" style={{ fontFamily: MONO, fontSize: 11, color: C.dim }}>
+                example node — it takes no commands; yours do
+              </span>
+            ) : applying ? (
               <span style={{ fontFamily: MONO, fontSize: 11, color: C.amber }}>
                 applying {Object.entries(desired?.state ?? {}).map(([k, v]) => stateWords(k, v)).join(", ")}…
               </span>
@@ -987,7 +993,8 @@ function ControlBody({ focusNode, testBench }: { focusNode?: string; testBench: 
               placeholder={isCodingNode(node) ? "N more calls" : "set / lower"}
               aria-label="budget"
               disabled={stopped || command.isPending}
-              style={{ width: 92, background: C.bg, border: `1px solid ${C.line}`, borderRadius: 4, color: C.text, fontFamily: MONO, fontSize: 11, padding: "4px 7px", outline: "none" }}
+              // wide enough for its placeholder, at 390 too, where fields are 16px (QA-091)
+              style={{ width: 132, flexShrink: 0, background: C.bg, border: `1px solid ${C.line}`, borderRadius: 4, color: C.text, fontFamily: MONO, fontSize: 11, padding: "4px 7px", outline: "none" }}
             />
             <Tooltip content="Cap how many tool calls this agent may still make. While it runs a cap can only be lowered (the agent refuses a raise); remove it and restart the agent to lift it.">
               <button
@@ -1110,6 +1117,12 @@ function ControlBody({ focusNode, testBench }: { focusNode?: string; testBench: 
                   <Syringe size={12} /> Inject next turn
                 </button>
               </Tooltip>
+              {/* a disabled button shows no tooltip: the reason is said beside it (QA-090) */}
+              {!benchOk && !stopped && (
+                <span data-testid="inject-why" style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim, alignSelf: "center" }}>
+                  inject: test-bench agents only
+                </span>
+              )}
               </>}
             </div>
           )}

@@ -600,12 +600,16 @@ function VersionBadge() {
 
 function ConnectionBadge({ onConnect }: { onConnect: boolean }) {
   const { mode } = useApp((s) => s.connection);
-  // the coding example runs on the demo connection, but "mock tools" is the
-  // production proxy's demo — for a coding visitor it is example data
-  const nodes = useQuery({ queryKey: ["nodes"], queryFn: api.nodes, enabled: mode === "demo" });
+  // One word for what is on screen, decided once the plane has answered: it
+  // flipped between "demo-mode · mock tools", "example data" and "connected ·
+  // your agents" as the example's links switched the connection (QA-091). The
+  // demo connection is the example agent; an adapter connection holding only
+  // the example shows example data too.
+  const nodes = useQuery({ queryKey: ["nodes"], queryFn: api.nodes, enabled: mode === "demo" || mode === "adapter" });
   const ids = (nodes.data ?? []).map((n) => n.node_id);
-  const label = mode === "demo" && (codingExampleOnly(ids) || fleetExampleOnly(ids))
+  const label = mode === "demo" || (mode === "adapter" && (codingExampleOnly(ids) || fleetExampleOnly(ids)))
     ? "example data" : MODE_LABEL[mode];
+  const known = mode !== "adapter" || nodes.isSuccess || nodes.isError;
   // On the connect page itself a "connect" button leads where you already are.
   if (mode === "none" && onConnect) return null;
   if (mode === "none") {
@@ -634,7 +638,7 @@ function ConnectionBadge({ onConnect }: { onConnect: boolean }) {
     >
       <Circle size={7} fill={color} color={color} />
       {/* on a phone the dot alone: the full mode is one tap away, on Connect */}
-      <span className="hide-narrow" style={{ fontFamily: MONO, fontSize: 10.5, color: C.mut, whiteSpace: "nowrap" }}>{label}</span>
+      <span className="hide-narrow" style={{ fontFamily: MONO, fontSize: 10.5, color: C.mut, whiteSpace: "nowrap" }}>{known ? label : ""}</span>
     </button>
   );
 }

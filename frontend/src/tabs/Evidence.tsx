@@ -77,6 +77,8 @@ const EXAMPLES = new Set(["adapter-demo", "multi-agent-demo", "coding-demo", "sk
 const TESTS = new Set(["tool-deprivation", "exfil", "injection"]);
 function source(scenario?: string, brokenOnPurpose = false): string {
   if (scenario && EXAMPLES.has(scenario)) return "example data";
+  // the spawned governed node: its denial is the demo's, not a chaos test (QA-090)
+  if (scenario === "governed" || scenario === "governed-tree") return "the governed demo";
   // a wrapped agent's test bench breaks a tool inside its live run
   if ((scenario && TESTS.has(scenario)) || brokenOnPurpose) return "a chaos test";
   return "live work";
