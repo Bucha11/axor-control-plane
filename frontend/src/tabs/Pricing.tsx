@@ -325,6 +325,10 @@ export default function Pricing() {
                             retry: false, enabled: !guest });
   const org = status.data?.licensed_to;
   const hosted = status.data?.hosted === true;
+  // only a plane that SAID it is self-hosted gets the operator's sentence: a
+  // status that could not be read (a visitor whose guest session was refused
+  // gets 401) is a hosted plane not known yet — never an env var's name (QA-232)
+  const selfHosted = status.data?.hosted === false;
   return (
     <div style={{ maxWidth: 1040, margin: "0 auto" }}>
       <Coach id="pricing" title="Pricing — one ladder">
@@ -470,9 +474,9 @@ export default function Pricing() {
                   style={{ fontFamily: MONO, fontSize: 9.5, color: C.dim, marginTop: 8, lineHeight: 1.4 }}>
                   {guest
                     ? "sign up or sign in to pay by card — a guest session has no workspace to license"
-                    : hosted
-                    ? "sign in to a workspace to pay by card"
-                    : "to pay by card, set AXOR_ORG on this deployment — the license names it"}
+                    : selfHosted
+                    ? "to pay by card, set AXOR_ORG on this deployment — the license names it"
+                    : "sign in to a workspace to pay by card"}
                 </div>
               )}
               {/* A per-developer plan has no base price, so its checkout shows

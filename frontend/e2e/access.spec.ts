@@ -179,4 +179,33 @@ test.describe("access (QA, 0.7.3)", () => {
     await expect(panel.getByLabel("skill to turn off")).toHaveCount(0);
     await expect(panel.getByRole("button", { name: /turn off|turn back on/ })).toHaveCount(0);
   });
+
+  test("a guest is not offered the audit tab (QA-238)", async ({ page }) => {
+    await page.route("**/v1/auth/status", (r) => {
+      const bearer = r.request().headers()["authorization"] ?? "";
+      return r.fulfill({ json: bearer.includes("gs_")
+        ? { auth_enabled: true, authenticated: true, guest: true, guest_sessions: true, scopes: MEMBER }
+        : { auth_enabled: true, authenticated: false, guest_sessions: true, scopes: [] } });
+    });
+    await page.route("**/v1/auth/guest", (r) => r.fulfill({ status: 201, json: {
+      token: "gs_e2e_guest_token", org: "guest_e2e", ttl_seconds: 1800,
+      expires_at: new Date(Date.now() + 29 * 60_000).toISOString() } }));
+    await goHash(page, "settings");
+    await page.waitForFunction(() => (sessionStorage.getItem("axor-app") ?? "").includes("gs_e2e_guest_token"));
+    await expect(page.getByTestId("settings-tab-alerts")).toBeVisible();
+    await page.waitForTimeout(500);
+    await expect(page.getByTestId("settings-tab-audit")).toHaveCount(0);
+  });
+
+  test("a visitor whose guest session was refused sees no self-hosted pricing copy (QA-232)", async ({ page }) => {
+    await page.route("**/v1/auth/status", (r) => r.fulfill({ json: {
+      auth_enabled: true, authenticated: false, guest_sessions: true, scopes: [] } }));
+    await page.route("**/v1/auth/guest", (r) => r.fulfill({ status: 429, headers: { "retry-after": "60" },
+      json: { detail: "too many guest sessions" } }));
+    await page.route("**/v1/license/status", (r) => r.fulfill({ status: 401, json: { error: "unauthorized" } }));
+    await goHash(page, "pricing?for=coding");
+    const note = page.getByTestId("card-needs-org").first();
+    await expect(note).toHaveText("sign in to a workspace to pay by card");
+    await expect(page.locator("body")).not.toContainText("AXOR_");
+  });
 });
