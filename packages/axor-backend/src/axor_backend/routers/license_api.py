@@ -456,22 +456,25 @@ async def license_billing(state: StateDep, store: StoreDep) -> dict:
         "priced": rate is not None,
     }
     out: dict = {"plan": plan, "current": None, "history": [], "if_paid": [], "forecast": None}
+    # Month by month on every plan, the free one too: what ran here each month
+    # and what it came to on the plan in force ($0 on Free). The tab showed a
+    # free workspace no months at all — only three paid plans side by side.
+    name = lic.organization if lic else ""
+    ceiling = lic.governed_node_ceiling if lic else TIER_NODE_CEILING["community"]
+    out["current"] = await _month_statement(store, this_month, name, tier, ceiling)
     if lic is not None:
-        name = lic.organization
-        out["current"] = await _month_statement(store, this_month, name, tier,
-                                                lic.governed_node_ceiling)
-        out["forecast"] = await _forecast(store, out["current"], tier, lic.governed_node_ceiling)
-        on = date.fromisoformat(f"{this_month}-01")
-        for _ in range(BILLING_HISTORY):
-            on = (on - timedelta(days=1)).replace(day=1)
-            out["history"].append(await _month_statement(
-                store, on.strftime("%Y-%m"), name, tier, lic.governed_node_ceiling))
-        # months before anything ran here are not months of this workspace: a
-        # workspace made yesterday listed half a year of $0.00 statements (QA-137)
-        while out["history"] and not out["history"][-1].get("peak_nodes") \
-                and not out["history"][-1].get("developers"):
-            out["history"].pop()
-    else:
+        out["forecast"] = await _forecast(store, out["current"], tier, ceiling)
+    on = date.fromisoformat(f"{this_month}-01")
+    for _ in range(BILLING_HISTORY):
+        on = (on - timedelta(days=1)).replace(day=1)
+        out["history"].append(await _month_statement(
+            store, on.strftime("%Y-%m"), name, tier, ceiling))
+    # months before anything ran here are not months of this workspace: a
+    # workspace made yesterday listed half a year of $0.00 statements (QA-137)
+    while out["history"] and not out["history"][-1].get("peak_nodes") \
+            and not out["history"][-1].get("developers"):
+        out["history"].pop()
+    if lic is None:
         # what this month would cost on each paid rung — the user's own usage,
         # the list prices; an estimate, said so
         for rung in ("coding", "team", "security"):

@@ -108,27 +108,20 @@ test.describe("settings", () => {
       if (r.method() === "GET" && (path === "/v1/funnel" || path === "/v1/license/invoice")) asked.push(path);
     });
     await goHash(page, "settings?tab=billing");
-    const usage = page.getByTestId("usage-billing");
-    await expect(usage.getByText(/there is nothing to bill/)).toBeVisible();
+    await expect(page.getByTestId("billing-months")).toBeVisible();
     await page.getByTestId("settings-tab-workspace").click();
     await expect(page.getByTestId("license-fold")).toBeVisible();
     expect(asked).toEqual([]);
   });
 
-  test("the meter and the statement drawn from it are visible", async ({ page }) => {
-    // Measured, priced, tested — and reachable only by curl, so a customer
-    // could not see their own fleet history or their own bill.
+  test("each month opens to its statement: the peak day it is billed on", async ({ page }) => {
+    // The meter and its statement were reachable only by curl, then lived in
+    // two panels beside the bill; they are the month rows' own detail now.
     await goHash(page, "settings?tab=billing");
-    const usage = page.getByTestId("usage-billing");
-    await expect(usage).toBeVisible();
-    await expect(usage.getByText(/A month is billed on its PEAK/)).toBeVisible();
-    await expect(usage.getByText("STATEMENT", { exact: false })).toBeVisible();
-    // No license on the e2e deployment: the statement says so honestly rather
-    // than rendering an empty bill, and usage is still measured.
-    // Deliberately not asserting the meter is empty: the suite seeds governed
-    // nodes elsewhere, and a test that only passes when it runs first is a test
-    // about ordering, not about this panel.
-    await expect(usage.getByText(/there is nothing to bill/)).toBeVisible();
+    const months = page.getByTestId("billing-months");
+    await expect(months).toBeVisible();
+    await months.getByRole("button").first().click();
+    await expect(months.getByTestId("bill-nodes").first()).toContainText("governed nodes at the peak");
   });
 
   test("the license panel reports the live posture, not just a paste", async ({ page }) => {
@@ -168,9 +161,11 @@ test.describe("settings", () => {
     await expect(fold).toContainText("a license applied here will renew itself before it expires");
     await expect(fold).not.toContainText("AXOR_");
     await page.getByTestId("settings-tab-billing").click();
-    const team = page.getByTestId("if-paid-team");
-    await expect(team).toContainText("the plan's price alone — nothing used yet");
-    await expect(team).not.toContainText("so far this month");
+    // one paid plan that fits, said as what this month WOULD come to — not a
+    // base price called "so far this month" (QA-035)
+    const hint = page.getByTestId("billing-upgrade-hint");
+    await expect(hint).toContainText("this month would come to $299.00");
+    await expect(hint).not.toContainText("so far this month");
   });
 
   test("tabs follow the journey:a coding team sees no security tab, plain alerts, keys with the lines to use them", async ({ page }) => {
@@ -199,11 +194,12 @@ test.describe("settings", () => {
     await expect(tabs.getByRole("tab", { name: "security" })).toHaveCount(0);
     await tabs.getByRole("tab", { name: "billing" }).click();
     await expect(page.getByTestId("billing-plan")).toContainText("Free");
-    await expect(page.getByTestId("developer-usage")).toContainText("developer");
-    await expect(page.getByTestId("usage-billing")).toHaveCount(0);
-    // on the free plan: what this month would cost, from this workspace's own usage
-    await expect(page.getByTestId("if-paid-coding")).toContainText("developers whose agents ran");
-    await expect(page.getByTestId("if-paid-security")).toHaveCount(0);
+    await expect(page.getByTestId("billing-months")).toContainText("DEVELOPERS");
+    await expect(page.getByTestId("billing-months")).not.toContainText("AGENTS AT PEAK");
+    // on the free plan: month by month at $0, and the one paid plan that fits
+    await expect(page.getByTestId("billing-months")).toContainText("so far");
+    await expect(page.getByTestId("billing-upgrade-hint")).toContainText("On Coding, this month would come to");
+    await expect(page.getByTestId("billing-upgrade-hint")).not.toContainText("Security");
     await tabs.getByRole("tab", { name: "alerts" }).click();
     await expect(page).toHaveURL(/tab=alerts/);
     await expect(page.getByLabel(/its own run contradicts/)).toBeVisible();
@@ -332,13 +328,42 @@ test.describe("settings", () => {
     await expect(form).toContainText("needs at least one node in scope_nodes");
   });
 
-  test("billing for production: the plan, and what this month would cost on Team and Security", async ({ page }) => {
+  test("billing: the plan, month by month, and one paid plan that fits", async ({ page }) => {
+    // The tab showed a free workspace Coding, Team and Security side by side
+    // and no months at all: now the months, at $0 on Free, and one line for
+    // the plan that fits.
+    const st = (month: string, devs: number, peak: number, provisional: boolean) => ({
+      month, organization: "", workspace_tier: "community", currency: "USD", base_cents: 0,
+      base: "$0.00", included_nodes: 1, peak_nodes: peak, peak_day: null, billable_nodes: 0,
+      overage_cents: 0, overage: "$0.00", included_developers: 0, active_developers: devs,
+      billable_developers: devs, seats: "$0.00", seat_cents: 0, total: "$0.00", total_cents: 0,
+      provisional, priced: true, note: "", computed_on: "2026-11-27",
+      developers: [{ developer: "dev-aaaaaaaaaaaa", sessions: 3, agents: ["claude-code"], first_day: `${month}-02`, seated: true }],
+      seat_cap: null, over_cap: 0 });
+    await page.route("**/v1/license/billing", (r) => r.fulfill({ json: {
+      plan: { tier: "community", licensed: false, organization: "", expires_at: null, base: "$0.00",
+              base_cents: 0, per_node_cents: 0, seat: "$0.00", seat_cents: 0, included_nodes: 1,
+              included_developers: 0, priced: true },
+      current: st("2026-11", 2, 3, true),
+      history: [st("2026-10", 1, 2, false), st("2026-09", 1, 1, false)],
+      if_paid: [
+        { tier: "coding", ...st("2026-11", 2, 3, true), workspace_tier: "coding", total: "$200.00", total_cents: 20000 },
+        { tier: "team", ...st("2026-11", 2, 3, true), workspace_tier: "team", total: "$379.00", total_cents: 37900 },
+        { tier: "security", ...st("2026-11", 2, 3, true), workspace_tier: "security", total: "$1,500.00", total_cents: 150000 }],
+      forecast: null } }));
     await goHash(page, "settings?tab=billing");
     await expect(page.getByTestId("billing-plan")).toContainText("Free");
-    await expect(page.getByTestId("if-paid-team").getByTestId("bill-nodes")).toContainText("governed nodes at the peak");
-    await expect(page.getByTestId("if-paid-team").getByTestId("bill-total")).toContainText("$");
-    await expect(page.getByTestId("if-paid-security")).toBeVisible();
-    await expect(page.getByTestId("usage-billing")).toBeVisible();
+    const months = page.getByTestId("billing-months");
+    await expect(page.getByText("MONTH BY MONTH · on Free")).toBeVisible();
+    await expect(page.getByTestId("billing-month-2026-11")).toContainText("2026-11 · so far");
+    await expect(page.getByTestId("billing-month-2026-10")).toContainText("$0.00");
+    await expect(page.getByTestId("billing-month-2026-09")).toBeVisible();
+    await page.getByTestId("billing-month-2026-10").getByRole("button").click();
+    await expect(page.getByTestId("billing-month-2026-10")).toContainText("dev-aaaaaaaa");
+    // one plan, the cheapest that fits — not three side by side
+    const hint = page.getByTestId("billing-upgrade-hint");
+    await expect(hint).toContainText("On Coding, this month would come to $200.00");
+    await expect(page.getByText("Security Workspace")).toHaveCount(0);
   });
 });
 

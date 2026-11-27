@@ -1142,53 +1142,6 @@ function b64utf8(s: string): string {
   return btoa(bin);
 }
 
-export interface UsageMonth {
-  month: string;
-  // The billing basis: the most nodes on any one day, and which day — a fleet
-  // is as big as it ever ran, and the customer can point at the date.
-  peak_nodes: number;
-  peak_day: string | null;
-  // Exceeds the peak whenever nodes are replaced rather than added, which is
-  // exactly why it is not what gets billed.
-  distinct_nodes: number;
-  days: { day: string; nodes: number }[];
-  over_ceiling: boolean;
-  // the coding-agent meter: developers whose Claude Code / Codex sessions
-  // reported this month (a session is not a governed node)
-  active_developers?: number;
-}
-
-export interface UsageReport {
-  governed_node_ceiling: number | null;
-  developer_seats?: number | null;
-  months: UsageMonth[];
-}
-
-export interface Statement {
-  month: string;
-  organization: string;
-  workspace_tier: string;
-  currency: string;
-  base_cents: number;
-  included_nodes: number;
-  peak_nodes: number;
-  peak_day: string | null;
-  billable_nodes: number;
-  overage_cents: number;
-  total_cents: number;
-  included_developers?: number;
-  active_developers?: number;
-  billable_developers?: number;
-  seat_cents?: number;
-  // The month is still running, so the peak can still rise.
-  provisional: boolean;
-  computed_on: string;
-  // False for a contracted rung: usage measured, total withheld — inventing a
-  // list price would put a figure nobody agreed to in front of a customer.
-  priced: boolean;
-  note: string;
-}
-
 export interface VaultCredential {
   tool: string;
   endpoint: string;
@@ -2259,11 +2212,6 @@ export const api = {
       method: "PUT", headers: { "content-type": "application/json" },
       body: JSON.stringify({ cap }),
     }).then((r) => j<{ seat_cap: number | null; used?: number }>(r)),
-  licenseUsage: (months = 3) =>
-    af(`/v1/license/usage?months=${months}`).then((r) => j<UsageReport>(r)),
-  licenseInvoice: (month?: string) =>
-    af(`/v1/license/invoice${month ? `?month=${month}` : ""}`).then(
-      (r) => j<Statement>(r)),
 
   // ── operator interventions over the plane (spec §12) ───────────────────────
   appendFact: async (nodeId: string, fact: Record<string, unknown>) => {
