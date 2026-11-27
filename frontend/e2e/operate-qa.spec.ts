@@ -1,6 +1,6 @@
 // Operating screens: findings of the 2026-11-27 QA run on 0.7.2.
 import { expect, test } from "@playwright/test";
-import { BACKEND, goHash, setConnection } from "./helpers";
+import { BACKEND, answerAsk, goHash, seedNode, setConnection, uniqueNode } from "./helpers";
 
 test.describe("times on the operating screens", () => {
   test.use({ timezoneId: "Asia/Kathmandu" });   // +05:45: never equal to UTC
@@ -92,4 +92,66 @@ test("the example fleet keeps the spawn actions and can be hidden (QA-082)", asy
   await page.getByRole("button", { name: "Load an example fleet" }).click();
   await expect(page.getByTestId("fleet-example-story")).toBeVisible();
   await page.unrouteAll({ behavior: "ignoreErrors" });
+});
+
+test.describe("operator keys (QA-083)", () => {
+  test("a browser with no key sends no made-up operator, and is told it has no key", async ({ page, request }) => {
+    const node = uniqueNode("gov-nokey");
+    await seedNode(request, node);
+    let body: { operator?: string } = {};
+    await page.route(`**/v1/plane/${node}/command`, (r) => {
+      body = r.request().postDataJSON();
+      return r.fulfill({ status: 403, json: { detail: `unknown operator '${body.operator}'` } });
+    });
+    await setConnection(page, { mode: "adapter" });
+    await goHash(page, "control");
+    await page.getByTestId(`agent-row-${node}`).click();
+    await page.getByRole("button", { name: /Pause/ }).click();
+    await expect(page.getByText(/this browser has no operator key/).first()).toBeVisible();
+    await expect(page.getByText(/Settings → workspace → operator keys/).first()).toBeVisible();
+    expect(body.operator).toBe("");
+  });
+
+  test("a replan records the operator whose key signs it", async ({ page, request }) => {
+    const node = uniqueNode("gov-replan");
+    await seedNode(request, node);
+    let body: { operator?: string; state?: { replan?: { operator?: string } } } = {};
+    await page.route(`**/v1/plane/${node}/command`, (r) => {
+      body = r.request().postDataJSON();
+      return r.fulfill({ status: 403, json: { detail: "sig_invalid" } });
+    });
+    await setConnection(page, { mode: "adapter" });
+    await goHash(page, "control");
+    await page.evaluate(async () => {
+      const k = await import("/src/opKey.ts");
+      await k.create();
+      await k.setOperatorId("ada@acme.io#qa083");
+    });
+    await page.getByTestId(`agent-row-${node}`).click();
+    await page.getByRole("button", { name: "more…" }).click();
+    await page.getByRole("button", { name: /Replan/ }).click();
+    await answerAsk(page, "the plan read an untrusted page");
+    await expect.poll(() => body.operator).toBe("ada@acme.io#qa083");
+    expect(body.state?.replan?.operator).toBe("ada@acme.io#qa083");
+  });
+
+  test("Settings calls them operator keys, as a refused command does", async ({ page }) => {
+    const ok = (body: unknown) => (route: import("@playwright/test").Route) => route.fulfill({ json: body });
+    const user = { user_id: "usr_1", email: "ada@acme.io" };
+    await setConnection(page, { mode: "adapter" });
+    await page.route("**/identity/v1/login", ok({
+      access_token: "acc-token", refresh_token: "ref-token", token_type: "Bearer", expires_in: 900,
+      user, org: { org_id: "org_1", role: "owner", tier: "community" } }));
+    await page.route("**/identity/v1/me", ok({ user, active_org: "org_1", role: "owner",
+      memberships: [{ org_id: "org_1", role: "owner", name: "Acme", tier: "coding" }] }));
+    await page.route("**/identity/v1/orgs/org_1/members", ok({ members: [] }));
+    await page.route("**/v1/operators", ok({ operators: [] }));
+    await goHash(page, "settings");
+    await page.getByLabel("email", { exact: true }).fill("ada@acme.io");
+    await page.getByLabel("password").fill("correct horse");
+    await page.getByRole("button", { name: "log in", exact: true }).click();
+    const panel = page.getByTestId("operator-keys");
+    await expect(panel).toContainText("operator keys");
+    await expect(panel).not.toContainText("signing keys");
+  });
 });

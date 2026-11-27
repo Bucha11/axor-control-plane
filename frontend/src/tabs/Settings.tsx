@@ -168,9 +168,11 @@ function OperatorKeys() {
   const err = (make.error ?? vouch.error ?? revoke.error) as Error | null;
   return (
     <div data-testid="operator-keys" style={{ marginTop: 6 }}>
-      <div style={{ color: C.text, marginBottom: 4 }}>signing keys</div>
+      {/* one name, the one a refused command points to (QA-083) */}
+      <div style={{ color: C.text, marginBottom: 4 }}>operator keys</div>
       <div style={{ color: C.dim, fontSize: 10.5, marginBottom: 6 }}>
-        your agents' machines take the team's rules, skills and notes only when an operator signed them.
+        a workspace with operator keys takes pause, stop, cap and replan only when an operator signed them,
+        and your agents' machines take the team's rules, skills and notes the same way.
         The key is made in this browser and never leaves it.
       </div>
       {registered ? (
@@ -184,7 +186,7 @@ function OperatorKeys() {
       ) : (
         <button data-testid="op-key-make" onClick={() => makeOnce()} disabled={make.isPending}
           style={btn({ fontSize: 11, padding: "3px 10px", color: C.text })}>
-          {make.isPending ? "…" : "make a signing key in this browser"}
+          {make.isPending ? "…" : "make an operator key in this browser"}
         </button>
       )}
       {keys.map((k) => {
