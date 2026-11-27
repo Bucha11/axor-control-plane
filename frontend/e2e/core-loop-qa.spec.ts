@@ -83,3 +83,44 @@ test("a lie caught by a chaos test is not offered as keepable (QA-193)", async (
   expect(options).not.toContain("kept as a test");
   expect(options).not.toContain("made a rule");
 });
+
+test.describe("operator keys (QA-173)", () => {
+  test("a command signed with a revoked key says the key was revoked", async ({ page, request }) => {
+    const node = `gov-revoked-${hex6()}`;
+    await seedNode(request, node);
+    await page.route(`**/v1/plane/${node}/command`, (r) =>
+      r.fulfill({ status: 403, json: { detail: "operator key 'ada@acme.io#377c9673' was revoked" } }));
+    await setConnection(page, { mode: "adapter" });
+    await goHash(page, `govern/${node}`);
+    await page.getByRole("button", { name: /Pause/ }).click();
+    await expect(page.getByText(/operator key was revoked/).first()).toBeVisible();
+    await expect(page.getByText(/not one the workspace knows/)).toHaveCount(0);
+  });
+
+  test("a vouch from a revoked key is not shown as a vouch", async ({ page }) => {
+    const session = {
+      access_token: "acc-token", refresh_token: "ref-token", token_type: "Bearer", expires_in: 900,
+      user: { user_id: "usr_1", email: "ada@acme.io" }, org: { org_id: "org_1", role: "owner", tier: "community" },
+    };
+    await setConnection(page, { mode: "adapter" });
+    await page.route("**/identity/v1/login", (r) => r.fulfill({ json: session }));
+    await page.route("**/identity/v1/me", (r) => r.fulfill({ json: {
+      user: session.user, active_org: "org_1", role: "owner",
+      memberships: [{ org_id: "org_1", role: "owner", name: "Acme", tier: "coding" }] } }));
+    await page.route("**/identity/v1/orgs/org_1/members", (r) => r.fulfill({ json: { members: [] } }));
+    const key = (id: string, revoked: string | null, by: string | null) => ({
+      operator_id: id, org: "org_1", email: id.split("#")[0], pubkey: "ab".repeat(32), label: "", created_ts: "t",
+      revoked_ts: revoked, endorsement: by ? { payload: {}, operator: by, sig: "00" } : null });
+    await page.route("**/v1/operators", (r) => r.fulfill({ json: { operators: [
+      key("ada@acme.io#377c9673", "2026-11-27T19:50:00Z", null),
+      key("sam@acme.io#77a9023b", null, "ada@acme.io#377c9673"),
+    ] } }));
+    await goHash(page, "settings");
+    await page.getByLabel("email", { exact: true }).fill("ada@acme.io");
+    await page.getByLabel("password").fill("correct horse");
+    await page.getByRole("button", { name: "log in", exact: true }).click();
+    const panel = page.getByTestId("operator-keys");
+    await expect(panel.getByTestId("op-key-vouch-revoked")).toContainText("whose key was revoked");
+    await expect(panel.getByText(/^vouched for by ada@acme.io#377c9673$/)).toHaveCount(0);
+  });
+});

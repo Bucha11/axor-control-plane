@@ -940,6 +940,13 @@ function commandRefusal(e: unknown, hasKey = true): unknown {
       "this workspace signs every command, and it has no operator key yet — an owner or admin "
       + "makes one for this browser in Settings → workspace → operator keys");
   }
+  // revoked on purpose: "not one the workspace knows — register it" sent its
+  // holder to register the key that was taken away (QA-173)
+  if (/was revoked/.test(e.message)) {
+    return new ApiError(403, "operator_key_revoked",
+      "this browser's operator key was revoked — an owner or admin took it away. To sign again, "
+      + "make a new one in Settings → workspace → operator keys and have it vouched for");
+  }
   // this browser has no key at all: it sent no operator, and saying its key
   // is unknown read as if it had one (QA-083)
   if (!hasKey && /sig_invalid|unknown operator|operator=/.test(e.message)) {

@@ -162,6 +162,10 @@ function OperatorKeys() {
   const revoke = useMutation({ mutationFn: api.revokeOperatorKey, onSuccess: done });
   const forget = useMutation({ mutationFn: () => opKey.forget(), onSuccess: done });
   const keys = (list.data?.operators ?? []).filter((k) => !k.revoked_ts);
+  // a vouch from a key since revoked vouches for nothing (QA-173)
+  const revokedIds = new Set((list.data?.operators ?? []).filter((k) => k.revoked_ts).map((k) => k.operator_id));
+  const vouched = (k: { endorsement?: { operator: string } | null }) =>
+    !!k.endorsement && !revokedIds.has(k.endorsement.operator);
   const local = mine.data;
   const localId = local?.operatorId ?? null;
   const registered = !!localId && keys.some((k) => k.operator_id === localId);
@@ -196,10 +200,13 @@ function OperatorKeys() {
           <div key={k.operator_id} data-testid="op-key" className="flex gap-2 items-center flex-wrap">
             <span style={{ color: C.text }}>{k.operator_id}</span>
             <span style={{ color: C.dim }}>{fp(k.pubkey)}</span>
-            {k.endorsement
-              ? <span style={{ color: C.green }}>vouched for by {k.endorsement.operator}</span>
-              : <span style={{ color: C.amber }}>not vouched for — machines trust it only if it was in their connect command</span>}
-            {registered && !own && !k.endorsement && (
+            {vouched(k)
+              ? <span style={{ color: C.green }}>vouched for by {k.endorsement!.operator}</span>
+              : k.endorsement
+                ? <span data-testid="op-key-vouch-revoked" style={{ color: C.amber }}>vouched for by {k.endorsement.operator},
+                    whose key was revoked — that vouch no longer counts; machines trust it only if it was in their connect command</span>
+                : <span style={{ color: C.amber }}>not vouched for — machines trust it only if it was in their connect command</span>}
+            {registered && !own && !vouched(k) && (
               <button data-testid="op-key-vouch" onClick={() => vouch.mutate(k)} disabled={vouch.isPending}
                 style={btn({ fontSize: 10.5, padding: "1px 8px", color: C.green, borderColor: C.green })}>vouch for it</button>
             )}
