@@ -60,3 +60,10 @@ export function useHasScopeKnown(): (scope: "read" | "ingest" | "operate" | "adm
   const q = useQuery({ queryKey: ["auth-status", apiToken], queryFn: api.authStatus });
   return (scope) => !!q.data && (!q.data.auth_enabled || q.data.scopes.includes(scope));
 }
+
+/** The scopes this sign-in holds; null on an open plane or while not known. */
+export function useScopes(): string[] | null {
+  const apiToken = useApp((s) => s.apiToken);
+  const q = useQuery({ queryKey: ["auth-status", apiToken], queryFn: api.authStatus });
+  return q.data && q.data.auth_enabled ? q.data.scopes : null;
+}

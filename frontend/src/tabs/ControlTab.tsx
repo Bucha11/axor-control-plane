@@ -2,7 +2,8 @@
 // Wired to /v1/plane/nodes; divergence between desired and reported is rendered, not hidden.
 import { askConfirm, askPrompt } from "../components/Ask";
 import { refusalWords } from "../refusal";
-import { useHasTeam, useMay, useMine } from "../team";
+import { useHasScope, useHasTeam, useMay, useMine } from "../team";
+import RoleNote from "../components/RoleNote";
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Circle, Gauge, GitBranch, Lock, Pause, Play, Square, Syringe } from "lucide-react";
@@ -166,6 +167,7 @@ function attention(n: NodeInfo): { label: string; color: string; route?: string 
 // switches the connection to adapter mode so Control shows the live node.
 function SpawnGoverned({ switchToAdapter }: { switchToAdapter?: boolean }) {
   const qc = useQueryClient();
+  const mayAdd = useHasScope()("operate");
   const connect = useApp((s) => s.connect);
   const [err, setErr] = useState<string | null>(null);
   const spawnTree = useMutation({
@@ -202,6 +204,10 @@ function SpawnGoverned({ switchToAdapter }: { switchToAdapter?: boolean }) {
     onError: (e: Error) => setErr(e.message),
   });
   const spawnOnce = useOneAtATime(spawn);
+  // a viewer adds no agent: the plane refuses it (QA-152)
+  if (!mayAdd) {
+    return <div className="mt-3"><RoleNote need="operate" what="add agents or examples" testid="spawn-viewer" /></div>;
+  }
   return (
     <div className="mt-3" data-tour="spawn">
       <div className="flex flex-wrap items-center gap-2">
@@ -262,6 +268,7 @@ function SpawnGoverned({ switchToAdapter }: { switchToAdapter?: boolean }) {
 export function ExampleFleet({ compact = false }: { compact?: boolean }) {
   const qc = useQueryClient();
   const unhide = useApp((s) => s.setFleetExampleHidden);
+  const mayAdd = useHasScope()("operate");
   const seed = useMutation({
     mutationFn: api.seedFleet,
     onSuccess: () => {
@@ -273,6 +280,8 @@ export function ExampleFleet({ compact = false }: { compact?: boolean }) {
       }
     },
   });
+  // a viewer loads nothing; SpawnGoverned beside it says who can (QA-152)
+  if (!mayAdd) return null;
   return (
     <div className={compact ? "" : "mt-3"}>
       <button onClick={() => seed.mutate()} disabled={seed.isPending}
@@ -370,6 +379,8 @@ function ControlBody({ focusNode, testBench }: { focusNode?: string; testBench: 
   const mine = useMine();
   // a teammate's session: an owner or admin, or whoever the workspace lets
   const canAdmin = useMay()("stop_others");
+  // a viewer steers no agent: no control the plane refuses them (QA-175)
+  const mayOperate = useHasScope()("operate");
   const qc = useQueryClient();
   const nodes = useQuery({
     queryKey: ["nodes"],
@@ -921,19 +932,20 @@ function ControlBody({ focusNode, testBench }: { focusNode?: string; testBench: 
             <div data-testid="stopped-note" className="mb-3 p-3"
               style={{ border: `1px solid ${C.red}`, borderRadius: 8, fontFamily: MONO, fontSize: 11.5, color: C.mut, lineHeight: 1.6 }}>
               <span style={{ color: C.red }}>Stopped.</span> The agent's running process stays stopped — a stop cannot be
-              undone from here while it runs, by design. To bring it back:{" "}
+              undone from here while it runs, by design.{mayOperate && <>{" "}To bring it back:{" "}
               <button disabled={command.isPending} onClick={() => send({ stopped: false, paused: false })}
                 style={btn({ color: C.text, borderColor: C.line, fontSize: 11, padding: "2px 10px" })}>
                 <Play size={11} /> Start it again
               </button>
-              {" "}then restart the agent's process (the proxy or the wrapped agent) — it comes back running.
+              {" "}then restart the agent's process (the proxy or the wrapped agent) — it comes back running.</>}
             </div>
           )}
 
           {!isCodingNode(node) && <HealthAndReputation node={node} />}
 
           <RunsPanel nodeId={node.node_id} paused={paused} stopped={stopped}
-            disabled={command.isPending || !(!isCodingNode(node) || mine(node.profile?.developer) || canAdmin)} send={send} />
+            disabled={command.isPending || !(!isCodingNode(node) || mine(node.profile?.developer) || canAdmin)}
+            hideControls={!mayOperate} send={send} />
 
           <details className="mb-3" style={{ fontFamily: MONO, fontSize: 11, color: C.mut, lineHeight: 1.7 }}>
             <summary style={{ cursor: "pointer", color: C.dim }}>
@@ -953,7 +965,9 @@ function ControlBody({ focusNode, testBench }: { focusNode?: string; testBench: 
             </span>
           </details>
 
-          {isCodingNode(node) && !mine(node.profile?.developer) && !canAdmin ? (
+          {!mayOperate ? (
+            <div className="mb-3"><RoleNote need="operate" what="pause, cap or stop agents" testid="agent-viewer" /></div>
+          ) : isCodingNode(node) && !mine(node.profile?.developer) && !canAdmin ? (
             <NotYours developer={node.profile?.developer ?? ""} nodeId={node.node_id} hasTeam={hasTeam} />
           ) : <>
           {/* Budget cap — a first-class control (spec §15). Decrease-only over
@@ -1371,8 +1385,8 @@ function NotYours({ developer, nodeId, hasTeam }: { developer: string; nodeId: s
   );
 }
 
-function RunsPanel({ nodeId, paused, stopped, disabled, send }: {
-  nodeId: string; paused: boolean; stopped: boolean; disabled: boolean;
+function RunsPanel({ nodeId, paused, stopped, disabled, hideControls, send }: {
+  nodeId: string; paused: boolean; stopped: boolean; disabled: boolean; hideControls: boolean;
   send: (state: Record<string, unknown>) => void;
 }) {
   const runs = useQuery({
@@ -1395,7 +1409,7 @@ function RunsPanel({ nodeId, paused, stopped, disabled, send }: {
         <div style={{ border: `1px solid ${C.line}`, borderRadius: 6, overflow: "hidden" }}>
           {rows.map((r, i) => (
             <RunRow key={r.run_id} run={r} first={i === 0}
-              paused={paused} stopped={stopped} disabled={disabled} send={send} />
+              paused={paused} stopped={stopped || hideControls} disabled={disabled} send={send} />
           ))}
         </div>
       )}

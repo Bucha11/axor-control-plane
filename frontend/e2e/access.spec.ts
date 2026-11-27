@@ -2,7 +2,7 @@
 // findings of the journaled QA run on 0.7.3 (QA-NNN in each test). The role is
 // played by stubbing /v1/auth/status's scopes.
 import { expect, test, type Page } from "@playwright/test";
-import { goHash, setConnection } from "./helpers";
+import { goHash, seedNode, setConnection, uniqueNode } from "./helpers";
 
 const VIEWER = ["read"];
 const MEMBER = ["read", "ingest", "operate"];
@@ -60,5 +60,50 @@ test.describe("access (QA, 0.7.3)", () => {
     await page.waitForTimeout(500);
     expect(puts).toBe(1);
     expect(refreshes).toBe(0);
+  });
+
+  test("a viewer gets no operator controls on an agent, and is told who can (QA-175)", async ({ page, request }) => {
+    const node = uniqueNode("viewer-gov");
+    await seedNode(request, node);
+    await playRole(page, VIEWER);
+    const commands: string[] = [];
+    await page.route("**/v1/plane/*/command", (r) => { commands.push(r.request().url()); return r.continue(); });
+    await goHash(page, "control");
+    await page.getByTestId(`agent-row-${node}`).click();
+    await expect(page.getByTestId("agent-viewer"))
+      .toHaveText("as a viewer you can't pause, cap or stop agents — an owner, admin or member can");
+    await expect(page.getByRole("button", { name: /^(Pause|Resume)$/ })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "more…" })).toHaveCount(0);
+    await expect(page.getByLabel("budget")).toHaveCount(0);
+    expect(commands).toEqual([]);
+  });
+
+  test("a viewer is not offered spawn or the example fleet (QA-152)", async ({ page }) => {
+    await setConnection(page, { mode: "proxy" });
+    await playRole(page, VIEWER);
+    await goHash(page, "control");
+    await page.getByText(/needs them wrapped in code/).waitFor();
+    const fold = page.getByRole("button", { name: "example agents ▾" });
+    if (await fold.isVisible()) await fold.click();
+    await expect(page.getByTestId("spawn-viewer"))
+      .toHaveText("as a viewer you can't add agents or examples — an owner, admin or member can");
+    await expect(page.getByRole("button", { name: /Spawn a governed demo/ })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Load an example fleet" })).toHaveCount(0);
+  });
+
+  test("a viewer is offered neither arming a chaos test nor its schedule (QA-175, QA-152)", async ({ page }) => {
+    await playRole(page, VIEWER);
+    await page.route("**/v1/runs", (r) => r.fulfill({ json: [{ run_id: "r1", node_id: "agent-1", scenario: "live",
+      intervened: false, completed: true, evidence: [], created_ts: "2026-11-27T10:00:00Z" }] }));
+    await page.route("**/v1/chaos", (r) => r.fulfill({ json: { runs: [], modes: ["silent_fail"], schedule: {
+      enabled: false, interval_hours: 24, nodes: [], modes: [], last_run_ts: null, last_armed: [], ee_active: true } } }));
+    await goHash(page, "chaos");
+    await expect(page.getByTestId("chaos-arm-viewer"))
+      .toHaveText("as a viewer you can't break a tool on a live agent — an owner, admin or member can");
+    await expect(page.getByTestId("chaos-arm")).toHaveCount(0);
+    await expect(page.getByTestId("chaos-schedule-viewer"))
+      .toHaveText("as a viewer you can't change the schedule — an owner, admin or member can");
+    await expect(page.getByTestId("chaos-schedule-save")).toHaveCount(0);
+    await expect(page.getByLabel("every how many hours")).toBeDisabled();
   });
 });
