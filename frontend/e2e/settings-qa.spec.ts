@@ -150,6 +150,10 @@ test.describe("settings (QA, 0.7.2)", () => {
     await page.route("**/identity/v1/orgs/org_1/invites", (r) => r.request().method() === "POST"
       ? r.fulfill({ status: 422, json: { detail: "that is not an e-mail address" } })
       : r.fulfill({ json: { invites: [] } }));
+    // a paid plan: on the free one a second developer is offered the plan first
+    await page.route("**/v1/license/entitlements", (r) => r.fulfill({ json: {
+      tier: "coding", free: false, developers: null, agent_families: null, agent_family: null,
+      locked: {}, locked_trees: {}, reasons: {} } }));
     await logIn(page);
     await page.getByLabel("invite email").fill("bob@acme.io");
     await page.getByTestId("invite-make").click();
