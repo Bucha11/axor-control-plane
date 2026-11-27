@@ -1,3 +1,4 @@
+import { askPrompt } from "./Ask";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api";
 import { C, MONO, btn } from "../theme";
@@ -38,8 +39,8 @@ export default function CutResult({ runId, valueRef, excised, nodeId: nodeProp }
       ) : (
         <Tooltip content={`${nodeId} stops seeing this result from its next step on (and, for a file it read, the cached copy). The reason you give is recorded.`}>
           <button
-            onClick={() => {
-              const reason = window.prompt(`Cut ${valueRef} from ${nodeId}'s context — reason (recorded):`);
+            onClick={async () => {
+              const reason = await askPrompt(`Cut ${valueRef} from ${nodeId}'s context — reason (recorded):`);
               if (reason && reason.trim()) cut.mutate(reason.trim());
             }}
             disabled={cut.isPending}

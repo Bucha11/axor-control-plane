@@ -2,6 +2,7 @@
 // 16) plus connection and license. Notifications emit-and-route (webhook), with
 // the dead-letter log surfaced honestly; a notification system that fails
 // silently is worse than none.
+import { askConfirm } from "../components/Ask";
 import { useEffect, useState } from "react";
 import { track } from "../funnel";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -24,7 +25,7 @@ import AuditTrail from "../components/AuditTrail";
 import { useStartTour } from "../components/Tour";
 import { errorWords } from "../refusal";
 import { useOneAtATime } from "../oneAtATime";
-import { localTime } from "../time";
+import { localDate, localTime } from "../time";
 
 // Every trigger the backend emits, in words, and for whom. A trigger that fires
 // and cannot be subscribed to is a notification nobody receives — which is how
@@ -200,7 +201,7 @@ function OperatorKeys() {
                 style={btn({ fontSize: 10.5, padding: "1px 8px", color: C.green, borderColor: C.green })}>vouch for it</button>
             )}
             <button data-testid="op-key-revoke"
-              onClick={() => { if (confirm(`Revoke ${k.operator_id}? Machines stop trusting it.`)) revoke.mutate(k.operator_id); }}
+              onClick={async () => { if (await askConfirm(`Revoke ${k.operator_id}? Machines stop trusting it.`)) revoke.mutate(k.operator_id); }}
               style={{ ...btn({ fontSize: 10.5, padding: "1px 8px" }), color: C.dim }}>revoke</button>
           </div>
         );
@@ -287,7 +288,7 @@ function Sessions({ orgId }: { orgId: string }) {
       </div>
       <div className="flex gap-3 items-center flex-wrap">
         <button data-testid="sessions-end" disabled={end.isPending}
-          onClick={() => { if (window.confirm("Sign everyone out of this workspace? You stay signed in.")) end.mutate(); }}
+          onClick={async () => { if (await askConfirm("Sign everyone out of this workspace? You stay signed in.")) end.mutate(); }}
           style={{ background: "none", border: "none", padding: 0, cursor: "pointer", color: C.amber, fontFamily: MONO, fontSize: 11 }}>
           sign everyone else out
         </button>
@@ -344,7 +345,7 @@ function Provisioning({ orgId }: { orgId: string }) {
           <div>
             SCIM base URL <span data-testid="scim-base" style={{ color: C.text }}>{d.base_url}</span>
             {d.enabled
-              ? <span style={{ color: C.dim }}> · token since {d.created_ts?.slice(0, 10)}
+              ? <span style={{ color: C.dim }}> · token since {localDate(d.created_ts)}
                   {d.last_used_ts ? `, last used ${localTime(d.last_used_ts)}` : ", not used yet"}</span>
               : <span style={{ color: C.dim }}> · no token yet</span>}
           </div>
@@ -360,12 +361,12 @@ function Provisioning({ orgId }: { orgId: string }) {
           )}
           <div className="flex gap-3">
             <button data-testid="scim-make" disabled={make.isPending} style={{ ...link, color: C.steel }}
-              onClick={() => { if (!d.enabled || window.confirm("Make a new token? The one your provider has stops working.")) makeOnce(); }}>
+              onClick={async () => { if (!d.enabled || await askConfirm("Make a new token? The one your provider has stops working.")) makeOnce(); }}>
               {d.enabled ? "make a new token" : "make a token"}
             </button>
             {d.enabled && (
               <button style={{ ...link, color: C.dim }} disabled={revoke.isPending}
-                onClick={() => { if (window.confirm("Turn provisioning off? The provider's token stops working.")) revoke.mutate(); }}>
+                onClick={async () => { if (await askConfirm("Turn provisioning off? The provider's token stops working.")) revoke.mutate(); }}>
                 turn off
               </button>
             )}
@@ -468,7 +469,7 @@ function SingleSignOn({ orgId }: { orgId: string }) {
               style={{ background: "none", border: "none", padding: 0, cursor: "pointer", color: C.steel, fontFamily: MONO, fontSize: 11 }}>
               change
             </button>
-            <button onClick={() => { if (window.confirm("Turn single sign-on off? People sign in with passwords again.")) remove.mutate(); }}
+            <button onClick={async () => { if (await askConfirm("Turn single sign-on off? People sign in with passwords again.")) remove.mutate(); }}
               style={{ background: "none", border: "none", padding: 0, cursor: "pointer", color: C.dim, fontFamily: MONO, fontSize: 11 }}>
               turn off
             </button>
@@ -764,7 +765,7 @@ function Team({ orgId, isAdmin }: { orgId: string; isAdmin: boolean }) {
                   {["admin", "member", "viewer"].map((r) => <option key={r} value={r}>{r}</option>)}
                 </select>
                 <button aria-label={`remove ${m.email}`} disabled={remove.isPending}
-                  onClick={() => { if (window.confirm(`Take ${m.email} off this workspace? Their keys are revoked too.`)) remove.mutate(m.user_id); }}
+                  onClick={async () => { if (await askConfirm(`Take ${m.email} off this workspace? Their keys are revoked too.`)) remove.mutate(m.user_id); }}
                   style={{ background: "none", border: "none", padding: 0, cursor: "pointer", color: C.dim, fontFamily: MONO, fontSize: 11 }}>
                   remove
                 </button>
@@ -866,7 +867,7 @@ function Team({ orgId, isAdmin }: { orgId: string; isAdmin: boolean }) {
               {(invites.data?.invites ?? []).map((i) => (
                 <div key={i.invite_id} className="flex gap-3" style={{ padding: "2px 0" }}>
                   <span style={{ flex: 1 }}>{i.email ?? "anyone with the link"} · {i.role}</span>
-                  <span style={{ color: C.dim }}>until {i.expires_ts.slice(0, 10)}</span>
+                  <span style={{ color: C.dim }}>until {localDate(i.expires_ts)}</span>
                   <button type="button" onClick={() => revoke.mutate(i.invite_id)}
                     style={{ background: "none", border: "none", padding: 0, cursor: "pointer", color: C.mut, fontFamily: MONO, fontSize: 11 }}>
                     withdraw
@@ -1505,7 +1506,7 @@ export default function Settings({ tab = "workspace" }: { tab?: string } = {}) {
           (deadLetters.data ?? []).map((d, i) => (
             <div key={i} style={{ fontFamily: MONO, fontSize: 11, color: C.amber, marginTop: 4 }}>
               {d.trigger} → {d.url} · {d.error} ({d.attempts} attempts)
-              {d.created_ts ? ` · ${d.created_ts.slice(0, 19)}` : ""}
+              {d.created_ts ? ` · ${localTime(d.created_ts, true)}` : ""}
             </div>
           ))
         )}
@@ -1977,7 +1978,7 @@ function MyKeys() {
       {(mine.data ?? []).map((k) => (
         <div key={k.key_id} className="flex gap-3 items-center" style={{ fontSize: 11, marginTop: 4 }}>
           <span style={{ color: C.text }}>{k.key_id}</span>
-          <span style={{ color: C.dim }}>{k.created_ts.slice(0, 10)}</span>
+          <span style={{ color: C.dim }}>{localDate(k.created_ts)}</span>
           <button onClick={() => revoke.mutate(k.key_id)} style={{ background: "none", border: "none", padding: 0,
             cursor: "pointer", fontFamily: MONO, fontSize: 11, color: C.steel }}>revoke</button>
         </div>
@@ -2092,8 +2093,8 @@ function AgentKeys({ journey, menuAll }: { journey: Journey | null; menuAll: boo
             {k.label}{k.node_id ? ` · only for ${k.node_id}` : ""}
           </span>
           <button aria-label={`revoke ${k.key_id}`} disabled={revoke.isPending}
-            onClick={() => {
-              if (window.confirm(`Revoke ${k.key_id}? Anything using it loses access.`)) revoke.mutate(k.key_id);
+            onClick={async () => {
+              if (await askConfirm(`Revoke ${k.key_id}? Anything using it loses access.`)) revoke.mutate(k.key_id);
             }}
             style={{ background: "none", border: "none", padding: 0, cursor: "pointer" }}>
             <Trash2 size={12} color={C.dim} />
@@ -2219,10 +2220,82 @@ function SecurityPosture() {
   const sealing = useQuery({ queryKey: ["vault-sealing", ""], queryFn: api.vaultSealingKey, retry: false });
   const items = [
     ...(posture.data?.items ?? []),
-    ...(sealing.data ? [{ id: "vault_custody", ok: sealing.data.envelope_mode,
+    // a hosted plane reports sealed custody itself (sealed_credentials)
+    ...(sealing.data && !posture.data?.items.some((i) => i.id === "sealed_credentials")
+      ? [{ id: "vault_custody", ok: sealing.data.envelope_mode,
       what: "tool credentials are stored sealed — the plane holds only what it cannot open",
       fix: "make a sealing key with axor-proxy vault keygen and register its public half below" }] : []),
   ];
+  return (
+    <>
+      <PostureItems items={items} />
+      <VaultTokens />
+    </>
+  );
+}
+
+const VAULT_WORDS: Record<"creds" | "signing", string> = {
+  creds: "dispensing tool credentials",
+  signing: "requesting a signature",
+};
+
+/** The workspace's own token per vault subsystem: with one, that subsystem
+ *  asks for it (X-Vault-…-Token), not just an admin. Shown once; a new one
+ *  cuts off whoever holds the old one. */
+function VaultTokens() {
+  const qc = useQueryClient();
+  const tokens = useQuery({ queryKey: ["vault-tokens"], queryFn: api.vaultTokens, retry: false });
+  const [shown, setShown] = useState<{ which: string; token: string; header: string } | null>(null);
+  const done = () => {
+    void qc.invalidateQueries({ queryKey: ["vault-tokens"] });
+    void qc.invalidateQueries({ queryKey: ["security-posture"] });
+  };
+  const make = useMutation({ mutationFn: api.makeVaultToken,
+    onSuccess: (r) => { setShown({ which: r.subsystem, token: r.token, header: r.header }); done(); } });
+  const makeOnce = useOneAtATime(make);
+  const drop = useMutation({ mutationFn: api.dropVaultToken, onSuccess: () => { setShown(null); done(); } });
+  if (!tokens.data) return null;
+  return (
+    <div data-testid="vault-tokens" className="mt-3" style={{ fontFamily: MONO, fontSize: 11, lineHeight: 1.7 }}>
+      <div style={{ color: C.mut, marginBottom: 4 }}>THIS WORKSPACE'S VAULT TOKENS</div>
+      {(["creds", "signing"] as const).map((w) => {
+        const t = tokens.data[w];
+        return (
+          <div key={w} data-testid={`vault-token-${w}`} className="flex items-center gap-2 flex-wrap">
+            <span style={{ color: C.text, minWidth: 220 }}>{VAULT_WORDS[w]}</span>
+            {t.deployment ? (
+              <span style={{ color: C.dim }}>set by this plane's operator</span>
+            ) : t.set ? (
+              <>
+                <span style={{ color: C.green }}>token since {t.since ? localTime(t.since) : "—"}{t.by ? ` · ${t.by}` : ""}</span>
+                <button onClick={() => makeOnce(w)} data-testid={`vault-token-${w}-replace`}
+                  style={btn({ color: C.text, borderColor: C.steel, fontSize: 10.5, padding: "2px 8px" })}>replace</button>
+                <button onClick={() => drop.mutate(w)} data-testid={`vault-token-${w}-drop`}
+                  style={btn({ color: C.mut, borderColor: C.line, fontSize: 10.5, padding: "2px 8px" })}>drop</button>
+              </>
+            ) : (
+              <button onClick={() => makeOnce(w)} data-testid={`vault-token-${w}-make`}
+                style={btn({ color: C.text, borderColor: C.steel, fontSize: 10.5, padding: "2px 8px" })}>make a token</button>
+            )}
+          </div>
+        );
+      })}
+      {shown && (
+        <div data-testid="vault-token-shown" className="mt-2 p-2" style={{ border: `1px solid ${C.amber}`, borderRadius: 6, overflowWrap: "anywhere" }}>
+          <div style={{ color: C.amber }}>shown once — give it to whatever calls the vault, as {shown.header}:</div>
+          <div style={{ color: C.text }}>{shown.token}</div>
+          <div style={{ color: C.dim }}>for axor-proxy: AXOR_VAULT_{shown.which.toUpperCase()}_TOKEN=…</div>
+        </div>
+      )}
+      {(make.isError || drop.isError) && (
+        <div style={{ color: C.red }}>{((make.error ?? drop.error) as Error).message}</div>
+      )}
+    </div>
+  );
+}
+
+/** The posture's items, up or down. */
+function PostureItems({ items }: { items: { id: string; ok: boolean; what: string; fix: string }[] }) {
   if (!items.length) return <div style={{ fontFamily: MONO, fontSize: 11, color: C.dim }}>…</div>;
   const down = items.filter((i) => !i.ok).length;
   return (
@@ -2286,8 +2359,8 @@ function FederationVault() {
   return (
     <div className="flex gap-4 mb-4 stack-narrow" data-testid="federation-vault" style={{ alignItems: "stretch" }}>
       <ToolCredentials />
-      {/* `flex-1` is no class in utilities.css: without the inline flex the
-          card was as wide as its widest line, past the column (QA-041) */}
+      {/* without flex 1 + minWidth 0 the card was as wide as its widest
+          line, past the column (QA-041) */}
       <div className="p-4 flex-1" style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 8, flex: 1, minWidth: 0 }}>
         <div style={{ fontSize: 10, fontFamily: MONO, color: C.dim, letterSpacing: "0.1em", marginBottom: 8 }}>
           SIGNING COMMANDS TO AGENTS

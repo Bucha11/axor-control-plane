@@ -48,7 +48,7 @@ AUDIT_PAGE = 200
 AUDIT_PAGE_MAX = 1000
 
 
-def _hosted(items: list[dict], config: Any) -> list[dict]:  # noqa: ANN401 - AppConfig
+def _hosted(items: list[dict], config: Any, own: dict) -> list[dict]:  # noqa: ANN401 - AppConfig
     """The vendor's hosted plane has its walls per workspace, not per
     deployment. A deployment operator key would sign for every tenant, and a
     deployment vault token would be one secret handed to all of them — so the
@@ -62,10 +62,10 @@ def _hosted(items: list[dict], config: Any) -> list[dict]:  # noqa: ANN401 - App
     for which, act in (("creds", "dispensing tool credentials"),
                        ("signing", "requesting a signature")):
         by_id[f"vault_{which}_token"] = {
-            "id": f"vault_{which}_token", "ok": False,
-            "what": f"{act} needs the workspace's admin, not a token of its own "
-                    "— a token per workspace is not offered here yet",
-            "fix": "nothing to set: it comes with the per-workspace token"}
+            "id": f"vault_{which}_token", "ok": which in own,
+            "what": f"{act} needs this workspace's own {which} token, not just admin"
+                    if which in own else f"{act} needs only the workspace's admin",
+            "fix": f"make this workspace's {which} token below"}
     return [*by_id.values(), {
         "id": "sealed_credentials", "ok": True,
         "what": "tool credentials are kept only sealed to the workspace's own key: "
@@ -74,11 +74,14 @@ def _hosted(items: list[dict], config: Any) -> list[dict]:  # noqa: ANN401 - App
 
 
 @router.get("/security/posture")
-async def security_posture(config: ConfigDep) -> dict:
+async def security_posture(config: ConfigDep, store: StoreDep) -> dict:
     """What this deployment's walls are, item by item, with how to raise the
     ones that are down — the same facts the boot log warns about
-    (lifecycle.warn_about_open_posture), where an operator looks. Config only:
-    no secret, no key material."""
+    (lifecycle.warn_about_open_posture), where an operator looks. Config,
+    and which vault tokens this workspace made: no secret, no key material."""
+    from axor_backend.routers.vault import workspace_tokens
+
+    own = await workspace_tokens(store)
     signing = ("signed" if config.operator_keys and not config.allow_unsigned
                else "unsigned_accepted" if config.allow_unsigned else "signed_no_keys")
     items = [
@@ -89,10 +92,12 @@ async def security_posture(config: ConfigDep) -> dict:
          "what": "commands to agents (pause, stop, cap) are signed by an operator key",
          "fix": "set AXOR_OPERATOR_KEYS and turn AXOR_ALLOW_UNSIGNED off"
                 if signing == "unsigned_accepted" else "set AXOR_OPERATOR_KEYS"},
-        {"id": "vault_creds_token", "ok": config.vault_creds_token is not None,
+        {"id": "vault_creds_token",
+         "ok": config.vault_creds_token is not None or "creds" in own,
          "what": "dispensing tool credentials needs its own token, not just admin",
          "fix": "set AXOR_VAULT_CREDS_TOKEN"},
-        {"id": "vault_signing_token", "ok": config.vault_signing_token is not None,
+        {"id": "vault_signing_token",
+         "ok": config.vault_signing_token is not None or "signing" in own,
          "what": "requesting a signature needs its own token, not just admin",
          "fix": "set AXOR_VAULT_SIGNING_TOKEN"},
         # on the hosted plane each plan has its window (ee.entitlements.RETENTION_DAYS)
@@ -103,7 +108,7 @@ async def security_posture(config: ConfigDep) -> dict:
          "fix": "set AXOR_RETENTION_DAYS"},
     ]
     if config.hosted:
-        items = _hosted(items, config)
+        items = _hosted(items, config, own)
     elif config.vendor_pubkey:
         items.append({"id": "licensed_org", "ok": bool(config.org),
                       "what": "only a license issued to this organization activates here",

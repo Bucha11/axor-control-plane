@@ -3,7 +3,7 @@
 // this exercises the panel's UI behavior (sign in, error, sign up, log out),
 // not the identity service itself (that has its own suite).
 import { expect, test } from "@playwright/test";
-import { goHash, setConnection } from "./helpers";
+import { answerAsk, goHash, setConnection } from "./helpers";
 
 const SESSION = {
   access_token: "acc-token",
@@ -209,8 +209,8 @@ test.describe("identity login (Settings)", () => {
     await box.getByTestId("session-hours").selectOption("12");
     await expect(box.getByTestId("session-hours")).toHaveValue("12");
     expect(hours).toBe(12);
-    page.once("dialog", (d) => void d.accept());
     await box.getByTestId("sessions-end").click();
+    await answerAsk(page);
     await expect(box.getByTestId("sessions-ended")).toContainText("3 people signed out");
     await expect(box.getByTestId("sessions-ended")).toContainText("within 15 minutes");
   });
@@ -401,8 +401,8 @@ test.describe("identity login (Settings)", () => {
     await expect(page.getByLabel("role of ada@acme.io")).toHaveCount(0);
     await page.getByLabel("role of sam@acme.io").selectOption("admin");
     await expect(page.getByLabel("role of sam@acme.io")).toHaveValue("admin");
-    page.once("dialog", (d) => void d.accept());
     await page.getByLabel("remove sam@acme.io").click();
+    await answerAsk(page);
     await expect(team).not.toContainText("sam@acme.io");
     expect(calls).toEqual(["PUT admin", "DELETE", "keys DELETE"]);
   });
@@ -767,4 +767,19 @@ test("the header's sign-in panel opens on log in, its buttons one line each (QA-
   await oneLine();
   await dialog.getByRole("button", { name: "new? create a workspace" }).click();
   await oneLine();
+});
+
+// QA-037: a day was cut from the UTC string ("until 2026-11-30"), so a viewer
+// far from UTC saw the wrong day near midnight. The day is the viewer's own.
+test.describe("days are the viewer's local day", () => {
+  test.use({ timezoneId: "Pacific/Kiritimati" });   // +14: noon UTC is the next day
+
+  test("an invitation says until which day, in local time", async ({ page }) => {
+    await setConnection(page, { mode: "adapter" });
+    await page.route("**/identity/v1/invites/tok-day", jsonRoute(200, {
+      org_name: "Acme", role: "member", for_email: null, expires_ts: "2026-11-30T12:00:00Z" }));
+    await goHash(page, "invite/tok-day");
+    const inv = page.getByTestId("invite");
+    await expect(inv).toContainText("until 2026-12-01.");
+  });
 });

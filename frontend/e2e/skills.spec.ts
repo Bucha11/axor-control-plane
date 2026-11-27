@@ -1,7 +1,7 @@
 // Coding agents: a menu of their own, and Try a skill — what a skill asks the
 // agent to do (a static read) and what an agent did with it (a dry run).
 import { expect, test } from "@playwright/test";
-import { goHash, setConnection } from "./helpers";
+import { answerAsk, goHash, setConnection } from "./helpers";
 
 async function journey(page: import("@playwright/test").Page, j: string) {
   await page.addInitScript((value) => {
@@ -705,8 +705,8 @@ test.describe("session controls for coding agents", () => {
     await setConnection(page, { mode: "demo" });
     await journey(page, "coding");
     await goHash(page, "govern");
-    page.once("dialog", (d) => void d.accept("a skill gone bad"));
     await page.getByTestId("brake-pull").click();
+    await answerAsk(page, "a skill gone bad");
     await expect(page.getByTestId("brake-on")).toContainText("every coding agent of the team is held");
     await expect(page.getByTestId("brake-on")).toContainText("a skill gone bad");
     expect((await (await request.get(`${B}/v1/coding/policy`)).json()).brake.on).toBe(true);
@@ -731,8 +731,8 @@ test.describe("session controls for coding agents", () => {
     const desired = async () => ((await (await request.get(`${B}/v1/plane/nodes`)).json())
       .find((n: { node_id: string }) => n.node_id === tree)?.desired?.state) ?? {};
     expect((await desired()).paused).toBe(true);
-    page.once("dialog", (d) => void d.accept());
     await page.getByTestId("tree-stop").click();
+    await answerAsk(page);
     await expect(page.getByTestId("tree-stopping")).toBeVisible();
     expect((await desired()).stopped).toBe(true);
   });

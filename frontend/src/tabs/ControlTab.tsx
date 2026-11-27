@@ -1,5 +1,6 @@
 // Control: a tree that is quiet when healthy (main-tabs mockup, ControlTab).
 // Wired to /v1/plane/nodes; divergence between desired and reported is rendered, not hidden.
+import { askConfirm, askPrompt } from "../components/Ask";
 import { refusalWords } from "../refusal";
 import { useHasTeam, useMay, useMine } from "../team";
 import { useEffect, useState } from "react";
@@ -977,14 +978,14 @@ function ControlBody({ focusNode, testBench }: { focusNode?: string; testBench: 
             />
             <Tooltip content="Cap how many tool calls this agent may still make. While it runs a cap can only be lowered (the agent refuses a raise); remove it and restart the agent to lift it.">
               <button
-                onClick={() => {
+                onClick={async () => {
                   const entered = parseInt(budgetInput, 10);
                   if (Number.isNaN(entered) || entered < 0) { setCmdError("cap must be a non-negative integer"); return; }
                   // a coding session: "N more calls" from where it is now
                   const n = isCodingNode(node) ? (fleetRows.get(node.node_id)?.calls ?? 0) + entered : entered;
                   const cur = typeof desired?.state.budget_cap_calls === "number" ? desired.state.budget_cap_calls : null;
                   if (cur != null && n > cur) { setCmdError(`can only lower the cap on a running agent — ${n} > current ${cur}. Remove it and restart the agent to start over.`); return; }
-                  if (cur == null && !window.confirm(
+                  if (cur == null && !await askConfirm(
                     `Cap ${node.node_id} at ${n} tool calls?\n\nWhile it runs the cap can only be lowered, never raised: when it is spent every call is refused (429) until you remove the cap and restart the agent.`)) return;
                   send({ budget_cap_calls: n });
                   setBudgetInput("");
@@ -1028,7 +1029,7 @@ function ControlBody({ focusNode, testBench }: { focusNode?: string; testBench: 
             <div className="flex gap-2 mt-2 flex-wrap">
               <Tooltip content="Stop this one agent for good — it finishes no further turns.">
                 <button
-                  onClick={() => { if (confirmStop(node.node_id, false)) send({ stopped: true }); }}
+                  onClick={async () => { if (await confirmStop(node.node_id, false)) send({ stopped: true }); }}
                   disabled={stopped || command.isPending}
                   style={btn({ color: stopped ? C.dim : C.mut, fontSize: 11, padding: "6px 10px" })}
                 >
@@ -1037,8 +1038,8 @@ function ControlBody({ focusNode, testBench }: { focusNode?: string; testBench: 
               </Tooltip>
               <Tooltip content="Stop this node AND every agent it spawned (its whole subtree) — the blast-radius kill switch.">
                 <button
-                  onClick={() => {
-                    if (!node || !confirmStop(node.node_id, true)) return;
+                  onClick={async () => {
+                    if (!node || !await confirmStop(node.node_id, true)) return;
                     cascade.reset();
                     cascade.mutate({
                       nodeId: node.node_id,
@@ -1063,9 +1064,9 @@ function ControlBody({ focusNode, testBench }: { focusNode?: string; testBench: 
               {!isCodingNode(node) && !cannotCut(node) && <>
               <Tooltip content="Ask the agent to drop its current plan and reconsider next turn. Your reason is recorded on the run.">
                 <button
-                  onClick={() => {
+                  onClick={async () => {
                     const id = `rp_${Date.now()}`;
-                    const reason = window.prompt("Replan — reason for the operator record:");
+                    const reason = await askPrompt("Replan — reason for the operator record:");
                     if (reason == null) return;
                     send({ replan: { id, reason, operator: "op_ui" } });
                   }}
@@ -1079,11 +1080,11 @@ function ControlBody({ focusNode, testBench }: { focusNode?: string; testBench: 
                 ? NOT_A_TEST_BENCH
                 : "Insert text into the agent's next turn to probe how it recovers. The run is marked intervened and excluded from scores."}>
                 <button
-                  onClick={() => {
+                  onClick={async () => {
                     if (!node) return;
-                    const text = window.prompt("Injection text (test-bench only) — inserted next turn:");
+                    const text = await askPrompt("Injection text (test-bench only) — inserted next turn:");
                     if (!text) return;
-                    const reason = window.prompt("Reason (recorded):") ?? "";
+                    const reason = await askPrompt("Reason (recorded):") ?? "";
                     send({
                       pending_injection: {
                         id: `inj_${Date.now()}`, text, reason, operator: "op_ui",
@@ -1409,7 +1410,7 @@ function RunRow({ run, first, paused, stopped, disabled, send }: {
             style={btn({ fontSize: 10, padding: "2px 8px", color: C.text })}>
             {paused ? <Play size={10} /> : <Pause size={10} />} {paused ? "resume" : "pause"}
           </button>
-          <button disabled={disabled} onClick={() => { if (confirmStop("this agent", false)) send({ stopped: true }); }}
+          <button disabled={disabled} onClick={async () => { if (await confirmStop("this agent", false)) send({ stopped: true }); }}
             style={btn({ fontSize: 10, padding: "2px 8px", color: C.mut })}>
             <Square size={10} /> stop
           </button>
@@ -1471,8 +1472,8 @@ function TeamBrake() {
   return (
     <div className="mb-2" style={{ fontFamily: MONO, fontSize: 11 }}>
       <button data-testid="brake-pull" disabled={set.isPending}
-        onClick={() => {
-          const reason = window.prompt("Hold every coding agent of the team — why (they see it)?");
+        onClick={async () => {
+          const reason = await askPrompt("Hold every coding agent of the team — why (they see it)?");
           if (reason != null) set.mutate({ on: true, reason });
         }}
         style={{ background: "none", border: "none", padding: 0, cursor: "pointer", color: C.dim, fontFamily: MONO, fontSize: 11 }}>
@@ -2335,8 +2336,8 @@ function stateWords(key: string, value: unknown): string {
 }
 
 // A stop is final for the agent's running process: say so before it happens.
-function confirmStop(nodeId: string, cascade: boolean): boolean {
-  return window.confirm(
+function confirmStop(nodeId: string, cascade: boolean): Promise<boolean> {
+  return askConfirm(
     `${cascade ? "Cascade-stop" : "Stop"} ${nodeId}${cascade ? " and every agent it started" : ""}?\n\n` +
     "Its running process cannot be resumed — every tool call is refused (the proxy answers 503; a wrapped agent's call raises AdmissionHeld). To bring it back you start it " +
     "again here and restart the agent's process.");

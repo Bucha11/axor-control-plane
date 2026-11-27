@@ -288,6 +288,27 @@ test.describe("settings", () => {
     await expect(page.getByTestId("federation-vault")).toBeVisible();
   });
 
+  test("a workspace makes its own vault token, shown once (QA-007)", async ({ page }) => {
+    // stubbed: a real token on the shared test plane would lock the vault for other specs
+    let set = false;
+    await page.route("**/v1/vault/tokens", (r) => r.fulfill({ json: {
+      creds: { set, since: set ? "2026-11-27T10:00:00+00:00" : null, by: set ? "ada@acme.io" : null, deployment: false },
+      signing: { set: false, since: null, by: null, deployment: false } } }));
+    let posts = 0;
+    await page.route("**/v1/vault/tokens/creds", (r) => {
+      posts += 1; set = true;
+      return r.fulfill({ status: 201, json: { subsystem: "creds", token: "axv_creds_secret1",
+                                              header: "X-Vault-Creds-Token" } });
+    });
+    await goHash(page, "settings?tab=security");
+    await page.getByTestId("vault-token-creds-make").dblclick();
+    await expect(page.getByTestId("vault-token-shown")).toContainText("axv_creds_secret1");
+    await expect(page.getByTestId("vault-token-shown")).toContainText("X-Vault-Creds-Token");
+    await expect(page.getByTestId("vault-token-creds")).toContainText("ada@acme.io");
+    await expect(page.getByTestId("vault-token-signing-make")).toBeVisible();
+    expect(posts).toBe(1);
+  });
+
   test("security: the cards stay in the column, the enrol error sits under enrol (QA-041)", async ({ page }) => {
     // SIGNING COMMANDS stuck out past the column's right edge, and a refused
     // enrolment was said under PUBLIC KEYS, a section below the form

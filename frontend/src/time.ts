@@ -14,3 +14,10 @@ export function localTime(ts: string | null | undefined, seconds = false): strin
   const time = `${p(d.getHours())}:${p(d.getMinutes())}${seconds ? `:${p(d.getSeconds())}` : ""}`;
   return `${day} ${time}`;
 }
+
+/** "2026-11-26": the local day of a stored time. A bare calendar date
+ *  ("2026-12-01", no time) is a day already, not an instant: returned as is. */
+export function localDate(ts: string | null | undefined): string {
+  if (!ts || !ts.includes("T")) return ts ?? "";
+  return localTime(ts).slice(0, 10);
+}

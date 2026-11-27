@@ -63,3 +63,50 @@ async def test_the_posture_says_what_holds_on_the_hosted_plane(
     assert "licensed_org" not in items
     assert items["vault_creds_token"]["ok"] is False   # said, not hidden
     assert "AXOR_OPERATOR_KEYS" not in str(items)
+
+
+async def test_a_workspace_makes_its_own_vault_token_and_then_needs_it(
+        client: httpx.AsyncClient) -> None:
+    """No deployment token on a hosted plane: each workspace mints its own per
+    subsystem; from then on that subsystem asks for it, and the posture says so."""
+    assert (await client.get("/v1/vault/creds/sealing-key")).status_code == 200
+    r = await client.post("/v1/vault/tokens/creds")
+    assert r.status_code == 201, r.text
+    token, header = r.json()["token"], r.json()["header"]
+    assert header == "X-Vault-Creds-Token" and token.startswith("axv_creds_")
+
+    assert (await client.get("/v1/vault/creds/sealing-key")).status_code == 403
+    assert (await client.get("/v1/vault/creds/sealing-key",
+                             headers={header: "wrong"})).status_code == 403
+    assert (await client.get("/v1/vault/creds/sealing-key",
+                             headers={header: token})).status_code == 200
+    # the other subsystem keeps its own wall: not opened, not closed by this one
+    listed = (await client.get("/v1/vault/tokens")).json()
+    assert listed["creds"]["set"] is True and listed["signing"]["set"] is False
+    assert "hash" not in str(listed)   # never the token, nor its hash
+
+    items = {i["id"]: i for i in (await client.get("/v1/security/posture")).json()["items"]}
+    assert items["vault_creds_token"]["ok"] is True
+    assert items["vault_signing_token"]["ok"] is False
+
+    # a new token cuts off the old one
+    newer = (await client.post("/v1/vault/tokens/creds")).json()["token"]
+    assert (await client.get("/v1/vault/creds/sealing-key",
+                             headers={header: token})).status_code == 403
+    assert (await client.get("/v1/vault/creds/sealing-key",
+                             headers={header: newer})).status_code == 200
+    assert (await client.delete("/v1/vault/tokens/creds")).status_code == 200
+    assert (await client.get("/v1/vault/creds/sealing-key")).status_code == 200
+    assert (await client.post("/v1/vault/tokens/keys")).status_code == 404
+
+
+async def test_a_deployment_token_rules_and_a_workspace_one_is_refused(
+        tmp_path: pathlib.Path) -> None:
+    app = create_app(database_url=f"sqlite+aiosqlite:///{tmp_path}/d.db",
+                     operator_keys={}, allow_unsigned=True, vault_creds_token="deploy")
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app),
+                                 base_url="http://backend.test") as c, \
+            app.router.lifespan_context(app):
+        assert (await c.post("/v1/vault/tokens/creds")).status_code == 409
+        assert (await c.get("/v1/vault/creds/sealing-key",
+                            headers={"X-Vault-Creds-Token": "deploy"})).status_code == 200

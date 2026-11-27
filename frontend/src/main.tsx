@@ -2,6 +2,7 @@ import React from "react";
 import ReactDOM from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import App from "./App";
+import { AskHost } from "./components/Ask";
 import { load as loadOperatorKey } from "./opKey";
 
 // this browser's operator key, if it has one: read before the first command
@@ -15,6 +16,7 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
     <QueryClientProvider client={queryClient}>
       <App />
+      <AskHost />
     </QueryClientProvider>
   </React.StrictMode>,
 );

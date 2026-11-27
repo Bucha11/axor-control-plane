@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api";
+import { localDate } from "../time";
 import { IdentityError, inviteInfo, login, signupInvited } from "../identity";
 import { navigate } from "../router";
 import { useApp } from "../store";
@@ -76,7 +77,7 @@ export default function Invite({ token }: { token: string }) {
       <div style={{ fontSize: 14, color: C.mut, lineHeight: 1.6, marginBottom: 20 }}>
         You're invited as <span style={{ color: C.text }}>{i.role}</span>
         {i.for_email ? <> — for <span style={{ color: C.text }}>{i.for_email}</span></> : null}. The link works once,
-        until {i.expires_ts.slice(0, 10)}.
+        until {localDate(i.expires_ts)}.
       </div>
       {identityEmail ? (
         <div className="flex flex-col" style={{ gap: 10 }}>

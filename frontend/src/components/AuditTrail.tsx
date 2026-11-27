@@ -2,12 +2,13 @@
 // pulled the team's brake, granted an exception, changed the rules, the seat
 // limit, a skill — and the keys minted and revoked. Filtered here, exported as
 // CSV or JSON lines for an archive. Admins only (the plane says so with 403).
+import { askConfirm, askPrompt } from "./Ask";
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, type AuditItem, type Hold } from "../api";
 import { C, MONO, btn } from "../theme";
 import { errorWords } from "../refusal";
-import { localTime } from "../time";
+import { localDate, localTime } from "../time";
 
 // an act, as a person says it
 const WORDS: Record<string, string> = {
@@ -206,7 +207,7 @@ function ForTheReviewer({ field }: { field: React.CSSProperties }) {
           <>
             <span style={{ color: C.dim }}>none — retention prunes on its schedule</span>
             <button data-testid="hold-place" disabled={place.isPending}
-              onClick={() => { const r = window.prompt("What is the hold for? (a case, an investigation)");
+              onClick={async () => { const r = await askPrompt("What is the hold for? (a case, an investigation)");
                                if (r && r.trim().length > 2) place.mutate(r.trim()); }}
               style={btn({ color: C.amber, fontSize: 11, padding: "2px 8px" })}>
               put one on
@@ -215,9 +216,9 @@ function ForTheReviewer({ field }: { field: React.CSSProperties }) {
         ) : open.map((h: Hold) => (
           <span key={h.hold_id} className="flex gap-2 items-center">
             <span style={{ color: C.amber }}>● {h.reason}</span>
-            <span style={{ color: C.dim }}>since {h.placed_ts.slice(0, 10)} · nothing is pruned</span>
+            <span style={{ color: C.dim }}>since {localDate(h.placed_ts)} · nothing is pruned</span>
             <button data-testid={`hold-release-${h.hold_id}`} disabled={release.isPending}
-              onClick={() => { if (window.confirm("Lift the hold? Retention starts pruning again.")) release.mutate(h.hold_id); }}
+              onClick={async () => { if (await askConfirm("Lift the hold? Retention starts pruning again.")) release.mutate(h.hold_id); }}
               style={btn({ color: C.mut, fontSize: 11, padding: "2px 8px" })}>
               lift it
             </button>

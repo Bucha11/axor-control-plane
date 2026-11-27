@@ -6,6 +6,7 @@
 // Cutting goes through the tree's own node and the ordinary signed command door
 // (`pending_excision`); the run takes it before its next stage, so the item never
 // reaches a later node — pushed or pulled.
+import { askConfirm, askPrompt } from "../components/Ask";
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, type TreeItem, type TreeNode, type TreeRun } from "../api";
@@ -165,8 +166,8 @@ function TreeView({ treeRun }: { treeRun: string }) {
       </div>
 
       <ContextItems tree={t} pending={pending} canCut={canCut} lit={lit}
-        onCut={(ref) => {
-          const reason = window.prompt(`Cut ${ref} so no later node of this tree sees it — reason (recorded):`);
+        onCut={async (ref) => {
+          const reason = await askPrompt(`Cut ${ref} so no later node of this tree sees it — reason (recorded):`);
           if (reason && reason.trim()) cut.mutate({ ref, reason: reason.trim() });
         }} />
       {error && <div style={{ fontFamily: MONO, fontSize: 11, color: C.red, marginTop: 8 }}>{error}</div>}
@@ -212,7 +213,7 @@ function TreeControls({ treeRun, version, paused, stopping }: {
         {paused ? "resume the tree" : "pause the tree"}
       </button>
       <button data-testid="tree-stop" disabled={send.isPending}
-        onClick={() => { if (window.confirm("Stop this tree? Running nodes end their turn; no further stage starts.")) send.mutate({ stopped: true }); }}
+        onClick={async () => { if (await askConfirm("Stop this tree? Running nodes end their turn; no further stage starts.")) send.mutate({ stopped: true }); }}
         style={btn({ fontSize: 11, padding: "4px 12px", color: C.red, borderColor: C.red })}>stop the tree</button>
       {err && <span style={{ fontFamily: MONO, fontSize: 11, color: C.red }}>{err}</span>}
     </span>

@@ -498,7 +498,7 @@ def test_the_subsystem_tokens_are_not_compared_byte_by_byte() -> None:
     tree = ast.parse((src / "routers" / "vault.py").read_text("utf-8"))
     gate = next(
         n for n in ast.walk(tree)
-        if isinstance(n, ast.FunctionDef) and n.name == "vault_gate"
+        if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n.name == "vault_gate"
     )
     calls = {
         n.func.id for n in ast.walk(gate)
