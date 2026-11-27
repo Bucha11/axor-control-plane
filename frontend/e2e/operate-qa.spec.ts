@@ -386,3 +386,80 @@ test("the agent map names a spawned tree's agents in full, over the edges (QA-03
   }
   await page.unrouteAll({ behavior: "ignoreErrors" });
 });
+
+// QA-104, QA-106, QA-107: cramped after the spacing change
+test.describe("layout at 390 and 1366 (QA-104, QA-106, QA-107)", () => {
+  const lines = (el: import("@playwright/test").Locator) => el.evaluate((e) => {
+    const r = document.createRange();
+    r.selectNodeContents(e);
+    return new Set([...r.getClientRects()].map((x) => Math.round(x.top))).size;
+  });
+
+  test("Incidents: the buttons stay inside the card and on one line", async ({ page, request }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    expect((await request.post(`${BACKEND}/v1/demo/seed-coding`)).ok()).toBeTruthy();
+    await setConnection(page, { mode: "adapter" });
+    await goHash(page, "evidence");
+    const card = page.getByTestId("evidence-list").locator(":scope > [data-kind]").first();
+    await expect(card).toBeVisible();
+    const replay = card.getByRole("button", { name: /replay it|where it came from/ });
+    const c = (await card.boundingBox())!;
+    const b = (await replay.boundingBox())!;
+    expect(b.x + b.width).toBeLessThanOrEqual(c.x + c.width - 8);
+    expect(b.height).toBeLessThan(30);
+  });
+
+  test("Skills: a dry run's date stays on one line", async ({ page, request }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    expect((await request.post(`${BACKEND}/v1/demo/seed-skill-try`)).ok()).toBeTruthy();
+    await setConnection(page, { mode: "adapter" });
+    await goHash(page, "skills");
+    const when = page.getByTestId("dry-run-release-helper").locator("span", { hasText: /^\d{4}-\d\d-\d\d \d\d:\d\d$/ });
+    await expect(when).toBeVisible();
+    expect(await lines(when)).toBe(1);
+  });
+
+  test("Skill evals: 'times each' stays on one line", async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.route("**/v1/machines", (r) => r.fulfill({ json: { machines: [{ machine_id: "m-laptop", host: "laptop",
+      repo_label: "acme/api", agents: ["claude-code"], last_seen: new Date().toISOString(), online: true, yours: true }] } }));
+    await page.route("**/v1/machine-jobs?limit=10", (r) => r.fulfill({ json: { jobs: [] } }));
+    await setConnection(page, { mode: "adapter" });
+    await goHash(page, "skill-evals");
+    const label = page.locator("label", { hasText: "times each" }).locator("span").first();
+    await expect(label).toHaveText("times each");
+    expect(await lines(label)).toBe(1);
+  });
+
+  test("Team memory: the rotation sentence goes on after its select", async ({ page, request }) => {
+    expect((await request.post(`${BACKEND}/v1/demo/seed-memory`)).ok()).toBeTruthy();
+    await setConnection(page, { mode: "adapter" });
+    await goHash(page, "memory");
+    const select = page.getByLabel("freshness window");
+    await expect(select).toBeVisible();
+    // the words after the select start on the select's line
+    const after = await page.getByTestId("memory-fresh").evaluate((sec) => {
+      const sel = sec.querySelector("select")!;
+      let n: Node | null = sel.nextSibling;
+      while (n && !(n.textContent ?? "").includes("is no longer given")) n = n.nextSibling;
+      const r = document.createRange();
+      r.selectNodeContents(n!);
+      return { text: r.getClientRects()[0].top, select: sel.getBoundingClientRect() };
+    });
+    expect(after.text).toBeLessThan(after.select.bottom);
+    expect(after.text).toBeGreaterThanOrEqual(after.select.top - 12);
+  });
+
+  test("Home: the coding example's record box holds its label", async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await goHash(page, "home");
+    await page.getByTestId("home-tab-coding").click();
+    const sub = page.locator("svg text", { hasText: "setup.limitkit.example” ← web" });
+    await expect(sub).toBeVisible({ timeout: 20_000 });
+    const box = sub.locator("xpath=preceding-sibling::*[local-name()='rect'][1]");
+    const t = (await sub.boundingBox())!;
+    const r = (await box.boundingBox())!;
+    expect(t.x).toBeGreaterThanOrEqual(r.x);
+    expect(t.x + t.width).toBeLessThanOrEqual(r.x + r.width);
+  });
+});

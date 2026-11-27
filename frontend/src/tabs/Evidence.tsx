@@ -342,13 +342,15 @@ function Item({ item, who }: { item: IncidentItem; who?: string }) {
             .some((a) => a.fault_mode && !a.fault_mode.startsWith("observed_")))}
           {item.origin && <span data-testid="incident-origin"> · {ORIGIN_WORDS[item.origin] ?? item.origin}</span>}
         </span>
-        <span className="flex gap-2 items-center">
+        {/* at 390 the buttons wrap whole inside the card, never past its edge (QA-104) */}
+        <span className="flex gap-2 items-center flex-wrap" data-testid="incident-actions" style={{ minWidth: 0, maxWidth: "100%" }}>
           <StatusPick item={item} />
           {item.kind === "made_up" && (
-            <button onClick={() => navigate(`catch/${encodeURIComponent(item.run_id)}`)} style={small}>details</button>
+            <button onClick={() => navigate(`catch/${encodeURIComponent(item.run_id)}`)} style={{ ...small, whiteSpace: "nowrap" }}>details</button>
           )}
           <button onClick={toStep}
-            style={{ ...small, display: "flex", alignItems: "center", gap: 5, border: `1px solid ${C.steel}`, color: C.steel }}>
+            style={{ ...small, display: "flex", alignItems: "center", gap: 5, border: `1px solid ${C.steel}`, color: C.steel,
+                     whiteSpace: "nowrap" }}>
             <Play size={11} /> {item.kind === "dangerous" ? "where it came from" : "replay it"}
           </button>
         </span>

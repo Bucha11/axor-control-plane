@@ -184,8 +184,9 @@ function HowToRun() {
         {field("the skill", skill, setSkill, "eval-skill")}
         {field("a task", prompt, setPrompt, "eval-prompt")}
         {field("done when", checkCmd, setCheckCmd, "eval-check")}
-        <label className="flex items-center gap-2" style={{ fontFamily: MONO, fontSize: 11, color: C.mut }}>
-          <span style={{ width: 110 }}>times each</span>
+        <label className="flex items-center gap-2 flex-wrap" style={{ fontFamily: MONO, fontSize: 11, color: C.mut }}>
+          {/* the label keeps its width and its line at 390 (QA-104) */}
+          <span data-testid="eval-trials-label" style={{ width: 110, flexShrink: 0, whiteSpace: "nowrap" }}>times each</span>
           <input inputMode="numeric" value={trialsText} data-testid="eval-trials"
             onChange={(ev) => setTrialsText(ev.target.value)}
             style={{ width: 70, background: C.bg, border: `1px solid ${trials === null ? C.red : C.line}`, borderRadius: 5,
