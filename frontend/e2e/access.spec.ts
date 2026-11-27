@@ -208,4 +208,16 @@ test.describe("access (QA, 0.7.3)", () => {
     await expect(note).toHaveText("sign in to a workspace to pay by card");
     await expect(page.locator("body")).not.toContainText("AXOR_");
   });
+
+  test("a member or admin sees the license but is not offered pasting one (QA-064, QA-135)", async ({ page }) => {
+    await playRole(page, MEMBER);
+    await goHash(page, "settings");
+    const fold = page.getByTestId("license-fold");
+    await fold.locator("summary").click();
+    await expect(fold.getByTestId("license-viewer"))
+      .toHaveText("as a member or admin you can't apply a license — only the owner can");
+    await expect(page.getByPlaceholder('{"license": {...}, "sig": "…"}')).toHaveCount(0);
+    await expect(page.getByRole("button", { name: /Verify license/ })).toHaveCount(0);
+    await expect(fold).not.toContainText("AXOR_");
+  });
 });

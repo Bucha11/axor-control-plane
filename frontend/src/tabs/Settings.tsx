@@ -9,6 +9,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Check, Copy, Loader2, Trash2 } from "lucide-react";
 import { api, BillingReport, BillingStatement, type Capability, type Permissions } from "../api";
 import { useCanAdmin, useHasScope, useHasScopeKnown } from "../team";
+import RoleNote from "../components/RoleNote";
 import {
   IdentityError, emailAvailable, forgotPassword, here, login, logout, oauthProviders,
   oauthStartUrl, signup, signupAvailable, ssoDiscover, ssoStartUrl, type OAuthProvider,
@@ -1174,6 +1175,9 @@ export default function Settings({ tab = "workspace" }: { tab?: string } = {}) {
                             enabled: authStatus.data?.operator === true });
   const canAdmin = useCanAdmin();
   const canOperate = useHasScope()("operate");
+  // applying a license is the owner's (POST /v1/license/verify: admin scope);
+  // a member or admin sees what is active and who applies one (QA-064, QA-135)
+  const canLicense = useHasScope()("admin");
   const prod = !journey || menuAll || journey !== "coding";
   const coding = !journey || menuAll || journey !== "production";
   const tabs: [SettingsTab, string][] = [
@@ -1231,6 +1235,7 @@ export default function Settings({ tab = "workspace" }: { tab?: string } = {}) {
               <summary style={{ cursor: "pointer", fontFamily: MONO, fontSize: 11.5, color: C.mut }}>
                 {licenseStatus.data?.active
                   ? `active · ${licenseStatus.data.workspace_tier} · expires ${licenseStatus.data.expires_at}`
+                  : !canLicense ? (licenseStatus.data?.expired ? "expired" : "no license")
                   : licenseStatus.data?.expired ? "expired — open to paste a new one" : "no license — open to paste one"}
               </summary>
               <div className="mt-3">
@@ -1277,7 +1282,7 @@ export default function Settings({ tab = "workspace" }: { tab?: string } = {}) {
                 ? "usage reported on the renewal channel"
                 : "usage not reported"}
             </div>
-            {licenseStatus.data.vendor_key_configured && !licenseStatus.data.licensed_to && (
+            {canLicense && licenseStatus.data.vendor_key_configured && !licenseStatus.data.licensed_to && (
               <div style={{ color: C.amber, fontSize: 10, marginTop: 3 }}>
                 AXOR_ORG is unset, so ANY vendor-signed license activates here —
                 including one issued to another customer. Set it to the name on
@@ -1286,6 +1291,7 @@ export default function Settings({ tab = "workspace" }: { tab?: string } = {}) {
             )}
           </div>
         )}
+        {!canLicense ? <RoleNote need="admin" what="apply a license" testid="license-viewer" /> : <>
         <textarea
           value={licenseJson}
           onChange={(e) => setLicenseJson(e.target.value)}
@@ -1316,6 +1322,7 @@ export default function Settings({ tab = "workspace" }: { tab?: string } = {}) {
             {(license.error as Error).message}
           </div>
         )}
+        </>}
         {license.data && (
           <>
             <div className="mt-2" style={{ fontFamily: MONO, fontSize: 11, color: C.green }}>
