@@ -7,6 +7,8 @@ The ids are the ones demo.py seeds; tests/test_examples.py keeps the two in step
 """
 from __future__ import annotations
 
+import re
+
 EXAMPLE_NODES = frozenset({
     "adapter-demo-block", "adapter-demo-pass",
     "tree-orch", "tree-research", "tree-writer", "tree-scraper",
@@ -23,9 +25,17 @@ def is_example_node(node_id: str) -> bool:
 WORK_STARTED = "workspace_work_started"
 
 
+# The proxy's demo node and demo tree (axor_proxy.governed): real IntentLoops
+# that take commands, so not examples to hide, but the product showing itself,
+# not the team at work. Counting the first one as work hid every other example
+# the moment it heartbeat — the tree, a second node, the fleet (QA-174).
+_DEMO_NODE = re.compile(r"governed-[0-9a-f]{6}|gov-tree-[0-9a-f]{4}-(orch|research|scraper)")
+
+
 def is_real_node(node_id: str) -> bool:
     # a skill dry run is the product trying a skill, not the team's agents at work
-    return not is_example_node(node_id) and not node_id.startswith("skill-try.")
+    return (not is_example_node(node_id) and not node_id.startswith("skill-try.")
+            and not _DEMO_NODE.fullmatch(node_id))
 
 
 async def work_started(store: object) -> str | None:

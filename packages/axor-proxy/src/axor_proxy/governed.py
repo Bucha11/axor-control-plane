@@ -249,13 +249,54 @@ async def run_governed_session(
     return lines, denials
 
 
+# How long a demo node stays on the plane. It was three minutes, which is less
+# than it takes to make an operator key and come back: every command sent after
+# that went to a node that had already left, and the panel said "applying…"
+# for good (QA-171).
+DEMO_NODE_TTL = 600.0
+
+
+def _credential_expiry(key: str | None) -> float | None:
+    """When the node's credential stops working: the `exp` of a sign-in token
+    (read, not verified — the plane verifies it), None for an ingest key.
+
+    The page hands the node the person's own access token, which lives minutes.
+    Past it every heartbeat is refused and the node goes quiet while the panel
+    still waits on it, so the node leaves at that time and says so."""
+    import base64
+    import json
+
+    parts = (key or "").split(".")
+    if len(parts) != 3:
+        return None
+    try:
+        pad = "=" * (-len(parts[1]) % 4)
+        exp = json.loads(base64.urlsafe_b64decode(parts[1] + pad)).get("exp")
+    except (ValueError, AttributeError):
+        return None
+    return float(exp) if isinstance(exp, (int, float)) else None
+
+
+def demo_ttl(key: str | None, wanted: float, now: float | None = None) -> float:
+    """The node's time on the plane: `wanted`, cut to its credential's life."""
+    import time
+
+    exp = _credential_expiry(key)
+    if exp is None:
+        return wanted
+    left = exp - (time.time() if now is None else now) - 5.0
+    return max(0.0, min(wanted, left))
+
+
 async def spawn_governed_node(
     backend_url: str, ingest_key: str | None = None,
-    ttl_seconds: float = 180.0,
+    ttl_seconds: float = DEMO_NODE_TTL,
 ) -> dict[str, Any]:
     """Run a governed session, upload its trace, and keep the node live on the
     plane for `ttl_seconds` (heartbeats + desired-state subscription) so it shows
-    up in Control and responds to interventions. Returns node_id + run_id."""
+    up in Control and responds to interventions. Returns node_id + run_id and
+    when the node leaves the plane."""
+    ttl_seconds = demo_ttl(ingest_key, ttl_seconds)
     node_id = f"governed-{secrets.token_hex(3)}"
     run_id = f"gov_{secrets.token_hex(4)}"
     session = PlaneSession(node_id=node_id, test_bench=True)
@@ -324,7 +365,10 @@ async def spawn_governed_node(
     task = asyncio.create_task(_keepalive())
     return {
         "node_id": node_id, "run_id": run_id, "events": len(lines),
-        "denials": denials, "ttl_seconds": ttl_seconds, "_task": task,
+        "denials": denials, "ttl_seconds": ttl_seconds,
+        "leaves_at": datetime.fromtimestamp(
+            datetime.now(UTC).timestamp() + ttl_seconds, UTC).isoformat(),
+        "_task": task,
     }
 
 

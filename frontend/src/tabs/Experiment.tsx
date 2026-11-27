@@ -435,7 +435,12 @@ export default function Experiment({ runId, autostart }: { runId?: string; autos
                 </div>
                 <div style={{ fontFamily: MONO, fontSize: 11, color: C.mut, marginTop: 10, lineHeight: 1.6 }}>
                   Without Axor this run reads as a success. With it, you get the receipt below — replayable,
-                  and it can become a test.
+                  {/* a test the rules re-check needs a call they refused: a lie
+                      caught with every call let through cannot be kept (QA-193) */}
+                  {(runEventsQ.data ?? []).some((e) => e.kind === "tool_call" && e.verdict === "deny")
+                    ? <> and it can become a test.</>
+                    : <> and the same break can be run again from Chaos tests. It refused no call, so there is
+                      nothing for Safe to ship? to re-check.</>}
                 </div>
               </div>
               <EvidenceCase runId={focusRun.run_id} caseIndex={caseIndex} c={caught} said={said}

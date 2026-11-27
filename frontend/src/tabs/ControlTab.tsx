@@ -7,7 +7,7 @@ import { useEffect, useState } from "react";
 import ReadFailed from "../components/ReadFailed";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Circle, Gauge, GitBranch, Lock, Pause, Play, Square, Syringe } from "lucide-react";
-import { ActivityEvent, api, FleetRow, IncidentItem, NodeInfo, NodeRun, type LockReason, type TreeSummary } from "../api";
+import { ActivityEvent, api, ApiError, FleetRow, IncidentItem, NodeInfo, NodeRun, type LockReason, type TreeSummary } from "../api";
 import { describeAck } from "./RunControl";
 import Coverage from "../components/Coverage";
 import TopologyGraph, { PeerCard } from "../components/TopologyGraph";
@@ -25,6 +25,10 @@ import { NOT_A_TEST_BENCH, behindProxy, cannotCut, isTestBench } from "../agentN
 import { useOneAtATime } from "../oneAtATime";
 
 const REFETCH_MS = 5000;
+// a node is quiet after three missed heartbeats (T = 10 s, protocol §9)
+const QUIET_MS = 30_000;
+// the proxy's demo node (axor_proxy.governed): it leaves the plane after a while
+const isDemoNode = (id: string) => /^governed-[0-9a-f]{6}$/.test(id);
 
 const LEVEL_COLOR: Record<string, string> = {
   FLAGGED: C.red, WATCH: C.amber, CLEAN: C.dim,
@@ -250,7 +254,9 @@ function SpawnGoverned({ switchToAdapter }: { switchToAdapter?: boolean }) {
       )}
       {spawn.isSuccess && (
         <div style={{ fontFamily: MONO, fontSize: 11, color: C.dim, marginTop: 8 }}>
-          governed node live — it heartbeats to the plane; pause / stop / inject below reach it.
+          governed node live until {localTime(spawn.data.leaves_at)} — it heartbeats to the plane; pause / stop /
+          inject below reach it. It holds no operator keys of its own: it takes a command as the plane
+          checked it, and does not check the signature again.
         </div>
       )}
     </div>
@@ -324,15 +330,16 @@ export default function ControlTab({ focusNode }: { focusNode?: string }) {
         onClick={() => navigate("connect?for=production")}>connect →</span>)
     </>
   );
+  const noteShown = !isAdapter(mode) && fleet.isSuccess && !codingTeam
+    && !codingExampleOnly((fleet.data ?? []).map((n) => n.node_id))
+    && !fleetExampleOnly((fleet.data ?? []).map((n) => n.node_id))
+    // the workspace's own agents are on screen: no example agents to offer
+    && !(workStarted && hasAgents);
   return (
     <>
       {/* decided once the list is in: a note that unfolds and then folds
           itself takes the button out from under the pointer */}
-      {!isAdapter(mode) && fleet.isSuccess && !codingTeam
-        && !codingExampleOnly((fleet.data ?? []).map((n) => n.node_id))
-        && !fleetExampleOnly((fleet.data ?? []).map((n) => n.node_id))
-        // the workspace's own agents are on screen: no example agents to offer
-        && !(workStarted && hasAgents) && (hasAgents ? (
+      {noteShown && (hasAgents ? (
         // agents are already on screen: one line, the example tools folded away
         <div data-testid="adapter-note" style={{ fontFamily: MONO, fontSize: 11, color: C.mut,
                                                   lineHeight: 1.6, marginBottom: 14 }}>
@@ -361,12 +368,43 @@ export default function ControlTab({ focusNode }: { focusNode?: string }) {
           {note}.
         </div>
       ))}
-      <ControlBody focusNode={focusNode} testBench={testBench} />
+      <ControlBody focusNode={focusNode} testBench={testBench}
+        examplesOffered={(noteShown && hasAgents) || codingTeam} />
     </>
   );
 }
 
-function ControlBody({ focusNode, testBench }: { focusNode?: string; testBench: boolean }) {
+// The examples, one folded line under the list: after the first demo node the
+// tree, a second node, the canned tree and the fleet were offered nowhere
+// (QA-174). Folded, so a real fleet is not crowded by them.
+function MoreExamples({ nodes }: { nodes: NodeInfo[] }) {
+  const [open, setOpen] = useState(false);
+  const apiTokenNow = useApp((st) => st.apiToken);
+  const wsQ = useQuery({ queryKey: ["workspace", apiTokenNow], queryFn: api.workspace, retry: false });
+  const workStarted = Boolean(wsQ.data?.work_started);
+  const fleetLoaded = nodes.some((n) => n.node_id === "tree-orch");
+  return (
+    <div data-testid="more-examples" style={{ fontFamily: MONO, fontSize: 11, color: C.mut, marginTop: 10 }}>
+      <button onClick={() => setOpen((v) => !v)}
+        style={{ background: "none", border: "none", padding: 0, cursor: "pointer",
+                 fontFamily: MONO, fontSize: 11, color: C.steel }}>
+        {open ? "try more examples ▴" : "try more examples ▾"}
+      </button>
+      {open && (
+        <div style={{ border: `1px solid ${C.line}`, borderRadius: 8, padding: "10px 12px", marginTop: 8 }}>
+          {/* once the workspace's own agents report the example fleet is
+              hidden: loading it then would do nothing visible */}
+          {!fleetLoaded && !workStarted && <ExampleFleet />}
+          <SpawnGoverned />
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ControlBody({ focusNode, testBench, examplesOffered }: {
+  focusNode?: string; testBench: boolean; examplesOffered: boolean;
+}) {
   const hasTeam = useHasTeam();
   const mine = useMine();
   // a teammate's session: an owner or admin, or whoever the workspace lets
@@ -417,7 +455,9 @@ function ControlBody({ focusNode, testBench }: { focusNode?: string; testBench: 
     // commanded — a traced tree's children are in the topology and not in that
     // list. Gating this query on the graph lens meant Control said "no governed
     // nodes connected yet" while it held the whole tree.
-    enabled: lens === "graph" || list.length === 0,
+    enabled: lens === "graph" || list.length === 0
+      // an address naming an agent the list does not have: is it traced, or none?
+      || (sel != null && !everyone.some((n) => n.node_id === sel)),
   });
   // the topology draws every node that traced here — a skill's dry run too,
   // which is not an agent to operate (see `everyone` above)
@@ -433,6 +473,9 @@ function ControlBody({ focusNode, testBench }: { focusNode?: string; testBench: 
   };
   const [more, setMore] = useState(false);
   const [cmdError, setCmdError] = useState<string | null>(null);
+  // a command another tab (or person) beat to the agent: named, and offered
+  // again on the state as it is now (QA-172)
+  const [lost, setLost] = useState<{ nodeId: string; state: Record<string, unknown> } | null>(null);
   const [filter, setFilter] = useState<Status | "all">("all");
   const fleetQ = useQuery({ queryKey: ["fleet"], queryFn: api.fleet, refetchInterval: REFETCH_MS });
   // a tree's agents fold into one row: which node belongs to which tree run
@@ -470,9 +513,18 @@ function ControlBody({ focusNode, testBench }: { focusNode?: string; testBench: 
     }) => api.command(nodeId, version, state),
     onSuccess: () => {
       setCmdError(null);
+      setLost(null);
       void qc.invalidateQueries({ queryKey: ["nodes"] });
     },
-    onError: (err: Error) => setCmdError(err.message),
+    onError: (err: Error, vars) => {
+      if (err instanceof ApiError && err.status === 409 && /stale version/.test(err.message)) {
+        setCmdError(null);
+        setLost({ nodeId: vars.nodeId, state: vars.state });
+        void qc.invalidateQueries({ queryKey: ["nodes"] });
+        return;
+      }
+      setCmdError(err.message);
+    },
   });
 
   const cascade = useMutation({
@@ -583,18 +635,25 @@ function ControlBody({ focusNode, testBench }: { focusNode?: string; testBench: 
   }
 
   const node = list.find((n) => n.node_id === sel) ?? null;
+  const unknownSel = sel != null && !node && !everyone.some((n) => n.node_id === sel)
+    && topo.isSuccess && !(topoData?.nodes ?? []).some((n) => n.node_id === sel);
   const benchOk = isTestBench(node, testBench);
 
   const desired = node?.desired ?? null;
   const reported = node?.reported ?? null;
   const applying =
     desired != null && desired.version > (reported?.applied_version ?? 0);
+  // a node silent past 3 heartbeats (protocol §9) is not applying anything:
+  // a demo node that had left still read "applying…" for good (QA-171)
+  const quietSince = reported?.updated_ts && Date.now() - Date.parse(reported.updated_ts) > QUIET_MS
+    ? reported.updated_ts : null;
   const paused = desired?.state.paused === true;
   const stopped = desired?.state.stopped === true;
 
   const send = (state: Record<string, unknown>) => {
     if (!node) return;
     setCmdError(null);
+    setLost(null);
     command.mutate({
       nodeId: node.node_id,
       version: (node.desired?.version ?? 0) + 1,
@@ -691,6 +750,15 @@ function ControlBody({ focusNode, testBench }: { focusNode?: string; testBench: 
       {fleetExampleOnly(list.map((n) => n.node_id)) && (
         <FleetExampleStory onPick={pick} onGraph={() => setLens("graph")} />
       )}
+      {unknownSel && (
+        // opened by an address naming no agent: said, not a fleet with a
+        // stray note under it (QA-176)
+        <div data-testid="no-such-agent" className="mb-3 p-3"
+          style={{ border: `1px solid ${C.amber}`, borderRadius: 8, fontFamily: MONO, fontSize: 11.5, color: C.mut }}>
+          <span style={{ color: C.amber }}>There is no agent “{sel}” on the plane.</span> It may have been removed,
+          or the address is mistyped — the agents there are listed below.
+        </div>
+      )}
       <h1 style={{ fontSize: 22, fontWeight: 650, margin: "0 0 4px" }}>
         {needYou === 0 && (heldStopped + heldPaused) > 0
           ? <>Nothing needs you — {[heldStopped ? `${heldStopped} stopped` : "", heldPaused ? `${heldPaused} paused` : ""]
@@ -745,7 +813,7 @@ function ControlBody({ focusNode, testBench }: { focusNode?: string; testBench: 
       )}
       {/* a traced node that does not report has no panel: its reputation
           stays here, by the graph */}
-      {sel && !node && topoData?.nodes.find((n) => n.node_id === sel)?.kind !== "peer" && (
+      {sel && !node && !unknownSel && topoData?.nodes.find((n) => n.node_id === sel)?.kind !== "peer" && (
         <ReputationCard nodeId={sel} />
       )}
 
@@ -849,6 +917,7 @@ function ControlBody({ focusNode, testBench }: { focusNode?: string; testBench: 
           return out;
         })()}
       </div>
+      {!examplesOffered && <MoreExamples nodes={nodes.data ?? []} />}
 
     </div>
     <aside className="fleet-sticky" data-testid={node ? "agent-panel" : "fleet-activity"}>
@@ -903,6 +972,16 @@ function ControlBody({ focusNode, testBench }: { focusNode?: string; testBench: 
               <span data-testid="example-no-commands" style={{ fontFamily: MONO, fontSize: 11, color: C.dim }}>
                 example node — it takes no commands; yours do
               </span>
+            ) : applying && quietSince && isDemoNode(node.node_id) ? (
+              <span data-testid="demo-node-left" style={{ fontFamily: MONO, fontSize: 11, color: C.dim }}>
+                this demo node left the plane at {localTime(quietSince)} — it takes no more
+                commands; spawn another under “try more examples”
+              </span>
+            ) : applying && quietSince ? (
+              <span data-testid="node-quiet" style={{ fontFamily: MONO, fontSize: 11, color: C.amber }}>
+                not applied: the agent has not reported since {localTime(quietSince)} — it gets{" "}
+                {Object.entries(desired?.state ?? {}).map(([k, v]) => stateWords(k, v)).join(", ")} when it reconnects
+              </span>
             ) : applying ? (
               <span style={{ fontFamily: MONO, fontSize: 11, color: C.amber }}>
                 applying {Object.entries(desired?.state ?? {}).map(([k, v]) => stateWords(k, v)).join(", ")}…
@@ -949,7 +1028,7 @@ function ControlBody({ focusNode, testBench }: { focusNode?: string; testBench: 
 
           <details className="mb-3" style={{ fontFamily: MONO, fontSize: 11, color: C.mut, lineHeight: 1.7 }}>
             <summary style={{ cursor: "pointer", color: C.dim }}>
-              details{applying ? " · a command is on its way to the agent" : ""}
+              details{applying && !quietSince ? " · a command is on its way to the agent" : ""}
             </summary>
             commanded (desired){" "}
             <span style={{ color: C.text }}>
@@ -1179,6 +1258,16 @@ function ControlBody({ focusNode, testBench }: { focusNode?: string; testBench: 
           {cmdError && (
             <div className="mt-3" style={{ fontFamily: MONO, fontSize: 11, color: C.red }}>
               {cmdError}
+            </div>
+          )}
+          {lost && lost.nodeId === node.node_id && (
+            <div data-testid="command-lost" className="mt-3" style={{ fontFamily: MONO, fontSize: 11, color: C.amber, lineHeight: 1.6 }}>
+              not sent: {Object.entries(lost.state).map(([k, v]) => stateWords(k, v)).join(", ")} — someone else
+              changed this agent first (another tab, or another operator). What they sent is shown above.{" "}
+              <button disabled={command.isPending} onClick={() => send(lost.state)}
+                style={btn({ color: C.text, borderColor: C.line, fontSize: 11, padding: "2px 10px" })}>
+                send {Object.entries(lost.state).map(([k, v]) => stateWords(k, v)).join(", ")} again
+              </button>
             </div>
           )}
           {cascade.isSuccess && cascade.variables?.nodeId === node?.node_id && (

@@ -18,7 +18,12 @@ from fastapi.responses import HTMLResponse
 
 from axor_backend.clock import now
 from axor_backend.deps import StoreDep
-from axor_backend.share import evidence_receipt_html, evidence_receipt_pdf, new_token
+from axor_backend.share import (
+    evidence_receipt_html,
+    evidence_receipt_pdf,
+    link_gone_html,
+    new_token,
+)
 from axor_backend.storage import Store
 from axor_backend.tenancy import set_current_org
 
@@ -96,9 +101,13 @@ async def resolve_share(token: str, store: StoreDep) -> HTMLResponse:
     """
     link = await store.get_share_link(token)
     if link is None or link["revoked"]:
-        raise HTTPException(404, "link revoked or unknown")
+        # a person with a link, not an API client: a page in words (QA-190)
+        return HTMLResponse(link_gone_html(), status_code=404)
     set_current_org(link["org_id"])  # this route is open; adopt the link's tenant
-    run = await _case_run(store, link["run_id"], link["case_index"])
+    try:
+        run = await _case_run(store, link["run_id"], link["case_index"])
+    except HTTPException:
+        return HTMLResponse(link_gone_html(), status_code=404)   # its run was pruned
     said = _said(await store.last_claims([link["run_id"]]), link["run_id"])
     return HTMLResponse(evidence_receipt_html(
         link["run_id"], run["evidence"][link["case_index"]],

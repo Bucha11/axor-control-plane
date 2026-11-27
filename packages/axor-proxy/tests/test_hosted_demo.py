@@ -160,3 +160,54 @@ async def test_the_demo_node_heartbeats_with_the_spawners_credential(
                                              ttl_seconds=0.05)
     await out["_task"]
     assert seen["ingest_key"] == "user-jwt"
+
+
+def _jwt(exp: float) -> str:
+    import base64
+    import json
+
+    def b64(d: dict) -> str:
+        return base64.urlsafe_b64encode(json.dumps(d).encode()).decode().rstrip("=")
+    return f"{b64({'alg': 'EdDSA'})}.{b64({'sub': 'u', 'exp': int(exp)})}.sig"
+
+
+@pytest.mark.parametrize("key, ttl", [
+    ("an-ingest-key", 600.0),     # outlives making an operator key and coming back
+    ("JWT+120", 115.0),           # a sign-in token: leaves when it would be refused
+])
+async def test_qa171_the_demo_node_stays_long_enough_and_leaves_with_its_token(
+        monkeypatch: pytest.MonkeyPatch, key: str, ttl: float) -> None:
+    """QA-171: the demo node left the plane three minutes after it was spawned,
+    so every command sent after making an operator key went nowhere and the
+    panel said "applying…" for good. It now stays ten minutes, cut to the life
+    of the sign-in token it heartbeats with, and says when it leaves."""
+    import asyncio
+    import time
+    from datetime import datetime
+
+    from axor_proxy import governed
+
+    class FakeClient:
+        def __init__(self, *a: object, **kw: object) -> None:
+            pass
+
+        async def run(self, stop: asyncio.Event) -> None:
+            await stop.wait()
+
+        async def heartbeat_loop(self, stop: asyncio.Event, level_fn: object = None) -> None:
+            await stop.wait()
+
+        async def flush(self, level: str = "NORMAL") -> None:
+            return None
+
+    real = httpx.AsyncClient
+    monkeypatch.setattr(governed, "PlaneClient", FakeClient)
+    monkeypatch.setattr(governed.httpx, "AsyncClient", lambda **kw: real(
+        transport=httpx.MockTransport(lambda r: httpx.Response(200, json={})), **kw))
+    if key.startswith("JWT+"):
+        key = _jwt(time.time() + int(key[4:]))
+    out = await governed.spawn_governed_node("http://plane.test", ingest_key=key)
+    out["_task"].cancel()
+    assert out["ttl_seconds"] == pytest.approx(ttl, abs=2.0)
+    leaves = datetime.fromisoformat(out["leaves_at"]).timestamp()
+    assert leaves == pytest.approx(time.time() + ttl, abs=3.0)

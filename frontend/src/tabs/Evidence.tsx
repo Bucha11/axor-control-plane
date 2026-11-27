@@ -250,6 +250,14 @@ export default function Evidence({ agent: agentParam }: { agent?: string } = {})
   );
 }
 
+// A lie caught with a tool broken on purpose: the run refused no call, so
+// there is nothing to keep as a test or make a rule of (QA-193) — the
+// chaos test is what runs again.
+const CHAOS_MODES = ["silent_fail", "corrupt_retrieval", "instruction_injection", "tool_substitution",
+                     "timeout", "empty_result"];
+const brokenOnPurpose = (item: IncidentItem) => item.kind === "made_up"
+  && (item.case?.fault_attribution ?? []).some((f) => CHAOS_MODES.includes(f.fault_mode));
+
 function StatusPick({ item }: { item: IncidentItem }) {
   const qc = useQueryClient();
   const set = useMutation({
@@ -263,7 +271,8 @@ function StatusPick({ item }: { item: IncidentItem }) {
                color: item.status === "new" ? C.steel : C.mut, fontFamily: MONO, fontSize: 11, padding: "3px 6px" }}>
       {(Object.keys(STATUS_WORDS) as IncidentStatus[])
         // a refusal already is a rule at work: keeping it or making one is not its question
-        .filter((st) => item.kind !== "refused" || st === item.status || !["kept_as_test", "rule_made"].includes(st))
+        .filter((st) => !(item.kind === "refused" || brokenOnPurpose(item)) || st === item.status
+          || !["kept_as_test", "rule_made"].includes(st))
         .map((st) => <option key={st} value={st}>{STATUS_WORDS[st]}</option>)}
     </select>
   );

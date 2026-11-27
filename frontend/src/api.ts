@@ -900,9 +900,11 @@ export function apiError(status: number, text: string): ApiError {
     if (!words && typeof body.error === "string") words = body.error.replace(/_/g, " ");
   } catch { /* not JSON */ }
   // not the plane's sentence: a proxy's or server's own page ("Internal Server
-  // Error", nginx's HTML) is said in words, never shown raw (QA-234)
+  // Error", nginx's HTML — "413 Request Entity Too Large") is said in words,
+  // never shown raw (QA-234, QA-217)
   if (!words) {
-    words = status >= 500 ? `the plane could not answer (HTTP ${status}) — try again in a moment`
+    words = status === 413 ? "that is too large for the plane to take in one request — send less at a time"
+      : status >= 500 ? `the plane could not answer (HTTP ${status}) — try again in a moment`
       : /^\s*</.test(text) || !text.trim() ? `the request was refused (HTTP ${status})`
         : text.trim().slice(0, 300);
   }
@@ -953,6 +955,13 @@ function commandRefusal(e: unknown, hasKey = true): unknown {
     return new ApiError(403, "operator_key_needed",
       "this workspace signs every command, and it has no operator key yet — an owner or admin "
       + "makes one for this browser in Settings → workspace → operator keys");
+  }
+  // revoked on purpose: "not one the workspace knows — register it" sent its
+  // holder to register the key that was taken away (QA-173)
+  if (/was revoked/.test(e.message)) {
+    return new ApiError(403, "operator_key_revoked",
+      "this browser's operator key was revoked — an owner or admin took it away. To sign again, "
+      + "make a new one in Settings → workspace → operator keys and have it vouched for");
   }
   // this browser has no key at all: it sent no operator, and saying its key
   // is unknown read as if it had one (QA-083)
@@ -2352,7 +2361,8 @@ export const api = {
   // ── governed node: a real axor-core IntentLoop wired to the plane ──────────
   spawnGoverned: () =>
     af("/axor/governed/spawn", { method: "POST", headers: uploadAs() }).then(
-      (r) => j<{ node_id: string; run_id: string; events: number; denials: number; ttl_seconds: number }>(r),
+      (r) => j<{ node_id: string; run_id: string; events: number; denials: number; ttl_seconds: number;
+             leaves_at: string }>(r),
     ),
 
   // ── demo: seed adapter-fidelity runs (recorded verdicts + provenance) ──────

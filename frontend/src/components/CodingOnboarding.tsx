@@ -13,7 +13,7 @@ import { navigate } from "../router";
 import { CARD } from "../quote";
 import { isGuestToken, useApp } from "../store";
 import { C, MONO, btn } from "../theme";
-import { IdentityLogin } from "../tabs/Settings";
+import { IdentityLogin, TIER_NAME } from "../tabs/Settings";
 import { useOneAtATime } from "../oneAtATime";
 
 type Agent = "claude-code" | "codex";
@@ -78,6 +78,10 @@ const step = (n: number, text: string, first = false) => (
 const hint = { fontFamily: MONO, fontSize: 10.5, color: C.dim, marginBottom: 4, lineHeight: 1.6 } as const;
 
 export default function CodingOnboarding({ then }: { then?: () => void }) {
+  // the workspace's plan: a member of a paid one was told "free for 1
+  // developer" (QA-157)
+  const ent = useQuery({ queryKey: ["entitlements"], queryFn: api.entitlements, retry: false });
+  const paidPlan = ent.data && !ent.data.free ? (TIER_NAME[ent.data.tier] ?? ent.data.tier) : null;
   const [agents, setAgents] = useState<Agent[]>(["claude-code"]);
   const [copied, setCopied] = useState<string | null>(null);
   const [key, setKey] = useState<string | null>(null);
@@ -134,7 +138,12 @@ export default function CodingOnboarding({ then }: { then?: () => void }) {
       </div>
       <div data-testid="coding-free" style={{ fontFamily: MONO, fontSize: 11, color: C.mut, lineHeight: 1.7,
         border: `1px solid ${C.line}`, borderRadius: 6, padding: "8px 12px", marginBottom: 18 }}>
-        {then ? (
+        {paidPlan ? (
+          <>
+            <span style={{ color: C.green }}>your workspace is on the {paidPlan} plan</span> — Claude Code and
+            Codex, with hooks, agent trees and pause / stop / cap, for every developer it covers.{" "}
+          </>
+        ) : then ? (
           <>
             <span style={{ color: C.green }}>free: 1 developer, 1 agent family and 1 production agent</span>.
             {/* from the rate card, as the Pricing cards are: Team includes no

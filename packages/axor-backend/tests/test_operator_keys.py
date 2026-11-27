@@ -128,3 +128,27 @@ async def test_only_an_owner_or_admin_registers_and_only_a_real_key(
     ada = _user(idp, "ada@acme.io")
     assert (await client.post("/v1/operators", headers=ada,
                               json={"pubkey": "zz"})).status_code == 400
+
+
+async def test_qa173_a_revoked_key_is_said_revoked_and_its_vouch_is_withdrawn(
+        client: httpx.AsyncClient, idp: Ed25519PrivateKey) -> None:
+    """QA-173: a command signed with a revoked key was refused as from an
+    "unknown operator", and a key the revoked one had vouched for was still
+    served to machines as vouched for."""
+    ada, sam = _user(idp, "ada@acme.io"), _user(idp, "sam@acme.io", role="admin")
+    ka, ks = Ed25519PrivateKey.generate(), Ed25519PrivateKey.generate()
+    a = (await _register(client, ada, ka))["operator_id"]
+    reg = await _register(client, sam, ks)
+    s, doc = reg["operator_id"], reg["endorse"]
+    assert (await client.put(f"/v1/operators/{quote(s, safe='')}/endorsement", headers=ada, json={
+        "payload": doc, "operator": a, "sig": ka.sign(canonicalize(doc)).hex()})).status_code == 200
+    revoke = await client.delete(f"/v1/operators/{quote(a, safe='')}", headers=sam)
+    assert revoke.status_code == 200
+    ts = "2026-11-27T19:00:00Z"
+    sig = ka.sign(signed_payload("agent-9", 1, {"paused": False}, ts)).hex()
+    r = await client.post("/v1/plane/agent-9/command", headers=ada, json={
+        "version": 1, "state": {"paused": False}, "operator": a, "timestamp": ts, "sig": sig})
+    assert r.status_code == 403
+    assert "was revoked" in r.json()["detail"] and "unknown" not in r.json()["detail"]
+    machines = (await client.get("/v1/coding/policy", headers=ada)).json()["operators"]
+    assert machines == {"endorsed": [], "revoked": [a]}
