@@ -56,6 +56,16 @@ export async function goHash(page: Page, hash: string): Promise<void> {
   await page.goto("/#/" + hash.replace(/^#?\/?/, ""));
 }
 
+// The app's in-app confirm/prompt (components/Ask.tsx): answer it — with
+// `text` typed in for a prompt — and wait for it to close.
+export async function answerAsk(page: Page, text?: string): Promise<void> {
+  const ask = page.getByTestId("ask");
+  await expect(ask).toBeVisible();
+  if (text !== undefined) await ask.getByLabel("answer").fill(text);
+  await ask.getByRole("button", { name: "ok" }).click();
+  await expect(ask).toHaveCount(0);
+}
+
 // A node whose recorded trace carries a degradation fact, so Control has
 // something real to attest. The event is kernel-schema (the coverage recompute
 // reads the kernel trace, and a line without `schema_version` is plane

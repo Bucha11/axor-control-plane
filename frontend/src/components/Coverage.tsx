@@ -9,6 +9,7 @@
 // The node's own reported level is never overwritten here. It converges when
 // the attestation reaches it on its desired-state stream; until then the two
 // differ and the divergence is rendered, not hidden.
+import { askPrompt } from "./Ask";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Shield } from "lucide-react";
 import { api, DrivingFact } from "../api";
@@ -90,8 +91,8 @@ export default function Coverage({ nodeId, refetchMs }: {
     onSuccess: () => void cov.refetch(),
   });
 
-  const onAttest = (fact: DrivingFact) => {
-    const reason = window.prompt(
+  const onAttest = async (fact: DrivingFact) => {
+    const reason = await askPrompt(
       `Attest ${fact.fact_id} — what did you check? (required, recorded, append-only):`,
     );
     if (reason && reason.trim()) attest.mutate({ fact, reason: reason.trim() });

@@ -3,7 +3,7 @@
 // this exercises the panel's UI behavior (sign in, error, sign up, log out),
 // not the identity service itself (that has its own suite).
 import { expect, test } from "@playwright/test";
-import { goHash, setConnection } from "./helpers";
+import { answerAsk, goHash, setConnection } from "./helpers";
 
 const SESSION = {
   access_token: "acc-token",
@@ -209,8 +209,8 @@ test.describe("identity login (Settings)", () => {
     await box.getByTestId("session-hours").selectOption("12");
     await expect(box.getByTestId("session-hours")).toHaveValue("12");
     expect(hours).toBe(12);
-    page.once("dialog", (d) => void d.accept());
     await box.getByTestId("sessions-end").click();
+    await answerAsk(page);
     await expect(box.getByTestId("sessions-ended")).toContainText("3 people signed out");
     await expect(box.getByTestId("sessions-ended")).toContainText("within 15 minutes");
   });
@@ -401,8 +401,8 @@ test.describe("identity login (Settings)", () => {
     await expect(page.getByLabel("role of ada@acme.io")).toHaveCount(0);
     await page.getByLabel("role of sam@acme.io").selectOption("admin");
     await expect(page.getByLabel("role of sam@acme.io")).toHaveValue("admin");
-    page.once("dialog", (d) => void d.accept());
     await page.getByLabel("remove sam@acme.io").click();
+    await answerAsk(page);
     await expect(team).not.toContainText("sam@acme.io");
     expect(calls).toEqual(["PUT admin", "DELETE", "keys DELETE"]);
   });

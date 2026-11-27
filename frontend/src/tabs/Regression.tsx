@@ -2,6 +2,7 @@
 // about to ship: attacks must stay blocked, normal work must keep passing.
 // Wired to /v1/regression — deterministic replay, no model calls. The rules
 // come from Policy (the shared record), the example, or JSON by hand.
+import { askConfirm } from "../components/Ask";
 import { useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { CalendarClock, ChevronDown, ChevronRight, Circle, FlaskConical, Loader2, Lock, Play, Upload } from "lucide-react";
@@ -649,8 +650,8 @@ function Report({ report, open, setOpen, onRemoved, exampleRules }: {
                     </button>
                     {!r.demo && (
                       <button data-testid={`unpin-${r.run_id}`} disabled={unpin.isPending}
-                        onClick={() => {
-                          if (window.confirm("Take this case out of the check? Releases will no longer be checked against it.")) {
+                        onClick={async () => {
+                          if (await askConfirm("Take this case out of the check? Releases will no longer be checked against it.")) {
                             unpin.mutate(r.run_id);
                           }
                         }}

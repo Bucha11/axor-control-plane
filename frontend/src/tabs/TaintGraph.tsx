@@ -7,6 +7,7 @@
 // a counter that restarts at zero, so `v_ext_1` names a different value in every
 // run; the cross-run graph this panel used to draw merged unrelated values and
 // showed one run's edges under another's ref.
+import { askPrompt } from "../components/Ask";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { api, GraphKhop } from "../api";
@@ -81,8 +82,8 @@ export default function TaintGraph({ runId, focus }: { runId: string; focus: str
         )}
         <Tooltip content="Vouch for this value's branch after you've checked it — an append-only reputation event with a required reason. It lowers the branch's suspicion; it never resets or erases history.">
           <button
-            onClick={() => {
-              const reason = window.prompt(`Attest branch ${short(current)} — reason (required, append-only):`);
+            onClick={async () => {
+              const reason = await askPrompt(`Attest branch ${short(current)} — reason (required, append-only):`);
               if (reason && reason.trim()) attest.mutate(reason.trim());
             }}
             disabled={attest.isPending}

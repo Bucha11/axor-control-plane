@@ -4,7 +4,7 @@
 // stubbed here — this checks the page, not the pack (packages/axor-backend/
 // tests/test_compliance.py checks what is in it).
 import { expect, test } from "@playwright/test";
-import { goHash } from "./helpers";
+import { answerAsk, goHash } from "./helpers";
 
 const REPORT = {
   month: "2026-11", acts: 0, by_action: {}, by_person: {}, on_others_sessions: [],
@@ -57,8 +57,8 @@ test.describe("compliance pack and legal hold (Enterprise)", () => {
 
     // no hold: retention prunes on its schedule
     await expect(box.getByTestId("audit-holds")).toContainText("none");
-    page.once("dialog", (d) => void d.accept("Acme v. Roe, discovery"));
     await box.getByTestId("hold-place").click();
+    await answerAsk(page, "Acme v. Roe, discovery");
     await expect(box.getByTestId("audit-holds")).toContainText("Acme v. Roe, discovery");
     await expect(box.getByTestId("audit-holds")).toContainText("nothing is pruned");
   });
