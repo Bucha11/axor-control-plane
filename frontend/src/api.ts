@@ -1109,14 +1109,18 @@ async function refreshSession(staleToken: string | null): Promise<boolean> {
   if (!state.refreshToken) return false;
   if (!refreshing) {
     const presented = state.refreshToken;
-    refreshing = refresh(presented)
+    let why = "";
+    refreshing = refresh(presented, (w) => { why = w; })
       .then((next) => {
         if (next) {
           useApp.getState().setSession(next.access_token, next.refresh_token, next.user.email);
           return true;
         }
         useApp.getState().clearSession();
-        useApp.getState().setSessionEnded(true);
+        // identity's reason, when it is one of the sentences that end a
+        // session for a reason the person should know (QA-154)
+        useApp.getState().setSessionEnded(/^you are no longer a member of /.test(why)
+          ? `${why} — your access to it ended` : true);
         return false;
       })
       .finally(() => {

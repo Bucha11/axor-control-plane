@@ -33,9 +33,10 @@ interface AppState {
   // Who is logged in, for display (identity login only).
   identityEmail: string;
   // The sign-in ran out (its refresh was refused): said, not a silent guest
-  // (QA-102). Not kept across a reload.
-  sessionEnded: boolean;
-  setSessionEnded: (v: boolean) => void;
+  // (QA-102). Not kept across a reload. A string is the reason, in words
+  // ("you are no longer a member of Acme" — QA-154).
+  sessionEnded: boolean | string;
+  setSessionEnded: (v: boolean | string) => void;
   // Hosted guest sessions this tab has held (newest first; the live one is
   // also `apiToken`). Kept so signing up can claim every one of them — an
   // expired guest's work is still claimable for a day.

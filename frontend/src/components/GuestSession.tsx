@@ -113,7 +113,7 @@ export default function GuestSession({ invite = false }: { invite?: boolean } = 
           maxWidth: 1040, margin: "0 auto 12px", fontFamily: MONO, fontSize: 11.5, color: C.amber,
           border: `1px solid ${C.amber}`, borderRadius: 8, padding: "8px 12px",
           display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-          <span style={{ flex: 1 }}>your session ended — sign in again</span>
+          <span style={{ flex: 1 }}>{typeof sessionEnded === "string" ? sessionEnded : "your session ended — sign in again"}</span>
           <button onClick={() => navigate("settings", { tab: "workspace" })}
             style={btn({ fontSize: 10.5, padding: "2px 8px", color: C.steel, borderColor: C.steel })}>sign in</button>
           <button onClick={() => useApp.getState().setSessionEnded(false)}

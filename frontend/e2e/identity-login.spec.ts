@@ -783,3 +783,25 @@ test.describe("days are the viewer's local day", () => {
     await expect(inv).toContainText("until 2026-12-01.");
   });
 });
+
+
+// QA-154: a member taken off the team kept reading until the access token
+// expired. The plane now refuses the token; the refresh says why, and so does
+// the page.
+test("a removed member is told in words that they are no longer in the workspace", async ({ page }) => {
+  await setConnection(page, { mode: "adapter" });
+  await page.route("**/identity/v1/login", jsonRoute(200, SESSION));
+  await goHash(page, "settings");
+  await page.getByLabel("email", { exact: true }).fill("ada@acme.io");
+  await page.getByLabel("password").fill("correct horse");
+  await page.getByRole("button", { name: "log in", exact: true }).click();
+  await expect(page.getByText("signed in as ada@acme.io")).toBeVisible();
+  await page.route("**/identity/v1/refresh", jsonRoute(401, { detail: "you are no longer a member of Acme" }));
+  await page.route(/\/v1\/(runs|plane|incidents|workspace)/, (r) =>
+    r.request().headers()["authorization"] === "Bearer acc-token"
+      ? r.fulfill({ status: 401, json: { error: "unauthorized",
+                                         detail: "you are no longer a member of this workspace" } })
+      : r.fallback());
+  await goHash(page, "evidence");
+  await expect(page.getByTestId("session-ended")).toContainText("you are no longer a member of Acme");
+});

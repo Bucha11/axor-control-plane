@@ -135,10 +135,13 @@ export function verifyEmail(token: string): Promise<{ email: string }> {
 
 /** Exchange a refresh token for a new access token, rotating it. Returns the
  * new session, or null if the refresh token is no longer valid. */
-export async function refresh(refreshToken: string): Promise<Session | null> {
+export async function refresh(refreshToken: string, refused?: (why: string) => void): Promise<Session | null> {
   try {
     return await post<Session>("/v1/refresh", { refresh_token: refreshToken });
-  } catch {
+  } catch (e) {
+    // the service's reason, when it gave one ("you are no longer a member of
+    // Acme" — QA-154); not for a network failure
+    if (refused && e instanceof IdentityError && e.status === 401) refused(e.message);
     return null;
   }
 }
@@ -234,3 +237,4 @@ export function takeAuthReturn(): { code?: string; org?: string; error?: string;
   window.history.replaceState(null, "", here());
   return got;
 }
+

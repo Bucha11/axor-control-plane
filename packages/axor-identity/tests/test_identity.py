@@ -167,22 +167,41 @@ async def test_refresh_rotates_and_old_token_dies(client: httpx.AsyncClient) -> 
     assert r.status_code == 200
     second = r.json()
     assert second["refresh_token"] != first
-    # the rotated-out token is single-use — replay is refused
-    assert (await client.post("/v1/refresh",
-            json={"refresh_token": first})).status_code == 401
     # the new refresh works, and its access token verifies
     jwks = (await client.get("/.well-known/jwks.json")).json()
     verify_access_token(second["access_token"], jwks)
+    third = await client.post("/v1/refresh", json={"refresh_token": second["refresh_token"]})
+    assert third.status_code == 200
+    other = (await client.post("/v1/login", json={"email": "rot@acme.io",
+                                                  "password": PW})).json()
+    # the rotated-out token is single-use — replay is refused...
     assert (await client.post("/v1/refresh",
-            json={"refresh_token": second["refresh_token"]})).status_code == 200
+            json={"refresh_token": first})).status_code == 401
+    # ...and (QA-240) the replay ends the whole session: the token the
+    # legitimate holder has now is refused too, and so is its access token
+    assert (await client.post("/v1/refresh", json={
+        "refresh_token": third.json()["refresh_token"]})).status_code == 401
+    me = await client.get("/v1/me", headers={
+        "Authorization": f"Bearer {third.json()['access_token']}"})
+    assert me.status_code == 401
+    # another sign-in of the same person is not touched
+    assert (await client.post("/v1/refresh", json={
+        "refresh_token": other["refresh_token"]})).status_code == 200
 
 
 async def test_logout_revokes_the_refresh_token(client: httpx.AsyncClient) -> None:
     session = await _signup(client, "bye@acme.io")
+    h = {"Authorization": f"Bearer {session['access_token']}"}
+    assert (await client.get("/v1/me", headers=h)).status_code == 200
     assert (await client.post("/v1/logout",
             json={"refresh_token": session["refresh_token"]})).status_code == 204
     assert (await client.post("/v1/refresh",
             json={"refresh_token": session["refresh_token"]})).status_code == 401
+    # QA-240: the access token the tab still holds stops too, not in 15 minutes
+    r = await client.get("/v1/me", headers=h)
+    assert r.status_code == 401 and "signed out" in r.json()["detail"]
+    feed = (await client.get("/v1/revocations")).json()
+    assert len(feed["sessions"]) == 1 and feed["window"] > 900
 
 
 # ── multi-org membership ──────────────────────────────────────────────────────

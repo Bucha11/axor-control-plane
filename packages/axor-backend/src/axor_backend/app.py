@@ -52,7 +52,7 @@ from axor_backend.errors import (
     run_too_large,
     unhandled_error,
 )
-from axor_backend.identity_client import JwksRefresher
+from axor_backend.identity_client import JwksRefresher, RevocationFeed
 from axor_backend.lifecycle import lifespan
 from axor_backend.limits import SubgraphCache
 from axor_backend.mail import mailer_from_url
@@ -111,6 +111,12 @@ def create_app(
     app.state.jwks = (
         JwksRefresher(config.identity_jwks, config.identity_jwks_url)
         if config.identity_jwks is not None else None
+    )
+    # What identity revoked since a token was issued (QA-154, QA-240): read
+    # from identity's feed, so it needs to know where identity answers.
+    app.state.revocations = (
+        RevocationFeed(config.identity_url.rstrip("/") + "/v1/revocations")
+        if config.identity_jwks is not None and config.identity_url else None
     )
     # (org, node) -> the UTC day already written to the governed-node meter, so
     # a heartbeat every ten seconds is not a write every ten seconds. Per app,
