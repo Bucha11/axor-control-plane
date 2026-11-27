@@ -23,6 +23,23 @@ test.describe("eval (demo-mode)", () => {
     await expect(page.getByRole("button", { name: /Run the test/ })).toBeVisible();
   });
 
+  test("a double-click on Run the test starts one run", async ({ page }) => {
+    // QA-087: the second click of a double-click got through before the button
+    // turned disabled — two runs started, an extra incident on the plane
+    let posts = 0;
+    await page.route("**/axor/runs", async (r) => {
+      if (r.request().method() === "POST") {
+        posts += 1;
+        await new Promise((ok) => setTimeout(ok, 300));
+      }
+      await r.continue();
+    });
+    await goHash(page, "eval");
+    await page.getByRole("button", { name: /Run the test/ }).dblclick();
+    await expect(page.getByText("fabricated a tool result").first()).toBeVisible({ timeout: 20_000 });
+    expect(posts).toBe(1);
+  });
+
   test("running an experiment catches the fabrication as an EvidenceCase", async ({ page }) => {
     await goHash(page, "eval");
     await page.getByRole("button", { name: /Run the test/ }).click();
