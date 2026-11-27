@@ -842,11 +842,13 @@ def create_app(database_url: str | None = None, *,
 
     @app.post("/v1/orgs/{org_id}/sessions/end")
     async def end_all_sessions(org_id: str, caller: Claims = Depends(_member)) -> dict:
-        """Everyone signs in again — but the admin who asked. On every plan: a
-        stolen laptop is not a premium problem. A token already handed out runs
-        out within its few minutes; nothing renews it."""
+        """Everyone signs in again — but the session that asked: the admin's
+        own other sessions end too (QA-156), a stolen laptop may be theirs. On
+        every plan: a stolen laptop is not a premium problem. Access tokens
+        already handed out stop through the revocation feed."""
         _sso_admin(org_id, caller)
-        ended = await store.end_sessions_in_org(org_id, keep_user=caller.user_id)
+        ended = await store.end_sessions_in_org(org_id, keep_user=caller.user_id,
+                                                keep_session=caller.session_id)
         await _on_trail(org_id, "sessions_ended", f"{ended} people", who=_who(caller),
                         ended=ended)
         return {"ended": ended, "access_minutes": access_ttl // 60}

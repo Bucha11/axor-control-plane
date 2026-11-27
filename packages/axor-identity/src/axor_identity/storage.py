@@ -568,16 +568,30 @@ class Store:
                                .where(refresh_tokens.c.user_id == user_id)
                                .values(revoked=True))
 
-    async def end_sessions_in_org(self, org_id: str, *, keep_user: str | None = None) -> int:
-        """Every live sign-in to one workspace ends (but ``keep_user``'s)."""
+    async def end_sessions_in_org(self, org_id: str, *, keep_user: str | None = None,
+                                  keep_session: str | None = None) -> int:
+        """Every live sign-in to one workspace ends — but ``keep_session`` (the
+        caller's own, whoever else's sessions they also have: QA-156), or, for
+        a caller whose token names no session, all of ``keep_user``'s. Their
+        access tokens go on the revocation feed. Returns how many people
+        (other than ``keep_user``) were signed out."""
         where = [refresh_tokens.c.org_id == org_id, refresh_tokens.c.revoked.is_(False)]
-        if keep_user:
+        if keep_session:
+            where.append(func.coalesce(refresh_tokens.c.family, refresh_tokens.c.token_hash)
+                         != keep_session)
+        elif keep_user:
             where.append(refresh_tokens.c.user_id != keep_user)
         async with self.engine.begin() as conn:
-            users_out = (await conn.execute(
-                select(refresh_tokens.c.user_id).where(*where).distinct())).all()
+            rows = (await conn.execute(select(
+                refresh_tokens.c.user_id,
+                func.coalesce(refresh_tokens.c.family, refresh_tokens.c.token_hash).label("sid"),
+            ).where(*where))).all()
             await conn.execute(update(refresh_tokens).where(*where).values(revoked=True))
-        return len(users_out)
+            now = int(time.time())
+            for sid in {r.sid for r in rows}:
+                await conn.execute(insert(revocations).values(
+                    kind="session", key=sid, reason="ended", ts=now))
+        return len({r.user_id for r in rows} - {keep_user})
 
     async def revoke_refresh_in_org(self, user_id: str, org_id: str) -> None:
         """Their sessions in one workspace end; those in others go on."""

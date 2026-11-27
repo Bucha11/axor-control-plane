@@ -116,6 +116,27 @@ async def test_a_removed_member_s_sign_in_ends_at_once(c, app) -> None:  # noqa:
                          json={"refresh_token": petr["refresh_token"]})).status_code == 401
 
 
+async def test_signing_everyone_else_out_ends_the_owner_s_own_other_sessions(
+        c, app) -> None:  # noqa: ANN001
+    """QA-156: the owner's second browser kept a working refresh. Every
+    session ends but the one that asked — the owner's own others included —
+    and their access tokens stop at once."""
+    olga, petr = await _team(c, app)
+    org = olga["org"]["org_id"]
+    laptop = (await c.post("/v1/login", json={"email": "olga@acme.dev", "password": PW,
+                                              "org_id": org})).json()
+    r = await c.post(f"/v1/orgs/{org}/sessions/end", headers=_h(olga))
+    assert r.status_code == 200 and r.json()["ended"] == 1  # one other person
+    assert (await c.post("/v1/refresh",
+                         json={"refresh_token": laptop["refresh_token"]})).status_code == 401
+    assert (await c.get("/v1/me", headers=_h(laptop))).status_code == 401
+    assert (await c.get("/v1/me", headers=_h(petr))).status_code == 401
+    # the session that asked goes on
+    assert (await c.get("/v1/me", headers=_h(olga))).status_code == 200
+    assert (await c.post("/v1/refresh",
+                         json={"refresh_token": olga["refresh_token"]})).status_code == 200
+
+
 async def test_a_removed_member_is_refused_on_the_org_routes_at_once(c, app) -> None:  # noqa: ANN001
     """QA-154: after removal the old access token still listed the team's
     e-mail addresses until it expired. The org routes read the membership
