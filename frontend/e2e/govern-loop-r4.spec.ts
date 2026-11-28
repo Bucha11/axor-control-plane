@@ -329,3 +329,22 @@ test.describe("the brake says what it holds, and whose (QA-361, QA-363)", () => 
     await expect(on).not.toContainText("of yours");
   });
 });
+
+test("a command lost to a concurrent write gets the command-lost note, not raw text (QA-362)", async ({ page, request }) => {
+  const node = `gov-race-${hex6()}`;
+  await seedNode(request, node);
+  let calls = 0;
+  await page.route(`**/v1/plane/${node}/command`, async (r) => {
+    calls += 1;
+    if (calls === 1) {
+      return r.fulfill({ status: 409, json: { detail: `desired state for ${node} was changed concurrently 1 times running; the command was not applied` } });
+    }
+    return r.continue();
+  });
+  await setConnection(page, { mode: "adapter" });
+  await goHash(page, `govern/${node}`);
+  await page.getByRole("button", { name: /Pause/ }).click();
+  const lost = page.getByTestId("command-lost");
+  await expect(lost).toContainText("not sent: pause — someone else changed this agent first");
+  await expect(page.getByText(/changed concurrently/)).toHaveCount(0);
+});

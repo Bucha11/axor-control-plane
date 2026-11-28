@@ -541,7 +541,9 @@ function ControlBody({ focusNode, testBench, examplesOffered }: {
         what: Object.entries(vars.state).map(([k, v]) => stateWords(k, v)).join(", "),
         again: () => command.mutate(vars),
       } : null);
-      if (err instanceof ApiError && err.status === 409 && /stale version/.test(err.message)) {
+      // two writes at once lose one the same way: a concurrent write is the
+      // same lost command, not raw server text (QA-362)
+      if (err instanceof ApiError && err.status === 409 && /stale version|changed concurrently/.test(err.message)) {
         setCmdError(null);
         setLost({ nodeId: vars.nodeId, state: vars.state });
         void qc.invalidateQueries({ queryKey: ["nodes"] });
