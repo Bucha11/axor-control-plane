@@ -24,6 +24,7 @@ import { FLEET_EXAMPLE, codingExampleOnly, fleetExampleOnly, isCodingSession } f
 import { AlertMe, KeepAsTest, SignUpForYourAgent } from "../components/AccountAction";
 import { NOT_A_TEST_BENCH, behindProxy, cannotCut, isTestBench } from "../agentName";
 import { useOneAtATime } from "../oneAtATime";
+import MakeKeyAndSend, { needsKey } from "../components/MakeKeyAndSend";
 
 const REFETCH_MS = 5000;
 // a node is quiet after three missed heartbeats (T = 10 s, protocol §9)
@@ -487,6 +488,8 @@ function ControlBody({ focusNode, testBench, examplesOffered }: {
   // a command another tab (or person) beat to the agent: named, and offered
   // again on the state as it is now (QA-172)
   const [lost, setLost] = useState<{ nodeId: string; state: Record<string, unknown> } | null>(null);
+  // refused for want of an operator key: made here, then sent (QA-501)
+  const [keyless, setKeyless] = useState<{ nodeId: string; what: string; again: () => void } | null>(null);
   const [filter, setFilter] = useState<Status | "all">("all");
   const fleetQ = useQuery({ queryKey: ["fleet"], queryFn: api.fleet, refetchInterval: REFETCH_MS });
   // a tree's agents fold into one row: which node belongs to which tree run
@@ -525,9 +528,15 @@ function ControlBody({ focusNode, testBench, examplesOffered }: {
     onSuccess: () => {
       setCmdError(null);
       setLost(null);
+      setKeyless(null);
       void qc.invalidateQueries({ queryKey: ["nodes"] });
     },
     onError: (err: Error, vars) => {
+      setKeyless(needsKey(err) ? {
+        nodeId: vars.nodeId,
+        what: Object.entries(vars.state).map(([k, v]) => stateWords(k, v)).join(", "),
+        again: () => command.mutate(vars),
+      } : null);
       if (err instanceof ApiError && err.status === 409 && /stale version/.test(err.message)) {
         setCmdError(null);
         setLost({ nodeId: vars.nodeId, state: vars.state });
@@ -546,11 +555,15 @@ function ControlBody({ focusNode, testBench, examplesOffered }: {
       api.cascadeStop(nodeId, version),
     onSuccess: () => {
       setCmdError(null);
+      setKeyless(null);
       void qc.invalidateQueries({ queryKey: ["nodes"] });
       // The subtree it stopped is drawn on the topology, not only the list.
       void qc.invalidateQueries({ queryKey: ["topology"] });
     },
-    onError: (err: Error) => setCmdError(err.message),
+    onError: (err: Error, vars) => {
+      setKeyless(needsKey(err) ? { nodeId: vars.nodeId, what: "the cascade stop", again: () => cascade.mutate(vars) } : null);
+      setCmdError(err.message);
+    },
   });
 
   if (nodes.isLoading) {
@@ -1272,6 +1285,9 @@ function ControlBody({ focusNode, testBench, examplesOffered }: {
           {cmdError && (
             <div className="mt-3" style={{ fontFamily: MONO, fontSize: 11, color: C.red }}>
               {cmdError}
+              {keyless && keyless.nodeId === node.node_id && (
+                <div><MakeKeyAndSend what={keyless.what} send={keyless.again} /></div>
+              )}
             </div>
           )}
           {lost && lost.nodeId === node.node_id && (

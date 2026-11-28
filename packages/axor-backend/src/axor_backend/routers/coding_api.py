@@ -678,4 +678,7 @@ async def operator_keys(request: Request) -> dict:
 
     keys = {**request.app.state.keyring.public_keys(),
             **await operators.active_keys(request.app.state.store)}
-    return {"keys": keys, "fingerprint": fingerprint(keys)}
+    # whether a command with no signature is taken: Connect says what holds on
+    # this plane, not "signs nothing" where pause and stop are refused (QA-501)
+    return {"keys": keys, "fingerprint": fingerprint(keys),
+            "unsigned_commands": bool(getattr(request.app.state, "allow_unsigned", False))}

@@ -17,6 +17,7 @@ import { useApp } from "../store";
 import { useMine } from "../team";
 import { useWorkStarted } from "../workStarted";
 import { useOneAtATime } from "../oneAtATime";
+import MakeKeyAndSend, { needsKey } from "../components/MakeKeyAndSend";
 
 const label: React.CSSProperties = {
   fontFamily: MONO, fontSize: 10.5, color: C.dim, letterSpacing: "0.1em", marginBottom: 8,
@@ -578,6 +579,15 @@ function PairPane({ token }: { token: string }) {
           {teammate && f.pair.yours !== false && <CopyLink token={token} />}
           {teammate && f.pair.yours !== false && <button onClick={() => end.mutate()} style={{ ...link, color: C.mut }}>end pairing</button>}
         </div>
+        {/* a refused pause is said, not swallowed (QA-501) */}
+        {command.error && (
+          <div data-testid="pair-hold-error" style={{ fontFamily: MONO, fontSize: 11, color: C.red, marginTop: 4, lineHeight: 1.6 }}>
+            not sent: {problem(command.error).words}
+            {needsKey(command.error) && (
+              <div><MakeKeyAndSend what={f.pair.paused ? "resume" : "pause"} send={() => command.mutate(f)} /></div>
+            )}
+          </div>
+        )}
         <div data-testid="pair-who" style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim, marginTop: 4, lineHeight: 1.6 }}>
           {f.pair.yours === false
             ? `${f.pair.created_by}'s session · you're here at their invitation`

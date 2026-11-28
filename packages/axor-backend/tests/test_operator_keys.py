@@ -152,3 +152,23 @@ async def test_qa173_a_revoked_key_is_said_revoked_and_its_vouch_is_withdrawn(
     assert "was revoked" in r.json()["detail"] and "unknown" not in r.json()["detail"]
     machines = (await client.get("/v1/coding/policy", headers=ada)).json()["operators"]
     assert machines == {"endorsed": [], "revoked": [a]}
+
+
+async def test_connect_is_told_whether_unsigned_commands_are_taken(
+        tmp_path: pathlib.Path, client: httpx.AsyncClient, idp: Ed25519PrivateKey) -> None:
+    """QA-501: Connect said "this plane signs nothing yet" on a plane that
+    refuses every unsigned pause and stop. It now reads what holds here."""
+    ada = _user(idp, "ada@acme.io")
+    got = (await client.get("/v1/coding/operator-keys", headers=ada)).json()
+    assert got["unsigned_commands"] is True
+    app = create_app(database_url=f"sqlite+aiosqlite:///{tmp_path}/s.db",
+                     operator_keys={}, allow_unsigned=False, api_token="m",
+                     identity_jwks=_jwks(idp))
+    async with app.router.lifespan_context(app):
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app),
+                                     base_url="http://cp.test") as c:
+            got = (await c.get("/v1/coding/operator-keys", headers=ada)).json()
+            assert got["keys"] == {} and got["unsigned_commands"] is False
+            r = await c.post("/v1/plane/agent-1/command", headers=ada,
+                             json={"version": 1, "state": {"paused": True}})
+            assert r.status_code == 403
