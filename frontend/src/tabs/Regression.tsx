@@ -101,8 +101,12 @@ function ScheduleAndHistory({ parseConfig }: { parseConfig: () => Record<string,
         <div className="flex items-center gap-2 p-4" style={{ background: C.panel, border: `1px dashed ${C.line}`, borderRadius: 8 }}>
           <Lock size={13} color={C.dim} />
           <span style={{ fontFamily: MONO, fontSize: 11.5, color: C.dim }}>
-            checks on a schedule, and their history, come with Team — add a
-            license in Settings · checking by hand stays free forever
+            checks on a schedule, and their history, come with Team —{" "}
+            <button onClick={() => navigate("pricing")} data-testid="schedule-plans"
+              style={{ background: "none", border: "none", padding: 0, cursor: "pointer", fontFamily: MONO, fontSize: 11.5, color: C.steel }}>
+              see plans →
+            </button>{" "}
+            · checking by hand stays free forever
           </span>
         </div>
       ) : (
@@ -297,21 +301,19 @@ export default function Regression({ rules: rulesParam }: { rules?: string } = {
   const policy = useApp((s) => s.toolPolicy);
   const policyTools = Object.keys(policy);
   const corpus = useQuery({ queryKey: ["pins"], queryFn: api.getPins });
+  // the workspace's own cases: the example's are never kept among them, and
+  // are checked only against the example's rules (QA-400, QA-386)
   const pins = corpus.data?.pins ?? [];
-  const ownPins = pins.filter((p) => !(p.run_id in DEMO_CASES));
-  // once the workspace's own agents report, the example's rules are not
-  // offered — unless its cases were kept here before, and need them
-  const started = useWorkStarted();
-  const offerExample = !started || pins.some((p) => p.run_id in DEMO_CASES);
-
   // `?rules=policy` — arriving from Replay's "make it a rule"
   const [chosen, setChosen] = useState<RulesFrom | null>(
     rulesParam === "policy" || rulesParam === "example" ? rulesParam : null);
-  // until the person picks: their own cases are checked against their Policy;
-  // the example's cases against the example's rules
+  // once the workspace's own agents report, the example's rules are not
+  // offered — unless asked for (the example's Replay)
+  const started = useWorkStarted();
+  const offerExample = !started || chosen === "example";
+  // until the person picks: their own cases are checked against their Policy
   const rulesFrom: RulesFrom = chosen
-    ?? (ownPins.length > 0 || !offerExample ? "policy"
-      : pins.length > 0 || policyTools.length === 0 ? "example" : "policy");
+    ?? (pins.length > 0 || !offerExample || policyTools.length > 0 ? "policy" : "example");
   const [variant, setVariant] = useState<Variant>("as-is");
   const [raw, setRaw] = useState("");
   const [parseError, setParseError] = useState<string | null>(null);
@@ -325,9 +327,8 @@ export default function Regression({ rules: rulesParam }: { rules?: string } = {
       void qc.invalidateQueries({ queryKey: ["pins"] });
       return r.config;
     },
-    // loaded on a click, or when the example's cases are already kept —
-    // opening the page never writes into someone's corpus
-    enabled: rulesFrom === "example" && (chosen === "example" || pins.some((p) => p.run_id in DEMO_CASES)),
+    // loaded on a click — opening the page seeds nothing
+    enabled: rulesFrom === "example" && chosen === "example",
     staleTime: Infinity,
   });
 
@@ -358,7 +359,8 @@ export default function Regression({ rules: rulesParam }: { rules?: string } = {
   };
 
   const check = useMutation({
-    mutationFn: (config: Record<string, unknown>) => api.regression(config),
+    mutationFn: ({ config, cases }: { config: Record<string, unknown>; cases: "own" | "example" }) =>
+      api.regression(config, cases),
     // every run is recorded server-side, so the history list is now stale
     onSuccess: () => void qc.invalidateQueries({ queryKey: ["regression-history"] }),
   });
@@ -367,16 +369,18 @@ export default function Regression({ rules: rulesParam }: { rules?: string } = {
     setOpen(null);
     // the example's rules load on first use — a click is that use
     if (rulesFrom === "example" && !example.data) {
-      void example.refetch().then((r) => { if (r.data) check.mutate(exampleVariant(r.data, variant)); });
+      void example.refetch().then((r) => {
+        if (r.data) check.mutate({ config: exampleVariant(r.data, variant), cases: "example" });
+      });
       return;
     }
     const config = rules();
-    if (config) check.mutate(config);
+    if (config) check.mutate({ config, cases: rulesFrom === "example" ? "example" : "own" });
   };
   const tryVariant = (v: Variant) => {
     setVariant(v);
     setOpen(null);
-    if (example.data) check.mutate(exampleVariant(example.data, v));
+    if (example.data) check.mutate({ config: exampleVariant(example.data, v), cases: "example" });
   };
 
   const report = check.data;
@@ -405,7 +409,15 @@ export default function Regression({ rules: rulesParam }: { rules?: string } = {
       {/* the cases */}
       <div style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim, letterSpacing: "0.1em", marginBottom: 6 }}>THE CASES</div>
       <div data-testid="cases" style={{ fontFamily: MONO, fontSize: 12, color: C.mut, lineHeight: 1.7, marginBottom: 20 }}>
-        {corpus.isError ? (
+        {rulesFrom === "example" ? (
+          <span data-testid="example-cases">
+            the example's: <span style={{ color: C.text }}>1 attack</span> that must stay blocked ·{" "}
+            <span style={{ color: C.text }}>1 normal flow</span> that must keep passing
+            <div style={{ color: C.dim, fontSize: 11 }}>
+              checked against the example's rules only — not kept among your cases
+            </div>
+          </span>
+        ) : corpus.isError ? (
           <ReadFailed what="the kept cases" error={corpus.error} retry={() => void corpus.refetch()} />
         ) : pins.length === 0 ? (
           <>No cases kept yet. On a caught case, <span style={{ color: C.text }}>keep it as a test</span> adds
@@ -416,7 +428,6 @@ export default function Regression({ rules: rulesParam }: { rules?: string } = {
             <span style={{ color: C.text }}>{plural(corpus.data?.must_block ?? 0, "attack", "attacks")}</span> that
             must stay blocked · <span style={{ color: C.text }}>{plural(corpus.data?.must_pass ?? 0, "normal flow", "normal flows")}</span> that
             must keep passing
-            {ownPins.length === 0 && <span style={{ color: C.dim }}> · all from the example</span>}
             <div style={{ color: C.dim, fontSize: 11 }}>
               more: “keep it as a test” on a caught case, or pin a run in Replay
             </div>
@@ -532,10 +543,9 @@ function Report({ report, open, setOpen, onRemoved, exampleRules }: {
   if (report.regressed) broken.push(`${plural(report.regressed, "normal flow is", "normal flows are")} now refused`);
   if (report.unanchored) broken.push(`${plural(report.unanchored, "case", "cases")} can't be checked`);
   if (report.skipped.length) broken.push(`${plural(report.skipped.length, "case", "cases")} could not be read`);
-  // "the example's" cases are the ones its rules were written for: a canned
-  // run kept from Replay counts as demo too, but is not one of them (QA-032)
-  const notExample = report.rows.filter((r) => !(r.run_id in DEMO_CASES));
-  const onlyExample = report.own_rows === 0 && report.demo_rows > 0 && notExample.length === 0;
+  // the example's rules check the example's own cases, and only those: the
+  // verdict is the example's, never this workspace's (QA-400)
+  const onlyExample = exampleRules;
 
   if (report.rows.length === 0 && report.skipped.length === 0) {
     return <div style={{ fontFamily: MONO, fontSize: 12.5, color: C.mut }}>No cases kept yet — nothing to check.</div>;
@@ -558,14 +568,8 @@ function Report({ report, open, setOpen, onRemoved, exampleRules }: {
         )}
       </div>
       {onlyExample && (
-        <div style={{ fontFamily: MONO, fontSize: 11.5, color: C.dim, marginBottom: 14 }}>
-          these are the example's cases, not your agent's — keep cases of your own to check yours
-        </div>
-      )}
-      {exampleRules && notExample.length > 0 && notExample.length < report.rows.length && (
-        <div data-testid="not-the-examples" style={{ fontFamily: MONO, fontSize: 11.5, color: C.dim, marginBottom: 14 }}>
-          checked against the example's rules too, though they were not written for{" "}
-          {notExample.length === 1 ? "it" : "them"}: {notExample.map((r) => caseName(r.run_id, r.label)).join(", ")}
+        <div data-testid="example-verdict" style={{ fontFamily: MONO, fontSize: 11.5, color: C.dim, marginBottom: 14 }}>
+          these are the example's cases, under the example's rules, not your agent's — keep cases of your own to check yours
         </div>
       )}
 

@@ -14,8 +14,19 @@ export function isoDate(ts: string | null | undefined): Date | null {
   return Number.isNaN(d.getTime()) ? null : d;
 }
 
-/** "2026-11-26 21:07" (with `seconds`, "2026-11-26 21:07:42") in local time.
- *  A stamp that is not ISO-8601 is returned as written, never as a date. */
+/** "UTC+4", "UTC+5:45", "UTC": the viewer's zone at that instant. Said beside
+ *  every local time: the shared and exported copies of the same run say UTC,
+ *  and the owner's screens said a local time with no zone (QA-385). */
+export function zoneOf(d: Date): string {
+  const off = -d.getTimezoneOffset();
+  if (off === 0) return "UTC";
+  const a = Math.abs(off);
+  return `UTC${off > 0 ? "+" : "-"}${Math.floor(a / 60)}${a % 60 ? `:${String(a % 60).padStart(2, "0")}` : ""}`;
+}
+
+/** "2026-11-26 21:07 UTC+1" (with `seconds`, "2026-11-26 21:07:42 UTC+1") in
+ *  local time, with its zone. A stamp that is not ISO-8601 is returned as
+ *  written, never as a date. */
 export function localTime(ts: string | null | undefined, seconds = false): string {
   if (!ts) return "";
   const d = isoDate(ts);
@@ -23,7 +34,7 @@ export function localTime(ts: string | null | undefined, seconds = false): strin
   const p = (n: number) => String(n).padStart(2, "0");
   const day = `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
   const time = `${p(d.getHours())}:${p(d.getMinutes())}${seconds ? `:${p(d.getSeconds())}` : ""}`;
-  return `${day} ${time}`;
+  return `${day} ${time} ${zoneOf(d)}`;
 }
 
 /** "2026-11-26": the local day of a stored time. A bare calendar date

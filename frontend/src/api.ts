@@ -48,7 +48,7 @@ export interface IncidentItem {
 }
 
 // Chaos tests (GET /v1/chaos): every run with a tool broken on purpose
-export type ChaosVerdict = "made_it_up" | "stopped" | "no_lie_found" | "no_answer";
+export type ChaosVerdict = "made_it_up" | "stopped" | "no_lie_found" | "no_answer" | "not_tested";
 export interface ChaosRun {
   run_id: string; node_id: string; scenario: string; created_ts: string;
   faults: { tool: string; mode: string }[]; verdict: ChaosVerdict; deviations: string[]; claim: string;
@@ -994,6 +994,13 @@ function commandRefusal(e: unknown, hasKey = true): unknown {
 // through unchanged.
 async function af(path: string, init: RequestInit = {}, retried = false): Promise<Response> {
   if (!apiToken() && path !== "/v1/auth/status") await sessionSettled();
+  // An access token past its expiry is refreshed once before anything is sent,
+  // and every read waits for that one refresh: the first load after it lapsed
+  // fired 10–12 reads in parallel, each a 401, before one refreshed (QA-406).
+  if (refreshing) await refreshing;
+  else if (!retried && useApp.getState().refreshToken && accessExpired(apiToken())) {
+    await refreshSession(apiToken());
+  }
   const token = apiToken();
   if (!token && signedOutHere && path.startsWith("/v1/") && !OPEN_PATHS.some((p) => path.startsWith(p))) {
     // the plane's answer, without asking it again and again
@@ -1211,6 +1218,19 @@ function noteAccountRequired(resp: Response): void {
       window.dispatchEvent(new CustomEvent("axor:account-required", { detail: body }));
     }
   }).catch(() => undefined);
+}
+
+/** Whether an identity access token (a JWT) says it has expired. Anything
+ *  else — an API key, a guest token, an unreadable one — is not known to be. */
+function accessExpired(token: string): boolean {
+  const parts = token.split(".");
+  if (parts.length !== 3) return false;
+  try {
+    const claims = JSON.parse(atob(parts[1].replace(/-/g, "+").replace(/_/g, "/"))) as { exp?: unknown };
+    return typeof claims.exp === "number" && claims.exp * 1000 <= Date.now();
+  } catch {
+    return false;
+  }
 }
 
 // One refresh at a time. The refresh token is single-use (identity rotates it),
@@ -1880,11 +1900,13 @@ export const api = {
         total: number;
       }>(r),
     ),
-  regression: (config: Record<string, unknown>) =>
+  // `example`: the example's own cases, under the example's rules — never
+  // kept among the workspace's (QA-400)
+  regression: (config: Record<string, unknown>, cases: "own" | "example" = "own") =>
     af("/v1/regression", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ config }),
+      body: JSON.stringify({ config, cases }),
     }).then((r) => j<RegressionReport>(r)),
   // ── MCP onboarding: discover an MCP server's tools + register it. Either an
   // HTTP url or a local stdio command (the proxy spawns it as a gateway). ────

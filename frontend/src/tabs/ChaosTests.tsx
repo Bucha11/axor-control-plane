@@ -38,6 +38,7 @@ const VERDICT: Record<ChaosVerdict, { text: string; color: string; hint: string 
   stopped: { text: "stopped", color: C.amber, hint: "it made something up, and Axor stopped it before it spread" },
   no_lie_found: { text: "no lie found", color: C.green, hint: "nothing it said contradicts the trace — not proof it was honest" },
   no_answer: { text: "no answer yet", color: C.dim, hint: "still running, or it never said anything" },
+  not_tested: { text: "nothing tested", color: C.dim, hint: "it called no tool, so the broken tool never ran — nothing to check its answer against" },
 };
 
 const section: React.CSSProperties = { fontFamily: MONO, fontSize: 10.5, color: C.dim, letterSpacing: "0.1em", margin: "22px 0 8px" };
@@ -59,6 +60,8 @@ export default function ChaosTests() {
   // the example agent runs in demo mode — the same switch Home and Incidents make
   const example = () => { connect("demo"); navigate("catch", { auto: "1" }); };
   const started = useWorkStarted();
+  // a test's run goes into the workspace: not a viewer's to start (QA-384)
+  const mayRun = useHasScope()("ingest");
   const data = useQuery({ queryKey: ["chaos"], queryFn: api.chaos });
   const runs = useQuery({ queryKey: ["runs"], queryFn: api.listRuns });
   // the product's examples hide once the workspace's own agents report, as on
@@ -91,7 +94,7 @@ export default function ChaosTests() {
           <div style={{ fontSize: 12.5, color: C.mut, lineHeight: 1.6, marginBottom: 10 }}>
             {started ? "Yours, pointed at the proxy" : "The example agent, or yours pointed at the proxy"}: pick a tool and how to break it, watch the run.
           </div>
-          <div className="flex gap-2 flex-wrap">
+          {!mayRun ? <RoleNote need="ingest" what="run a chaos test" testid="chaos-run-viewer" /> : <div className="flex gap-2 flex-wrap">
             {!started && <button data-testid="chaos-example" onClick={example}
               style={btn({ color: C.text, borderColor: C.steel, fontSize: 11.5, padding: "5px 12px" })}>
               try it on the example →
@@ -99,7 +102,7 @@ export default function ChaosTests() {
             <button onClick={() => navigate("catch")} style={btn({ color: C.mut, fontSize: 11.5, padding: "5px 12px" })}>
               on my agent →
             </button>
-          </div>
+          </div>}
         </div>
         <LiveArm agents={agents} modes={data.data?.modes ?? Object.keys(MODE_WORDS)}
           armed={(data.data?.armed ?? []).filter((a) => !hidden.has(a.node_id))}
@@ -116,7 +119,7 @@ export default function ChaosTests() {
         <div style={{ color: C.mut, fontSize: 13 }}>loading…</div>
       ) : list.length === 0 ? (
         <div style={{ color: C.mut, fontSize: 13.5 }}>
-          No chaos test has run yet.{!started && <>{" "}
+          No chaos test has run yet.{!started && mayRun && <>{" "}
           <button onClick={example} style={{ ...link, fontSize: 13 }}>try it on the example →</button></>}
         </div>
       ) : (

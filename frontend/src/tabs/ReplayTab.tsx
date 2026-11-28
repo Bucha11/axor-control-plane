@@ -34,12 +34,11 @@ function isTainted(s: ScrubberStep): boolean {
 // The product's example runs (backend demo.DEMO_RUN_IDS): what is done on one
 // stays the example's — it never writes the workspace's Policy, its kept
 // cases or its incidents (QA-194)
-const EXAMPLE_CORPUS = ["ex_block", "ex_pass", "ex_tree", "ex_coding_claude", "ex_coding_codex"];
-const EXAMPLE_RUNS = new Set([...EXAMPLE_CORPUS,
+const EXAMPLE_RUNS = new Set(["ex_block", "ex_pass", "ex_tree", "ex_coding_claude", "ex_coding_codex",
   "ex_skill_try", "ex_prod_drop", "ex_prod_ok", "ex_mem_ada", "ex_mem_bob", "ex_mem_bob_2", "ex_mem_ada_2"]);
-// kept, an example run outside the example's own cases (Safe to ship?'s
-// "the example's cases") would count as one of the workspace's
-const keepsAsOwn = (runId: string) => EXAMPLE_RUNS.has(runId) && !EXAMPLE_CORPUS.includes(runId);
+// no example run is kept among the workspace's cases: its own are checked
+// with the example's rules (QA-400)
+const keepsAsOwn = (runId: string) => EXAMPLE_RUNS.has(runId);
 
 const verdictOf = (s: ScrubberStep) => s.reevaluated_verdict ?? s.recorded_verdict;
 const isRefused = (s: ScrubberStep) => s.kind === "tool_call" && verdictOf(s) === "deny";

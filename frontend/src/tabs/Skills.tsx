@@ -19,6 +19,8 @@ import { SkillsOffPanel, TeamSkillsPanel } from "../components/SkillsOff";
 import { HowItWorks, MachineCommand } from "../components/MachineCommand";
 import { useWorkStarted } from "../workStarted";
 import { localTime } from "../time";
+import { useHasScope } from "../team";
+import RoleNote from "../components/RoleNote";
 const TRY_PREFIX = "skill-try.";
 // the example dry run ("see an example dry run", demo.SKILL_TRY): listed as one
 const EXAMPLE_TRY = "skill-try.claude-code.release-helper.example";
@@ -131,6 +133,8 @@ export default function Skills() {
 
 function CheckSkill() {
   const started = useWorkStarted();
+  // the check is a write the plane refuses a viewer (QA-426)
+  const mayCheck = useHasScope()("ingest");
   const files = useRef<HTMLInputElement>(null);
   const folder = useRef<HTMLInputElement | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -155,7 +159,7 @@ function CheckSkill() {
       <input type="file" multiple data-testid="skill-folder" style={{ display: "none" }}
         ref={(el) => { folder.current = el; el?.setAttribute("webkitdirectory", ""); }}
         onChange={(e) => { void run(e.target.files); e.target.value = ""; }} />
-      <div className="flex gap-3 flex-wrap items-center">
+      {!mayCheck ? <RoleNote need="ingest" what="check a skill here" testid="skill-check-viewer" /> : <div className="flex gap-3 flex-wrap items-center">
         <button onClick={() => folder.current?.click()} data-testid="skill-pick"
           style={btn({ color: C.text, borderColor: C.steel, fontSize: 12.5, padding: "8px 14px" })}>
           {check.isPending ? <Loader2 size={13} className="animate-spin" /> : <Upload size={13} />} Check a skill folder
@@ -166,7 +170,7 @@ function CheckSkill() {
         <button onClick={() => check.mutate(EXAMPLE_SKILL)} data-testid="skill-example" style={link}>
           check an example skill
         </button></>}
-      </div>
+      </div>}
       <div style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim, marginTop: 6 }}>
         read, not run — SKILL.md and the scripts beside it
       </div>

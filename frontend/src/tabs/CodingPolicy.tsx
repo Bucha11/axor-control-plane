@@ -10,6 +10,7 @@ import { errorWords } from "../refusal";
 import ReadFailed from "../components/ReadFailed";
 import { useCanAdmin, useMay } from "../team";
 import { localTime } from "../time";
+import { useOneAtATime } from "../oneAtATime";
 
 export default function CodingPolicy() {
   const qc = useQueryClient();
@@ -24,9 +25,25 @@ export default function CodingPolicy() {
     if (q.data) { setAllow(new Set(q.data.allow)); setMode(q.data.mode); }
   }, [q.data]);
   const save = useMutation({
-    mutationFn: () => api.setCodingRules([...allow], mode, {}, q.data?.version),
+    mutationFn: async () => {
+      try {
+        return await api.setCodingRules([...allow], mode, {}, q.data?.version);
+      } catch (e) {
+        // refused as stale, but the team's policy now IS what this screen
+        // sent — this tab's own save landed first: saved, not "nothing was
+        // saved" (QA-464)
+        if (e instanceof ApiError && e.status === 409 && e.code === "stale") {
+          const now = await api.codingRules();
+          if (now.mode === mode && [...now.allow].sort().join() === [...allow].sort().join()) return now;
+        }
+        throw e;
+      }
+    },
     onSuccess: () => void qc.invalidateQueries({ queryKey: ["coding-rules"] }),
   });
+  // a double-click sent two saves, the second against the version the first
+  // had just replaced (QA-464)
+  const saveOnce = useOneAtATime(save);
   const d = q.data;
   const changed = !!d && (mode !== d.mode || [...allow].sort().join() !== [...d.allow].sort().join() || !d.set);
   const toggle = (id: string) => setAllow((cur) => {
@@ -97,7 +114,7 @@ export default function CodingPolicy() {
       </div>}
       <div className="mt-4 flex items-center gap-3 flex-wrap" style={{ fontFamily: MONO, fontSize: 11.5 }}>
         {!d ? null : canEdit ? (
-          <button data-testid="policy-save" onClick={() => save.mutate()} disabled={!changed || save.isPending}
+          <button data-testid="policy-save" onClick={() => saveOnce(undefined)} disabled={!changed || save.isPending}
             style={btn({ color: changed ? C.text : C.dim, borderColor: changed ? C.steel : C.line, fontSize: 12, padding: "6px 14px" })}>
             {save.isPending ? "…" : "save for the team"}
           </button>

@@ -20,9 +20,25 @@ from axor_backend.replay_api import kernel_config_from_json, regression_row
 from axor_backend.storage import Store
 from axor_backend.traces import events_for
 
+# The example's own cases — the ones its rules were written for. They are
+# checked only when the example's rules are (``cases="example"``), never kept
+# among the workspace's pins: seeded there, they made the workspace's own rule
+# fail "Safe to ship?" on the example's normal flow (QA-400, QA-386).
+EXAMPLE_CASES: tuple[dict[str, str], ...] = (
+    {"run_id": "ex_block", "side": "must_block", "label": "adapter-demo"},
+    {"run_id": "ex_pass", "side": "must_pass", "label": "adapter-demo"},
+)
 
-async def regression_report(store: Store, config_json: dict) -> dict:
-    """Run the pinned corpus under a config.
+
+async def own_pins(store: Store) -> list[dict]:
+    """The workspace's kept cases. A pin on an example run (kept before this
+    rule, or seeded by an older build) is not one of them."""
+    return [p for p in await store.pinned() if p["run_id"] not in DEMO_RUN_IDS]
+
+
+async def regression_report(store: Store, config_json: dict, cases: str = "own") -> dict:
+    """Run the pinned corpus — or, with ``cases="example"``, the example's own
+    cases — under a config.
 
     Two ways a pin does not produce a row, and both withhold the verdict:
     `unanchored` (replayed, but its trace recorded no denial to re-check) and
@@ -33,7 +49,8 @@ async def regression_report(store: Store, config_json: dict) -> dict:
     config = kernel_config_from_json(config_json)
     rows: list[dict[str, Any]] = []
     skipped: list[dict[str, str]] = []
-    for pin in await store.pinned():
+    pins = [dict(c) for c in EXAMPLE_CASES] if cases == "example" else await own_pins(store)
+    for pin in pins:
         # A pin whose run has no replayable kernel trace (deleted events,
         # telemetry-only, a Lab package recorded under another kernel build)
         # must not 4xx the whole report — skip it and say so, with the reason.
@@ -46,9 +63,7 @@ async def regression_report(store: Store, config_json: dict) -> dict:
         row = regression_row(
             pin["run_id"], pin["side"], pin["label"], events, config,
             must_refuse=pin.get("must_refuse") or None)
-        # Canned evidence is real, replayable and about the DEMO. Marked rather
-        # than excluded: a demo pin that REGRESSES is still a kernel that stopped
-        # denying what it used to, which is worth failing on.
+        # canned evidence is real, replayable and about the DEMO: said so
         row["demo"] = pin["run_id"] in DEMO_RUN_IDS
         rows.append(row)
     regressed = sum(1 for r in rows if r["result"] == "regressed")

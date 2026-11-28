@@ -29,6 +29,9 @@ const WORDS: Record<string, string> = {
   pair_open: "opened a pair on", pair_end: "ended the pair on", pair_let_in: "let a teammate pair on",
   pair_declined: "declined a pair on", pair_note: "sent a note to",
   incident_settled: "settled", incident_new: "reopened", muted: "muted", unmuted: "unmuted",
+  // the operator's word on an incident (incidents.STATUSES), raw before (QA-404)
+  incident_looked_at: "marked as looked at", incident_kept_as_test: "marked as kept as a test",
+  incident_rule_made: "made a rule from", incident_not_a_problem: "marked as not a problem",
   memory_on: "put in the team's memory", memory_off: "took out of the team's memory",
   memory_note: "added to the team's memory", memory_fresh_days: "set memory freshness to (days)",
   seat_limit: "set the seat limit to", seat_limit_removed: "removed the seat limit",

@@ -41,6 +41,26 @@ test.describe("settings (QA, 0.7.2)", () => {
     await card.getByRole("button", { name: "enrol a credential" }).click();
     await expect(card.getByTestId("enrol-form")).toContainText("refused until a sealing key is registered");
     await expect(card.getByTestId("enrol-form")).not.toContainText("store it as-is");
+    // QA-401: and the plaintext is not sent to be refused
+    const enrols: string[] = [];
+    page.on("request", (r) => { if (r.url().includes("/v1/vault/creds/enroll")) enrols.push(r.url()); });
+    const form = card.getByTestId("enrol-form");
+    await form.getByLabel("tool", { exact: true }).fill("qa-tool");
+    await form.getByLabel("endpoint", { exact: true }).fill("https://api.example.com");
+    await form.getByLabel("secret", { exact: true }).fill("sk-dummy");
+    await expect(form.getByRole("button", { name: "enrol" })).toBeDisabled();
+    expect(enrols).toEqual([]);
+  });
+
+  test("QA-402: a workspace with a creds token, a browser without it: said so, not 'no credentials enrolled'", async ({ page }) => {
+    await page.route("**/v1/security/posture", (r) => r.fulfill({ json: { items: [
+      { id: "auth", ok: true, what: "every request needs a token or a sign-in", fix: "" },
+      { id: "vault_creds_token", ok: true, what: "the creds vault has its own token", fix: "" },
+    ] } }));
+    await goHash(page, "settings?tab=security");
+    const card = page.getByTestId("tool-credentials");
+    await expect(card.getByTestId("creds-no-token")).toContainText("this browser has no creds token");
+    await expect(card).not.toContainText("no credentials enrolled");
   });
 
   test("a long key label wraps; the role and revoke stay on screen (QA-063)", async ({ page }) => {
@@ -94,6 +114,20 @@ test.describe("settings (QA, 0.7.2)", () => {
     await page.getByTestId("settings-tab-security").click();
     await expect(page.getByTestId("vault-viewer")).toBeVisible();
     await expect(page.getByTestId("federation-vault")).toHaveCount(0);
+  });
+
+  test("QA-403: a viewer's Security does not ask for the vault tokens", async ({ page }) => {
+    const asked: string[] = [];
+    page.on("request", (r) => { if (r.url().endsWith("/v1/vault/tokens")) asked.push(r.url()); });
+    // the plane answers who this is a moment later than the page renders
+    await page.route("**/v1/auth/status", async (r) => {
+      await new Promise((ok) => setTimeout(ok, 400));
+      await r.fulfill({ json: { auth_enabled: true, authenticated: true, scopes: ["read"] } });
+    });
+    await goHash(page, "settings?tab=security");
+    await expect(page.getByTestId("vault-viewer")).toBeVisible();
+    await page.waitForTimeout(800);
+    expect(asked).toEqual([]);
   });
 
   test("a member or admin is not shown the vault forms only the owner may use (QA-121)", async ({ page }) => {
@@ -282,6 +316,43 @@ test.describe("settings (QA, 0.7.2)", () => {
     await expect(page.getByText("○ not signed in")).toBeAttached();
     await expect(page.getByText("● signed in", { exact: true })).toHaveCount(0);
     await expect(page.getByText(/^can: /)).toHaveCount(0);
+  });
+
+  test("QA-404: an incident's word in the audit trail reads as words, not its id", async ({ page }) => {
+    await page.route("**/v1/audit?*", (r) => r.fulfill({ json: { total: 1, actions: ["incident_rule_made"], items: [
+      { id: "a1", ts: "2026-11-27T10:01:00Z", kind: "control", action: "incident_rule_made", who: "ada@acme.io",
+        role: "owner", target: "step:run_1:4", detail: {} },
+    ] } }));
+    await goHash(page, "settings?tab=audit");
+    await expect(page.getByTestId("audit-row").first()).toContainText("made a rule from");
+    await expect(page.getByText("incident_rule_made")).toHaveCount(0);
+    await expect(page.locator("option", { hasText: "made a rule from" })).toHaveCount(1);
+  });
+
+  test("QA-406: an access token past its expiry is refreshed once before the page's reads go out", async ({ page }) => {
+    const b64 = (o: object) => Buffer.from(JSON.stringify(o)).toString("base64url");
+    const expired = `${b64({ alg: "EdDSA" })}.${b64({ sub: "u1", exp: Math.floor(Date.now() / 1000) - 60 })}.sig`;
+    await page.addInitScript((tok) => {
+      if (sessionStorage.getItem("qa406")) return;
+      sessionStorage.setItem("qa406", "1");
+      sessionStorage.setItem("axor-app", JSON.stringify({ version: 0, state: {
+        apiToken: tok, refreshToken: "ref-1", identityEmail: "ada@acme.io",
+        vaultSigningToken: "", vaultCredsToken: "", guestTokens: [] } }));
+    }, expired);
+    let refreshes = 0;
+    await page.route("**/identity/v1/refresh", (r) => {
+      refreshes += 1;
+      return r.fulfill({ json: { access_token: "acc-fresh", refresh_token: "ref-2", user: { email: "ada@acme.io" } } });
+    });
+    const stale: string[] = [];
+    page.on("request", (r) => {
+      if ((r.headers()["authorization"] ?? "").includes(expired)) stale.push(new URL(r.url()).pathname);
+    });
+    await goHash(page, "settings?tab=security");
+    await expect.poll(() => refreshes).toBe(1);
+    await page.waitForTimeout(1000);
+    expect(stale).toEqual([]);
+    expect(refreshes).toBe(1);
   });
 
   test("cosmetics: audit words for vault tokens, an e-mail in key history, \"As an admin\" (QA-070)", async ({ page }) => {

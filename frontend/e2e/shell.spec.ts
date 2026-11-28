@@ -48,7 +48,8 @@ test.describe("shell", () => {
   test("the no-code way in still catches a made-up answer", async ({ page }) => {
     await goHash(page, "home?for=production");
     await page.getByRole("button", { name: /catch a made-up answer/ }).click();
-    await expect(page).toHaveURL(/#\/catch\?auto=1/);
+    // ?auto=1 starts it, and is dropped once it has (QA-387)
+    await expect(page).toHaveURL(/#\/catch(\?auto=1)?$/);
     // the test screen belongs to Chaos tests
     await expect(page.getByRole("button", { name: "Chaos tests", exact: true })).toHaveAttribute("aria-current", "page");
     // the run lands, and the button that started it is ready again — it used

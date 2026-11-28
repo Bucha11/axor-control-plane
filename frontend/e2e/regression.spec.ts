@@ -45,32 +45,34 @@ test.describe("safe to ship", () => {
     await expect(page.getByText(/keep cases of your own to check yours/)).toBeVisible();
   });
 
-  test("a case kept from Replay is not called the example's (QA-032)", async ({ page }) => {
-    // Pinning the canned prod incident from Replay, then checking the example's
-    // rules, said "Not safe to ship: 1 case can't be checked" under "these are
-    // the example's cases" — the third case was not the example's.
-    await page.route("**/v1/regression", (route) =>
-      route.fulfill({
-        json: {
-          rows: [
-            { run_id: "ex_block", side: "must_block", label: "adapter-demo", result: "held",
-              first_divergence: null, new_denial: null, pinned_denials: 1, escaped_denials: [], demo: true },
-            { run_id: "ex_pass", side: "must_pass", label: "adapter-demo", result: "passed",
-              first_divergence: null, new_denial: null, pinned_denials: 0, escaped_denials: [], demo: true },
-            { run_id: "ex_prod_drop", side: "must_block", label: "kept from Replay", result: "unanchored",
-              first_divergence: null, new_denial: null, pinned_denials: 0, escaped_denials: [], demo: true },
-          ],
-          regressed: 0, escaped: 0, unanchored: 1, skipped: [], own_rows: 0, demo_rows: 3, safe_to_ship: false,
-        },
-      }),
-    );
-    await goHash(page, "regression");
-    await page.getByTestId("rules-example").click();
-    await page.getByRole("button", { name: /Check these rules/ }).click();
-    const result = page.getByTestId("check-result");
-    await expect(result).toContainText("Not safe to ship: 1 case can't be checked");
-    await expect(result).not.toContainText("these are the example's cases");
-    await expect(page.getByTestId("not-the-examples")).toContainText("kept from Replay");
+  test("QA-400 / QA-386: the example's cases are checked only with the example's rules, never kept among yours", async ({ page, request }) => {
+    // seeded, the example is not in the workspace's pins
+    const pinned = ((await (await request.get(`${BACKEND}/v1/pins`)).json()).pins as { run_id: string }[]).map((p) => p.run_id);
+    expect(pinned).not.toContain("ex_block");
+    expect(pinned).not.toContain("ex_pass");
+    // the workspace's own rule: the example's normal flow would be refused by it
+    await request.put(`${BACKEND}/v1/policy`, { data: { tools: { ticket_read: { klass: "READ", outside: true } } } });
+    await goHash(page, "prevent?rules=example");
+    await expect(page.getByTestId("example-cases")).toContainText("not kept among your cases");
+    const [asExample] = await Promise.all([
+      page.waitForRequest((r) => r.url().endsWith("/v1/regression")),
+      page.getByRole("button", { name: /Check these rules/ }).click(),
+    ]);
+    expect(asExample.postDataJSON().cases).toBe("example");
+    await expect(page.getByText("The example holds:")).toBeVisible();
+    await expect(page.getByTestId("example-verdict")).toContainText("under the example's rules");
+    // the workspace's own rule is checked on the workspace's own cases only
+    await page.getByTestId("rules-policy").click();
+    const [own, answer] = await Promise.all([
+      page.waitForRequest((r) => r.url().endsWith("/v1/regression")),
+      page.waitForResponse((r) => r.url().endsWith("/v1/regression")),
+      page.getByRole("button", { name: /Check these rules/ }).click(),
+    ]);
+    expect(own.postDataJSON().cases).toBe("own");
+    const rows = ((await answer.json()).rows as { run_id: string }[]).map((r) => r.run_id);
+    expect(rows).not.toContain("ex_pass");
+    expect(rows).not.toContain("ex_block");
+    await request.put(`${BACKEND}/v1/policy`, { data: { tools: {} } });
   });
 
   test("a stricter rule breaks the normal flow (the check has teeth)", async ({ page }) => {
@@ -93,7 +95,13 @@ test.describe("safe to ship", () => {
     await expect(row).toContainText("was refused at slack_post (step 6)");
   });
 
-  test("rules by hand: an escape through JSON is named too", async ({ page }) => {
+  test("rules by hand: an escape through JSON is named too", async ({ page, request }) => {
+    // a case of the workspace's own: the example's attack, kept under its own id
+    const own = `own_exfil_${Date.now().toString(36)}`;
+    const events = await (await request.get(`${BACKEND}/v1/runs/ex_block/events`)).json() as Record<string, unknown>[];
+    expect((await request.post(`${BACKEND}/v1/ingest/${own}`, { data: { node_id: events[0].node_id, scenario: "custom",
+      events: events.map(({ id: _id, run_id: _run, ...e }) => e) } })).ok()).toBeTruthy();
+    expect((await request.post(`${BACKEND}/v1/pins/${own}`, { data: { side: "must_block", label: "the exfil, kept" } })).ok()).toBeTruthy();
     await goHash(page, "regression");
     await page.getByTestId("rules-json").click();
     // a trusted set on slack_post's driving argument (the exfil now goes
@@ -107,8 +115,9 @@ test.describe("safe to ship", () => {
       value_policies: { slack_post: [{ arg: "text", kind: "enum", allowed: ["…"] }] },
     }));
     await page.getByRole("button", { name: /Check these rules/ }).click();
-    await expect(page.getByTestId("case-ex_block")).toContainText("NOW GETS THROUGH");
+    await expect(page.getByTestId(`case-${own}`)).toContainText("NOW GETS THROUGH");
     await expect(page.getByText(/Safe to ship:/)).toHaveCount(0);
+    await request.delete(`${BACKEND}/v1/pins/${own}`);
   });
 
   test("the rules from Policy are checked by default once there are cases of your own", async ({ page, request }) => {

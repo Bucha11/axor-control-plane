@@ -227,6 +227,11 @@ export default function Evidence({ agent: agentParam }: { agent?: string } = {})
                          fontFamily: MONO, fontSize: 11, padding: "3px 6px", marginLeft: 6, maxWidth: 220 }}>
                 <option value="">any agent</option>
                 {agents.map((a) => <option key={a} value={a}>{labelOf(a)}</option>)}
+                {/* asked for by link but not one of them: shown as asked, not
+                    as "any agent" over an empty list (QA-383) */}
+                {agent && !agents.includes(agent) && (
+                  <option value={agent}>{labelOf(agent)} — no incidents</option>
+                )}
               </select>
             </div>
           </div>

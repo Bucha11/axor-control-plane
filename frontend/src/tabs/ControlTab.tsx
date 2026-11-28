@@ -19,7 +19,7 @@ import { C, MONO, btn } from "../theme";
 import Coach from "../components/Coach";
 import { incidentWhat } from "./Evidence";
 import Tooltip from "../components/Tooltip";
-import { isoDate, localTime } from "../time";
+import { isoDate, localTime, zoneOf } from "../time";
 import { FLEET_EXAMPLE, codingExampleOnly, fleetExampleOnly, isCodingSession } from "../components/CodingOnboarding";
 import { AlertMe, KeepAsTest, SignUpForYourAgent } from "../components/AccountAction";
 import { NOT_A_TEST_BENCH, QUIET_MS, behindProxy, cannotCut, demoLeftAt, isTestBench } from "../agentName";
@@ -1742,7 +1742,7 @@ function stamp(iso: string): string {
   const d = isoDate(iso);
   if (!d) return "";
   const today = new Date().toDateString() === d.toDateString();
-  return today ? d.toTimeString().slice(0, 8) : localTime(iso);
+  return today ? `${d.toTimeString().slice(0, 8)} ${zoneOf(d)}` : localTime(iso);
 }
 
 function ago(iso?: string | null): string {

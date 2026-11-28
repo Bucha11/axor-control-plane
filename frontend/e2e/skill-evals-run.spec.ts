@@ -148,3 +148,31 @@ test("both ways solved 1/1: the card says no difference, not 0% solved (QA-506)"
   await expect(card).toContainText("no difference (both solved 1/1)");
   await expect(card).not.toContainText("0% solved");
 });
+
+test.describe("what a viewer is offered, and an id that is not there (QA-425, QA-426)", () => {
+  const viewer = (page: Page) => page.route("**/v1/auth/status", (r) => r.fulfill({ json: {
+    auth_enabled: true, authenticated: true, scopes: ["read"] } }));
+
+  test("QA-425: an eval id that is not there is asked once, and said in words", async ({ page }) => {
+    let asked = 0;
+    page.on("request", (r) => { if (r.url().includes("/v1/skill-evals/nope")) asked += 1; });
+    await setConnection(page, { mode: "adapter" });
+    await goHash(page, "skill-evals/nope<b>");
+    await expect(page.getByText("no skill eval nope<b>")).toBeVisible();
+    await page.waitForTimeout(1500);
+    expect(asked).toBe(1);
+  });
+
+  test("QA-426: a viewer is offered no skill check and no worker to run", async ({ page }) => {
+    await viewer(page);
+    await machines(page, []);
+    await setConnection(page, { mode: "adapter" });
+    await goHash(page, "skills");
+    await expect(page.getByTestId("skill-check-viewer")).toContainText("you can't check a skill here");
+    await expect(page.getByTestId("skill-pick")).toHaveCount(0);
+    await expect(page.getByTestId("skill-example")).toHaveCount(0);
+    await goHash(page, "skill-evals");
+    await expect(page.getByTestId("eval-viewer")).toContainText("you can't run a skill eval on a machine");
+    await expect(page.getByTestId("skill-eval-cmd")).toHaveCount(0);
+  });
+});

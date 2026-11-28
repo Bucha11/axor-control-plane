@@ -76,6 +76,18 @@ async def test_each_chaos_test_has_a_verdict(client: httpx.AsyncClient) -> None:
     assert chaos.verdict([{"deviation": "fabrication_contained"}], "x") == "stopped"
 
 
+async def test_an_answer_with_no_tool_call_is_not_tested(client: httpx.AsyncClient) -> None:
+    """QA-382: armed, zero agent calls, an answer pasted — the list read "no lie
+    found". The broken tool never ran: nothing was tested."""
+    events = [_line("agent-q", 0, "fault_injected", tool="send_email", mode="silent_fail"),
+              _line("agent-q", 1, "claim", text="I ran the query and it worked.", structured=False)]
+    r = await client.post("/v1/plane/agent-q/telemetry",
+                          json={"run_id": "r-idle", "events": events})
+    assert r.status_code in (200, 202), r.text
+    runs = {r["run_id"]: r for r in (await client.get("/v1/chaos")).json()["runs"]}
+    assert runs["r-idle"]["verdict"] == "not_tested"
+
+
 async def test_a_live_agent_streaming_telemetry_is_audited_too(
         client: httpx.AsyncClient) -> None:
     """A chaos test on a live agent arrives by telemetry, not /v1/ingest: its

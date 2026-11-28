@@ -13,7 +13,8 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
 
-from axor_backend.corpus import record_corpus_run, regression_report
+from axor_backend.corpus import own_pins, record_corpus_run, regression_report
+from axor_backend.demo import DEMO_RUN_IDS
 from axor_backend.deps import StateDep, StoreDep
 from axor_backend.licensing import active_license, require_ee
 from axor_backend.replay_api import kernel_config_from_json
@@ -38,6 +39,11 @@ async def pin_run(run_id: str, body: dict, store: StoreDep, request: Request) ->
         ):
             raise HTTPException(400, "must_refuse is a list of {node_id, seq}")
         anchors = [{"node_id": a.get("node_id", ""), "seq": a["seq"]} for a in raw]
+    if run_id in DEMO_RUN_IDS:
+        # the example's cases are checked against the example's rules, never
+        # among the workspace's own (QA-400)
+        raise HTTPException(400, f"{run_id} is the example's run — it is not kept among "
+                                 "your cases; Safe to ship? checks it with the example's rules")
     await store.pin(run_id, side, body.get("label", ""), anchors)
     # what "Safe to ship?" holds a release to is a control like any other
     from axor_backend import audit
@@ -67,7 +73,7 @@ async def list_pins(store: StoreDep) -> dict:
     permanent checks (must_block auto-pins on evidence, must_pass by hand). A
     growing corpus means Axor's findings were trusted enough to guard against
     forever — the signal that the loop closed."""
-    pins = await store.pinned()
+    pins = await own_pins(store)
     return {
         "pins": pins,
         "must_block": sum(1 for p in pins if p["side"] == "must_block"),
@@ -82,8 +88,14 @@ async def regression(body: dict, state: StateDep, store: StoreDep) -> dict:
     sides, or a config that blocks everything passes. Manual runs are free
     forever (Line 1); every run leaves a history row and a failing corpus fires
     the regression_failed trigger."""
-    report = await regression_report(store, body.get("config", {}))
-    await record_corpus_run(state, report, "manual")
+    cases = body.get("cases", "own")
+    if cases not in ("own", "example"):
+        raise HTTPException(400, "cases is own|example")
+    report = await regression_report(store, body.get("config", {}), cases)
+    # the example checked is not a release of this workspace: no history row,
+    # and no regression_failed alert when a variant breaks it on purpose
+    if cases == "own":
+        await record_corpus_run(state, report, "manual")
     return report
 
 
