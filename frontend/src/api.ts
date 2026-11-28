@@ -908,6 +908,9 @@ export function apiError(status: number, text: string): ApiError {
   // not the plane's sentence: a proxy's or server's own page ("Internal Server
   // Error", nginx's HTML — "413 Request Entity Too Large") is said in words,
   // never shown raw (QA-234, QA-217)
+  if (status >= 500 && /^(internal server error|bad gateway|service unavailable|gateway time-?out)$/i.test(words.trim())) {
+    words = "";   // the status phrase, not a sentence (QA-461)
+  }
   if (!words) {
     words = status === 413 ? "that is too large for the plane to take in one request — send less at a time"
       : status >= 500 ? `the plane could not answer (HTTP ${status}) — try again in a moment`

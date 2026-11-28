@@ -212,6 +212,7 @@ export default function App() {
     <>
       {welcome && <SignedUpNote onDismiss={() => setWelcome(false)} />}
       <GuestSession invite={key === "invite"} />
+      <Offline />
       <AuthReturn />
       {key === "home" && <Home />}
       {key === "chaos" && <ChaosTests />}
@@ -569,6 +570,29 @@ function LearnToggle() {
 // noise about the one thing that is almost never wrong. The kernel is the one
 // shown, because that is the version deciding what this deployment DOES; the
 // rest of the stack is in the tooltip.
+// QA-465: offline, a save waits for the connection with its button on "…" —
+// said, not left to look stuck
+function Offline() {
+  const [online, setOnline] = useState(() => navigator.onLine);
+  useEffect(() => {
+    const on = () => setOnline(navigator.onLine);
+    window.addEventListener("online", on);
+    window.addEventListener("offline", on);
+    return () => {
+      window.removeEventListener("online", on);
+      window.removeEventListener("offline", on);
+    };
+  }, []);
+  if (online) return null;
+  return (
+    <div data-testid="offline" role="status" style={{
+      maxWidth: 1040, margin: "0 auto 12px", fontFamily: MONO, fontSize: 11.5, color: C.amber,
+      border: `1px solid ${C.amber}`, borderRadius: 8, padding: "8px 12px" }}>
+      you are offline — nothing is sent until the connection is back
+    </div>
+  );
+}
+
 function VersionBadge() {
   const [versions, setVersions] = useState<Record<string, string | null> | null>(null);
   // asked again once this tab signs in: before, the plane answered nothing

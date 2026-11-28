@@ -384,4 +384,23 @@ test.describe("access (QA, 0.7.3)", () => {
     await expect(page.getByText("kernel 0.13.0")).toBeVisible();
   });
 
+  test("a read that never got an answer, or a bare 500, is said in words (QA-461)", async ({ page }) => {
+    await page.route("**/v1/plane/nodes", (r) => r.abort());
+    await goHash(page, "govern");
+    await expect(page.getByTestId("read-failed")).toContainText("the plane could not be reached");
+    await expect(page.getByText(/Failed to fetch/)).toHaveCount(0);
+    await page.route("**/v1/incidents?*", (r) => r.fulfill({ status: 500, json: { detail: "Internal Server Error" } }));
+    await goHash(page, "evidence");
+    await expect(page.getByTestId("read-failed")).toContainText("could not answer");
+    await expect(page.getByText(/Internal Server Error/)).toHaveCount(0);
+  });
+
+  test("offline, the page says so (QA-465)", async ({ page, context }) => {
+    await goHash(page, "govern");
+    await expect(page.getByTestId("offline")).toHaveCount(0);
+    await context.setOffline(true);
+    await expect(page.getByTestId("offline")).toHaveText("you are offline — nothing is sent until the connection is back");
+    await context.setOffline(false);
+    await expect(page.getByTestId("offline")).toHaveCount(0);
+  });
 });
