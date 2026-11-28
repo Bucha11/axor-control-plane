@@ -2060,6 +2060,8 @@ function AgentKeys({ journey, menuAll }: { journey: Journey | null; menuAll: boo
   const [label, setLabel] = useState("");
   const [node, setNode] = useState("");
   const [minted, setMinted] = useState<{ secret: string; preset: string; keyId: string } | null>(null);
+  // the copy icon said nothing when it copied (QA-369)
+  const [keyCopied, setKeyCopied] = useState<string | null>(null);
   const keys = useQuery({ queryKey: ["api-keys"], queryFn: api.listKeys, enabled: on, retry: false });
   const keysAudit = useQuery({ queryKey: ["api-keys-audit"], queryFn: () => api.keysAudit(), enabled: on, retry: false });
   const mint = useMutation({
@@ -2149,7 +2151,12 @@ function AgentKeys({ journey, menuAll }: { journey: Journey | null; menuAll: boo
         <div data-testid="key-minted" className="mb-3 p-2" style={{ background: C.panel2, border: `1px solid ${C.line}`, borderRadius: 5 }}>
           <div className="flex items-center gap-2" style={{ fontFamily: MONO, fontSize: 10, color: C.amber, marginBottom: 4 }}>
             shown once — copy it now
-            <Copy size={12} color={C.mut} style={{ cursor: "pointer" }} onClick={() => void navigator.clipboard?.writeText(env)} />
+            <button type="button" data-testid="key-copy" aria-label="copy the key"
+              onClick={() => { void navigator.clipboard?.writeText(env); setKeyCopied(minted.keyId); }}
+              style={{ background: "none", border: "none", padding: 0, cursor: "pointer", display: "inline-flex",
+                       alignItems: "center", gap: 4, fontFamily: MONO, fontSize: 10, color: C.mut }}>
+              {keyCopied === minted.keyId ? <><Check size={12} color={C.green} /> copied</> : <Copy size={12} color={C.mut} />}
+            </button>
           </div>
           <pre style={{ margin: 0, fontFamily: MONO, fontSize: 10.5, color: C.green, whiteSpace: "pre-wrap", wordBreak: "break-all" }}>{env}</pre>
         </div>

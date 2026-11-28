@@ -442,3 +442,18 @@ test("a pair link naming the same session twice opens one pane (QA-364)", async 
   await expect(page.getByTestId("pair-split")).toBeVisible();
   await request.delete(`${BACKEND}/v1/pair/${pair.token}`);
 });
+
+test("the copy icon on a new key says it copied (QA-369)", async ({ page, context }) => {
+  await context.grantPermissions(["clipboard-read", "clipboard-write"]);
+  await page.route("**/v1/auth/status", (r) => r.fulfill({ json: {
+    auth_enabled: true, authenticated: true, scopes: ["read", "ingest", "operate", "admin"] } }));
+  await page.route("**/v1/keys", async (r) => {
+    if (r.request().method() !== "POST") return r.fulfill({ json: [] });
+    await r.fulfill({ status: 201, json: { key_id: "k_1", secret: "ak_qa369", scopes: ["ingest"], node_id: null } });
+  });
+  await goHash(page, "settings?tab=connect");
+  await page.getByTestId("key-mint").click();
+  await expect(page.getByTestId("key-minted")).toContainText("ak_qa369");
+  await page.getByTestId("key-copy").click();
+  await expect(page.getByTestId("key-copy")).toHaveText("copied");
+});
