@@ -748,13 +748,14 @@ function ControlBody({ focusNode, testBench, examplesOffered }: {
     <div className={node ? "fleet-grid fleet-grid-open" : "fleet-grid"}>
     <div style={{ minWidth: 0 }}>
       {readFailed}
-      <Coach id="control" title="Control — operate governed agents live">
+      {/* the coding journey's Agents page has its own note (App PageCoach, QA-463) */}
+      {journey !== "coding" && <Coach id="control" title="Control — operate governed agents live">
         Each row is a live governed agent (a node). Click one to open its panel:{" "}
         <span style={{ color: C.text }}>desired</span> is what you've commanded,{" "}
         <span style={{ color: C.text }}>reported</span> is what the node has applied —
         a gap means a command is still in flight. Pause, cap its budget, or stop it;
         interventions travel over the plane and the node obeys on its next turn.
-      </Coach>
+      </Coach>}
       {codingExampleOnly(list.map((n) => n.node_id)) && (
         <CodingExampleStory list={list} treeOf={treeOf} onPick={pick} />
       )}

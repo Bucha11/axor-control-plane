@@ -21,6 +21,7 @@ import { navigate, safeDecode, useRoute } from "./router";
 import PageGuard from "./components/PageGuard";
 import { MODE_LABEL, isConnected, isGuestToken, useApp } from "./store";
 import GuestSession, { guestTimeLeft } from "./components/GuestSession";
+import Coach from "./components/Coach";
 import { track } from "./funnel";
 import { useHasTeam } from "./team";
 import Tooltip from "./components/Tooltip";
@@ -213,6 +214,8 @@ export default function App() {
       {welcome && <SignedUpNote onDismiss={() => setWelcome(false)} />}
       <GuestSession invite={key === "invite"} />
       <Offline />
+      <PageCoach page={key === "govern" ? ((head === "govern" || head === "control") && !runIdParam ? "agents" : head === "memory" ? "memory" : "")
+        : key} journey={menu.journey} />
       <AuthReturn />
       {key === "home" && <Home />}
       {key === "chaos" && <ChaosTests />}
@@ -570,6 +573,38 @@ function LearnToggle() {
 // noise about the one thing that is almost never wrong. The kernel is the one
 // shown, because that is the version deciding what this deployment DOES; the
 // rest of the stack is in the tooltip.
+// QA-463: learn mode explained only some pages of the coding journey. These
+// are the main ones; each says what the page is for, in a sentence or two.
+const PAGE_NOTES: Record<string, { title: string; text: string; coding?: boolean }> = {
+  agents: { coding: true, title: "Agents — every coding session of the team",
+    text: "Each row is a Claude Code or Codex session that reported in: whose it is, which repository, "
+      + "what it ran and what it was refused. Open one to see its steps, or stop it from here." },
+  policy: { coding: true, title: "Policy — what every coding agent is refused",
+    text: "One set of rules for every developer's Claude Code and Codex. A repository may refuse more; "
+      + "it cannot allow what is refused here." },
+  evidence: { title: "Incidents — what needs a look",
+    text: "An agent made something up, a dangerous call went through, or a rule refused a call. "
+      + "Mark each one — looked at, kept as a test, made a rule of, or not a problem — and the list stays short." },
+  memory: { title: "Memory — what the agents learned in each repository",
+    text: "Notes the agents wrote down, given to the next session in that repository. Remove one that is wrong; "
+      + "a version that made sessions worse shows up under Incidents." },
+  skills: { title: "Skills — what the agents may load",
+    text: "The skills found on the team's machines, and which are on. Turn one off and the agents stop loading it." },
+  connect: { coding: true, title: "Connect — one command on each machine",
+    text: "axor-wrap connects this machine's Claude Code and Codex to the workspace. "
+      + "Once a session reports in, it is under Agents." },
+};
+
+function PageCoach({ page, journey }: { page: string; journey: string | null }) {
+  const note = PAGE_NOTES[page];
+  if (!note || (note.coding && journey !== "coding")) return null;
+  return (
+    <div style={{ maxWidth: 1040, margin: "0 auto" }}>
+      <Coach id={`page-${page}`} title={note.title}>{note.text}</Coach>
+    </div>
+  );
+}
+
 // QA-465: offline, a save waits for the connection with its button on "…" —
 // said, not left to look stuck
 function Offline() {
