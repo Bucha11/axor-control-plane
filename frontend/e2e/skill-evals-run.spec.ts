@@ -127,3 +127,24 @@ test("a guest has no machines: the page does not ask for them (QA-042)", async (
   await page.waitForTimeout(1000);
   expect(asked).toEqual([]);
 });
+
+test("both ways solved 1/1: the card says no difference, not 0% solved (QA-506)", async ({ page }) => {
+  const arm = (a: string, skills: string[]) => ({
+    arm: a, skills, trials: 1, solved: 1, rate: 1, mean_tokens: 1000, median_tokens: 1000,
+    mean_input_tokens: 900, mean_cache_read_tokens: 0, mean_output_tokens: 100, mean_cost_usd: null,
+    tokens_per_solved: 1000, cost_per_solved_usd: null, mean_turns: 3, mean_duration_s: 10,
+    errors: 0, opened: null });
+  const cmp = { arm: "release-helper", base: "none", lift: 0, p_value: 1, token_delta: 0,
+                token_delta_ci: null, token_change: 0, cost_delta_usd: null };
+  const task = { task: "t", arms: [arm("none", []), arm("release-helper", ["release-helper"])], vs_none: [cmp] };
+  await page.route("**/v1/skill-evals/se-even", (r) => r.fulfill({ json: {
+    eval_id: "se-even", created_ts: "2026-11-28T10:00:00Z", agent: "claude-code", model: "",
+    skills: ["release-helper"], arms: [{ arm: "none", skills: [] }, { arm: "release-helper", skills: ["release-helper"] }],
+    per_skill: [{ skill: "release-helper", carried_tokens: 40, body_tokens: 300, alone: cmp, on_top: null,
+                  opened: "1/1", verdict: "no difference seen" }],
+    overall: task, per_task: [task], trials: [] } }));
+  await goHash(page, "skill-evals/se-even");
+  const card = page.getByTestId("skill-card-release-helper");
+  await expect(card).toContainText("no difference (both solved 1/1)");
+  await expect(card).not.toContainText("0% solved");
+});

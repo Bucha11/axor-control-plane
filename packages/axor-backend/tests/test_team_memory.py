@@ -47,7 +47,8 @@ def _fresh_seq() -> None:
 
 
 async def _check(c: httpx.AsyncClient, node: str, run: str, command: str, passed: bool,
-                 kind: str = "tests", carries: list[str] | None = None) -> None:
+                 kind: str = "tests", carries: list[str] | None = None,
+                 summary: str = "x") -> None:
     seq = _SEQ.get(run, 0)
     _SEQ[run] = seq + 2
     extra = {"carries": carries} if carries else {}
@@ -60,7 +61,7 @@ async def _check(c: httpx.AsyncClient, node: str, run: str, command: str, passed
          "verdict": None, "payload": {"tool": "Bash", "status": "ok" if passed else "error",
                                       "preview": "", **extra,
                                       "check": {"kind": kind, "passed": passed,
-                                                "command": command, "summary": "x"}}},
+                                                "command": command, "summary": summary}}},
     ]
     r = await c.post(f"/v1/plane/{node}/telemetry", json={"run_id": run, "events": lines})
     assert r.status_code < 300, r.text
@@ -223,3 +224,55 @@ async def test_the_example_memory_is_read_not_changed(client: httpx.AsyncClient)
     assert r.status_code == 409 and "example" in r.json()["detail"]
     r = await client.post("/v1/memory/notes", json={"repo": demo.CODING_REPO, "text": "mine"})
     assert r.status_code == 409
+
+
+async def _call(c: httpx.AsyncClient, node: str, run: str, tool: str, args: dict) -> None:
+    seq = _SEQ.get(run, 0)
+    _SEQ[run] = seq + 2
+    lines = [
+        {"schema_version": "1.0", "seq": seq, "node_id": node, "kind": "tool_call",
+         "ts": f"2026-11-20T10:00:{seq:02d}+00:00", "causal_root": None, "gate": None,
+         "verdict": "pass", "payload": {"tool": tool, "args": args}},
+        {"schema_version": "1.0", "seq": seq + 1, "node_id": node, "kind": "tool_result",
+         "ts": f"2026-11-20T10:00:{seq + 1:02d}+00:00", "causal_root": None, "gate": None,
+         "verdict": None, "payload": {"tool": tool, "status": "ok", "preview": ""}},
+    ]
+    r = await c.post(f"/v1/plane/{node}/telemetry", json={"run_id": run, "events": lines})
+    assert r.status_code < 300, r.text
+
+
+@pytest.mark.parametrize("summary,between", [
+    # QA-502 as recorded: the suite ran and a test failed, the agent edited the
+    # code, and a different invocation of the same suite passed
+    ("1 failed, 2 passed in 0.03s",
+     [("Edit", {"file_path": "calc/__init__.py", "old_string": "a - b", "new_string": "a + b"})]),
+    ("Exit code 1", [("Write", {"file_path": "calc/__init__.py", "content": "..."})]),
+    ("Exit code 1", [("Bash", {"command": "sed -i 's/a - b/a + b/' calc/__init__.py"})]),
+    ("Exit code 1", [("Bash", {"command": "cat > calc/__init__.py <<EOF\nx\nEOF"})]),
+    ("1 failed, 2 passed in 0.03s", []),
+])
+async def test_no_fix_is_learned_when_the_code_failed_the_check(
+        client: httpx.AsyncClient, summary: str, between: list) -> None:
+    """QA-502: "fails here — works" only when the first command failed for
+    being the wrong command, not when the code failed it and was fixed."""
+    await _session(client, "ada-1", "dev-ada")
+    bad = "python -m pytest -q 2>&1 | tail -20; cat calc/__init__.py"
+    await _check(client, "ada-1", "ada-r1", bad, False, summary=summary)
+    for tool, args in between:
+        await _call(client, "ada-1", "ada-r1", tool, args)
+    await _check(client, "ada-1", "ada-r1", "python -m pytest -q 2>&1 | tail -3", True,
+                 summary="3 passed in 0.02s")
+    items = await _items(client)
+    assert "runs:tests:python -m pytest -q 2>&1 | tail -3" in items
+    assert not any(k.startswith("fix:") for k in items)
+
+
+async def test_a_fix_is_learned_when_the_command_was_wrong(client: httpx.AsyncClient) -> None:
+    """QA-502: the command itself failed (not found), nothing was edited, a
+    different runner passed: that is the fix to remember."""
+    await _session(client, "ada-1", "dev-ada")
+    await _check(client, "ada-1", "ada-r1", "pytest -q", False,
+                 summary="bash: pytest: command not found")
+    await _call(client, "ada-1", "ada-r1", "Read", {"file_path": "pyproject.toml"})
+    await _check(client, "ada-1", "ada-r1", "uv run pytest -q", True, summary="3 passed")
+    assert "fix:tests:pytest -q->uv run pytest -q" in await _items(client)

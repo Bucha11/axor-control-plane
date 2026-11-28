@@ -37,6 +37,19 @@ test("a broken tool, what the agent said, and arming one on a live agent", async
   await expect(page.getByTestId("chaos-armed")).toContainText(`armed: ${node} — send_email, poisoning its results`);
   expect(arms).toBe(1);
 
+  // QA-500: still armed after a reload, until the agent answers — then what it said
+  await page.reload();
+  await expect(page.getByTestId("chaos-armed")).toContainText(`armed: ${node} — send_email, poisoning its results`);
+  const desired = await (await request.get(`${BACKEND}/v1/plane/nodes`)).json();
+  const id = desired.find((n: { node_id: string }) => n.node_id === node).desired.state.pending_experiment.id;
+  expect((await request.post(`${BACKEND}/v1/plane/${node}/telemetry`, { data: { run_id: node, events: [
+    line(node, 10, "operator_intervention", { action: "experiment_refused", id, reason: "not test-bench" }),
+  ] } })).ok()).toBeTruthy();
+  expect((await request.post(`${BACKEND}/v1/plane/${node}/consumed`, { data: { key: "pending_experiment" } })).ok()).toBeTruthy();
+  await page.reload();
+  await expect(page.getByTestId("chaos-armed")).toContainText(`not taken: ${node} — not test-bench`);
+  await expect(page.getByTestId("chaos-armed")).not.toContainText(`armed: ${node}`);
+
   // the schedule is Team: shown, locked, with the way to it
   await expect(page.getByTestId("chaos-schedule")).toContainText("part of Team");
 });

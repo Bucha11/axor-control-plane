@@ -313,4 +313,19 @@ test.describe("access (QA, 0.7.3)", () => {
     await expect(page.getByTestId("audit-pack-note")).toBeVisible();
     expect(holds).toBe(0);
   });
+
+  test("machines and their people lists the worker machine and whose it is (QA-504)", async ({ page }) => {
+    // only the hooks' developer ids were listed; the worker Skill evals shows as on was not
+    await signedIn(page, "owner");
+    await page.route("**/v1/identities", (r) => r.fulfill({ json: {
+      identities: [{ developer_id: "dev-0a1b", email: "ada@acme.io", source: "personal_key",
+                     ts: "2026-11-28T10:00:00Z", disputed_by: null }],
+      machines: [{ machine_id: "m-ed6edebfb85c22b8", host: "laptop", repo_label: "acme/api",
+                   email: "ada@acme.io", online: true }] } }));
+    await goHash(page, "settings?tab=workspace");
+    const ids = page.getByTestId("machine-ids");
+    await expect(ids.getByTestId("machine-id")).toContainText("dev-0a1b");
+    await expect(ids.getByTestId("machine-worker")).toContainText(
+      "m-ed6edebfb85c22b8worker · laptop · acme/api · on→ ada@acme.io");
+  });
 });

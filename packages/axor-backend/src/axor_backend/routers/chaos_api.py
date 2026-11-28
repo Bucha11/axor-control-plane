@@ -17,8 +17,11 @@ router = APIRouter(prefix="/v1/chaos", tags=["chaos"])
 @router.get("")
 async def list_chaos(state: StateDep, store: StoreDep) -> dict:
     sched = await store.get_setting("chaos_schedule") or {}
+    pending, said = await chaos.armed(store)
     return {
         "runs": await chaos.chaos_runs(store),
+        "armed": pending,
+        "answered": said,
         "modes": list(chaos.MODES),
         "schedule": {
             "enabled": bool(sched.get("enabled")),

@@ -35,9 +35,18 @@ const usd = (x: number | null | undefined) => (x == null ? "—" : `$${x.toFixed
 const signed = (x: number) => `${x > 0 ? "+" : ""}${Math.round(x).toLocaleString("en-US")}`;
 const pct = (x: number | null | undefined) => (x == null ? "" : ` (${x > 0 ? "+" : ""}${Math.round(x * 100)}%)`);
 
-/** "+100% solved (p 0.008)" — the solved-rate difference, with how sure. */
-function solvedText(c: SkillEvalCompare | null): string {
+/** "+100% solved (p 0.008)" — the solved-rate difference, with how sure.
+ *  No difference reads as one, with what both solved: "0% solved" read as
+ *  nothing solved when both ways solved 1/1 (QA-506). */
+function solvedText(c: SkillEvalCompare | null, arms?: SkillEvalArm[]): string {
   if (!c) return "—";
+  const a = arms?.find((x) => x.arm === c.arm);
+  const b = arms?.find((x) => x.arm === c.base);
+  if (Math.round(c.lift * 100) === 0 && a && b) {
+    return a.solved === b.solved && a.trials === b.trials
+      ? `no difference (both solved ${a.solved}/${a.trials})`
+      : `no difference (${a.solved}/${a.trials} vs ${b.solved}/${b.trials})`;
+  }
   const lift = `${c.lift > 0 ? "+" : ""}${Math.round(c.lift * 100)}%`;
   return `${lift} solved (p ${c.p_value < 0.001 ? "<0.001" : c.p_value.toPrecision(2)})`;
 }
@@ -325,7 +334,7 @@ function EvalView({ evalId }: { evalId: string }) {
 
       <div style={label}>PER SKILL</div>
       <div className="flex flex-col gap-3 mb-8">
-        {e.per_skill.map((s) => <SkillCard key={s.skill} s={s} single={e.skills.length === 1} example={!!e.example} />)}
+        {e.per_skill.map((s) => <SkillCard key={s.skill} s={s} single={e.skills.length === 1} arms={e.overall.arms} example={!!e.example} />)}
       </div>
 
       {/* nothing solved, with the skill or without: the "done when" command is
@@ -359,7 +368,9 @@ function EvalView({ evalId }: { evalId: string }) {
   );
 }
 
-function SkillCard({ s, single, example = false }: { s: SkillEvalSkill; single: boolean; example?: boolean }) {
+function SkillCard({ s, single, arms, example = false }: {
+  s: SkillEvalSkill; single: boolean; arms: SkillEvalArm[]; example?: boolean;
+}) {
   return (
     <div data-testid={`skill-card-${s.skill}`} className="p-4"
       style={{ background: C.panel, border: `1px solid ${C.line}`, borderLeft: `3px solid ${verdictColor(s.verdict)}`, borderRadius: 8 }}>
@@ -378,13 +389,13 @@ function SkillCard({ s, single, example = false }: { s: SkillEvalSkill; single: 
       <div className="flex gap-6 flex-wrap" style={{ fontFamily: MONO, fontSize: 11.5, lineHeight: 1.7 }}>
         <div>
           <div style={{ color: C.dim, fontSize: 10 }}>{single ? "WITH IT VS NONE" : "ALONE VS NONE"}</div>
-          <div style={{ color: C.text }}>{solvedText(s.alone)}</div>
+          <div style={{ color: C.text }}>{solvedText(s.alone, arms)}</div>
           <div style={{ color: C.mut }}>{tokensText(s.alone)}</div>
         </div>
         {!single && (
           <div>
             <div style={{ color: C.dim, fontSize: 10 }}>ON TOP OF THE OTHERS (ALL VS ALL BUT IT)</div>
-            <div style={{ color: C.text }}>{solvedText(s.on_top)}</div>
+            <div style={{ color: C.text }}>{solvedText(s.on_top, arms)}</div>
             <div style={{ color: C.mut }}>{tokensText(s.on_top)}</div>
           </div>
         )}

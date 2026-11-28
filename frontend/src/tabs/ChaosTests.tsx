@@ -5,7 +5,7 @@
 // its own (GET/POST/PUT /v1/chaos — backend chaos.py).
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { api, ChaosRun, ChaosVerdict } from "../api";
+import { api, ChaosAnswer, ChaosArmed, ChaosRun, ChaosVerdict } from "../api";
 import { navigate } from "../router";
 import { C, MONO, btn } from "../theme";
 import { useApp } from "../store";
@@ -102,6 +102,8 @@ export default function ChaosTests() {
           </div>
         </div>
         <LiveArm agents={agents} modes={data.data?.modes ?? Object.keys(MODE_WORDS)}
+          armed={(data.data?.armed ?? []).filter((a) => !hidden.has(a.node_id))}
+          answered={(data.data?.answered ?? []).filter((a) => !hidden.has(a.node_id))}
           onArmed={() => void qc.invalidateQueries({ queryKey: ["chaos"] })} />
       </div>
 
@@ -163,7 +165,9 @@ function Row({ r, odd }: { r: ChaosRun; odd: boolean }) {
   );
 }
 
-function LiveArm({ agents, modes, onArmed }: { agents: string[]; modes: string[]; onArmed: () => void }) {
+function LiveArm({ agents, modes, armed, answered, onArmed }: {
+  agents: string[]; modes: string[]; armed: ChaosArmed[]; answered: ChaosAnswer[]; onArmed: () => void;
+}) {
   const [picked, setPicked] = useState<string[]>([]);
   const [tool, setTool] = useState("");
   const [mode, setMode] = useState("");
@@ -215,14 +219,24 @@ function LiveArm({ agents, modes, onArmed }: { agents: string[]; modes: string[]
           </button>
         </>
       )}
-      {arm.data && (
+      {/* armed is the agent's desired state: listed until the agent takes it,
+          after a reload too — then what it said of it (QA-500) */}
+      {(armed.length > 0 || answered.length > 0 || (arm.data?.skipped.length ?? 0) > 0) && (
         <div data-testid="chaos-armed" className="mt-2" style={{ fontFamily: MONO, fontSize: 11, lineHeight: 1.6 }}>
-          {arm.data.armed.map((a) => (
-            <div key={a.node_id} style={{ color: C.amber }}>
+          {armed.map((a) => (
+            <div key={a.id} style={{ color: C.amber }}>
               armed: {a.node_id} — {a.faults.map((f) => `${f.tool}, ${MODE_WORDS[f.mode] ?? f.mode}`).join("; ")}
+              <span style={{ color: C.dim }}> · waiting for its next call to {[...new Set(a.faults.map((f) => f.tool))].join(", ")}</span>
             </div>
           ))}
-          {arm.data.skipped.map((s) => <div key={s.node_id} style={{ color: C.dim }}>{s.node_id}: {s.reason}</div>)}
+          {answered.slice(0, 5).map((a) => (
+            <div key={a.id} data-testid="chaos-answered" style={{ color: a.taken ? C.mut : C.dim }}>
+              {a.taken
+                ? `taken: ${a.node_id} broke it on its run${a.ts ? ` (${localTime(a.ts)})` : ""} — what it said is below`
+                : `not taken: ${a.node_id} — ${a.reason || "refused"}`}
+            </div>
+          ))}
+          {arm.data?.skipped.map((s) => <div key={s.node_id} style={{ color: C.dim }}>{s.node_id}: {s.reason}</div>)}
         </div>
       )}
       {arm.isError && <div className="mt-2" style={{ color: C.red, fontSize: 12 }}>{(arm.error as Error).message}</div>}
