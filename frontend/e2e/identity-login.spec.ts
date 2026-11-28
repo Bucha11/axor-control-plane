@@ -652,6 +652,23 @@ test.describe("e-mail: reset and verification links", () => {
     expect(asked).toEqual({ email: "ada@acme.io", return_to: "/#/settings" });
   });
 
+  test("a double-click on send reset link still shows that the link is on its way (QA-484)", async ({ page }) => {
+    await page.route("**/identity/v1/email", jsonRoute(200, { available: true }));
+    let asks = 0;
+    await page.route("**/identity/v1/password/forgot", async (route) => {
+      asks += 1;
+      await new Promise((r) => setTimeout(r, 600));
+      await route.fulfill({ status: 202, json: { detail: "if that address has an account, a link is on its way" } });
+    });
+    await goHash(page, "settings");
+    await page.getByRole("button", { name: "forgot password?" }).click();
+    await page.getByLabel("email").fill("ada@acme.io");
+    await page.getByRole("button", { name: "send reset link" }).dblclick();
+    await expect(page.getByTestId("reset-sent")).toContainText("a link is on its way");
+    await expect(page.getByLabel("password")).toHaveCount(0);
+    expect(asks).toBe(1);
+  });
+
   test("no mail set up, no forgot-password", async ({ page }) => {
     await page.route("**/identity/v1/email", jsonRoute(200, { available: false }));
     await goHash(page, "settings");

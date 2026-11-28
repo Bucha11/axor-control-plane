@@ -1064,7 +1064,9 @@ export function IdentityLogin({ onDone, onSignedUp, initialMode = "login", compa
       <div className="flex items-center gap-2 flex-wrap">
         <button type="submit" disabled={!canSubmit || busy}
           style={btn({ color: C.steel, borderColor: C.steel, fontSize: 11, padding: "5px 14px", whiteSpace: "nowrap" })}>
-          {busy ? "…" : mode === "signup" ? "create workspace" : mode === "forgot" ? "send reset link" : "log in"}
+          {/* busy keeps its label (and so its width): shrunk to "…", the second
+              click of a double-click landed on "back to log in" (QA-484) */}
+          {mode === "signup" ? "create workspace" : mode === "forgot" ? "send reset link" : "log in"}{busy ? "…" : ""}
         </button>
         {mode === "login" && !ssoFor && (
           <button type="button" data-testid="sso-start" onClick={() => void startSso()}
