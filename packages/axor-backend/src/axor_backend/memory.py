@@ -469,6 +469,8 @@ async def refresh(store: Any, repo: str,  # noqa: ANN401
         for i in sorted(before - set(ids)):
             item = by_id.get(i)
             why = _WHY_GONE.get(item["status"], item["status"]) if item else "dropped"
+            if item and item["status"] == "off" and item["doc"].get("decided_by"):
+                why = f"turned off by {item['doc']['decided_by']}"   # QA-503: who
             removed.append({"id": i, "text": item["doc"]["text"] if item else "", "why": why,
                             **({"replaced_by": item["doc"].get("replaced_by")}
                                if item and item["doc"].get("replaced_by") else {})})
@@ -526,8 +528,17 @@ async def session_outcome(store: Any, node_id: str) -> dict[str, bool]:  # noqa:
 async def compare(store: Any, repo: str, change: dict) -> dict:  # noqa: ANN401
     """The sessions given the version before a change against those given it
     after."""
-    before = await store.sessions_given_version(repo, change["previous"])
-    after = await store.sessions_given_version(repo, change["version"])
+    # its own window: from the change before it to this one, from this one to
+    # the next (QA-503 — "" before turning on and "" after turning off are the
+    # same version, and counted together the off row read "0 before, 2 after")
+    changes = sorted(await store.memory_changes_of(repo, 200), key=lambda c: c["id"])
+    earlier = [c["ts"] for c in changes if c["id"] < change["id"]]
+    later = [c["ts"] for c in changes if c["id"] > change["id"]]
+    before = await store.sessions_given_version(repo, change["previous"],
+                                                since=earlier[-1] if earlier else "",
+                                                until=change["ts"])
+    after = await store.sessions_given_version(repo, change["version"], since=change["ts"],
+                                               until=later[0] if later else "")
     sides = {}
     for name, nodes in (("before", before), ("after", after)):
         outs = [await session_outcome(store, n) for n in nodes[-50:]]
