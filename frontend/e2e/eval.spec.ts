@@ -137,3 +137,87 @@ test.describe("eval (your own agent, through the proxy)", () => {
     expect(body.faults).toEqual([{ tool: "lookup_order", mode: "silent_fail" }]);
   });
 });
+
+test.describe("a test's receipt is the one asked for, and the one it was (QA-380, 381, 382, 384, 387)", () => {
+  test("QA-384: a viewer is not offered a test run, and none starts", async ({ page }) => {
+    const posts: string[] = [];
+    page.on("request", (r) => { if (r.method() === "POST" && r.url().includes("/axor/runs")) posts.push(r.url()); });
+    await page.route("**/v1/auth/status", (r) => r.fulfill({ json: {
+      auth_enabled: true, authenticated: true, scopes: ["read"] } }));
+    await setConnection(page, { mode: "demo" });
+    await goHash(page, "chaos");
+    await expect(page.getByTestId("chaos-run-viewer")).toContainText("you can't run a chaos test");
+    await expect(page.getByTestId("chaos-example")).toHaveCount(0);
+    await goHash(page, "catch?auto=1");
+    await expect(page.getByTestId("catch-viewer")).toContainText("you can't run a test");
+    await expect(page.getByRole("button", { name: /Run the test/ })).toHaveCount(0);
+    await page.waitForTimeout(1000);
+    expect(posts).toEqual([]);
+  });
+
+  test("QA-387: the example run started by ?auto=1 is not started again by a reload", async ({ page }) => {
+    let posts = 0;
+    page.on("request", (r) => { if (r.method() === "POST" && r.url().endsWith("/axor/runs")) posts += 1; });
+    await setConnection(page, { mode: "demo" });
+    await goHash(page, "catch?auto=1");
+    await expect(page.getByText("fabricated a tool result").first()).toBeVisible({ timeout: 20_000 });
+    expect(new URL(page.url()).hash).toBe("#/catch");
+    await page.reload();
+    await expect(page.getByText("BREAK A TOOL ON PURPOSE")).toBeVisible();
+    await page.waitForTimeout(1500);
+    expect(posts).toBe(1);
+  });
+
+  test("QA-380: an unknown run id says there is no such run, and a changed link shows its own run", async ({ page }) => {
+    await setConnection(page, { mode: "demo" });
+    await goHash(page, "catch/bogus_123");
+    await expect(page.getByTestId("no-such-run")).toContainText("There is no run “bogus_123” here.");
+    await expect(page.getByText("fabricated a tool result")).toHaveCount(0);
+    // a run made here, then a link to another case: that case, not the run just made
+    await goHash(page, "catch");
+    await page.getByRole("button", { name: /Run the test/ }).click();
+    await expect(page.getByText("fabricated a tool result").first()).toBeVisible({ timeout: 20_000 });
+    await page.evaluate(() => { window.location.hash = "#/catch/nosuch_case"; });
+    await expect(page.getByTestId("no-such-run")).toContainText("nosuch_case");
+  });
+
+  test("QA-381: before your own agent has run, the example's receipt is not shown as yours", async ({ page }) => {
+    // on the example first (kept across the reload below, unlike setConnection)
+    await page.addInitScript(() => {
+      if (!localStorage.getItem("axor-app")) {
+        localStorage.setItem("axor-app", JSON.stringify({ version: 0, state: {
+          connection: { mode: "demo", tools: [], testBench: true }, lastRunId: null, apiToken: "", signingKeyId: "" } }));
+      }
+    });
+    await goHash(page, "catch");
+    await page.getByRole("button", { name: /Run the test/ }).click();
+    await expect(page.getByText("The example agent").first()).toBeVisible({ timeout: 20_000 });
+    // now on the person's own agent: "Run a first test"
+    await page.evaluate(() => {
+      const raw = JSON.parse(localStorage.getItem("axor-app")!);
+      raw.state.connection = { mode: "proxy", tools: [{ name: "web_search", url: "http://127.0.0.1:8401/mock/web_search" }], testBench: false };
+      localStorage.setItem("axor-app", JSON.stringify(raw));
+    });
+    await page.reload();
+    await expect(page.getByRole("button", { name: /Start the test, then run my agent/ })).toBeVisible();
+    await expect(page.getByText("No runs yet — configure a scenario above and run one.")).toBeVisible();
+    await expect(page.getByText(/Your agent/)).toHaveCount(0);
+    await expect(page.getByText("fabricated a tool result")).toHaveCount(0);
+  });
+
+  test("QA-382: an answer with no tool call says nothing was tested", async ({ page }) => {
+    await setConnection(page, {
+      mode: "proxy",
+      tools: [{ name: "web_search", url: "http://127.0.0.1:8401/mock/web_search" }],
+    });
+    await goHash(page, "eval");
+    await page.getByRole("button", { name: /Start the test, then run my agent/ }).click();
+    const finish = page.getByTestId("finish-test");
+    await finish.locator("textarea").fill("I ran the query and it worked.");
+    await finish.getByRole("button", { name: "Check the answer" }).click();
+    await expect(page.getByTestId("nothing-tested")).toContainText("Nothing was tested", { timeout: 20_000 });
+    await expect(page.getByText("No discrepancies caught")).toHaveCount(0);
+    await goHash(page, "chaos");
+    await expect(page.getByTestId("chaos-runs")).toContainText("nothing tested");
+  });
+});

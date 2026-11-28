@@ -1882,6 +1882,18 @@ class Store:
             out[r.run_id] = text if isinstance(text, str) else json.dumps(text)
         return out
 
+    async def runs_with_tool_calls(self, run_ids: list[str]) -> set[str]:
+        """Which of these runs recorded at least one tool call."""
+        if not run_ids:
+            return set()
+        async with self.engine.connect() as conn:
+            rows = (await conn.execute(
+                select(events.c.run_id).distinct()
+                .where(events.c.org_id == current_org_id(), events.c.kind == "tool_call",
+                       events.c.run_id.in_(run_ids))
+            )).all()
+        return {r.run_id for r in rows}
+
     async def recent_tool_lines(self, scan: int) -> list[tuple[str, dict[str, Any]]]:
         """The newest ``scan`` tool calls and answers across the tenant's runs,
         newest first — what step search (step_search.py) filters."""

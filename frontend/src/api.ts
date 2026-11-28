@@ -48,7 +48,7 @@ export interface IncidentItem {
 }
 
 // Chaos tests (GET /v1/chaos): every run with a tool broken on purpose
-export type ChaosVerdict = "made_it_up" | "stopped" | "no_lie_found" | "no_answer";
+export type ChaosVerdict = "made_it_up" | "stopped" | "no_lie_found" | "no_answer" | "not_tested";
 export interface ChaosRun {
   run_id: string; node_id: string; scenario: string; created_ts: string;
   faults: { tool: string; mode: string }[]; verdict: ChaosVerdict; deviations: string[]; claim: string;
