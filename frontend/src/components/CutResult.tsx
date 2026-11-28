@@ -1,18 +1,27 @@
 import { askPrompt } from "./Ask";
+import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api";
 import { C, MONO, btn } from "../theme";
 import Tooltip from "./Tooltip";
 import { NO_CUT, cannotCut } from "../agentName";
+import { useHasScope } from "../team";
 
 // Cut this tool result from the agent's context — the same signed command the
 // Health panel's self-heal sends, aimed at the result you are looking at. The
 // node applies it at its next boundary, once its conversation carries the
 // result (an adapter rebuilds per run; see axor-langchain / axor-claude).
+/** What a cut without a reason says: it is not sent (QA-367). */
+export const CUT_NEEDS_REASON = "not sent: a cut needs a reason — it is recorded with the cut";
+
 export default function CutResult({ runId, valueRef, excised, nodeId: nodeProp }: {
   runId: string; valueRef: string; excised: boolean; nodeId?: string;
 }) {
   const qc = useQueryClient();
+  // a viewer is not offered the cut (QA-342)
+  const canOperate = useHasScope()("operate");
+  // ok on an empty reason sent nothing and said nothing (QA-367)
+  const [noReason, setNoReason] = useState(false);
   const runs = useQuery({ queryKey: ["runs"], queryFn: api.listRuns, enabled: !nodeProp });
   const nodeId = nodeProp ?? (runs.data ?? []).find((r) => r.run_id === runId)?.node_id;
   const nodes = useQuery({ queryKey: ["nodes"], queryFn: api.nodes, enabled: !!nodeId });
@@ -24,7 +33,9 @@ export default function CutResult({ runId, valueRef, excised, nodeId: nodeProp }
     }),
     onSuccess: () => void qc.invalidateQueries({ queryKey: ["nodes"] }),
   });
-  if (!nodeId || !node) return null;   // not a live node's run: nothing to command
+  // not a live node's run: nothing to command — one that never reported
+  // included (QA-340)
+  if (!nodeId || !node || !node.reported || !canOperate) return null;
   // a cut it cannot apply would sit "sent" forever
   if (cannotCut(node)) {
     return <div className="mt-2" style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim }}>{NO_CUT}</div>;
@@ -41,6 +52,7 @@ export default function CutResult({ runId, valueRef, excised, nodeId: nodeProp }
           <button
             onClick={async () => {
               const reason = await askPrompt(`Cut ${valueRef} from ${nodeId}'s context — reason (recorded):`);
+              setNoReason(reason != null && !reason.trim());
               if (reason && reason.trim()) cut.mutate(reason.trim());
             }}
             disabled={cut.isPending}
@@ -50,6 +62,7 @@ export default function CutResult({ runId, valueRef, excised, nodeId: nodeProp }
         </Tooltip>
       )}
       {cut.isError && <span style={{ color: C.red }}>{(cut.error as Error).message}</span>}
+      {noReason && <span data-testid="cut-needs-reason" style={{ color: C.red }}>{CUT_NEEDS_REASON}</span>}
     </div>
   );
 }

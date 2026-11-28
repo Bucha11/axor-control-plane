@@ -15,6 +15,8 @@ import { isGuestToken, useApp } from "../store";
 import { C, MONO, btn } from "../theme";
 import { IdentityLogin, TIER_NAME } from "../tabs/Settings";
 import { useOneAtATime } from "../oneAtATime";
+import MakeKeyAndSend from "./MakeKeyAndSend";
+import { useCanAdmin } from "../team";
 
 type Agent = "claude-code" | "codex";
 const AGENTS: { id: Agent; label: string; note: string }[] = [
@@ -124,6 +126,7 @@ export default function CodingOnboarding({ then }: { then?: () => void }) {
   // one command, once per machine: axor-wrap saves the plane and the key, and
   // every axor command on the machine reads them — nothing to export
   const signedKeys = useOperatorKeys();
+  const admin = useCanAdmin();
   const connectCmd = `axor-wrap connect ${PLANE_URL}${needsKey ? ` --key ${key ?? "<create the key below>"}` : ""}${signedKeys.flags}`;
   // on to the next part of "both" is not a connection: nothing reported yet
   const goAgents = () => { if (then) { then(); return; } connect("adapter", []); navigate("govern"); };
@@ -228,9 +231,20 @@ export default function CodingOnboarding({ then }: { then?: () => void }) {
               Already connected? Run it again without <span style={{ color: C.text }}>--key</span>: your key is kept.
             </div>
           ) : (
-            <div data-testid="connect-unsigned" style={{ ...hint, marginTop: 6 }}>
-              this plane signs nothing yet (no operator keys): your agents take its word as it is.
-            </div>
+            signedKeys.unsignedCommands ? (
+              <div data-testid="connect-unsigned" style={{ ...hint, marginTop: 6 }}>
+                this plane signs nothing yet (no operator keys): your agents take its word as it is.
+              </div>
+            ) : (
+              // this plane refuses unsigned pause and stop: said so, with the key one click away (QA-501)
+              <div data-testid="connect-unsigned" style={{ ...hint, marginTop: 6 }}>
+                no operator key yet: this plane takes pause, stop and cap only when an operator signed them,
+                so until there is one it refuses them; your agents take the team&apos;s rules, skills and notes as the plane sends them.{" "}
+                {admin
+                  ? <MakeKeyAndSend what="" send={() => undefined} label="make this browser's operator key" />
+                  : "An owner or admin makes the key in Settings → workspace → operator keys."}
+              </div>
+            )
           )}
           <div style={{ ...hint, marginTop: 6 }}>
             {key ? <span style={{ color: C.amber }}>the key is shown once — copy it now. </span> : null}

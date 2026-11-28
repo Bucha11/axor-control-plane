@@ -117,3 +117,16 @@ def test_the_rate_card_gives_the_pricing_calculators_numbers() -> None:
     # Business and strictly better — nobody would have bought Business.)
     assert all(total("team", d, 1) - total("business", d, 1) == 299 for d in range(0, 200))
     assert all(total("security", d, 1) - total("business", d, 1) == 1500 for d in range(0, 200))
+
+
+async def test_qa360_demo_nodes_are_not_governed_nodes(open_client: httpx.AsyncClient) -> None:
+    """QA-360: Free says one governed node, and demo nodes and the demo tree
+    spawned past it into "agents at peak". The product showing itself is no
+    one's fleet: only the workspace's own nodes count."""
+    for node in ("governed-a1b2c3", "governed-d4e5f6", "gov-tree-ab12-orch",
+                 "gov-tree-ab12-research", "tree-orch", "my-agent"):
+        r = await open_client.post(f"/v1/plane/{node}/telemetry",
+                                   json={"run_id": f"{node}-r", "events": []})
+        assert r.status_code < 300, r.text
+    body = (await open_client.get("/v1/license/billing")).json()
+    assert body["current"]["peak_nodes"] == 1

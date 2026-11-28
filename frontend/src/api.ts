@@ -1969,7 +1969,7 @@ export const api = {
       j<{ revoked: boolean }>(r)),
   // the operators' public keys, for `axor-wrap connect --operator-key`
   operatorKeys: () => af("/v1/coding/operator-keys").then((r) =>
-    j<{ keys: Record<string, string>; fingerprint: string }>(r)),
+    j<{ keys: Record<string, string>; fingerprint: string; unsigned_commands?: boolean }>(r)),
   // what widens for sidecars with operator keys: sign the policy as it stands
   signCodingPolicy: async () => {
     const doc = await j<{ payload: Record<string, unknown> }>(await af("/v1/coding/policy/document"));
@@ -2322,7 +2322,8 @@ export const api = {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ version, operator: signed?.operator ?? "", timestamp, sig: signed?.sig ?? "" }),
     });
-    return j<{ stopped: string[]; count: number; mode?: string }>(r);
+    return j<{ stopped: string[]; count: number; mode?: string }>(r)
+      .catch((e: unknown) => { throw commandRefusal(e, !!signed); });
   },
 
   // The node's last behavioral health check, plus the series behind it. `latest`

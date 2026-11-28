@@ -225,7 +225,8 @@ test("a tree's agents fold into one row on Agents", async ({ page }) => {
   // the two loose sessions are not part of the tree
   await expect(page.getByTestId("agent-row-codex-example-77b0e4d2")).toBeVisible();
   // the counters count rows: the tree is one, not one per agent in it
-  await expect(page.getByTestId("fleet-count")).toContainText(/\d+ trees? · live/);
+  // ...and an example's rows are said apart from the live agents (QA-344)
+  await expect(page.getByTestId("fleet-count")).toContainText(/\d+ examples?, not counted/);
   await expect.poll(async () => {
     const chip = await page.getByTestId("status-chips").getByRole("button", { name: /^all/ }).innerText();
     const rows = await page.locator('[data-tour="spawn"] > [data-testid^="agent-row-"], [data-tour="spawn"] > [data-testid^="tree-row-"], [data-tour="spawn"] > [data-testid^="developer-row-"]').count();

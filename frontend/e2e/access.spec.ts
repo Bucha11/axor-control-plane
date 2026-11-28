@@ -237,7 +237,7 @@ test.describe("access (QA, 0.7.3)", () => {
     await page.route("**/v1/coding/brake", (r) => r.fulfill({ json: { on: false } }));
     await setConnection(page, { mode: "demo" });
     await goHash(page, "govern");
-    await expect(page.getByTestId("brake-pull")).toHaveText("⏸ hold all your agents…");
+    await expect(page.getByTestId("brake-pull")).toHaveText("⏸ hold all your coding agents…");
   });
 
   test("a tab with no sign-in on a plane that needs one says so, and does not poll into 401s (QA-170)", async ({ page }) => {

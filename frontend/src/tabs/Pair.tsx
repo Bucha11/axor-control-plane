@@ -13,10 +13,11 @@ import { api, ApiError, PairControl, PairFeed, PairNote, PairStep, streamPair } 
 import { navigate } from "../router";
 import { C, MONO, btn } from "../theme";
 import { HowItWorks } from "../components/MachineCommand";
-import { useApp } from "../store";
+import { isGuestToken, useApp } from "../store";
 import { useMine } from "../team";
 import { useWorkStarted } from "../workStarted";
 import { useOneAtATime } from "../oneAtATime";
+import MakeKeyAndSend, { needsKey } from "../components/MakeKeyAndSend";
 
 const label: React.CSSProperties = {
   fontFamily: MONO, fontSize: 10.5, color: C.dim, letterSpacing: "0.1em", marginBottom: 8,
@@ -65,7 +66,9 @@ function problem(e: unknown): { status: number; code: string; words: string } {
 }
 
 export default function Pair({ token, withToken, node }: { token?: string; withToken?: string; node?: string }) {
-  return token ? <PairPage token={token} withToken={withToken} /> : <PairHome node={node} />;
+  // the same session twice is one pane, not two (QA-364)
+  return token ? <PairPage token={token} withToken={withToken === token ? undefined : withToken} />
+    : <PairHome node={node} />;
 }
 
 // ── starting one ─────────────────────────────────────────────────────────────
@@ -107,6 +110,9 @@ function PairHome({ node }: { node?: string }) {
   });
   const askOnce = useOneAtATime(ask);
   const started = useWorkStarted();
+  // a guest cannot open a pair, the example's included: it was offered, and
+  // then said "Sign in to join" (QA-365)
+  const guest = isGuestToken(useApp((s) => s.apiToken));
   const example = useMutation({
     mutationFn: api.seedPair,
     onSuccess: (r) => { void qc.invalidateQueries({ queryKey: ["pairs"] }); navigate(`pair/${r.token}`); },
@@ -177,7 +183,10 @@ function PairHome({ node }: { node?: string }) {
         {yours.length === 0 ? (
           <div style={{ ...panel, padding: 16, fontSize: 13, color: C.mut }}>
             None of your sessions is running now — start your agent, and it appears here.
-            {!anySessions && !started && <>{" "}
+            {!anySessions && !started && guest && <>{" "}
+              <span data-testid="pair-guest">Pairing needs an account — a free one is enough.{" "}
+                <button onClick={() => navigate("settings")} style={{ ...link, fontSize: 13 }}>sign in →</button></span></>}
+            {!anySessions && !started && !guest && <>{" "}
               <button onClick={() => example.mutate()} data-testid="pair-example" style={{ ...link, fontSize: 13 }}>
                 {example.isPending ? "loading…" : "see an example pair →"}
               </button></>}
@@ -578,6 +587,15 @@ function PairPane({ token }: { token: string }) {
           {teammate && f.pair.yours !== false && <CopyLink token={token} />}
           {teammate && f.pair.yours !== false && <button onClick={() => end.mutate()} style={{ ...link, color: C.mut }}>end pairing</button>}
         </div>
+        {/* a refused pause is said, not swallowed (QA-501) */}
+        {command.error && (
+          <div data-testid="pair-hold-error" style={{ fontFamily: MONO, fontSize: 11, color: C.red, marginTop: 4, lineHeight: 1.6 }}>
+            not sent: {problem(command.error).words}
+            {needsKey(command.error) && (
+              <div><MakeKeyAndSend what={f.pair.paused ? "resume" : "pause"} send={() => command.mutate(f)} /></div>
+            )}
+          </div>
+        )}
         <div data-testid="pair-who" style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim, marginTop: 4, lineHeight: 1.6 }}>
           {f.pair.yours === false
             ? `${f.pair.created_by}'s session · you're here at their invitation`

@@ -1695,7 +1695,7 @@ function StatementLines({ st, coding, prod, estimate = false }: {
         <>governed nodes at the peak: <span style={{ color: C.text }}>{st.peak_nodes}</span>
           {st.peak_day ? ` on ${st.peak_day}` : ""} · {st.included_nodes} included
           {st.billable_nodes ? ` · ${st.billable_nodes} over` : ""}</>,
-        st.workspace_tier === "coding" && st.billable_nodes > 0 ? "on Team and up"
+        (st.workspace_tier === "coding" || st.workspace_tier === "community") && st.billable_nodes > 0 ? "on Team and up"
           : st.priced ? st.overage : "—", "bill-nodes")}
       <div className="flex gap-3" style={{ fontFamily: MONO, fontSize: 12.5, padding: "6px 0 0", borderTop: `1px solid ${C.line}` }}>
         <span style={{ flex: 1, color: C.text }}>
@@ -1750,7 +1750,9 @@ function Billing({ coding, prod }: { coding: boolean; prod: boolean }) {
         <div data-testid="billing-plan" style={{ fontFamily: MONO, fontSize: 12, color: C.text, lineHeight: 1.7 }}>
           {TIER_NAME[plan.tier] ?? plan.tier}
           <span style={{ color: C.mut }}>
-            {plan.tier === "community" ? " — $0: one developer and one agent family, one governed node"
+            {/* what holds on Free, not more: a second node still connects, and demo
+                nodes are not counted at all (QA-360) */}
+            {plan.tier === "community" ? " — $0: one developer and one agent family, one governed node included (more still connect; the month below counts them past the plan) · demo nodes and examples don't count"
               : plan.tier === "coding" || plan.tier === "business" ? ` — ${plan.seat} per developer whose agents ran that month · production agents: 1 included, then $75 each`
                 : plan.priced ? ` — ${plan.base} a month · ${plan.included_developers} developers and ${plan.included_nodes} governed nodes included, then ${plan.seat} per developer`
                   : " — contracted"}
@@ -2067,6 +2069,8 @@ function AgentKeys({ journey, menuAll }: { journey: Journey | null; menuAll: boo
   const [label, setLabel] = useState("");
   const [node, setNode] = useState("");
   const [minted, setMinted] = useState<{ secret: string; preset: string; keyId: string } | null>(null);
+  // the copy icon said nothing when it copied (QA-369)
+  const [keyCopied, setKeyCopied] = useState<string | null>(null);
   const keys = useQuery({ queryKey: ["api-keys"], queryFn: api.listKeys, enabled: on, retry: false });
   const keysAudit = useQuery({ queryKey: ["api-keys-audit"], queryFn: () => api.keysAudit(), enabled: on, retry: false });
   const mint = useMutation({
@@ -2156,7 +2160,12 @@ function AgentKeys({ journey, menuAll }: { journey: Journey | null; menuAll: boo
         <div data-testid="key-minted" className="mb-3 p-2" style={{ background: C.panel2, border: `1px solid ${C.line}`, borderRadius: 5 }}>
           <div className="flex items-center gap-2" style={{ fontFamily: MONO, fontSize: 10, color: C.amber, marginBottom: 4 }}>
             shown once — copy it now
-            <Copy size={12} color={C.mut} style={{ cursor: "pointer" }} onClick={() => void navigator.clipboard?.writeText(env)} />
+            <button type="button" data-testid="key-copy" aria-label="copy the key"
+              onClick={() => { void navigator.clipboard?.writeText(env); setKeyCopied(minted.keyId); }}
+              style={{ background: "none", border: "none", padding: 0, cursor: "pointer", display: "inline-flex",
+                       alignItems: "center", gap: 4, fontFamily: MONO, fontSize: 10, color: C.mut }}>
+              {keyCopied === minted.keyId ? <><Check size={12} color={C.green} /> copied</> : <Copy size={12} color={C.mut} />}
+            </button>
           </div>
           <pre style={{ margin: 0, fontFamily: MONO, fontSize: 10.5, color: C.green, whiteSpace: "pre-wrap", wordBreak: "break-all" }}>{env}</pre>
         </div>
@@ -2225,7 +2234,8 @@ function Connections({ coding, prod }: { coding: boolean; prod: boolean }) {
   const bound = new Set((keys.data ?? []).map((k) => k.node_id).filter(Boolean));
   // what is reporting is the workspace's own: the product's example nodes
   // (the tree-* fleet among them) never were, and are hidden once it has its own
-  const all = (nodes.data ?? []).filter((n) => !n.example_hidden && !/example/.test(n.node_id)
+  // the plane's own word for an example, not its id (QA-370)
+  const all = (nodes.data ?? []).filter((n) => !n.example_hidden && !n.example
     && !n.profile?.developer?.startsWith("dev-example-"));
   const agents = all.filter((n) => !n.profile || n.profile.kind === "agent");
   // coding agents per developer this month, from the seat meter (activity, not

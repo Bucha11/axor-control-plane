@@ -2709,6 +2709,12 @@ class Store:
                     node_activity.c.node_id.not_in(not_fleet),
                 )
             )).all()
+        # the product showing itself — a demo node, the demo tree, an example —
+        # is no one's fleet: Free's "one governed node" said nothing of the
+        # demo nodes that spawned past it (QA-360)
+        from axor_backend.examples import is_real_node
+
+        rows = [r for r in rows if is_real_node(r.node_id)]
         by_day: dict[str, set[str]] = {}
         for row in rows:
             by_day.setdefault(row.day, set()).add(row.node_id)
