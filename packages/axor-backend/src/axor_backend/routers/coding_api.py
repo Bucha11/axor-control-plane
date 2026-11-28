@@ -209,8 +209,43 @@ _SECOND_LEVEL = re.compile(r"^(?:co|com|net|org|gov|edu|ac|or|ne|go|ltd|plc|nom|
                            r"\.[a-z]{2}$")
 
 
+# Shared hosting where everything under the name is anyone's content: a
+# vendored excerpt of the private section of the Public Suffix List
+# (publicsuffix.org), by the parent the list names its entries under —
+# s3.amazonaws.com, s3.dualstack.<region>.amazonaws.com, *.compute.amazonaws.com
+# … are all amazonaws.com here. "*.s3.amazonaws.com" trusted every bucket
+# (QA-423). A wildcard anywhere under one of these, or the name itself, is
+# refused; one named site (mybucket.s3.amazonaws.com) is still the team's.
+_SHARED_HOSTING = (
+    "amazonaws.com", "cloudfront.net", "elasticbeanstalk.com", "amplifyapp.com", "awsapprunner.com",
+    "azurewebsites.net", "azurestaticapps.net", "azureedge.net", "azurefd.net", "azurecontainer.io",
+    "cloudapp.net", "cloudapp.azure.com", "windows.net", "trafficmanager.net",
+    "appspot.com", "googleapis.com", "googleusercontent.com", "cloudfunctions.net", "run.app",
+    "r2.dev", "trycloudflare.com", "digitaloceanspaces.com", "ondigitalocean.app",
+    "githubusercontent.com", "bitbucket.io", "ngrok.io", "ngrok.app", "ngrok-free.app",
+    "deno.dev", "replit.app", "replit.dev", "webflow.io", "wixsite.com", "weebly.com",
+    "myshopify.com", "pythonanywhere.com", "000webhostapp.com", "carrd.co", "framer.app",
+    "herokudns.com", "up.railway.app", "koyeb.app",
+)
+# S3's path-style endpoints (s3.amazonaws.com/bucket, s3.eu-west-1.amazonaws.com/…):
+# one host, every bucket
+_S3_ENDPOINT = re.compile(r"^s3(?:[.-][a-z0-9-]+)*\.amazonaws\.com$")
+
+
+def _shared(name: str) -> bool:
+    return any(name == p or name.endswith("." + p) for p in _SHARED_HOSTING)
+
+
 def _public_suffix(name: str) -> bool:
     return name in _PUBLIC_SUFFIXES or bool(_SECOND_LEVEL.match(name))
+
+
+def _anyones(host: str) -> bool:
+    """A source that trusts what anyone can publish: a public suffix, a
+    wildcard under shared hosting, or shared hosting's own name."""
+    name = host.removeprefix("*.")
+    return (_public_suffix(name) or (host.startswith("*.") and _shared(name))
+            or name in _SHARED_HOSTING or bool(_S3_ENDPOINT.match(name)))
 
 
 def _matches(host: str, names: tuple[str, ...]) -> bool:
@@ -265,7 +300,7 @@ def _sources(raw: object, held: tuple[str, ...] | list[str] = ()) -> list[str]:
     if blogs:
         raise HTTPException(400, f"{', '.join(blogs)}: a blog platform is never a trusted source "
                                  "— anyone can publish on it; name the project's docs site")
-    public = [h for h in hosts if h not in held and _public_suffix(h.removeprefix("*."))]
+    public = [h for h in hosts if h not in held and _anyones(h)]
     if public:
         raise HTTPException(400, f"{', '.join(public)}: that trusts every site anyone registers "
                                  "or publishes under it — never a trusted source; name one site "

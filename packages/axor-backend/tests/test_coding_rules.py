@@ -170,6 +170,28 @@ async def test_a_public_suffix_or_a_blog_platform_is_never_a_trusted_source(
     assert r.status_code == 200, r.text
 
 
+async def test_shared_hosting_is_never_a_trusted_source(
+        client: httpx.AsyncClient, priv) -> None:  # noqa: ANN001, F811
+    """QA-423: *.s3.amazonaws.com was saved as a trusted source — every bucket
+    anyone makes. A wildcard under shared hosting (the Public Suffix List's
+    private section) is refused, and so is its own name; one site is not."""
+    owner = _bearer(_mint(priv, role="owner"))
+    for host in ("*.s3.amazonaws.com", "*.amazonaws.com", "s3.amazonaws.com",
+                 "s3.eu-west-1.amazonaws.com", "*.s3.dualstack.us-east-1.amazonaws.com",
+                 "*.cloudfront.net", "*.azurewebsites.net", "*.blob.core.windows.net",
+                 "*.appspot.com", "*.storage.googleapis.com", "*.firebaseapp.com",
+                 "*.herokuapp.com", "*.r2.dev", "*.githubusercontent.com"):
+        r = await client.put("/v1/coding/exceptions", headers=owner,
+                             json={"trusted_sources": ["pypi.org", host]})
+        assert r.status_code == 400, host
+        assert "never a trusted source" in r.json()["detail"] and host in r.json()["detail"]
+    for host in ("docs-bucket.s3.amazonaws.com", "d111111abcdef8.cloudfront.net",
+                 "myapp.azurewebsites.net", "*.readthedocs.io"):
+        r = await client.put("/v1/coding/exceptions", headers=owner,
+                             json={"trusted_sources": ["pypi.org", host]})
+        assert r.status_code == 200, (host, r.text)
+
+
 async def test_a_save_from_a_stale_screen_is_refused_naming_what_changed(
         client: httpx.AsyncClient, priv) -> None:  # noqa: ANN001, F811
     """QA-212: in two tabs, B's exception replaced A's, B's toggle reverted
