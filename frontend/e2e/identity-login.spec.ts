@@ -212,7 +212,9 @@ test.describe("identity login (Settings)", () => {
     await box.getByTestId("sessions-end").click();
     await answerAsk(page);
     await expect(box.getByTestId("sessions-ended")).toContainText("3 people signed out");
-    await expect(box.getByTestId("sessions-ended")).toContainText("within 15 minutes");
+    // QA-487, QA-324: open pages stop within seconds, not 15 minutes
+    await expect(box.getByTestId("sessions-ended")).toContainText("stop within seconds");
+    await expect(box.getByTestId("sessions-ended")).not.toContainText("minutes");
   });
 
   test("SAML: the admin sees what to give the provider and pastes its metadata", async ({ page }) => {

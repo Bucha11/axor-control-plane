@@ -306,7 +306,9 @@ function Sessions({ orgId }: { orgId: string }) {
           <span data-testid="sessions-ended" style={{ color: C.dim }}>
             {end.data.ended === 0 ? "nobody else was signed in"
               : `${end.data.ended} ${end.data.ended === 1 ? "person" : "people"} signed out`}
-            {" "}— a page already open stops within {end.data.access_minutes} minutes
+            {/* the revocation feed ends open pages in seconds now, not when
+                their access token expires (QA-487, QA-324) */}
+            {end.data.ended > 0 && " — pages already open, your own other browsers too, stop within seconds"}
           </span>
         )}
         {(set.isError || end.isError) && (
