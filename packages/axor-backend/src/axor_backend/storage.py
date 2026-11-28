@@ -1725,37 +1725,20 @@ class Store:
                 guest_sessions.c.claimed_by.is_(None)))).all()
         return len(rows)
 
-    async def guest_examples(self, token_hash: str) -> dict[str, int]:
-        """How many of a guest org's runs and agents are the product's examples
-        (the guest looked at an example): moved with the rest, but not the
-        guest's own work, so not what "moved into your account" counts."""
-        from axor_backend.demo import DEMO_SCENARIOS
-        from axor_backend.examples import is_example_node
-
-        async with self.engine.connect() as conn:
-            row = (await conn.execute(select(guest_sessions).where(
-                guest_sessions.c.token_hash == token_hash))).first()
-            if row is None:
-                return {}
-            run_rows = (await conn.execute(select(runs.c.scenario).where(
-                runs.c.org_id == row.org_id))).all()
-            node_rows = (await conn.execute(select(desired_state.c.node_id).where(
-                desired_state.c.org_id == row.org_id))).all()
-        return {"runs": sum(1 for r in run_rows if r.scenario in DEMO_SCENARIOS),
-                "desired_state": sum(1 for r in node_rows if is_example_node(r.node_id))}
-
-    async def claim_guest(self, token_hash: str, to_org: str) -> dict[str, int]:
+    async def claim_guest(self, token_hash: str, to_org: str) -> dict[str, int] | None:
         """Move a guest org's rows into ``to_org``, in one transaction. The
         account wins a clash: a guest row whose key (minus the org) the
         account already holds is dropped, not merged. Returns rows moved per
-        table. The guest session is marked claimed and stops authenticating."""
+        table (None: no such session, or claimed already). The guest session is
+        marked claimed and stops authenticating."""
         moved: dict[str, int] = {}
         async with self.engine.begin() as conn:
             row = (await conn.execute(select(guest_sessions).where(
                 guest_sessions.c.token_hash == token_hash))).first()
             if row is None or row.claimed_by is not None:
-                return moved
+                return None
             src = row.org_id
+            await _drop_examples(conn, src)
             for table in metadata.sorted_tables:
                 if table is guest_sessions or "org_id" not in table.c:
                     continue
@@ -3842,6 +3825,29 @@ async def _stored_coordinates(
         )
     )).all()
     return {(r.node_id, r.seq) for r in rows} & wanted
+
+
+async def _drop_examples(conn: Any, org: str) -> None:  # noqa: ANN401
+    """Delete the product's examples a guest opened from its org, so a claim
+    moves the guest's own work and not them (QA-468): a run the account did
+    not hold came along, and the example incidents with it."""
+    from axor_backend.demo import DEMO_SCENARIOS
+    from axor_backend.examples import is_example_node
+
+    example_runs = [r.run_id for r in (await conn.execute(select(runs.c.run_id).where(
+        runs.c.org_id == org, runs.c.scenario.in_(DEMO_SCENARIOS)))).all()]
+    for table in metadata.sorted_tables:
+        if "org_id" not in table.c or table is guest_sessions:
+            continue
+        if "run_id" in table.c and example_runs:
+            await conn.execute(table.delete().where(
+                table.c.org_id == org, table.c.run_id.in_(example_runs)))
+        if "node_id" in table.c:
+            nodes = [n for (n,) in (await conn.execute(select(table.c.node_id).distinct().where(
+                table.c.org_id == org))).all() if n and is_example_node(str(n))]
+            if nodes:
+                await conn.execute(table.delete().where(
+                    table.c.org_id == org, table.c.node_id.in_(nodes)))
 
 
 async def _reassign(conn: Any, table: Table, src: str, dst: str) -> int:  # noqa: ANN401
