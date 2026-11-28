@@ -250,3 +250,29 @@ test.describe("the example fleet beside your own agents (QA-344, QA-370)", () =>
     await page.unrouteAll({ behavior: "ignoreErrors" });
   });
 });
+
+for (const [role, scopes, offered] of [["member", ["read", "ingest", "operate"], 1], ["viewer", ["read"], 0]] as const) {
+  test(`#/health offers the example checks to a ${role}: ${offered ? "yes" : "no"} (QA-343)`, async ({ page, request }) => {
+    const node = `gov-health-${hex6()}`;
+    await seedNode(request, node);
+    await playRole(page, [...scopes]);
+    await page.route("**/v1/setup-health", (r) => r.fulfill({ json: { checks: [] } }));
+    await page.route("**/v1/workspace", async (r) => {
+      const body = await (await r.fetch()).json();
+      await r.fulfill({ json: { ...body, work_started: false } });
+    });
+    await page.route("**/v1/plane/nodes", async (route) => {
+      const all = await (await request.get(`${BACKEND}/v1/plane/nodes`)).json() as { node_id: string }[];
+      await route.fulfill({ json: all.filter((n) => n.node_id === node) });
+    });
+    const seeds: string[] = [];
+    await page.route("**/v1/demo/seed-*", (r) => { seeds.push(r.request().url()); return r.continue(); });
+    await setConnection(page, { mode: "adapter" });
+    await goHash(page, `health?node=${node}`);
+    await expect(page.getByText("No health check yet.")).toBeVisible();
+    await expect(page.getByTestId("setup-health-example")).toHaveCount(offered);
+    await expect(page.getByTestId("health-example")).toHaveCount(offered);
+    expect(seeds).toEqual([]);
+    await page.unrouteAll({ behavior: "ignoreErrors" });
+  });
+}

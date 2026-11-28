@@ -17,6 +17,7 @@ import { C, MONO, btn } from "../theme";
 import { HowItWorks, MachineCommand } from "../components/MachineCommand";
 import { SkillSwitch } from "../components/SkillsOff";
 import { useWorkStarted } from "../workStarted";
+import { useHasScope } from "../team";
 import { localTime } from "../time";
 
 
@@ -41,6 +42,8 @@ export default function SetupHealth() {
   const qc = useQueryClient();
   const q = useQuery({ queryKey: ["setup-health"], queryFn: api.setupHealth });
   const started = useWorkStarted();
+  // loading an example is a write a viewer is refused: not offered (QA-343)
+  const mayLoad = useHasScope()("operate");
   const example = useMutation({
     mutationFn: api.seedSetupHealth,
     onSuccess: () => void qc.invalidateQueries({ queryKey: ["setup-health"] }),
@@ -82,7 +85,7 @@ export default function SetupHealth() {
 
       {checks.length > 1 && <History checks={checks} />}
       <HowToRun />
-      {!started && !checks.some((c) => c.example) && (
+      {!started && mayLoad && !checks.some((c) => c.example) && (
         <div className="mt-4" style={{ fontFamily: MONO, fontSize: 12, color: C.mut }}>
           <button onClick={() => example.mutate()} data-testid="setup-health-example"
             style={{ background: "none", border: "none", padding: 0, cursor: "pointer", fontFamily: MONO,

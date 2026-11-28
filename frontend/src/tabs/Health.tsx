@@ -32,6 +32,7 @@ import Coach from "../components/Coach";
 import Tooltip from "../components/Tooltip";
 import { NO_TOOLSET_CUT, behindProxy, cannotCut } from "../agentName";
 import { useWorkStarted } from "../workStarted";
+import { useHasScope } from "../team";
 
 // The demo battery's node: shown only when it is actually listed — it used to
 // be the default and was mixed into every workspace's agents as if it were one.
@@ -124,6 +125,8 @@ export default function Health() {
   // A production agent's drift check, on example data: the example fleet posts
   // one, but once the workspace's own agents report the lists hide examples,
   // so it was out of reach exactly when someone wanted to see what they'd get.
+  // loading an example is a write a viewer is refused: not offered (QA-343)
+  const mayLoad = useHasScope()("operate");
   const showExample = useMutation({
     mutationFn: async () => { await api.seedFleet(); },
     onSuccess: () => pickNode(EXAMPLE_PROBE_NODE),
@@ -270,7 +273,7 @@ export default function Health() {
                   wrap it in code →
                 </button>
               </div>
-              {!started && <div className="mt-3">
+              {!started && mayLoad && <div className="mt-3">
                 <button onClick={() => showExample.mutate()} disabled={showExample.isPending}
                   data-testid="health-example"
                   style={{ background: "none", border: "none", padding: 0, cursor: "pointer",
@@ -289,7 +292,7 @@ export default function Health() {
                 agent&apos;s plane link sends the result here (axor-probe README, “Reporting to the
                 Control Plane”). The plane never starts your agent itself.
               </div>
-              {!started && <div className="mt-3">
+              {!started && mayLoad && <div className="mt-3">
                 <button onClick={() => showExample.mutate()} disabled={showExample.isPending}
                   data-testid="health-example"
                   style={{ background: "none", border: "none", padding: 0, cursor: "pointer",
