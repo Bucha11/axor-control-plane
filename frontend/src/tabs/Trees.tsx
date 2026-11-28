@@ -103,8 +103,10 @@ function TreeView({ treeRun }: { treeRun: string }) {
   }
   const t = tree.data;
   if (!t) return <Shell><div style={{ fontFamily: MONO, fontSize: 12, color: C.dim }}>loading…</div></Shell>;
-  const canCut = t.status === "running" && !!self;
-  const example = t.tree_run.startsWith("tree-example");
+  // a recorded example takes no commands: it took them and showed
+  // "stopping…" and "cut sent" for good (QA-368) — the plane's own word for it
+  const example = self?.example === true || t.tree_run.startsWith("tree-example");
+  const canCut = t.status === "running" && !!self && !example;
   const light = (ref: string) => {
     setLit(ref);
     document.querySelector(`[data-testid="tree-item-${ref}"]`)?.scrollIntoView({ block: "center", behavior: "smooth" });
@@ -126,7 +128,11 @@ function TreeView({ treeRun }: { treeRun: string }) {
             nothing from it since {new Date(t.updated_ts).toLocaleTimeString()} — its process ended without a last word
           </span>
         )}
-        {self && (t.status === "running" || t.status === "paused") && (
+        {example ? (
+          <span data-testid="tree-example-no-commands" style={{ fontFamily: MONO, fontSize: 11, color: C.dim, marginLeft: "auto" }}>
+            an example — a recorded run, it takes no commands; your own trees do
+          </span>
+        ) : self && (t.status === "running" || t.status === "paused") && (
           <TreeControls treeRun={treeRun} version={self.desired?.version ?? 0}
             paused={self.desired?.state.paused === true} stopping={self.desired?.state.stopped === true} />
         )}

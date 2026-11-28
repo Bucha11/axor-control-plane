@@ -159,3 +159,17 @@ test("a demo node past its last heartbeat says it left, before any command (QA-3
   await expect(page.getByTestId("no-such-agent")).toHaveCount(0);
   await page.unrouteAll({ behavior: "ignoreErrors" });
 });
+
+test("the recorded example tree takes no commands, and says so up front (QA-368)", async ({ page, request }) => {
+  expect((await request.post(`${BACKEND}/v1/demo/seed-coding`)).ok()).toBeTruthy();
+  const commands: string[] = [];
+  await page.route("**/v1/plane/*/command", (r) => { commands.push(r.request().url()); return r.continue(); });
+  await setConnection(page, { mode: "demo" });
+  await goHash(page, "trees/tree-example-coding");
+  await expect(page.getByTestId("example-intro")).toBeVisible();
+  await expect(page.getByTestId("tree-example-no-commands")).toContainText("it takes no commands");
+  await expect(page.getByTestId("tree-pause")).toHaveCount(0);
+  await expect(page.getByTestId("tree-stop")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: /^cut/ })).toHaveCount(0);
+  expect(commands).toEqual([]);
+});
