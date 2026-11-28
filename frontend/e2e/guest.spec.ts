@@ -204,4 +204,16 @@ test.describe("guest", () => {
     await expect(b.getByText(/your guest session ended/)).toHaveCount(0);
     expect(guestPosts).toBe(posts);
   });
+
+  test("a refused guest's panels say the guest session is not there yet, not \"signed out\" (QA-460)", async ({ page }) => {
+    await page.route("**/v1/auth/status", (r) => r.fulfill({ json: {
+      auth_enabled: true, authenticated: false, scopes: [], guest_sessions: true, guest: false } }));
+    await page.route("**/v1/auth/guest", (r) => r.fulfill({ status: 429, headers: { "retry-after": "60" },
+      json: { detail: "too many guest sessions from this address — try again in a minute" } }));
+    await setConnection(page, { mode: "demo" });
+    await goHash(page, "evidence");
+    await expect(page.getByTestId("guest-busy")).toBeVisible();
+    await expect(page.getByText(/guest session is not available yet/).first()).toBeVisible();
+    await expect(page.getByText(/you are signed out/)).toHaveCount(0);
+  });
 });

@@ -276,7 +276,9 @@ test.describe("settings (QA, 0.7.2)", () => {
     await goHash(page, "settings");
     await expect(page.getByTestId("session-ended")).toContainText("your session ended — sign in again");
     await expect(page.getByRole("button", { name: "log in", exact: true })).toBeVisible();
-    await page.waitForFunction(() => (sessionStorage.getItem("axor-app") ?? "").includes("gs_e2e_guest_token"));
+    // QA-321: a sign-in that ended starts no guest session in its place
+    await page.waitForTimeout(1500);
+    expect(await page.evaluate(() => sessionStorage.getItem("axor-app") ?? "")).not.toContain("gs_e2e_guest_token");
     await expect(page.getByText("○ not signed in")).toBeAttached();
     await expect(page.getByText("● signed in", { exact: true })).toHaveCount(0);
     await expect(page.getByText(/^can: /)).toHaveCount(0);

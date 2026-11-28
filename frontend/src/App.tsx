@@ -571,6 +571,9 @@ function LearnToggle() {
 // rest of the stack is in the tooltip.
 function VersionBadge() {
   const [versions, setVersions] = useState<Record<string, string | null> | null>(null);
+  // asked again once this tab signs in: before, the plane answered nothing
+  // and the badge stayed away until a reload (QA-462)
+  const signedIn = useApp((s) => Boolean(s.apiToken));
   useEffect(() => {
     let alive = true;
     api
@@ -584,7 +587,7 @@ function VersionBadge() {
     return () => {
       alive = false;
     };
-  }, []);
+  }, [signedIn]);
   const kernel = versions?.["axor-core"];
   if (!kernel) return null;
   const detail = Object.entries(versions ?? {})

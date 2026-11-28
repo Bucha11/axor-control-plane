@@ -96,6 +96,12 @@ export default function GuestSession({ invite = false }: { invite?: boolean } = 
     });
   }, [apiToken, refreshToken, guestTokens, qc]);
 
+  // a sign-in ended (removed, refused): what this tab read with it is not
+  // shown any more (QA-322)
+  useEffect(() => {
+    if (sessionEnded && !apiToken) void qc.resetQueries();
+  }, [sessionEnded, apiToken, qc]);
+
   // a guest reached an account-only feature
   useEffect(() => {
     const on = (e: Event) => {

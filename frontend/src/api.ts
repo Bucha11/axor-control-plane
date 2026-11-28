@@ -918,8 +918,10 @@ export function apiError(status: number, text: string): ApiError {
   // 401 text (QA-236); the reason, if any, is on the session-ended banner
   if (status === 401) {
     code = code || "unauthorized";
-    words = isGuestToken(useApp.getState().apiToken) ? (guestMoved ? GUEST_MOVED : GUEST_ENDED)
-      : "you are signed out — sign in again";
+    const held = useApp.getState().apiToken;
+    words = isGuestToken(held) ? (guestMoved ? GUEST_MOVED : GUEST_ENDED)
+      : !held && guestRefused ? GUEST_NOT_YET
+        : "you are signed out — sign in again";
   }
   return new ApiError(status, code, words.length > 600 ? `${words.slice(0, 600)}…` : words);
 }
@@ -1047,8 +1049,21 @@ function guestCannotRead(path: string): string | null {
 // burst of 401s before the guest token arrived (QA-042). Signing out (the
 // token gone) asks again.
 let session: Promise<void> | null = null;
+// A sign-in ended in this tab (removed, signed out, refused): no guest session
+// is started in its place — it used up the shared guest budget for someone
+// whose access had just ended (QA-321). A new sign-in, or a reload, clears it.
+let accountEnded = false;
 useApp.subscribe((s, prev) => {
   if (prev.apiToken && !s.apiToken) session = null;
+  if (prev.refreshToken && !s.refreshToken) accountEnded = true;
+  if (!prev.refreshToken && s.refreshToken) {
+    // signed in here: what this tab was refused while signed out is not the
+    // answer any more (QA-481)
+    accountEnded = false;
+    signedOutHere = false;
+    guestRefused = false;
+    if (s.policyNotice?.kind === "read_failed") s.reloadPolicy();
+  }
 });
 
 /** Settles once the session is known: a token is there, or none is needed,
@@ -1057,7 +1072,7 @@ export function sessionSettled(again = false): Promise<void> {
   if (!session || again) {
     session = api.authStatus()
       .then(async (st) => {
-        if (st.auth_enabled && st.guest_sessions && !st.authenticated && !apiToken()) {
+        if (st.auth_enabled && st.guest_sessions && !st.authenticated && !apiToken() && !accountEnded) {
           await startGuest();
         }
         signedOutHere = st.auth_enabled && !st.authenticated && !apiToken();
@@ -1084,6 +1099,9 @@ const OPEN_PATHS = ["/v1/auth/status", "/v1/auth/guest", "/v1/share/", "/v1/heal
 let renewing: Promise<boolean> | null = null;
 // Seconds the plane asked a refused guest to wait (429 Retry-After), or 0.
 let guestWait = 0;
+// the last guest start was refused (full, too many from here): the tab was
+// never signed in, so "signed out — sign in again" is not what it is (QA-460)
+let guestRefused = false;
 
 /** How long the plane asked to wait before the next guest session, after the
  *  last attempt was refused for too many from this address; 0 when it was not. */
@@ -1099,6 +1117,7 @@ export async function startGuest(stale?: string): Promise<boolean> {
     renewing = fetch("/v1/auth/guest", { method: "POST" })
       .then(async (r) => {
         guestWait = r.status === 429 ? Number(r.headers.get("retry-after")) || 60 : 0;
+        guestRefused = !r.ok;
         if (!r.ok) return false;
         const g = (await r.json()) as { token: string; expires_at: string };
         useApp.getState().setGuest(g.token, g.expires_at);
@@ -1145,6 +1164,7 @@ async function renewGuest(stale: string): Promise<boolean> {
 }
 
 export const GUEST_ENDED = "your guest session ended — sign up to keep your work, or reload the page for a new one";
+export const GUEST_NOT_YET = "the guest session is not available yet — the examples open by themselves in a moment, or sign in";
 export const GUEST_MOVED = "your guest work moved into your account (you signed in in another tab) — sign in here to see it";
 
 // Which guest sessions this browser claimed into an account, by fingerprint:
