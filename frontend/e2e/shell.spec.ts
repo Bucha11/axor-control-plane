@@ -158,8 +158,20 @@ test.describe("shell", () => {
   });
 
   test("the connection badge reflects the persisted mode", async ({ page }) => {
+    await page.route("**/v1/plane/nodes", (r) => r.fulfill({ json: [{ node_id: "agent-1", desired: null, facts: [],
+      reported: { applied_version: 0, level: "NORMAL", budget_remaining: null, updated_ts: new Date().toISOString() } }] }));
     await setConnection(page, { mode: "adapter" });
     await goHash(page, "home");
     await expect(page.getByText("connected · your agents").first()).toBeVisible();
+  });
+
+  test("no agent reporting yet is not \"connected\" (QA-485)", async ({ page }) => {
+    // a key minted, an agent named: nothing on the plane has reported
+    await page.route("**/v1/plane/nodes", (r) => r.fulfill({ json: [{ node_id: "agent-1", desired: null, facts: [],
+      reported: null }] }));
+    await setConnection(page, { mode: "adapter" });
+    await goHash(page, "settings");
+    await expect(page.getByRole("button", { name: "connection: no agent reporting yet" })).toBeVisible();
+    await expect(page.getByText("connected · your agents")).toHaveCount(0);
   });
 });

@@ -637,8 +637,12 @@ function ConnectionBadge({ onConnect }: { onConnect: boolean }) {
   // the example shows example data too.
   const nodes = useQuery({ queryKey: ["nodes"], queryFn: api.nodes, enabled: mode === "demo" || mode === "adapter" });
   const ids = (nodes.data ?? []).map((n) => n.node_id);
+  // "connected" is said once one of the workspace's own agents has reported:
+  // a key minted, or an agent named, is not an agent on the plane (QA-485)
+  const reporting = (nodes.data ?? []).some((n) => !n.example && n.reported);
+  const waiting = mode === "adapter" && nodes.isSuccess && !reporting;
   const label = mode === "demo" || (mode === "adapter" && (codingExampleOnly(ids) || fleetExampleOnly(ids)))
-    ? "example data" : MODE_LABEL[mode];
+    ? "example data" : waiting ? "no agent reporting yet" : MODE_LABEL[mode];
   const known = mode !== "adapter" || nodes.isSuccess || nodes.isError;
   // On the connect page itself a "connect" button leads where you already are.
   if (mode === "none" && onConnect) return null;
@@ -658,7 +662,7 @@ function ConnectionBadge({ onConnect }: { onConnect: boolean }) {
       </button>
     );
   }
-  const color = mode === "adapter" ? C.green : C.steel;
+  const color = mode === "adapter" && !waiting ? C.green : C.steel;
   return (
     <button
       onClick={() => navigate("connect")}
