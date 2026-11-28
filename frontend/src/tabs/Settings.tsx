@@ -237,10 +237,19 @@ function MachineIds() {
     onSuccess: () => void qc.invalidateQueries({ queryKey: ["identities"] }),
   });
   const rows = q.data?.identities ?? [];
-  if (!rows.length) return null;
+  const workers = q.data?.machines ?? [];
+  if (!rows.length && !workers.length) return null;
   return (
     <div data-testid="machine-ids" style={{ marginTop: 6 }}>
       <div style={{ color: C.text, marginBottom: 4 }}>machines and their people</div>
+      {/* a worker reports no developer id: its person is its key's (QA-504) */}
+      {workers.map((m) => (
+        <div key={m.machine_id} data-testid="machine-worker" className="flex gap-2 items-center flex-wrap">
+          <span style={{ color: C.dim }}>{m.machine_id}</span>
+          <span style={{ color: C.dim }}>worker · {[m.host, m.repo_label].filter(Boolean).join(" · ")}{m.online ? " · on" : ""}</span>
+          <span>→ <span style={{ color: C.text }}>{m.email || "the workspace's operator"}</span></span>
+        </div>
+      ))}
       {rows.map((r) => (
         <div key={r.developer_id} data-testid="machine-id" className="flex gap-2 items-center flex-wrap">
           <span style={{ color: C.dim }}>{r.developer_id}</span>

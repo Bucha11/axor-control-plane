@@ -725,6 +725,8 @@ export interface OperatorKey {
   revoked_ts: string | null; org?: string;
   endorsement: { payload: Record<string, unknown>; operator: string; sig: string } | null;
 }
+// an `axor-wrap worker` machine and whose it is (QA-504)
+export interface WorkerMachine { machine_id: string; host: string; repo_label: string; email: string; online: boolean }
 export interface DeveloperIdentity {
   developer_id: string; email: string; source: string; ts: string; disputed_by: string | null;
 }
@@ -1997,7 +1999,7 @@ export const api = {
     }).then((r) => j<{ mode: AgentMsgMode }>(r)),
   // whose machine id is whose (owner/admin): bound when a person's own key
   // reports a session carrying it; a second claim disputes it
-  identities: () => af("/v1/identities").then((r) => j<{ identities: DeveloperIdentity[] }>(r)),
+  identities: () => af("/v1/identities").then((r) => j<{ identities: DeveloperIdentity[]; machines?: WorkerMachine[] }>(r)),
   setIdentity: (developerId: string, email: string | null) =>
     af(`/v1/identities/${encodeURIComponent(developerId)}`, {
       method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ email }),
