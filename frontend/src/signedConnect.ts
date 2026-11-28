@@ -6,7 +6,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { api } from "./api";
 
-export function useOperatorKeys(): { flags: string; fingerprint: string; count: number } {
+export function useOperatorKeys(): { flags: string; fingerprint: string; count: number; unsignedCommands: boolean } {
   const q = useQuery({ queryKey: ["operator-keys"], queryFn: api.operatorKeys, retry: false,
                        staleTime: 60_000 });
   const keys = q.data?.keys ?? {};
@@ -15,5 +15,7 @@ export function useOperatorKeys(): { flags: string; fingerprint: string; count: 
     flags: ops.map((op) => ` --operator-key ${op}=${keys[op]}`).join(""),
     fingerprint: q.data?.fingerprint ?? "",
     count: ops.length,
+    // not known yet reads as refused: the claim "takes its word" is made only when true (QA-501)
+    unsignedCommands: q.data?.unsigned_commands === true,
   };
 }

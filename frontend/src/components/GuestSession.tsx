@@ -7,9 +7,9 @@
 //   for a sign-up right there, naming what it unlocks.
 // - On sign-in it claims every guest session this tab held into the account
 //   and says what moved.
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { api, guestRetryAfter, sessionSettled, tabSignedOut } from "../api";
+import { api, guestRetryAfter, noteGuestsClaimed, sessionSettled, tabSignedOut } from "../api";
 import { isGuestToken, useApp } from "../store";
 import { C, MONO, btn } from "../theme";
 import { IdentityLogin } from "../tabs/Settings";
@@ -82,6 +82,7 @@ export default function GuestSession({ invite = false }: { invite?: boolean } = 
     const tokens = [...guestTokens];
     useApp.getState().clearGuests();
     void Promise.all(tokens.map((t) => api.claimGuest(t).catch(() => null))).then((results) => {
+      void noteGuestsClaimed(tokens.filter((_, i) => results[i]?.claimed));
       const total: Record<string, number> = {};
       for (const r of results) {
         for (const [k, v] of Object.entries(r?.moved ?? {})) total[k] = (total[k] ?? 0) + v;
@@ -94,6 +95,12 @@ export default function GuestSession({ invite = false }: { invite?: boolean } = 
       void qc.invalidateQueries();
     });
   }, [apiToken, refreshToken, guestTokens, qc]);
+
+  // a sign-in ended (removed, refused): what this tab read with it is not
+  // shown any more (QA-322)
+  useEffect(() => {
+    if (sessionEnded && !apiToken) void qc.resetQueries();
+  }, [sessionEnded, apiToken, qc]);
 
   // a guest reached an account-only feature
   useEffect(() => {
@@ -108,6 +115,18 @@ export default function GuestSession({ invite = false }: { invite?: boolean } = 
     window.addEventListener("axor:account-required", on);
     return () => window.removeEventListener("axor:account-required", on);
   }, []);
+
+  // the dialog takes the focus, and Escape or its close button closes it:
+  // only a tap on the backdrop did (QA-443)
+  const dialog = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!ask) return;
+    const box = dialog.current;
+    (box?.querySelector<HTMLElement>("input, button:not([data-close])") ?? box)?.focus();
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setAsk(null); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [ask]);
 
   return (
     <>
@@ -151,15 +170,20 @@ export default function GuestSession({ invite = false }: { invite?: boolean } = 
         </div>
       )}
       {ask && (
-        <div role="dialog" aria-label="sign up to continue" data-testid="account-required"
+        <div role="dialog" aria-modal="true" aria-label="sign up to continue" data-testid="account-required"
           onClick={() => setAsk(null)}
           style={{ position: "fixed", inset: 0, zIndex: 60, background: "rgba(0,0,0,0.5)",
                    display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}>
-          <div onClick={(e) => e.stopPropagation()}
+          <div ref={dialog} tabIndex={-1} onClick={(e) => e.stopPropagation()}
             style={{ width: 340, maxWidth: "100%", background: C.bg, border: `1px solid ${C.line}`,
-                     borderRadius: 10, padding: 16 }}>
-            <div style={{ fontSize: 16, fontWeight: 650, marginBottom: 6 }}>
-              {askText.title ?? `${ask.charAt(0).toUpperCase() + ask.slice(1)} need an account`}
+                     borderRadius: 10, padding: 16, outline: "none" }}>
+            <div className="flex items-start gap-2" style={{ marginBottom: 6 }}>
+              <div style={{ fontSize: 16, fontWeight: 650, flex: 1 }}>
+                {askText.title ?? `${ask.charAt(0).toUpperCase() + ask.slice(1)} need an account`}
+              </div>
+              <button data-close aria-label="close" onClick={() => setAsk(null)}
+                style={{ background: "none", border: "none", color: C.mut, cursor: "pointer", fontSize: 16,
+                         lineHeight: 1, padding: "0 2px" }}>×</button>
             </div>
             {askText.why && (
               <div style={{ fontSize: 13, color: C.text, lineHeight: 1.5, marginBottom: 8 }}>{askText.why}</div>

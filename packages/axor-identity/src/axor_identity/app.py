@@ -11,6 +11,7 @@ from __future__ import annotations
 import contextlib
 import dataclasses
 import datetime
+import hashlib
 import logging
 import os
 import secrets
@@ -29,7 +30,7 @@ from axor_identity.mail import Mailer, mailer_from_env
 from axor_identity.oauth import OAuthError, Provider, digest, pkce_pair, providers_from_env
 from axor_identity.passwords import hash_password, needs_rehash, verify_password
 from axor_identity.storage import Store, init_db, make_engine
-from axor_identity.tokens import hash_refresh, issue_access, new_refresh
+from axor_identity.tokens import hash_refresh, issue_access, new_refresh, successor_refresh
 from axor_identity.verify import Claims, IdentityError, verify_access_token
 
 # role rank (owner strongest); reused by the membership admin gate
@@ -62,6 +63,17 @@ def role_at_least(role: str, minimum: str) -> bool:
 
 def _now_iso() -> str:
     return datetime.datetime.now(datetime.UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _seconds_ago(seconds: int) -> str:
+    return (datetime.datetime.now(datetime.UTC) - datetime.timedelta(seconds=seconds)) \
+        .strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+# QA-480: how long a refresh token that was just rotated may be presented again
+# and get the same successor back instead of ending the session. A duplicated
+# tab holds a copy of the token; past this window a second use is reuse.
+ROTATION_GRACE = 30
 
 
 def _hours_after(ts: str, hours: int) -> str:
@@ -261,18 +273,26 @@ def create_app(database_url: str | None = None, *,
     app.state.store = store
     app.state.signing_key = signing_key
     jwks = signing_key.jwks()
+    # what a rotated refresh token's successor is derived with (QA-480)
+    rotation_secret = hashlib.sha256(b"axor-identity rotation\0" + signing_key.private_key
+                                     .private_bytes_raw()).digest()
+
+    def _refresh_expiry() -> str:
+        return (datetime.datetime.now(datetime.UTC)
+                + datetime.timedelta(seconds=refresh_ttl)).strftime("%Y-%m-%dT%H:%M:%SZ")
 
     async def _issue_session(user: dict, org_id: str, role: str, tier: str,
                              session_ts: str | None = None,
-                             family: str | None = None) -> dict:
-        raw_refresh, token_hash = new_refresh()
-        now = datetime.datetime.now(datetime.UTC)
-        expires = (now + datetime.timedelta(seconds=refresh_ttl)).strftime(
-            "%Y-%m-%dT%H:%M:%SZ")
+                             family: str | None = None,
+                             stored_refresh: str | None = None) -> dict:
         # a new sign-in starts a session; a refresh carries its family on
         family = family or "ses_" + secrets.token_hex(12)
-        await store.store_refresh(token_hash, user["user_id"], org_id, expires,
-                                  _now_iso(), session_ts=session_ts, family=family)
+        if stored_refresh is not None:
+            raw_refresh = stored_refresh     # a rotation already stored it
+        else:
+            raw_refresh, token_hash = new_refresh()
+            await store.store_refresh(token_hash, user["user_id"], org_id, _refresh_expiry(),
+                                      _now_iso(), session_ts=session_ts, family=family)
         # the role and the epoch as they are NOW, read together (QA-154)
         held, epoch = await store.role_and_epoch(user["user_id"], org_id)
         role = held or role
@@ -398,7 +418,21 @@ def create_app(database_url: str | None = None, *,
         if role is None and org is not None:
             # QA-154: say why, in words — not "invalid refresh token"
             raise HTTPException(401, f"you are no longer a member of {org['name']}")
+        successor = successor_refresh(rotation_secret, body.refresh_token)
         if record["revoked"]:
+            # QA-480: the token was rotated a moment ago and its successor is
+            # still the live one — a duplicated tab presenting its copy, or two
+            # requests racing. Same answer as the rotation gave, nothing new
+            # minted. Past the grace window, or once the successor was itself
+            # rotated or the session ended, it is reuse as below.
+            nxt = await store.get_refresh(hash_refresh(successor))
+            user = await store.get_user(record["user_id"])
+            if (nxt is not None and not nxt["revoked"] and nxt["family"] == record["family"]
+                    and nxt["created_ts"] >= _seconds_ago(ROTATION_GRACE)
+                    and user is not None and role is not None and org is not None):
+                return await _issue_session(user, org["org_id"], role, org["tier"],
+                                            session_ts=nxt["session_ts"],
+                                            family=nxt["family"], stored_refresh=successor)
             # QA-240: a refresh token used again after it was rotated is the
             # mark of a stolen copy (standard rotation reuse detection): one of
             # the two holders is not the person. The whole session ends — every
@@ -410,16 +444,20 @@ def create_app(database_url: str | None = None, *,
         user = await store.get_user(record["user_id"])
         if user is None or role is None or org is None:
             raise HTTPException(401, "refresh subject no longer valid")
-        # rotate: the presented token is single-use
-        await store.revoke_refresh(record["token_hash"])
         hours = org.get("session_hours")
         if hours and _now_iso() >= _hours_after(record["session_ts"], hours):
             # the workspace's policy: a sign-in lasts so long, refreshed or not
+            await store.revoke_refresh(record["token_hash"])
             raise HTTPException(401, f"{org['name']} asks everyone to sign in again "
                                      f"every {hours} hour{'s' if hours != 1 else ''}")
+        # rotate: the presented token is single-use, its successor stored with it
+        if not await store.rotate_refresh(record["token_hash"], hash_refresh(successor),
+                                          user["user_id"], org["org_id"], _refresh_expiry(),
+                                          _now_iso(), record["session_ts"], record["family"]):
+            return await refresh(body)   # a concurrent rotation won: take its answer
         return await _issue_session(user, org["org_id"], role, org["tier"],
                                     session_ts=record["session_ts"],
-                                    family=record["family"])
+                                    family=record["family"], stored_refresh=successor)
 
     @app.post("/v1/logout", status_code=204)
     async def logout(body: RefreshBody) -> None:
@@ -798,6 +836,25 @@ def create_app(database_url: str | None = None, *,
         return issue_access(signing_key, user_id="svc_identity", email="identity@axor",
                             org=org_id, role="admin", tier="community", ttl=120)
 
+    async def _plane_holds(org_id: str, lic: licensing.License) -> bool:
+        """Whether the control plane holds this very plan as the workspace's
+        license in force — asked as this service, for that workspace. No plane
+        wired, or one that cannot be reached, is a no."""
+        if not plane_url:
+            return False
+        try:
+            async with _http() as http:
+                r = await http.get(f"{plane_url}/v1/license/status",
+                                   headers={"Authorization": f"Bearer {_plane_bearer(org_id)}"})
+            data = r.json() if r.status_code == 200 else {}
+        except (httpx.HTTPError, ValueError) as exc:
+            logging.getLogger("axor_identity").warning(
+                "could not ask the control plane which plan %s holds: %s", org_id, exc)
+            return False
+        return (isinstance(data, dict) and data.get("organization") == lic.organization
+                and data.get("workspace_tier") == lic.tier
+                and data.get("expires_at") == lic.expires_at)
+
     async def _on_trail(org_id: str, action: str, target: str = "", *, who: str,
                         as_role: str | None = None, **detail: object) -> None:
         """Tell the workspace's audit trail (on the control plane) what changed
@@ -969,13 +1026,23 @@ def create_app(database_url: str | None = None, *,
         # same date is still refused.
         upgrade = (held and lic.expires_at == held
                    and licensing.rank(lic.tier) > licensing.rank(str(org.get("tier") or "")))
-        if held and lic.expires_at <= held and not upgrade:
+        # Down the ladder within the same period: a plan moved down mid-period
+        # is issued to the same end date too, and refusing it left SSO, SCIM and
+        # the session limit unlocked on a workspace that pays for less (QA-305).
+        # The file alone cannot tell that move from an older license replayed,
+        # so the plane — where the license is held — is asked whether this is
+        # the one in force there.
+        downgrade = (held and lic.expires_at == held and not upgrade
+                     and lic.tier != str(org.get("tier") or "")
+                     and await _plane_holds(org_id, lic))
+        if held and lic.expires_at <= held and not (upgrade or downgrade):
             raise HTTPException(409, f"this license ends on {lic.expires_at}, not after "
                                      f"the plan in force ({held}), and is not a higher "
                                      "plan — renewal only moves forward")
         await store.set_org_tier(org_id, lic.tier, lic.expires_at)
         first = not held or str(org.get("tier") or "community") == "community"
         await _on_trail(org_id, "plan_upgraded" if upgrade else
+                        "plan_downgraded" if downgrade else
                         "plan_activated" if first else "plan_renewed", lic.tier,
                         who="license renewal", tier=lic.tier, until=lic.expires_at)
         return {"org_id": org_id, "tier": lic.tier, "expires_at": lic.expires_at}

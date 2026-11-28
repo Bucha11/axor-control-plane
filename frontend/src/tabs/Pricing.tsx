@@ -17,7 +17,7 @@ import Coach from "../components/Coach";
 import Tabs from "../components/Tabs";
 import { LAB_SHIPPED } from "../flags";
 import { navigate, useRoute } from "../router";
-import { ADDS, CARD, quotes, RUNG_NAME, type Rung } from "../quote";
+import { ADDS, CARD, lostOnMove, quotes, RUNG_NAME, type Rung } from "../quote";
 import { openCheckout, paddlePrice } from "../paddle";
 import { isGuestToken, useApp } from "../store";
 
@@ -93,7 +93,7 @@ const TIERS: Tier[] = [
       { text: "PDF / HTML artifacts" },
       { text: "Config Builder" },
       { text: "runtime enforcement — gates, degradation, denials" },
-      { text: "1 governed node" },
+      { text: "1 governed node (demo nodes don't count)" },
       { text: "hosted: runs kept 7 days" },
       { text: "1 developer, 1 agent — Claude Code or Codex, with hooks, trees and control" },
     ],
@@ -361,7 +361,9 @@ export default function Pricing() {
   }, [current, waiting, qc]);
   const changePlan = async (rung: Rung) => {
     const from = RUNG_NAME[current as Rung] ?? current;
-    if (!(await askConfirm(`Move this workspace from ${from} to ${RUNG_NAME[rung]}? The same subscription changes, prorated on the card on file — nothing is bought twice.`))) return;
+    const lost = current ? lostOnMove(current as Rung, rung) : [];
+    if (!(await askConfirm(`Move this workspace from ${from} to ${RUNG_NAME[rung]}? The same subscription changes, prorated on the card on file — nothing is bought twice.`
+      + (lost.length ? ` What this workspace loses: ${lost.join("; ")}.` : "")))) return;
     try {
       await api.changePlan(rung);
       setPayNote(null);
@@ -426,8 +428,13 @@ export default function Pricing() {
       )}
       <div className="flex gap-4" style={{ flexWrap: "wrap" }}>
         {shown.map((base) => {
-          const { cta, ...over } = base.on?.[journey] ?? {};
+          const { cta: journeyCta, ...over } = base.on?.[journey] ?? {};
           const t: Tier = { ...base, ...over };
+          // on the hosted plane the free plan starts here, not with a self-host
+          // install from GitHub (QA-300); only a plane that said it is
+          // self-hosted gets the compose-up link
+          const cta = journeyCta ?? (t.kind === "free" && !selfHosted
+            ? { label: "Start here — connect your agent", route: `connect?for=${journey}` } : undefined);
           // on Both, the cheapest plan for the numbers above
           const highlight = journey === "both"
             ? enterprise ? t.kind === "contract" : RUNG_NAME[calc.best.rung] === t.name
@@ -561,8 +568,9 @@ export default function Pricing() {
                     ? (e) => {
                       e.preventDefault();
                       setPayNote(null);
-                      openCheckout(card.price, card.org, hosted, email || undefined)
-                        .then(() => setWaiting({ from: current, until: Date.now() + 5 * 60_000 }))
+                      openCheckout(card.price, card.org, hosted, email || undefined,
+                        // paid, not merely opened (QA-302)
+                        () => setWaiting({ from: current, until: Date.now() + 5 * 60_000 }))
                         // the payment page did not load: say so, with the other way (QA-136)
                         .catch(() => setPayNote({ ok: false, text: "the payment page could not load — an ad or script blocker can stop it; allow cdn.paddle.com and try again, or write to sales@axor.dev" }));
                     }

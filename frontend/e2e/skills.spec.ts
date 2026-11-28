@@ -383,6 +383,28 @@ test.describe("coding agents: their menu, and trying a skill", () => {
     await expect(page).toHaveURL(/#\/explain\/ex_mem_/);
   });
 
+  test("QA-441: on the free plan the memory example says what Coding gives, not that your agents get it", async ({ page, request }) => {
+    const B = "http://127.0.0.1:8400";
+    await request.post(`${B}/v1/demo/seed-memory`);
+    await page.route("**/v1/license/entitlements", async (r) => {
+      const body = await (await r.fetch()).json();
+      await r.fulfill({ json: { ...body, free: true } });
+    });
+    await setConnection(page, { mode: "demo" });
+    await journey(page, "coding");
+    await goHash(page, "memory");
+    const view = page.getByTestId("team-memory");
+    const tab = view.getByRole("tab", { name: "acme/api" });
+    if (await tab.isVisible()) await tab.click();
+    await expect(view.getByTestId("memory-is-example")).toBeVisible();
+    await expect(view.getByTestId("memory-plan")).toContainText("Team memory comes with the Coding plan");
+    await expect(view.getByTestId("memory-preview")).toContainText("WHAT AGENTS WOULD GET ON THE CODING PLAN");
+    await expect(view.getByText("WHAT YOUR AGENTS GET AT SESSION START")).toHaveCount(0);
+    await expect(view.getByText(/given to \d+ sessions? so far/)).toHaveCount(0);
+    await expect(view.getByTestId("memory-on")).toContainText("ON — GIVEN TO AGENTS ON THE CODING PLAN");
+    await expect(view.getByTestId("memory-suggested")).not.toContainText("turn it on now");
+  });
+
   test("team memory: a double-click on add the note adds one note", async ({ page }) => {
     // QA-101: the second click of a double-click got through before the button
     // turned disabled — two notes, both given to every agent
@@ -678,8 +700,8 @@ test.describe("session controls for coding agents", () => {
     expect(mine[0].own).toBe(true);
     await request.post(`${B}/v1/coding/notes/${claude}/delivered`, { data: { ids: [mine[0].id], at: "Edit" } });
     await expect(say.getByTestId("said").last()).toContainText("given after Edit");
-    // no replan / inject on a coding session: one way to speak to it
-    await page.getByRole("button", { name: "more…" }).click();
+    // no replan / inject on a coding session: one way to speak to it (an
+    // example takes no commands at all, so "more…" is not offered: QA-344)
     await expect(page.getByRole("button", { name: /Replan/ })).toHaveCount(0);
     await expect(page.getByRole("button", { name: /Inject next turn/ })).toHaveCount(0);
   });

@@ -51,6 +51,16 @@ export function scopeWords(need: Scope | string, have: readonly string[]): strin
 
 /** A request's error as a person reads it: "403 {\"detail\": \"…\"}" → "…". */
 export function errorWords(message: string): string {
+  // the browser's own words for a request that never got an answer, and a
+  // server's bare status phrase, are said as what happened (QA-461, QA-465)
+  if (/^(failed to fetch|networkerror when attempting to fetch resource\.?|load failed|network ?error)$/i.test(message.trim())) {
+    return typeof navigator !== "undefined" && navigator.onLine === false
+      ? "you are offline — retry once the connection is back"
+      : "the plane could not be reached — check the connection and retry";
+  }
+  if (/^(\d{3}\s+)?(internal server error|bad gateway|service unavailable|gateway time-?out)$/i.test(message.trim())) {
+    return "the plane could not answer — try again in a moment";
+  }
   const m = message.match(/^(\d{3})\s+(\{[\s\S]*\})$/);
   if (!m) return message;
   try {

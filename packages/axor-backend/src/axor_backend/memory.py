@@ -6,7 +6,9 @@ Only what the sidecars RECORDED counts — never what an agent said it learned:
 - ``runs``: a check command (tests, lint, typecheck, build) that passed —
   "tests: `uv run pytest -q`";
 - ``fix``: in one session, a check of one kind failed and then passed with a
-  different command — "`pytest` fails here — `uv run pytest -q` works";
+  different command — "`pytest` fails here — `uv run pytest -q` works" — when
+  it failed for the command, not for the code (no failures found, no file
+  edited in between);
 - ``note``: something a person on the team wrote, taken as their own words.
 
 What is kept out, whatever passed: a command whose arguments carry text from
@@ -130,6 +132,47 @@ def kept_out(command: str, carries: list[str] | None) -> str | None:
     return None
 
 
+# QA-502: "`a` fails here — `b` works" is only true when `a` failed for being
+# the wrong command (not found, wrong runner, missing tool), not when the code
+# failed it and was then fixed. So a fix is learned only when nothing points at
+# the code: not when the failure says the check ran and found failures, nor
+# when a file may have been edited between the two runs.
+_FOUND_FAILURES = re.compile(
+    r"\b\d+\s+(?:failed|failures?|errors?|failing)\b|\bFAILED\b|\bFAIL\b"
+    r"|AssertionError|Traceback|\b[Ff]ound \d+ errors?\b")
+_EDIT_TOOLS = frozenset({"edit", "write", "multiedit", "notebookedit", "apply_patch",
+                         "edit_file", "write_file", "str_replace_editor", "str_replace"})
+_SHELL_TOOLS = frozenset({"bash", "shell", "exec_command", "local_shell"})
+_WRITES = re.compile(
+    r"\bsed\s+-[a-zA-Z]*i|\bperl\s+-[a-zA-Z]*i|\btee\b|\bpatch\b|\bgit\s+(?:apply|checkout|restore"
+    r"|stash|reset|am|cherry-pick|merge|rebase)\b|\b(?:mv|cp|rm|touch|truncate)\s"
+    r"|(?<![0-9&])>>?\s*(?!/dev/null|&)\S|\bpython3?\s+-c\b|<<")
+
+
+def failed_for_the_command(check: dict, events: list[dict], after: int, before: int,
+                           node_id: str = "") -> bool:
+    """Whether a failed check failed for the command itself — so a passing
+    other command after it is a fix worth remembering (QA-502). Declined when
+    the check ran and found failures, or when anything between the two runs
+    could have changed the repository's files."""
+    if _FOUND_FAILURES.search(str(check.get("summary") or "")):
+        return False
+    for e in events:
+        seq = e.get("seq") or 0
+        if e.get("kind") != "tool_call" or not after < seq < before \
+                or (node_id and e.get("node_id") not in (None, node_id)):
+            continue
+        p = e.get("payload") or {}
+        tool = str(p.get("tool") or "").lower()
+        if tool in _EDIT_TOOLS:
+            return False
+        if tool in _SHELL_TOOLS:
+            args = p.get("args") if isinstance(p.get("args"), dict) else {}
+            if _WRITES.search(str(args.get("command") or args.get("cmd") or "")):
+                return False
+    return True
+
+
 def _text(kind: str, check_kind: str, command: str, failed: str = "") -> str:
     if kind == "fix":
         return f"{check_kind}: `{failed}` fails here — `{command}` works"
@@ -226,6 +269,9 @@ async def observe(store: Any, node_id: str, run_id: str, lines: list[dict]) -> i
             continue
         bad = str(failed["payload"]["check"].get("command") or "").strip()
         if not bad or bad == command or kept_out(bad, failed["payload"].get("carries")):
+            continue
+        if not failed_for_the_command(failed["payload"]["check"], earlier,
+                                      failed.get("seq") or 0, seq or 0, node_id):
             continue
         fix = {"check_kind": ck, "command": command, "failed": bad,
                "text": _text("fix", ck, command, bad)}
@@ -423,6 +469,8 @@ async def refresh(store: Any, repo: str,  # noqa: ANN401
         for i in sorted(before - set(ids)):
             item = by_id.get(i)
             why = _WHY_GONE.get(item["status"], item["status"]) if item else "dropped"
+            if item and item["status"] == "off" and item["doc"].get("decided_by"):
+                why = f"turned off by {item['doc']['decided_by']}"   # QA-503: who
             removed.append({"id": i, "text": item["doc"]["text"] if item else "", "why": why,
                             **({"replaced_by": item["doc"].get("replaced_by")}
                                if item and item["doc"].get("replaced_by") else {})})
@@ -480,8 +528,17 @@ async def session_outcome(store: Any, node_id: str) -> dict[str, bool]:  # noqa:
 async def compare(store: Any, repo: str, change: dict) -> dict:  # noqa: ANN401
     """The sessions given the version before a change against those given it
     after."""
-    before = await store.sessions_given_version(repo, change["previous"])
-    after = await store.sessions_given_version(repo, change["version"])
+    # its own window: from the change before it to this one, from this one to
+    # the next (QA-503 — "" before turning on and "" after turning off are the
+    # same version, and counted together the off row read "0 before, 2 after")
+    changes = sorted(await store.memory_changes_of(repo, 200), key=lambda c: c["id"])
+    earlier = [c["ts"] for c in changes if c["id"] < change["id"]]
+    later = [c["ts"] for c in changes if c["id"] > change["id"]]
+    before = await store.sessions_given_version(repo, change["previous"],
+                                                since=earlier[-1] if earlier else "",
+                                                until=change["ts"])
+    after = await store.sessions_given_version(repo, change["version"], since=change["ts"],
+                                               until=later[0] if later else "")
     sides = {}
     for name, nodes in (("before", before), ("after", after)):
         outs = [await session_outcome(store, n) for n in nodes[-50:]]

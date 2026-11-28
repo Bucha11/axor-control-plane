@@ -45,7 +45,8 @@ test.describe("multi-agent EvidenceCase", () => {
     // A case past the backend's ablation bound answers 422. That used to render
     // as an empty list under "ranked by subgraph ablation" — the reader saw
     // "no value drove this" where the backend had said "too many to ablate".
-    await page.route("**/v1/runs/*/influence", (route) =>
+    let asked = 0;
+    await page.route("**/v1/runs/*/influence", (route) => { asked += 1; return (
       route.fulfill({
         status: 422,
         contentType: "application/json",
@@ -53,8 +54,7 @@ test.describe("multi-agent EvidenceCase", () => {
           detail:
             "this case has 812 upstream values and one request ablates at most 200",
         }),
-      }),
-    );
+      })); });
     const ctx = await request.newContext();
     await ctx.post(`${BACKEND}/v1/demo/seed-tree-run`);
     await ctx.dispose();
@@ -68,5 +68,9 @@ test.describe("multi-agent EvidenceCase", () => {
     );
     await expect(sub.getByText("ranked by subgraph ablation", { exact: false }))
       .toHaveCount(0);
+    // QA-405: in words, and asked once
+    await expect(sub.getByTestId("influence-refused")).not.toContainText("ApiError");
+    await page.waitForTimeout(1500);
+    expect(asked).toBe(1);
   });
 });

@@ -211,3 +211,42 @@ async def test_qa171_the_demo_node_stays_long_enough_and_leaves_with_its_token(
     assert out["ttl_seconds"] == pytest.approx(ttl, abs=2.0)
     leaves = datetime.fromisoformat(out["leaves_at"]).timestamp()
     assert leaves == pytest.approx(time.time() + ttl, abs=3.0)
+
+
+async def test_qa340_the_demo_tree_keeps_its_nodes_live_like_the_demo_node(
+        monkeypatch: pytest.MonkeyPatch) -> None:
+    """QA-340: the demo tree only uploaded a trace, so the plane never heard
+    from its nodes, yet the run page offered them pause and stop. Each of its
+    three nodes now heartbeats and takes its desired state for the demo's TTL,
+    with the spawner's credential."""
+    import asyncio
+
+    from axor_proxy import governed
+
+    live: list[tuple[str, object]] = []
+
+    class FakeClient:
+        def __init__(self, base: str, session: governed.PlaneSession, run_id: str | None = None,
+                     ingest_key: str | None = None, **_: object) -> None:
+            self.session = session
+            live.append((session.node_id, ingest_key))
+
+        async def run(self, stop: asyncio.Event) -> None:
+            await stop.wait()
+
+        async def heartbeat_loop(self, stop: asyncio.Event, level_fn: object = None) -> None:
+            await stop.wait()
+
+        async def flush(self, level: str = "NORMAL") -> None:
+            return None
+
+    real = httpx.AsyncClient
+    monkeypatch.setattr(governed, "PlaneClient", FakeClient)
+    monkeypatch.setattr(governed.httpx, "AsyncClient", lambda **kw: real(
+        transport=httpx.MockTransport(lambda r: httpx.Response(200, json={})), **kw))
+    out = await governed.spawn_governed_tree("http://plane.test", ingest_key="user-jwt",
+                                             ttl_seconds=0.05)
+    await out["_task"]
+    assert sorted(n for n, _ in live) == sorted(out["nodes"].values())
+    assert {k for _, k in live} == {"user-jwt"}
+    assert out["ttl_seconds"] == pytest.approx(0.05)

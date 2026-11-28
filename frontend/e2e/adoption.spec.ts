@@ -57,6 +57,28 @@ test.describe("adoption", () => {
     }
   });
 
+  test("in the coding journey, learn mode explains the main pages too (QA-463)", async ({ page }) => {
+    await setConnection(page, { mode: "adapter" });
+    await page.addInitScript(() => {
+      const raw = localStorage.getItem("axor-app");
+      const data = raw ? JSON.parse(raw) : { state: {}, version: 0 };
+      Object.assign(data.state, { learnMode: true, learnSeen: true, coachDismissed: [], journey: "coding" });
+      localStorage.setItem("axor-app", JSON.stringify(data));
+    });
+    const cases: [string, string][] = [
+      ["govern", "every coding session of the team"],
+      ["policy", "what every coding agent is refused"],
+      ["evidence", "what needs a look"],
+      ["memory", "what the agents learned in each repository"],
+      ["skills", "what the agents may load"],
+      ["connect?for=coding", "one command on each machine"],
+    ];
+    for (const [hash, expected] of cases) {
+      await goHash(page, hash);
+      await expect(page.getByRole("note").filter({ hasText: expected })).toHaveCount(1);
+    }
+  });
+
   test("reset tips brings back dismissed coach notes", async ({ page }) => {
     await setConnection(page, { mode: "adapter" });
     await goHash(page, "settings?tab=learn");

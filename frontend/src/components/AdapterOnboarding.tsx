@@ -16,6 +16,9 @@ import { C, MONO, btn } from "../theme";
 import { IdentityLogin } from "../tabs/Settings";
 import { useOneAtATime } from "../oneAtATime";
 import { filesFromList, plainGuess } from "../tabs/ConfigBuilder";
+import { AGENT_NAME_MAX, wrapAnywhere } from "./GuardOnboarding";
+import RoleNote from "./RoleNote";
+import { useHasScope } from "../team";
 
 export type Framework = "langchain" | "claude" | "python";
 type Klass = "READ" | "WRITE" | "EXPORT" | "EXEC";
@@ -270,6 +273,9 @@ export default function AdapterOnboarding() {
   };
 
   const needsKey = authOn !== false;
+  // an agent's key is the owner's to make (POST /v1/keys): a viewer or member
+  // clicking it got a 403 (QA-482)
+  const mayMint = useHasScope()("admin");
   const snippet = adapterSnippet(framework, {
     origin: window.location.origin, nodeId: nodeId || "agent-1",
     key: needsKey ? (key ?? "<create the key above>") : null,
@@ -364,10 +370,13 @@ export default function AdapterOnboarding() {
         <div className="flex items-center gap-2 flex-wrap">
           <span style={{ ...hint, color: C.mut, fontSize: 11 }}>agent name</span>
           <input value={nodeId} onChange={(e) => { setNodeId(e.target.value); setKey(null); }}
-            aria-label="agent name"
+            aria-label="agent name" maxLength={AGENT_NAME_MAX}
             style={{ background: C.bg, border: `1px solid ${C.line}`, borderRadius: 4, color: C.text,
                      fontFamily: MONO, fontSize: 11.5, padding: "4px 8px", width: 160 }} />
-          {needsKey && !key && (
+          {needsKey && !key && !mayMint && (
+            <RoleNote need="admin" what="make an agent's key" testid="adapter-mint-role" inline />
+          )}
+          {needsKey && !key && mayMint && (
             <button onClick={() => mintOnce()} disabled={!nodeId.trim() || mint.isPending} data-testid="adapter-mint"
               style={btn({ color: C.steel, borderColor: C.steel, fontSize: 11, padding: "4px 10px" })}>
               {mint.isPending ? "…" : "create the key"}
@@ -382,7 +391,7 @@ export default function AdapterOnboarding() {
       {step(framework === "claude" ? 3 : 4, "IN YOUR AGENT")}
       <div className="flex items-start gap-2" style={{ background: C.bg, border: `1px solid ${C.line}`, borderRadius: 6, padding: "8px 10px" }}>
         <pre data-testid="adapter-snippet" style={{ margin: 0, flex: 1, fontFamily: MONO, fontSize: 11.5, color: C.text,
-                                                   whiteSpace: "pre-wrap", lineHeight: 1.6 }}>{snippet}</pre>
+                                                   whiteSpace: "pre-wrap", lineHeight: 1.6, ...wrapAnywhere }}>{snippet}</pre>
         <button aria-label="copy" onClick={() => { void navigator.clipboard?.writeText(snippet); setCopied(true); setTimeout(() => setCopied(false), 1200); }}
           style={btn({ color: C.mut, fontSize: 10, padding: "2px 6px" })}>
           {copied ? <Check size={11} /> : <Copy size={11} />}
@@ -391,7 +400,7 @@ export default function AdapterOnboarding() {
 
       {step(framework === "claude" ? 4 : 5, "RUN IT")}
       <div data-testid="adapter-live" className="p-3" style={{ background: C.panel, borderRadius: 8, fontFamily: MONO, fontSize: 11.5,
-        border: `1px solid ${live ? C.green : C.line}` }}>
+        border: `1px solid ${live ? C.green : C.line}`, ...wrapAnywhere }}>
         {live
           ? <span style={{ color: C.green }}>● {nodeId} reported in — it is on the plane</span>
           : taken

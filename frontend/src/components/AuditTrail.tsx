@@ -29,6 +29,9 @@ const WORDS: Record<string, string> = {
   pair_open: "opened a pair on", pair_end: "ended the pair on", pair_let_in: "let a teammate pair on",
   pair_declined: "declined a pair on", pair_note: "sent a note to",
   incident_settled: "settled", incident_new: "reopened", muted: "muted", unmuted: "unmuted",
+  // the operator's word on an incident (incidents.STATUSES), raw before (QA-404)
+  incident_looked_at: "marked as looked at", incident_kept_as_test: "marked as kept as a test",
+  incident_rule_made: "made a rule from", incident_not_a_problem: "marked as not a problem",
   memory_on: "put in the team's memory", memory_off: "took out of the team's memory",
   memory_note: "added to the team's memory", memory_fresh_days: "set memory freshness to (days)",
   seat_limit: "set the seat limit to", seat_limit_removed: "removed the seat limit",
@@ -44,9 +47,18 @@ const WORDS: Record<string, string> = {
   scim_role: "changed the role of", scim_renamed: "changed the address of",
   sessions_limit: "set how long a sign-in lasts:", sessions_ended: "signed out",
   plan_activated: "activated the plan", plan_renewed: "renewed the plan",
+  // QA-306: these showed as raw event names beside worded rows
+  plan_upgraded: "moved the plan up to", plan_downgraded: "moved the plan down to",
+  plan_change_requested: "asked to change the plan to",
   vault_token: "made the workspace's vault token for", vault_token_dropped: "dropped the workspace's vault token for",
   hold_placed: "put a legal hold on the trail", hold_released: "lifted the legal hold",
 };
+
+/** An act in words; one this page has no words for yet is still not shown as
+ *  an event name ("some_act" → "some act"). */
+function actionWords(action: string): string {
+  return WORDS[action] ?? action.replace(/_/g, " ");
+}
 
 function detailWords(it: AuditItem): string {
   const d = it.detail ?? {};
@@ -312,7 +324,7 @@ export default function AuditTrail() {
         <select value={action} onChange={(e) => setAction(e.target.value)} aria-label="action" style={field}
           data-testid="audit-action">
           <option value="">every act</option>
-          {(q.data?.actions ?? []).map((a) => <option key={a} value={a}>{WORDS[a] ?? a}</option>)}
+          {(q.data?.actions ?? []).map((a) => <option key={a} value={a}>{actionWords(a)}</option>)}
         </select>
         <input value={who} onChange={(e) => setWho(e.target.value)} placeholder="who" aria-label="who"
           style={{ ...field, width: 130 }} data-testid="audit-who" />
@@ -355,7 +367,7 @@ export default function AuditTrail() {
             style={{ borderTop: i === 0 ? "none" : `1px solid ${C.line}`, fontSize: 11 }}>
             <span style={{ color: C.dim, width: 128 }}>{localTime(it.ts)}</span>
             <span style={{ color: C.text }}>{it.who || "—"}</span>
-            <span>{WORDS[it.action] ?? it.action}</span>
+            <span>{actionWords(it.action)}</span>
             {it.target && (
               <span style={{ color: C.steel, overflowWrap: "anywhere" }} title={it.target}>{titleOf.get(it.target) ?? it.target}</span>
             )}

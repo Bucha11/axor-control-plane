@@ -237,10 +237,19 @@ function MachineIds() {
     onSuccess: () => void qc.invalidateQueries({ queryKey: ["identities"] }),
   });
   const rows = q.data?.identities ?? [];
-  if (!rows.length) return null;
+  const workers = q.data?.machines ?? [];
+  if (!rows.length && !workers.length) return null;
   return (
     <div data-testid="machine-ids" style={{ marginTop: 6 }}>
       <div style={{ color: C.text, marginBottom: 4 }}>machines and their people</div>
+      {/* a worker reports no developer id: its person is its key's (QA-504) */}
+      {workers.map((m) => (
+        <div key={m.machine_id} data-testid="machine-worker" className="flex gap-2 items-center flex-wrap">
+          <span style={{ color: C.dim }}>{m.machine_id}</span>
+          <span style={{ color: C.dim }}>worker · {[m.host, m.repo_label].filter(Boolean).join(" · ")}{m.online ? " · on" : ""}</span>
+          <span>→ <span style={{ color: C.text }}>{m.email || "the workspace's operator"}</span></span>
+        </div>
+      ))}
       {rows.map((r) => (
         <div key={r.developer_id} data-testid="machine-id" className="flex gap-2 items-center flex-wrap">
           <span style={{ color: C.dim }}>{r.developer_id}</span>
@@ -306,7 +315,9 @@ function Sessions({ orgId }: { orgId: string }) {
           <span data-testid="sessions-ended" style={{ color: C.dim }}>
             {end.data.ended === 0 ? "nobody else was signed in"
               : `${end.data.ended} ${end.data.ended === 1 ? "person" : "people"} signed out`}
-            {" "}— a page already open stops within {end.data.access_minutes} minutes
+            {/* the revocation feed ends open pages in seconds now, not when
+                their access token expires (QA-487, QA-324) */}
+            {end.data.ended > 0 && " — pages already open, your own other browsers too, stop within seconds"}
           </span>
         )}
         {(set.isError || end.isError) && (
@@ -1064,7 +1075,9 @@ export function IdentityLogin({ onDone, onSignedUp, initialMode = "login", compa
       <div className="flex items-center gap-2 flex-wrap">
         <button type="submit" disabled={!canSubmit || busy}
           style={btn({ color: C.steel, borderColor: C.steel, fontSize: 11, padding: "5px 14px", whiteSpace: "nowrap" })}>
-          {busy ? "…" : mode === "signup" ? "create workspace" : mode === "forgot" ? "send reset link" : "log in"}
+          {/* busy keeps its label (and so its width): shrunk to "…", the second
+              click of a double-click landed on "back to log in" (QA-484) */}
+          {mode === "signup" ? "create workspace" : mode === "forgot" ? "send reset link" : "log in"}{busy ? "…" : ""}
         </button>
         {mode === "login" && !ssoFor && (
           <button type="button" data-testid="sso-start" onClick={() => void startSso()}
@@ -1362,8 +1375,10 @@ export default function Settings({ tab = "workspace" }: { tab?: string } = {}) {
       {active === "billing" && (
         <>
           <Billing coding={coding} prod={prod} />
-          {/* on the hosted plane a card plan installs itself: nothing to paste */}
-          {!licenseStatus.data?.active && !authStatus.data?.guest && !licenseStatus.data?.hosted && (
+          {/* on the hosted plane a card plan installs itself: nothing to paste.
+              Only a plane that SAID it is self-hosted gets the hint — a status
+              that could not be read (signed out: 401) is not "not hosted" (QA-301) */}
+          {!licenseStatus.data?.active && !authStatus.data?.guest && licenseStatus.data?.hosted === false && (
             <div data-testid="billing-license-hint" className="mb-4" style={{ fontFamily: MONO, fontSize: 11, color: C.mut }}>
               bought a plan? the license file you were sent goes under{" "}
               <button onClick={() => navigate("settings", { tab: "workspace" })}
@@ -1646,6 +1661,16 @@ function TokenFold() {
             can: {(authStatus.data.scopes ?? []).join(", ") || "nothing"}
           </div>
         )}
+        {/* a token the plane does not take was kept and sent with every
+            request, and nothing said so (QA-323) */}
+        {own && authStatus.data?.auth_enabled && !signedIn && (
+          <div data-testid="token-refused" className="flex items-center gap-2 flex-wrap"
+            style={{ fontFamily: MONO, fontSize: 10.5, color: C.red }}>
+            the plane did not accept this token — check it, or clear it
+            <button onClick={() => setApiToken("")}
+              style={btn({ fontSize: 10.5, padding: "2px 8px", color: C.mut })}>clear</button>
+          </div>
+        )}
       </div>
     </details>
   );
@@ -1686,7 +1711,7 @@ function StatementLines({ st, coding, prod, estimate = false }: {
         <>governed nodes at the peak: <span style={{ color: C.text }}>{st.peak_nodes}</span>
           {st.peak_day ? ` on ${st.peak_day}` : ""} · {st.included_nodes} included
           {st.billable_nodes ? ` · ${st.billable_nodes} over` : ""}</>,
-        st.workspace_tier === "coding" && st.billable_nodes > 0 ? "on Team and up"
+        (st.workspace_tier === "coding" || st.workspace_tier === "community") && st.billable_nodes > 0 ? "on Team and up"
           : st.priced ? st.overage : "—", "bill-nodes")}
       <div className="flex gap-3" style={{ fontFamily: MONO, fontSize: 12.5, padding: "6px 0 0", borderTop: `1px solid ${C.line}` }}>
         <span style={{ flex: 1, color: C.text }}>
@@ -1741,7 +1766,9 @@ function Billing({ coding, prod }: { coding: boolean; prod: boolean }) {
         <div data-testid="billing-plan" style={{ fontFamily: MONO, fontSize: 12, color: C.text, lineHeight: 1.7 }}>
           {TIER_NAME[plan.tier] ?? plan.tier}
           <span style={{ color: C.mut }}>
-            {plan.tier === "community" ? " — $0: one developer and one agent family, one governed node"
+            {/* what holds on Free, not more: a second node still connects, and demo
+                nodes are not counted at all (QA-360) */}
+            {plan.tier === "community" ? " — $0: one developer and one agent family, one governed node included (more still connect; the month below counts them past the plan) · demo nodes and examples don't count"
               : plan.tier === "coding" || plan.tier === "business" ? ` — ${plan.seat} per developer whose agents ran that month · production agents: 1 included, then $75 each`
                 : plan.priced ? ` — ${plan.base} a month · ${plan.included_developers} developers and ${plan.included_nodes} governed nodes included, then ${plan.seat} per developer`
                   : " — contracted"}
@@ -1774,10 +1801,11 @@ function Billing({ coding, prod }: { coding: boolean; prod: boolean }) {
           the plan in force. The tab used to show a free workspace three paid
           plans side by side and no months at all. */}
       {months.length > 0 && (
-        <Section title={`MONTH BY MONTH · on ${TIER_NAME[plan.tier] ?? plan.tier}`}>
+        <Section title="MONTH BY MONTH">
           <div data-testid="billing-months">
             <div className="flex gap-3" style={{ fontFamily: MONO, fontSize: 9.5, color: C.dim, letterSpacing: "0.06em", padding: "0 0 4px" }}>
               <span style={{ width: 150 }}>MONTH</span>
+              <span style={{ width: 120 }}>PLAN</span>
               {coding && <span style={{ width: 110 }}>DEVELOPERS</span>}
               {prod && <span style={{ width: 120 }}>AGENTS AT PEAK</span>}
               <span style={{ flex: 1, textAlign: "right" }}>AMOUNT</span>
@@ -1789,6 +1817,12 @@ function Billing({ coding, prod }: { coding: boolean; prod: boolean }) {
                   style={{ background: "none", border: "none", cursor: "pointer", padding: "6px 0", fontFamily: MONO, fontSize: 11.5, textAlign: "left" }}>
                   <span style={{ color: C.text, width: 150, whiteSpace: "nowrap" }}>
                     {open === h.month ? "▾" : "▸"} {h.month}{i === 0 && current ? " · so far" : ""}
+                  </span>
+                  {/* the plan each month was billed on, not today's for all
+                      of them (QA-303) */}
+                  <span data-testid={`billing-month-plan-${h.month}`} style={{ color: C.dim, width: 120, whiteSpace: "nowrap" }}>
+                    {i === 0 && current ? `estimated on ${TIER_NAME[plan.tier] ?? plan.tier}`
+                      : TIER_NAME[h.workspace_tier] ?? h.workspace_tier}
                   </span>
                   {coding && <span style={{ color: C.mut, width: 110 }}>{h.active_developers}</span>}
                   {prod && <span style={{ color: C.mut, width: 120 }}>{h.peak_nodes}</span>}
@@ -1809,6 +1843,12 @@ function Billing({ coding, prod }: { coding: boolean; prod: boolean }) {
                 )}
               </div>
             ))}
+            {current && plan.tier !== "community" && (
+              <div data-testid="billing-estimate-note" style={{ fontFamily: MONO, fontSize: 10, color: C.dim, marginTop: 6, lineHeight: 1.6 }}>
+                The running month is an estimate on the plan in force now, {TIER_NAME[plan.tier] ?? plan.tier}. If the
+                plan changed this month, what is billed is the payment provider&apos;s prorated charge for each plan.
+              </div>
+            )}
             {plan.tier === "community" && (
               <div style={{ fontFamily: MONO, fontSize: 10, color: C.dim, marginTop: 6 }}>
                 Free charges nothing — the amounts are $0; the usage is what a paid plan would bill from
@@ -2058,6 +2098,8 @@ function AgentKeys({ journey, menuAll }: { journey: Journey | null; menuAll: boo
   const [label, setLabel] = useState("");
   const [node, setNode] = useState("");
   const [minted, setMinted] = useState<{ secret: string; preset: string; keyId: string } | null>(null);
+  // the copy icon said nothing when it copied (QA-369)
+  const [keyCopied, setKeyCopied] = useState<string | null>(null);
   const keys = useQuery({ queryKey: ["api-keys"], queryFn: api.listKeys, enabled: on, retry: false });
   const keysAudit = useQuery({ queryKey: ["api-keys-audit"], queryFn: () => api.keysAudit(), enabled: on, retry: false });
   const mint = useMutation({
@@ -2147,7 +2189,12 @@ function AgentKeys({ journey, menuAll }: { journey: Journey | null; menuAll: boo
         <div data-testid="key-minted" className="mb-3 p-2" style={{ background: C.panel2, border: `1px solid ${C.line}`, borderRadius: 5 }}>
           <div className="flex items-center gap-2" style={{ fontFamily: MONO, fontSize: 10, color: C.amber, marginBottom: 4 }}>
             shown once — copy it now
-            <Copy size={12} color={C.mut} style={{ cursor: "pointer" }} onClick={() => void navigator.clipboard?.writeText(env)} />
+            <button type="button" data-testid="key-copy" aria-label="copy the key"
+              onClick={() => { void navigator.clipboard?.writeText(env); setKeyCopied(minted.keyId); }}
+              style={{ background: "none", border: "none", padding: 0, cursor: "pointer", display: "inline-flex",
+                       alignItems: "center", gap: 4, fontFamily: MONO, fontSize: 10, color: C.mut }}>
+              {keyCopied === minted.keyId ? <><Check size={12} color={C.green} /> copied</> : <Copy size={12} color={C.mut} />}
+            </button>
           </div>
           <pre style={{ margin: 0, fontFamily: MONO, fontSize: 10.5, color: C.green, whiteSpace: "pre-wrap", wordBreak: "break-all" }}>{env}</pre>
         </div>
@@ -2216,7 +2263,8 @@ function Connections({ coding, prod }: { coding: boolean; prod: boolean }) {
   const bound = new Set((keys.data ?? []).map((k) => k.node_id).filter(Boolean));
   // what is reporting is the workspace's own: the product's example nodes
   // (the tree-* fleet among them) never were, and are hidden once it has its own
-  const all = (nodes.data ?? []).filter((n) => !n.example_hidden && !/example/.test(n.node_id)
+  // the plane's own word for an example, not its id (QA-370)
+  const all = (nodes.data ?? []).filter((n) => !n.example_hidden && !n.example
     && !n.profile?.developer?.startsWith("dev-example-"));
   const agents = all.filter((n) => !n.profile || n.profile.kind === "agent");
   // coding agents per developer this month, from the seat meter (activity, not
@@ -2284,7 +2332,6 @@ function Connections({ coding, prod }: { coding: boolean; prod: boolean }) {
 
 /** Each wall of this plane, up or down, with how to raise the ones that are down. */
 function SecurityPosture() {
-  const canOwn = useHasScope()("admin");
   // the owner's to read, and with the vault's token where it has one (QA-214)
   const ownKnown = useHasScopeKnown()("admin");
   const credsReadable = useVaultReadable("creds");
@@ -2303,8 +2350,10 @@ function SecurityPosture() {
   return (
     <>
       <PostureItems items={items} />
-      {/* only the owner holds `admin`, which the vault tokens need (QA-121) */}
-      {canOwn && <VaultTokens />}
+      {/* only the owner holds `admin`, which the vault tokens need (QA-121) —
+          and not asked before the plane has said who this is: a viewer's
+          every load sent it for a 403 (QA-403) */}
+      {ownKnown && <VaultTokens />}
     </>
   );
 }

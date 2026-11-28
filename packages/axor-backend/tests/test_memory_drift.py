@@ -220,3 +220,27 @@ def test_a_filter_added_later_applies_to_what_was_already_learned() -> None:
     changes, _ = memory.plan_rotation(items, NOW, 30)
     assert changes[1][0] == "kept_out" and "snapshots" in changes[1][1]["reason"]
     assert changes[3][0] == "kept_out" and 2 not in changes
+
+
+async def test_turned_off_counts_only_its_own_sessions_and_says_who(
+        client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    """QA-503: two sessions ran before anything was given; turned on, then off
+    a minute later. The off row read "0 before, 2 after" — "" before the
+    first change and "" after the off are the same version — and did not say
+    who turned it off."""
+    from axor_backend.routers import memory_api
+
+    monkeypatch.setattr(memory_api, "_who", lambda principal: "lee@acme.io")
+    await _session(client, "s-ada", "dev-ada", "uv run pytest -q")
+    await _session(client, "s-ada2", "dev-ada", None)
+    item = next(i for i in (await client.get("/v1/memory")).json()["repos"][0]["items"]
+                if i["kind"] == "runs")
+    assert (await client.put(f"/v1/memory/{item['id']}", json={"status": "on"})).status_code == 200
+    assert (await client.put(f"/v1/memory/{item['id']}", json={"status": "off"})).status_code == 200
+    repo = next(r for r in (await client.get("/v1/memory")).json()["repos"] if r["repo"] == REPO)
+    off, on = repo["changes"][0], repo["changes"][1]
+    assert on["added"] and on["compare"]["before"]["sessions"] == 2
+    assert on["compare"]["after"]["sessions"] == 0
+    assert off["removed"] and off["compare"]["before"]["sessions"] == 0
+    assert off["compare"]["after"]["sessions"] == 0
+    assert off["removed"][0]["why"] == "turned off by lee@acme.io"

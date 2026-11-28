@@ -225,7 +225,8 @@ test("a tree's agents fold into one row on Agents", async ({ page }) => {
   // the two loose sessions are not part of the tree
   await expect(page.getByTestId("agent-row-codex-example-77b0e4d2")).toBeVisible();
   // the counters count rows: the tree is one, not one per agent in it
-  await expect(page.getByTestId("fleet-count")).toContainText(/\d+ trees? · live/);
+  // ...and an example's rows are said apart from the live agents (QA-344)
+  await expect(page.getByTestId("fleet-count")).toContainText(/\d+ examples?, not counted/);
   await expect.poll(async () => {
     const chip = await page.getByTestId("status-chips").getByRole("button", { name: /^all/ }).innerText();
     const rows = await page.locator('[data-tour="spawn"] > [data-testid^="agent-row-"], [data-tour="spawn"] > [data-testid^="tree-row-"], [data-tour="spawn"] > [data-testid^="developer-row-"]').count();
@@ -381,7 +382,7 @@ test("the example asks a guest to sign up where it pays off, and does it for any
   await page.unrouteAll({ behavior: "ignoreErrors" });
 });
 
-test("not a guest: keeping a caught lie as a test just keeps it", async ({ page, request }) => {
+test("not a guest: the example's caught lie is not kept among your cases (QA-400)", async ({ page, request }) => {
   await request.post(`${BACKEND}/v1/demo/seed-fleet`);
   await setConnection(page, { mode: "demo" });
   await goHash(page, "govern");
@@ -390,18 +391,13 @@ test("not a guest: keeping a caught lie as a test just keeps it", async ({ page,
     const fleet = ["tree-orch", "tree-research", "tree-scraper", "tree-writer"];
     await route.fulfill({ json: all.filter((n) => fleet.includes(n.node_id)) });
   });
-  // the regression corpus is shared by every spec: answer the pin here rather
-  // than add an escaped exfil to everyone else's counts
-  let pinned: unknown = null;
-  await page.route("**/v1/pins/ex_tree", async (route) => {
-    pinned = route.request().postDataJSON();
-    await route.fulfill({ json: { pinned: "ex_tree" } });
-  });
+  const pins: string[] = [];
+  page.on("request", (r) => { if (r.method() === "POST" && r.url().includes("/v1/pins/")) pins.push(r.url()); });
   await page.reload();
   await expect(page.getByTestId("signup-own-agent")).toHaveCount(0);
-  await page.getByTestId("story-keep").getByRole("button").click();
-  await expect(page.getByTestId("story-keep")).toContainText("kept as a test");
-  expect(pinned).toMatchObject({ side: "must_block" });
+  await expect(page.getByTestId("story-keep")).toContainText("the example — on your own agent's incident, this keeps it as a test");
+  await expect(page.getByTestId("story-keep").getByRole("button")).toHaveCount(0);
+  expect(pins).toEqual([]);
   await page.unrouteAll({ behavior: "ignoreErrors" });
 });
 

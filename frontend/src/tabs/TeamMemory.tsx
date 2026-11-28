@@ -88,7 +88,7 @@ export default function TeamMemory() {
         </div>
       )}
 
-      {repo ? <RepoMemory repo={repo} freshDays={freshDays} /> : q.isError
+      {repo ? <RepoMemory repo={repo} freshDays={freshDays} solo={solo} /> : q.isError
         ? <ReadFailed what="the team memory" error={q.error} retry={() => void q.refetch()} /> : !q.isLoading && (
         <div data-testid="memory-empty" style={{ ...panel, padding: 16, fontSize: 13, color: C.mut, lineHeight: 1.6 }}>
           Nothing yet. It fills in as coding sessions with the axor hooks run checks in a repository.
@@ -111,7 +111,13 @@ export default function TeamMemory() {
   );
 }
 
-function RepoMemory({ repo, freshDays }: { repo: MemoryRepo; freshDays: number }) {
+function RepoMemory({ repo: held, freshDays, solo = false }: { repo: MemoryRepo; freshDays: number; solo?: boolean }) {
+  // the product's example is read, never changed: its switches, the
+  // workspace-wide rotation and a note all wrote into the real workspace (QA-005)
+  const example = held.repo === EXAMPLE_REPO;
+  // the example on the free plan shows what Coding gives — not "given to your
+  // agents", beside a plan that gives them nothing from it (QA-441)
+  const repo = example && solo ? { ...held, given: false } : held;
   const qc = useQueryClient();
   const [note, setNote] = useState("");
   const fresh = useMutation({
@@ -128,9 +134,6 @@ function RepoMemory({ repo, freshDays }: { repo: MemoryRepo; freshDays: number }
   });
   const addOnce = useOneAtATime(add);
   const given = new Set(repo.given_ids);
-  // the product's example is read, never changed: its switches, the
-  // workspace-wide rotation and a note all wrote into the real workspace (QA-005)
-  const example = repo.repo === EXAMPLE_REPO;
   return (
     <>
       {example && (
@@ -172,8 +175,12 @@ function RepoMemory({ repo, freshDays }: { repo: MemoryRepo; freshDays: number }
         if (!items.length) return null;
         return (
           <section key={g.status} className="mb-8" data-testid={`memory-${g.status}`}>
-            <div style={{ ...label, color: g.color }}>{g.title}</div>
-            {g.words && <div style={{ fontSize: 12.5, color: C.mut, lineHeight: 1.6, marginBottom: 8 }}>{g.words}</div>}
+            <div style={{ ...label, color: g.color }}>
+              {g.status === "on" && !repo.given ? "ON — GIVEN TO AGENTS ON THE CODING PLAN" : g.title}
+            </div>
+            {/* the example's items are read, never changed: no "turn it on now" */}
+            {g.words && <div style={{ fontSize: 12.5, color: C.mut, lineHeight: 1.6, marginBottom: 8 }}>
+              {example ? g.words.replace(/ — or turn it on now\.$/, ".") : g.words}</div>}
             <div style={panel}>
               {items.map((i, n) => (
                 <Item key={i.id} item={i} first={n === 0} overLimit={i.status === "on" && !given.has(i.id)}

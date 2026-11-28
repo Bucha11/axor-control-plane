@@ -83,11 +83,21 @@ interface AppState {
   // them and by a test run, so nobody classifies the same tools twice.
   toolPolicy: Record<string, ToolClass>;
   setToolClass: (name: string, patch: Partial<ToolClass>) => void;
+  // a tool taken out of the policy (Policy's × or its config text): saved like
+  // any other change, so a removed tool is not left allowed (QA-420)
+  removeTool: (name: string) => void;
+  // whether toolPolicy is the workspace's as this tab last read it: false
+  // until the read lands, after a failed read or a refused save. Edits are not
+  // offered then (QA-421). Not kept across a reload.
+  policyRead: boolean;
+  // bumped each time the workspace's policy is put in toolPolicy, so a screen
+  // holding its own list of the tools starts again from it (QA-422)
+  policyApplied: number;
   // the workspace's copy of it could not be read, or was saved by someone
   // else since this tab read it: nothing here is saved until it is read again
   // (QA-212, QA-231). Not kept across a reload.
-  policyNotice: { kind: "read_failed" | "stale"; words: string } | null;
-  setPolicyNotice: (n: { kind: "read_failed" | "stale"; words: string } | null) => void;
+  policyNotice: { kind: "read_failed" | "stale" | "not_saved"; words: string } | null;
+  setPolicyNotice: (n: { kind: "read_failed" | "stale" | "not_saved"; words: string } | null) => void;
   // bumped to read the workspace's policy again
   policyLoads: number;
   reloadPolicy: () => void;
@@ -263,13 +273,20 @@ export const useApp = create<AppState>()(
       setToolClass: (name, patch) =>
         set((s) => ({ toolPolicy: { ...s.toolPolicy,
           [name]: { ...({ klass: guessKlass(name), outside: false } as ToolClass), ...s.toolPolicy[name], ...patch } } })),
+      removeTool: (name) => set((s) => {
+        if (!(name in s.toolPolicy)) return {};
+        const { [name]: _gone, ...rest } = s.toolPolicy;
+        return { toolPolicy: rest };
+      }),
+      policyRead: false,
+      policyApplied: 0,
       tourStep: null,
       tourRestore: null,
       tourSide: "production",
       policyNotice: null,
       setPolicyNotice: (n) => set({ policyNotice: n }),
       policyLoads: 0,
-      reloadPolicy: () => set((s) => ({ policyNotice: null, policyLoads: s.policyLoads + 1 })),
+      reloadPolicy: () => set((s) => ({ policyNotice: null, policyRead: false, policyLoads: s.policyLoads + 1 })),
       connect: (mode, tools) =>
         set((s) => ({
           connection: {
@@ -326,7 +343,7 @@ export const useApp = create<AppState>()(
       // The trade: opening the app in a new tab asks you to sign in again.
       // For a governance console that is the right side of the trade.
       storage: createJSONStorage(() => splitStorage),
-      partialize: ({ sessionEnded, policyNotice, policyLoads, ...s }) => s,
+      partialize: ({ sessionEnded, policyNotice, policyLoads, policyRead, policyApplied, ...s }) => s,
     },
   ),
 );

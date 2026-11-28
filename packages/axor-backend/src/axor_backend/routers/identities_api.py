@@ -27,7 +27,28 @@ async def list_identities(store: StoreDep, principal: PrincipalDep) -> dict:
     from axor_backend.permissions import require_admin
 
     require_admin(principal)
-    return {"identities": await store.developer_bindings()}
+    return {"identities": await store.developer_bindings(),
+            "machines": await _workers(store)}
+
+
+async def _workers(store: StoreDep) -> list[dict]:
+    """The `axor-wrap worker` machines and whose each is (QA-504): a worker
+    reports no developer id — its person is the owner of the key it reports
+    with, named by that key's email."""
+    from datetime import timedelta
+
+    from axor_backend.routers.machines_api import ONLINE_SECONDS
+
+    cutoff = (datetime.now(UTC) - timedelta(seconds=ONLINE_SECONDS)).isoformat()
+    out = []
+    for m in await store.list_machines():
+        key = await store.get_api_key(m["key_id"]) if m.get("key_id") else None
+        label = str((key or {}).get("label") or "")
+        email = label.split(" · ", 1)[0] if (key or {}).get("created_by") and "@" in label else ""
+        out.append({"machine_id": m["machine_id"], "host": m["host"],
+                    "repo_label": m["repo_label"], "email": email or m["owner"],
+                    "online": m["last_seen"] >= cutoff})
+    return out
 
 
 @router.put("/v1/identities/{developer_id}")

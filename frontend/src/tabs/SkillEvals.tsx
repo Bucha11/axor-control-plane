@@ -9,7 +9,7 @@ import { useEffect, useState } from "react";
 import ReadFailed from "../components/ReadFailed";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ChevronDown, ChevronRight, Loader2 } from "lucide-react";
-import { api, SkillEval, SkillEvalArm, SkillEvalCompare, SkillEvalSkill, SkillEvalTask } from "../api";
+import { api, ApiError, SkillEval, SkillEvalArm, SkillEvalCompare, SkillEvalSkill, SkillEvalTask } from "../api";
 import { navigate } from "../router";
 import { isGuestToken, useApp } from "../store";
 import { C, MONO, btn } from "../theme";
@@ -18,6 +18,8 @@ import { HowItWorks, MachineCommand } from "../components/MachineCommand";
 import { useWorkStarted } from "../workStarted";
 import { localTime } from "../time";
 import { useOneAtATime } from "../oneAtATime";
+import { useScopes } from "../team";
+import RoleNote from "../components/RoleNote";
 
 const label: React.CSSProperties = {
   fontFamily: MONO, fontSize: 10.5, color: C.dim, letterSpacing: "0.1em", marginBottom: 8,
@@ -35,9 +37,18 @@ const usd = (x: number | null | undefined) => (x == null ? "—" : `$${x.toFixed
 const signed = (x: number) => `${x > 0 ? "+" : ""}${Math.round(x).toLocaleString("en-US")}`;
 const pct = (x: number | null | undefined) => (x == null ? "" : ` (${x > 0 ? "+" : ""}${Math.round(x * 100)}%)`);
 
-/** "+100% solved (p 0.008)" — the solved-rate difference, with how sure. */
-function solvedText(c: SkillEvalCompare | null): string {
+/** "+100% solved (p 0.008)" — the solved-rate difference, with how sure.
+ *  No difference reads as one, with what both solved: "0% solved" read as
+ *  nothing solved when both ways solved 1/1 (QA-506). */
+function solvedText(c: SkillEvalCompare | null, arms?: SkillEvalArm[]): string {
   if (!c) return "—";
+  const a = arms?.find((x) => x.arm === c.arm);
+  const b = arms?.find((x) => x.arm === c.base);
+  if (Math.round(c.lift * 100) === 0 && a && b) {
+    return a.solved === b.solved && a.trials === b.trials
+      ? `no difference (both solved ${a.solved}/${a.trials})`
+      : `no difference (${a.solved}/${a.trials} vs ${b.solved}/${b.trials})`;
+  }
   const lift = `${c.lift > 0 ? "+" : ""}${Math.round(c.lift * 100)}%`;
   return `${lift} solved (p ${c.p_value < 0.001 ? "<0.001" : c.p_value.toPrecision(2)})`;
 }
@@ -168,6 +179,11 @@ function HowToRun() {
     onSuccess: () => void qc.invalidateQueries({ queryKey: ["machine-jobs"] }),
   });
   const queueOnce = useOneAtATime(queue);
+  // a machine's jobs are an operator's: a viewer was told to install and run
+  // a worker they could not use (QA-426)
+  // (one signed in without it: a visitor not yet signed in has no scopes)
+  const scopes = useScopes();
+  const mayRun = !scopes || scopes.length === 0 || scopes.includes("operate");
   const ready = !!machine && trials !== null && skill.trim() && prompt.trim() && checkCmd.trim();
   const field = (labelText: string, value: string, set: (v: string) => void, testId: string) => (
     <label className="flex items-center gap-2" style={{ fontFamily: MONO, fontSize: 11, color: C.mut }}>
@@ -217,7 +233,9 @@ function HowToRun() {
           </label>
         )}
       </div>
-      {mine.length > 0 ? (
+      {!mayRun ? (
+        <RoleNote need="operate" what="run a skill eval on a machine" testid="eval-viewer" />
+      ) : mine.length > 0 ? (
         <div className="flex items-center gap-3 flex-wrap">
           <button data-testid="eval-run" disabled={!ready || queue.isPending} onClick={() => queueOnce()}
             style={btn({ color: C.bg, background: C.green, border: `1px solid ${C.green}`, fontSize: 12,
@@ -303,7 +321,9 @@ function Jobs() {
 // ── one eval ─────────────────────────────────────────────────────────────────
 
 function EvalView({ evalId }: { evalId: string }) {
-  const ev = useQuery({ queryKey: ["skill-eval", evalId], queryFn: () => api.skillEval(evalId) });
+  // "no such eval" is the answer: not asked again (QA-425)
+  const ev = useQuery({ queryKey: ["skill-eval", evalId], queryFn: () => api.skillEval(evalId),
+                        retry: (n, e) => !(e instanceof ApiError && e.status < 500) && n < 1 });
   if (ev.isLoading) return <Loader2 size={16} className="animate-spin" color={C.dim} />;
   if (!ev.data) {
     return <div style={{ fontFamily: MONO, fontSize: 12, color: C.mut }}>no skill eval {evalId}</div>;
@@ -325,7 +345,7 @@ function EvalView({ evalId }: { evalId: string }) {
 
       <div style={label}>PER SKILL</div>
       <div className="flex flex-col gap-3 mb-8">
-        {e.per_skill.map((s) => <SkillCard key={s.skill} s={s} single={e.skills.length === 1} example={!!e.example} />)}
+        {e.per_skill.map((s) => <SkillCard key={s.skill} s={s} single={e.skills.length === 1} arms={e.overall.arms} example={!!e.example} />)}
       </div>
 
       {/* nothing solved, with the skill or without: the "done when" command is
@@ -359,7 +379,9 @@ function EvalView({ evalId }: { evalId: string }) {
   );
 }
 
-function SkillCard({ s, single, example = false }: { s: SkillEvalSkill; single: boolean; example?: boolean }) {
+function SkillCard({ s, single, arms, example = false }: {
+  s: SkillEvalSkill; single: boolean; arms: SkillEvalArm[]; example?: boolean;
+}) {
   return (
     <div data-testid={`skill-card-${s.skill}`} className="p-4"
       style={{ background: C.panel, border: `1px solid ${C.line}`, borderLeft: `3px solid ${verdictColor(s.verdict)}`, borderRadius: 8 }}>
@@ -378,13 +400,13 @@ function SkillCard({ s, single, example = false }: { s: SkillEvalSkill; single: 
       <div className="flex gap-6 flex-wrap" style={{ fontFamily: MONO, fontSize: 11.5, lineHeight: 1.7 }}>
         <div>
           <div style={{ color: C.dim, fontSize: 10 }}>{single ? "WITH IT VS NONE" : "ALONE VS NONE"}</div>
-          <div style={{ color: C.text }}>{solvedText(s.alone)}</div>
+          <div style={{ color: C.text }}>{solvedText(s.alone, arms)}</div>
           <div style={{ color: C.mut }}>{tokensText(s.alone)}</div>
         </div>
         {!single && (
           <div>
             <div style={{ color: C.dim, fontSize: 10 }}>ON TOP OF THE OTHERS (ALL VS ALL BUT IT)</div>
-            <div style={{ color: C.text }}>{solvedText(s.on_top)}</div>
+            <div style={{ color: C.text }}>{solvedText(s.on_top, arms)}</div>
             <div style={{ color: C.mut }}>{tokensText(s.on_top)}</div>
           </div>
         )}

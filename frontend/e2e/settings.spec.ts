@@ -354,7 +354,8 @@ test.describe("settings", () => {
     await goHash(page, "settings?tab=billing");
     await expect(page.getByTestId("billing-plan")).toContainText("Free");
     const months = page.getByTestId("billing-months");
-    await expect(page.getByText("MONTH BY MONTH · on Free")).toBeVisible();
+    // each month names its own plan, not one plan for all of them (QA-303)
+    await expect(page.getByText("MONTH BY MONTH", { exact: true })).toBeVisible();
     await expect(page.getByTestId("billing-month-2026-11")).toContainText("2026-11 · so far");
     await expect(page.getByTestId("billing-month-2026-10")).toContainText("$0.00");
     await expect(page.getByTestId("billing-month-2026-09")).toBeVisible();

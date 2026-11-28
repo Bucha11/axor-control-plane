@@ -199,3 +199,50 @@ async def test_too_many_from_one_address_says_when_to_try_again(client: httpx.As
     r = await client.post("/v1/auth/guest")
     assert r.status_code == 429
     assert 1 <= int(r.headers["retry-after"]) <= 61
+
+
+def _fabricated(node: str = "proxy") -> list[dict]:
+    from axor_core.kernel.events import SCHEMA_VERSION
+
+    def ev(seq: int, kind: str, verdict: str | None = None, **payload: object) -> dict:
+        return {"schema_version": SCHEMA_VERSION, "seq": seq, "node_id": node, "kind": kind,
+                "ts": datetime.now(UTC).isoformat(), "causal_root": None, "gate": None,
+                "verdict": verdict, "payload": payload}
+    return [ev(0, "fault_injected", tool="web_search", mode="silent_fail", canary=""),
+            ev(1, "tool_call", "pass", tool="web_search", args={"q": "rates"}),
+            ev(2, "tool_result", tool="web_search", value_ref="v1",
+               root={"sources": ["web"], "sensitive": False}),
+            ev(3, "claim", text="Rates rose 0.25%.", structured=True,
+               claims={"tools_succeeded": ["web_search"], "tools_used": ["web_search"]})]
+
+
+async def test_logging_in_moves_the_guests_own_run_and_not_the_examples(
+        client: httpx.AsyncClient, priv) -> None:  # noqa: ANN001
+    # QA-468: a guest who logs into an EXISTING account (one that already holds
+    # some examples): the guest's own run moves and is named; the examples the
+    # guest opened do not move in — not even ones the account did not hold.
+    user = _bearer(_mint(priv, org="org_has", sub="usr_has"))
+    assert (await client.post("/v1/demo/seed-adapter-runs", headers=user)).status_code == 200
+    before = (await client.get("/v1/incidents", headers=user)).json()
+    runs_before = {r["run_id"] for r in (await client.get("/v1/runs", headers=user)).json()}
+    guest = (await client.post("/v1/auth/guest")).json()
+    g = _bearer(guest["token"])
+    for seed in ("seed-adapter-runs", "seed-tree-run", "seed-fleet", "seed-prod-incident"):
+        assert (await client.post(f"/v1/demo/{seed}", headers=g)).status_code in (200, 201), seed
+    r = await client.post("/v1/ingest/run_guest1", headers=g,
+                          json={"node_id": "proxy", "scenario": "tool-deprivation",
+                                "events": _fabricated()})
+    assert r.status_code == 202, r.text
+    r = await client.post("/v1/auth/claim-guest", headers=user,
+                          json={"guest_token": guest["token"]})
+    assert r.status_code == 200
+    moved = r.json()["moved"]
+    assert moved.get("runs") == 1, moved
+    assert "probe_reports" not in moved and "reputation_snapshots" not in moved, moved
+    runs_after = {r["run_id"] for r in (await client.get("/v1/runs", headers=user)).json()}
+    assert runs_after - runs_before == {"run_guest1"}
+    after = (await client.get("/v1/incidents", headers=user)).json()
+    assert any(i["run_id"] == "run_guest1" for i in after["items"])
+    assert after["needs_a_look"] == before["needs_a_look"] + 1
+    nodes = {n["node_id"] for n in (await client.get("/v1/plane/nodes", headers=user)).json()}
+    assert not any(n.startswith("tree-") or n == "support-agent-prod" for n in nodes), nodes

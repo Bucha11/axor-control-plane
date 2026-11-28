@@ -30,6 +30,8 @@ import TwoTreeContainment from "../components/TwoTreeContainment";
 import Coach from "../components/Coach";
 import Tooltip from "../components/Tooltip";
 import { useFaultModes } from "./ChaosTests";
+import { useHasScope, useHasScopeKnown } from "../team";
+import RoleNote from "../components/RoleNote";
 
 // The v1 scenario: Tool Deprivation. Fault modes map to the deprivation engine.
 const FAULT_MODES = [
@@ -87,6 +89,10 @@ export default function Experiment({ runId, autostart }: { runId?: string; autos
   const lastRunId = useApp((s) => s.lastRunId);
   const qc = useQueryClient();
   const autoFired = useRef(false);
+  // a test's run is uploaded into the workspace: a viewer's was refused by the
+  // plane after it had run, with the refusal's raw text (QA-384)
+  const mayRun = useHasScope()("ingest");
+  const mayRunKnown = useHasScopeKnown()("ingest");
 
   const [tool, setTool] = useState("web_search");
   const [faultMode, setFaultMode] = useState("silent_fail");
@@ -117,15 +123,23 @@ export default function Experiment({ runId, autostart }: { runId?: string; autos
     enabled: mode !== "demo" && Boolean(activeRun) && !landed,
     refetchInterval: 1500,
   });
-  const wanted = activeRun ?? runId ?? lastRunId;
+  // another run opened by link: it is what is shown, not the one just made
+  // here (QA-380)
+  useEffect(() => { if (runId) setActiveRun(null); }, [runId]);
   // A run armed in this view is never stood in for by an older one: until it
-  // lands, there is no receipt — not someone else's.
+  // lands, there is no receipt — not someone else's. A run asked for by link
+  // is that run or none: an unknown id showed another real run (QA-380).
+  // Off the example, an older receipt is only one of this person's own tests:
+  // the example agent's was shown reworded as "Your agent…" (QA-381).
   const focusRun: RunSummary | undefined = activeRun
     ? runs.data?.find((r) => r.run_id === activeRun)
-    : runs.data?.find((r) => r.run_id === wanted) ??
-      // a receipt, or nothing: the newest run of any kind put a live
-      // production run ("Run in progress.") under the test form
-      runs.data?.find((r) => r.evidence.some((c) => c.deviation));
+    : runId
+      ? runs.data?.find((r) => r.run_id === runId)
+      : runs.data?.find((r) => r.run_id === lastRunId) ??
+        // a receipt, or nothing: the newest run of any kind put a live
+        // production run ("Run in progress.") under the test form
+        (mode === "demo" ? runs.data?.find((r) => r.evidence.some((c) => c.deviation)) : undefined);
+  const noSuchRun = Boolean(runId && !activeRun && runs.isSuccess && !focusRun);
 
   // The run landed: the live stream has nothing more to say.
   useEffect(() => {
@@ -204,7 +218,8 @@ export default function Experiment({ runId, autostart }: { runId?: string; autos
         : res.upload
           ? `the proxy could not upload the run to the control plane (${(res.upload as { detail?: string }).detail ?? "upload failed"})`
           : "the proxy ran the scenario but did not upload it — start it with --backend-url so the receipt reaches the control plane");
-      setLastRun(id);
+      // the example agent's run is not "your last test" (QA-381)
+      if (mode !== "demo") setLastRun(id);
       void qc.invalidateQueries({ queryKey: ["runs"] });
     },
     // the run did not finish: say why, not nothing (QA-002)
@@ -222,14 +237,17 @@ export default function Experiment({ runId, autostart }: { runId?: string; autos
     if (autostart && mode !== "demo" && !autoFired.current) connect("demo");
   }, [autostart, mode, connect]);
   useEffect(() => {
-    if (!autostart || autoFired.current || mode !== "demo") return;
+    if (!autostart || autoFired.current || mode !== "demo" || !mayRunKnown) return;
     const t = window.setTimeout(() => {
       autoFired.current = true;
+      // started: a reload of this address shows the run, it does not start
+      // another one (QA-387)
+      window.history.replaceState(null, "", "#/catch");
       start.mutate();
     }, 0);
     return () => window.clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [autostart, mode]);
+  }, [autostart, mode, mayRunKnown]);
 
   // the moment the product proves itself: a lie caught in a run started here
   // (above the early return: hooks run unconditionally)
@@ -242,9 +260,21 @@ export default function Experiment({ runId, autostart }: { runId?: string; autos
   // (above the early return: hooks run unconditionally)
   const runEventsQ = useQuery({
     queryKey: ["run-events", focusRun?.run_id], queryFn: () => api.runEvents(focusRun!.run_id),
-    enabled: Boolean(focusRun?.run_id && (runId || focusRun.evidence.some((c) => c.deviation))),
+    enabled: Boolean(focusRun?.run_id && (runId || focusRun.completed || focusRun.evidence.some((c) => c.deviation))),
   });
   const nodesQ = useQuery({ queryKey: ["nodes"], queryFn: api.nodes });
+  if (noSuchRun) {
+    return (
+      <Center>
+        <div data-testid="no-such-run" style={{ fontFamily: MONO, fontSize: 12.5, color: C.mut }}>
+          There is no run “{runId}” here.{" "}
+          <span style={{ color: C.steel, cursor: "pointer" }} onClick={() => navigate("chaos")}>
+            Chaos tests →
+          </span>
+        </div>
+      </Center>
+    );
+  }
   if (!isConnected(mode) && !runId && !autostart) {
     return (
       <Center>
@@ -333,7 +363,7 @@ export default function Experiment({ runId, autostart }: { runId?: string; autos
                   say it on Connect</span> and the test also says which calls policy would refuse</>}
           </div>
         )}
-        <Tooltip
+        {!mayRun ? <RoleNote need="ingest" what="run a test" testid="catch-viewer" /> : <Tooltip
           content={mode === "demo"
             ? "Runs the whole loop through the proxy: arm the scenario, our scripted agent acts, and the receipt appears below."
             : "Arms the scenario and waits for YOUR agent (pointed at the proxy). The live audit stream shows each governed step as it happens."}
@@ -346,7 +376,7 @@ export default function Experiment({ runId, autostart }: { runId?: string; autos
             {running ? <Loader2 size={14} className="animate-spin" /> : <Zap size={14} />}{" "}
             {mode === "demo" ? "Run the test" : "Start the test, then run my agent"}
           </button>
-        </Tooltip>
+        </Tooltip>}
         {start.isError && (
           <div className="mt-2" style={{ fontFamily: MONO, fontSize: 11, color: C.red }}>
             {(start.error as Error).message} — is the proxy running? (uvx axor-proxy --demo --backend-url …)
@@ -406,6 +436,10 @@ export default function Experiment({ runId, autostart }: { runId?: string; autos
                         ? ` when ${caught.fault_attribution[0].tool_name} failed.`
                         : ` when ${caught.fault_attribution[0].tool_name} was broken on purpose.`)
                     : "."}</>
+              : focusRun.completed && runEventsQ.data && !runEventsQ.data.some((e) => e.kind === "tool_call")
+                // no call, so the broken tool never ran: not a pass (QA-382)
+                ? <span data-testid="nothing-tested">Nothing was tested: the agent made no tool calls, so the
+                    broken tool never ran and there was nothing to check its answer against.</span>
               : focusRun.completed
                 ? <>No discrepancies caught in this run.</>
                 : <>Run in progress.</>}

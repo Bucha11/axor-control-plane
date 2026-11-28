@@ -212,7 +212,9 @@ test.describe("identity login (Settings)", () => {
     await box.getByTestId("sessions-end").click();
     await answerAsk(page);
     await expect(box.getByTestId("sessions-ended")).toContainText("3 people signed out");
-    await expect(box.getByTestId("sessions-ended")).toContainText("within 15 minutes");
+    // QA-487, QA-324: open pages stop within seconds, not 15 minutes
+    await expect(box.getByTestId("sessions-ended")).toContainText("stop within seconds");
+    await expect(box.getByTestId("sessions-ended")).not.toContainText("minutes");
   });
 
   test("SAML: the admin sees what to give the provider and pastes its metadata", async ({ page }) => {
@@ -652,6 +654,23 @@ test.describe("e-mail: reset and verification links", () => {
     expect(asked).toEqual({ email: "ada@acme.io", return_to: "/#/settings" });
   });
 
+  test("a double-click on send reset link still shows that the link is on its way (QA-484)", async ({ page }) => {
+    await page.route("**/identity/v1/email", jsonRoute(200, { available: true }));
+    let asks = 0;
+    await page.route("**/identity/v1/password/forgot", async (route) => {
+      asks += 1;
+      await new Promise((r) => setTimeout(r, 600));
+      await route.fulfill({ status: 202, json: { detail: "if that address has an account, a link is on its way" } });
+    });
+    await goHash(page, "settings");
+    await page.getByRole("button", { name: "forgot password?" }).click();
+    await page.getByLabel("email").fill("ada@acme.io");
+    await page.getByRole("button", { name: "send reset link" }).dblclick();
+    await expect(page.getByTestId("reset-sent")).toContainText("a link is on its way");
+    await expect(page.getByLabel("password")).toHaveCount(0);
+    expect(asks).toBe(1);
+  });
+
   test("no mail set up, no forgot-password", async ({ page }) => {
     await page.route("**/identity/v1/email", jsonRoute(200, { available: false }));
     await goHash(page, "settings");
@@ -875,4 +894,53 @@ test("a removed member is told in words that they are no longer in the workspace
       : r.fallback());
   await goHash(page, "evidence");
   await expect(page.getByTestId("session-ended")).toContainText("you are no longer a member of Acme");
+});
+
+// QA-480: a duplicated tab carries a copy of session storage, so both tabs hold
+// one refresh token. Identity ends the whole sign-in when a rotated token is
+// presented again — so only one tab may exchange it, and the other takes the
+// result instead of presenting its copy.
+test("a duplicated tab does not end the sign-in in both tabs (QA-480)", async ({ context }) => {
+  let expired = false;
+  let dead = false;
+  const presented: string[] = [];
+  await context.addInitScript(() => {
+    if (window.sessionStorage.getItem("axor-app")) return;
+    window.sessionStorage.setItem("axor-app", JSON.stringify({ version: 0, state: {
+      apiToken: "acc-1", refreshToken: "ref-1", identityEmail: "ada@acme.io",
+      vaultSigningToken: "", vaultCredsToken: "", guestTokens: [] } }));
+  });
+  await context.route("**/identity/v1/refresh", (r) => {
+    const token = (r.request().postDataJSON() as { refresh_token: string }).refresh_token;
+    presented.push(token);
+    // identity as it is without a grace: the old token a second time ends it all
+    if (dead || token !== "ref-1" || presented.filter((t) => t === "ref-1").length > 1) {
+      dead = true;
+      return r.fulfill({ status: 401, json: { detail: "this sign-in has ended — sign in again" } });
+    }
+    return r.fulfill({ json: { ...SESSION, access_token: "acc-2", refresh_token: "ref-2" } });
+  });
+  await context.route(/\/v1\/(runs|plane|incidents|workspace)/, (r) =>
+    expired && r.request().headers()["authorization"] === "Bearer acc-1"
+      ? r.fulfill({ status: 401, json: { error: "unauthorized", detail: "token expired" } })
+      : r.fallback());
+  const one = await context.newPage();
+  const two = await context.newPage();
+  for (const p of [one, two]) {
+    await setConnection(p, { mode: "adapter" });
+    await goHash(p, "settings");
+  }
+  expired = true;
+  await goHash(one, "evidence");
+  await expect.poll(() => presented.length).toBe(1);
+  await one.waitForTimeout(500);
+  await goHash(two, "evidence");
+  await two.waitForTimeout(1500);
+  expect(presented).toEqual(["ref-1"]);
+  expect(dead).toBe(false);
+  for (const p of [one, two]) {
+    await expect(p.getByTestId("session-ended")).toHaveCount(0);
+    expect(await p.evaluate(() => JSON.parse(window.sessionStorage.getItem("axor-app") ?? "{}").state?.refreshToken))
+      .toBe("ref-2");
+  }
 });

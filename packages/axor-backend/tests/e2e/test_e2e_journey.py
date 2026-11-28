@@ -72,12 +72,12 @@ async def test_seeded_corpus_drives_replay_graph_and_regression(
                         params={"focus": "v_mail", "k": 3})).json()
     assert {"src": "v_mail", "dst": "v_sum"} in g["edges"]
 
-    # Two-sided regression: golden holds both pins; breaking the legit flow
-    # regresses. Not `safe_to_ship` itself: demo pins alone never make it true
-    # (corpus.py), and whether this server holds pins of its own depends on
-    # which e2e tests ran before this one.
-    good = (await http.post("/v1/regression", json={"config": cfg})).json()
+    # Two-sided regression on the example's cases, with the example's rules
+    # (QA-400): golden holds both; breaking the legit flow regresses. Not
+    # `safe_to_ship` itself: the example's cases alone never make it true
+    # (corpus.py).
+    good = (await http.post("/v1/regression", json={"config": cfg, "cases": "example"})).json()
     assert good["regressed"] == 0 and good["escaped"] == 0
     broken = dict(cfg, allowed_tools=[t for t in cfg["allowed_tools"] if t != "notes_write"])
-    bad = (await http.post("/v1/regression", json={"config": broken})).json()
+    bad = (await http.post("/v1/regression", json={"config": broken, "cases": "example"})).json()
     assert bad["safe_to_ship"] is False

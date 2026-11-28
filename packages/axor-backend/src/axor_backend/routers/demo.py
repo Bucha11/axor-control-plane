@@ -93,18 +93,16 @@ async def seed_adapter_runs(
     """Two adapter-fidelity runs: one denied at the boundary, one clean."""
     from axor_backend import demo
 
-    for run_id, node, events, evidence, pin_side in (
-        ("ex_block", demo.EX_BLOCK_NODE, demo.EX_BLOCK_EVENTS,
-         demo.EX_BLOCK_EVIDENCE, "must_block"),
-        ("ex_pass", demo.EX_PASS_NODE, demo.EX_PASS_EVENTS, [], "must_pass"),
+    for run_id, node, events, evidence in (
+        ("ex_block", demo.EX_BLOCK_NODE, demo.EX_BLOCK_EVENTS, demo.EX_BLOCK_EVIDENCE),
+        ("ex_pass", demo.EX_PASS_NODE, demo.EX_PASS_EVENTS, []),
     ):
         await _seed(store, cache, run_id, node, "adapter-demo", events, evidence)
-        # Pin both corpus sides explicitly (idempotent) — set_evidence's
-        # auto-pin lives in the HTTP route, which this seed bypasses. The
-        # regression report counts these as canned (corpus.py): they are real
-        # replayable evidence about the DEMO, and `safe_to_ship` is a sentence
-        # about the deployment's own agents.
-        await store.pin(run_id, pin_side, "adapter-demo")
+        # Not pinned: the example's cases are checked with the example's rules
+        # (corpus.EXAMPLE_CASES), never among the workspace's own pins, where
+        # its normal flow failed the workspace's own rule (QA-400). A pin an
+        # older build left is taken out.
+        await store.unpin(run_id)
     return {"seeded": ["ex_block", "ex_pass"], "config": demo.EX_CONFIG}
 
 

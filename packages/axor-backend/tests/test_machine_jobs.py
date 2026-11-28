@@ -166,3 +166,17 @@ async def test_a_spec_the_eval_cannot_run_is_refused(
     await _machine(client, key)
     r = await _queue(client, me, spec=spec)
     assert r.status_code == 400 and why in r.json()["detail"]
+
+
+async def test_a_worker_machine_is_listed_with_its_person(client: httpx.AsyncClient,  # noqa: F811
+                                                         priv: Ed25519PrivateKey) -> None:  # noqa: F811
+    """QA-504: "machines and their people" listed only the hooks' developer
+    ids; the worker that Skill evals shows as on was missing."""
+    _, key = await _developer(client, priv, "ada")
+    await _machine(client, key)
+    owner = _bearer(_mint(priv, role="owner", sub="usr_boss", eml="boss@acme.io"))
+    r = await client.get("/v1/identities", headers=owner)
+    assert r.status_code == 200, r.text
+    assert r.json()["machines"] == [{"machine_id": "m-laptop", "host": "laptop",
+                                     "repo_label": "acme/api", "email": "ada@acme.io",
+                                     "online": True}]

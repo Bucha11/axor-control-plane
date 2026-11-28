@@ -61,6 +61,9 @@ export default function CausalSubgraph({
     queryKey: ["influence", runId, anchor.node_id, anchor.seq],
     queryFn: () => api.influence(runId, anchor, {}),
     enabled: openRank,
+    // a refusal (422: too many values to ablate) is the answer, not a
+    // failure to ask again (QA-405)
+    retry: false,
   });
 
   if (sub.isError) {
@@ -166,7 +169,8 @@ export default function CausalSubgraph({
               // drove this" where the backend had said "too many to ablate".
               <div data-testid="influence-refused"
                 style={{ fontFamily: MONO, fontSize: 10, color: C.amber, lineHeight: 1.5 }}>
-                {String(rank.error).replace(/^Error:\s*/, "").slice(0, 400)}
+                {/* the words, not "ApiError: …" (QA-405) */}
+                {(rank.error as Error).message.slice(0, 400)}
               </div>
             )}
             {(rank.data?.ranking ?? []).map((r) => (

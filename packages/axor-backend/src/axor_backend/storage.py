@@ -1144,13 +1144,21 @@ class Store:
             ).order_by(memory_changes.c.id.desc()).limit(limit))).all()
         return [self._change_row(r) for r in rows]
 
-    async def sessions_given_version(self, repo: str, version: str) -> list[str]:
-        """The sessions given exactly this version, first given first."""
+    async def sessions_given_version(self, repo: str, version: str, *, since: str = "",
+                                     until: str = "") -> list[str]:
+        """The sessions given exactly this version, first given first — given
+        at or after ``since`` and before ``until`` when they are set: a version
+        recurs ("" before the first change and after everything is turned off),
+        and each change compares only its own before and after (QA-503)."""
+        where = [memory_given.c.org_id == current_org_id(), memory_given.c.repo == repo,
+                 memory_given.c.version == version]
+        if since:
+            where.append(memory_given.c.ts >= since)
+        if until:
+            where.append(memory_given.c.ts < until)
         async with self.engine.connect() as conn:
-            rows = (await conn.execute(select(memory_given.c.node_id).where(
-                memory_given.c.org_id == current_org_id(), memory_given.c.repo == repo,
-                memory_given.c.version == version,
-            ).order_by(memory_given.c.id))).all()
+            rows = (await conn.execute(select(memory_given.c.node_id).where(*where)
+                                       .order_by(memory_given.c.id))).all()
         return list(dict.fromkeys(r.node_id for r in rows))
 
     async def memory_given_to(self, node_id: str) -> list[dict[str, Any]]:
@@ -1725,37 +1733,20 @@ class Store:
                 guest_sessions.c.claimed_by.is_(None)))).all()
         return len(rows)
 
-    async def guest_examples(self, token_hash: str) -> dict[str, int]:
-        """How many of a guest org's runs and agents are the product's examples
-        (the guest looked at an example): moved with the rest, but not the
-        guest's own work, so not what "moved into your account" counts."""
-        from axor_backend.demo import DEMO_SCENARIOS
-        from axor_backend.examples import is_example_node
-
-        async with self.engine.connect() as conn:
-            row = (await conn.execute(select(guest_sessions).where(
-                guest_sessions.c.token_hash == token_hash))).first()
-            if row is None:
-                return {}
-            run_rows = (await conn.execute(select(runs.c.scenario).where(
-                runs.c.org_id == row.org_id))).all()
-            node_rows = (await conn.execute(select(desired_state.c.node_id).where(
-                desired_state.c.org_id == row.org_id))).all()
-        return {"runs": sum(1 for r in run_rows if r.scenario in DEMO_SCENARIOS),
-                "desired_state": sum(1 for r in node_rows if is_example_node(r.node_id))}
-
-    async def claim_guest(self, token_hash: str, to_org: str) -> dict[str, int]:
+    async def claim_guest(self, token_hash: str, to_org: str) -> dict[str, int] | None:
         """Move a guest org's rows into ``to_org``, in one transaction. The
         account wins a clash: a guest row whose key (minus the org) the
         account already holds is dropped, not merged. Returns rows moved per
-        table. The guest session is marked claimed and stops authenticating."""
+        table (None: no such session, or claimed already). The guest session is
+        marked claimed and stops authenticating."""
         moved: dict[str, int] = {}
         async with self.engine.begin() as conn:
             row = (await conn.execute(select(guest_sessions).where(
                 guest_sessions.c.token_hash == token_hash))).first()
             if row is None or row.claimed_by is not None:
-                return moved
+                return None
             src = row.org_id
+            await _drop_examples(conn, src)
             for table in metadata.sorted_tables:
                 if table is guest_sessions or "org_id" not in table.c:
                     continue
@@ -1864,6 +1855,25 @@ class Store:
         return [(r.run_id, r.line if isinstance(r.line, dict) else json.loads(r.line))
                 for r in rows]
 
+    async def experiment_acks(self, limit: int = 200) -> list[tuple[str, dict[str, Any]]]:
+        """What agents said of the chaos tests armed on them — taken
+        (``experiment_armed``) or refused with why — newest first, with the
+        node (QA-500)."""
+        async with self.engine.connect() as conn:
+            rows = (await conn.execute(
+                select(events.c.node_id, events.c.line)
+                .where(events.c.org_id == current_org_id(),
+                       events.c.kind == "operator_intervention")
+                .order_by(events.c.id.desc()).limit(limit)
+            )).all()
+        out = []
+        for r in rows:
+            line = r.line if isinstance(r.line, dict) else json.loads(r.line)
+            if (line.get("payload") or {}).get("action") in ("experiment_armed",
+                                                            "experiment_refused"):
+                out.append((r.node_id, line))
+        return out
+
     async def last_claims(self, run_ids: list[str]) -> dict[str, str]:
         """What the agent said last in each run — its answer after the fault."""
         if not run_ids:
@@ -1881,6 +1891,18 @@ class Store:
             text = (line.get("payload") or {}).get("text")
             out[r.run_id] = text if isinstance(text, str) else json.dumps(text)
         return out
+
+    async def runs_with_tool_calls(self, run_ids: list[str]) -> set[str]:
+        """Which of these runs recorded at least one tool call."""
+        if not run_ids:
+            return set()
+        async with self.engine.connect() as conn:
+            rows = (await conn.execute(
+                select(events.c.run_id).distinct()
+                .where(events.c.org_id == current_org_id(), events.c.kind == "tool_call",
+                       events.c.run_id.in_(run_ids))
+            )).all()
+        return {r.run_id for r in rows}
 
     async def recent_tool_lines(self, scan: int) -> list[tuple[str, dict[str, Any]]]:
         """The newest ``scan`` tool calls and answers across the tenant's runs,
@@ -2682,6 +2704,12 @@ class Store:
                     node_activity.c.node_id.not_in(not_fleet),
                 )
             )).all()
+        # the product showing itself — a demo node, the demo tree, an example —
+        # is no one's fleet: Free's "one governed node" said nothing of the
+        # demo nodes that spawned past it (QA-360)
+        from axor_backend.examples import is_real_node
+
+        rows = [r for r in rows if is_real_node(r.node_id)]
         by_day: dict[str, set[str]] = {}
         for row in rows:
             by_day.setdefault(row.day, set()).add(row.node_id)
@@ -3842,6 +3870,29 @@ async def _stored_coordinates(
         )
     )).all()
     return {(r.node_id, r.seq) for r in rows} & wanted
+
+
+async def _drop_examples(conn: Any, org: str) -> None:  # noqa: ANN401
+    """Delete the product's examples a guest opened from its org, so a claim
+    moves the guest's own work and not them (QA-468): a run the account did
+    not hold came along, and the example incidents with it."""
+    from axor_backend.demo import DEMO_SCENARIOS
+    from axor_backend.examples import is_example_node
+
+    example_runs = [r.run_id for r in (await conn.execute(select(runs.c.run_id).where(
+        runs.c.org_id == org, runs.c.scenario.in_(DEMO_SCENARIOS)))).all()]
+    for table in metadata.sorted_tables:
+        if "org_id" not in table.c or table is guest_sessions:
+            continue
+        if "run_id" in table.c and example_runs:
+            await conn.execute(table.delete().where(
+                table.c.org_id == org, table.c.run_id.in_(example_runs)))
+        if "node_id" in table.c:
+            nodes = [n for (n,) in (await conn.execute(select(table.c.node_id).distinct().where(
+                table.c.org_id == org))).all() if n and is_example_node(str(n))]
+            if nodes:
+                await conn.execute(table.delete().where(
+                    table.c.org_id == org, table.c.node_id.in_(nodes)))
 
 
 async def _reassign(conn: Any, table: Table, src: str, dst: str) -> int:  # noqa: ANN401

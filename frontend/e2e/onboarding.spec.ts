@@ -2,7 +2,7 @@
 // agent at the proxied URLs → prove the plumbing. The depth toggle sells the
 // adapter's extra surfaces honestly.
 import { expect, test } from "@playwright/test";
-import { goHash, resetPolicy } from "./helpers";
+import { BACKEND, goHash, resetPolicy } from "./helpers";
 
 test.describe("onboarding", () => {
   test("pasting an MCP config discovers and registers the server's tools", async ({ page }) => {
@@ -24,6 +24,27 @@ test.describe("onboarding", () => {
     await page.getByRole("button", { name: /Discover MCP tools/ }).click();
     await expect(page.getByText(/registered 1 MCP server · 2 tools discovered/)).toBeVisible();
     await expect(page.getByText("local_stdio", { exact: true })).toBeVisible();
+  });
+
+  test("a server that cannot be reached is said in words, and the others are still added (QA-486)", async ({ page }) => {
+    await page.route("**/axor/mcp/discover", async (r) => {
+      const body = r.request().postDataJSON() as { url?: string; name?: string };
+      if (body.url) {
+        return r.fulfill({ status: 502, json: { error: "mcp_discovery_failed",
+          detail: "server unreachable: [Errno -2] Name or service not known" } });
+      }
+      return r.fulfill({ json: { registered: body.name ?? "fs", proxied_base: "/t/fs/", server: "fs",
+        protocol_version: "2025-03-26", transport: "stdio", tools: [{ name: "read_file", description: "" }] } });
+    });
+    await goHash(page, "get-started");
+    await page.getByPlaceholder(/mcpServers/).fill(JSON.stringify({ mcpServers: {
+      docs: { url: "https://mcp.nowhere.invalid/sse" }, fs: { command: "npx", args: ["-y", "server-fs"] } } }));
+    await page.getByRole("button", { name: /Discover MCP tools/ }).click();
+    const note = page.getByText(/registered 1 MCP server · 1 tools discovered/);
+    await expect(note).toBeVisible();
+    await expect(note).toContainText("docs: could not reach https://mcp.nowhere.invalid/sse");
+    await expect(page.getByText(/Errno/)).toHaveCount(0);
+    await expect(page.getByText("fs", { exact: true })).toBeVisible();
   });
 
   test("walks tools → point agent → connection check", async ({ page }) => {
@@ -108,13 +129,9 @@ test.describe("onboarding", () => {
   });
 
   test("a found tool's address: the same http(s) rule as the add row (QA-015)", async ({ page, request }) => {
-    await resetPolicy(request);
-    // a tool the scanner found comes without an address
-    await page.addInitScript(() => {
-      const raw = JSON.parse(localStorage.getItem("axor-app") ?? '{"state":{},"version":0}');
-      raw.state.toolPolicy = { found_tool: { klass: "read", outside: false } };
-      localStorage.setItem("axor-app", JSON.stringify(raw));
-    });
+    // a tool the scanner found comes without an address; the policy is the
+    // workspace's, so it is there, not only in this browser (QA-421)
+    await request.put(`${BACKEND}/v1/policy`, { data: { tools: { found_tool: { klass: "READ", outside: false } } } });
     await goHash(page, "connect?for=production");
     await page.getByTestId("prod-way-proxy").click();
     const where = page.getByLabel("where found_tool lives");

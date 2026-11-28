@@ -19,17 +19,14 @@ import { C, MONO, btn } from "../theme";
 import Coach from "../components/Coach";
 import { incidentWhat } from "./Evidence";
 import Tooltip from "../components/Tooltip";
-import { isoDate, localTime } from "../time";
+import { isoDate, localTime, zoneOf } from "../time";
 import { FLEET_EXAMPLE, codingExampleOnly, fleetExampleOnly, isCodingSession } from "../components/CodingOnboarding";
 import { AlertMe, KeepAsTest, SignUpForYourAgent } from "../components/AccountAction";
-import { NOT_A_TEST_BENCH, behindProxy, cannotCut, isTestBench } from "../agentName";
+import { NOT_A_TEST_BENCH, QUIET_MS, behindProxy, cannotCut, demoLeftAt, isTestBench } from "../agentName";
 import { useOneAtATime } from "../oneAtATime";
+import MakeKeyAndSend, { needsKey } from "../components/MakeKeyAndSend";
 
 const REFETCH_MS = 5000;
-// a node is quiet after three missed heartbeats (T = 10 s, protocol §9)
-const QUIET_MS = 30_000;
-// the proxy's demo node (axor_proxy.governed): it leaves the plane after a while
-const isDemoNode = (id: string) => /^governed-[0-9a-f]{6}$/.test(id);
 
 const LEVEL_COLOR: Record<string, string> = {
   FLAGGED: C.red, WATCH: C.amber, CLEAN: C.dim,
@@ -435,8 +432,14 @@ function ControlBody({ focusNode, testBench, examplesOffered }: {
   // ...and the example fleet once "hide the example" was clicked (QA-082)
   const fleetHidden = useApp((st) => st.fleetExampleHidden);
   const hiddenExample = (id: string) => fleetHidden && FLEET_EXAMPLE.includes(id);
+  const hideFleet = useApp((st) => st.setFleetExampleHidden);
+  // a demo node past its last heartbeat has left: not an agent here, not
+  // counted, nothing to command — its panel says so (QA-347)
   const everyone = (nodes.data ?? []).filter((n) => !n.node_id.startsWith("skill-try.")
-    && !n.example_hidden && !(n.example && hiddenExample(n.node_id)));
+    && !n.example_hidden && !(n.example && hiddenExample(n.node_id)) && !demoLeftAt(n));
+  const goneSel = (nodes.data ?? []).find((n) => n.node_id === sel && demoLeftAt(n)) ?? null;
+  // the example fleet beside the workspace's own agents can be hidden there (QA-344)
+  const fleetHasHideable = everyone.some((n) => n.example && FLEET_EXAMPLE.includes(n.node_id));
   // the menu's side: coding agents (sessions and their tree runs) or
   // production agents — everything when no side was chosen or all was asked for
   const journey = useApp((st) => st.journey);
@@ -444,7 +447,9 @@ function ControlBody({ focusNode, testBench, examplesOffered }: {
   const setMenuAll = useApp((st) => st.setMenuAll);
   const side = menuAll || !journey || journey === "both" ? null : journey;
   const list = side ? everyone.filter((n) => (side === "coding") === isCodingNode(n)) : everyone;
-  const otherSide = everyone.length - list.length;
+  // the product's example is no one's production or coding agent: not
+  // counted as "not shown" (QA-370)
+  const otherSide = everyone.filter((n) => !n.example).length - list.filter((n) => !n.example).length;
   // what each agent did that needs a look (the Incidents feed, newest first)
   const incidentsQ = useQuery({ queryKey: ["incidents", "all"], queryFn: () => api.incidents({}),
                                 refetchInterval: REFETCH_MS });
@@ -487,6 +492,8 @@ function ControlBody({ focusNode, testBench, examplesOffered }: {
   // a command another tab (or person) beat to the agent: named, and offered
   // again on the state as it is now (QA-172)
   const [lost, setLost] = useState<{ nodeId: string; state: Record<string, unknown> } | null>(null);
+  // refused for want of an operator key: made here, then sent (QA-501)
+  const [keyless, setKeyless] = useState<{ nodeId: string; what: string; again: () => void } | null>(null);
   const [filter, setFilter] = useState<Status | "all">("all");
   const fleetQ = useQuery({ queryKey: ["fleet"], queryFn: api.fleet, refetchInterval: REFETCH_MS });
   // a tree's agents fold into one row: which node belongs to which tree run
@@ -525,10 +532,18 @@ function ControlBody({ focusNode, testBench, examplesOffered }: {
     onSuccess: () => {
       setCmdError(null);
       setLost(null);
+      setKeyless(null);
       void qc.invalidateQueries({ queryKey: ["nodes"] });
     },
     onError: (err: Error, vars) => {
-      if (err instanceof ApiError && err.status === 409 && /stale version/.test(err.message)) {
+      setKeyless(needsKey(err) ? {
+        nodeId: vars.nodeId,
+        what: Object.entries(vars.state).map(([k, v]) => stateWords(k, v)).join(", "),
+        again: () => command.mutate(vars),
+      } : null);
+      // two writes at once lose one the same way: a concurrent write is the
+      // same lost command, not raw server text (QA-362)
+      if (err instanceof ApiError && err.status === 409 && /stale version|changed concurrently/.test(err.message)) {
         setCmdError(null);
         setLost({ nodeId: vars.nodeId, state: vars.state });
         void qc.invalidateQueries({ queryKey: ["nodes"] });
@@ -546,11 +561,15 @@ function ControlBody({ focusNode, testBench, examplesOffered }: {
       api.cascadeStop(nodeId, version),
     onSuccess: () => {
       setCmdError(null);
+      setKeyless(null);
       void qc.invalidateQueries({ queryKey: ["nodes"] });
       // The subtree it stopped is drawn on the topology, not only the list.
       void qc.invalidateQueries({ queryKey: ["topology"] });
     },
-    onError: (err: Error) => setCmdError(err.message),
+    onError: (err: Error, vars) => {
+      setKeyless(needsKey(err) ? { nodeId: vars.nodeId, what: "the cascade stop", again: () => cascade.mutate(vars) } : null);
+      setCmdError(err.message);
+    },
   });
 
   if (nodes.isLoading) {
@@ -604,6 +623,7 @@ function ControlBody({ focusNode, testBench, examplesOffered }: {
             : <>No agents on the plane yet. Load an example fleet to see what this
                 looks like:</>}
         </div>
+        {goneSel && <div className="mt-3"><DemoLeft nodeId={goneSel.node_id} at={demoLeftAt(goneSel)!} /></div>}
         <ExampleFleet />
         <SpawnGoverned switchToAdapter />
         {topoData && traced.length > 0 && (
@@ -646,7 +666,7 @@ function ControlBody({ focusNode, testBench, examplesOffered }: {
   }
 
   const node = list.find((n) => n.node_id === sel) ?? null;
-  const unknownSel = sel != null && !node && !everyone.some((n) => n.node_id === sel)
+  const unknownSel = sel != null && !node && !goneSel && !everyone.some((n) => n.node_id === sel)
     && topo.isSuccess && !(topoData?.nodes ?? []).some((n) => n.node_id === sel);
   const benchOk = isTestBench(node, testBench);
 
@@ -729,9 +749,15 @@ function ControlBody({ focusNode, testBench, examplesOffered }: {
     unitStatuses.set(k, [...merged]);
   }
   const units = [...unitStatuses.values()];
-  const treeCount = [...unitStatuses.keys()].filter((k) => k.startsWith("tree:")).length;
-  const devCount = [...unitStatuses.keys()].filter((k) => k.startsWith("dev:")).length;
-  const looseCount = units.length - treeCount - devCount;
+  // the live count is the workspace's own agents: an example unit is said
+  // apart, beside them (QA-344)
+  const exampleUnits = new Set(list.filter((n) => n.example).map((n) => unitOf(n.node_id)));
+  for (const n of list) if (!n.example) exampleUnits.delete(unitOf(n.node_id));
+  const ownKeys = [...unitStatuses.keys()].filter((k) => !exampleUnits.has(k));
+  const treeCount = ownKeys.filter((k) => k.startsWith("tree:")).length;
+  const devCount = ownKeys.filter((k) => k.startsWith("dev:")).length;
+  const looseCount = ownKeys.length - treeCount - devCount;
+  const ownCount = list.filter((n) => !n.example).length;
   // the heading counts what the "needs you" chip counts — one definition
   const needYou = units.filter((st) => st.includes("needs_you")).length;
   // "healthy" said of a fleet whose agent was just stopped read as all clear
@@ -748,13 +774,14 @@ function ControlBody({ focusNode, testBench, examplesOffered }: {
     <div className={node ? "fleet-grid fleet-grid-open" : "fleet-grid"}>
     <div style={{ minWidth: 0 }}>
       {readFailed}
-      <Coach id="control" title="Control — operate governed agents live">
+      {/* the coding journey's Agents page has its own note (App PageCoach, QA-463) */}
+      {journey !== "coding" && <Coach id="control" title="Control — operate governed agents live">
         Each row is a live governed agent (a node). Click one to open its panel:{" "}
         <span style={{ color: C.text }}>desired</span> is what you've commanded,{" "}
         <span style={{ color: C.text }}>reported</span> is what the node has applied —
         a gap means a command is still in flight. Pause, cap its budget, or stop it;
         interventions travel over the plane and the node obeys on its next turn.
-      </Coach>
+      </Coach>}
       {codingExampleOnly(list.map((n) => n.node_id)) && (
         <CodingExampleStory list={list} treeOf={treeOf} onPick={pick} />
       )}
@@ -785,9 +812,18 @@ function ControlBody({ focusNode, testBench, examplesOffered }: {
         active: Math.max(fleetQ.data.totals.active, units.filter((st) => st.includes("running")).length) }} />}
       <div className="flex items-center gap-4" style={{ fontFamily: MONO, fontSize: 11, color: C.mut, marginBottom: 20 }}>
         <span data-testid="fleet-count">
+          {/* only examples here: they are said as what they are, not "0 agents · live" */}
+          {ownKeys.length > 0 && <>
           {devCount > 0 && <>{devCount} developer{devCount === 1 ? "" : "s"}{looseCount > 0 ? " · " : ""}</>}
           {(looseCount > 0 || devCount === 0) && <>{looseCount} agent{looseCount === 1 ? "" : "s"}</>}
           {treeCount > 0 && <> · {treeCount} tree{treeCount === 1 ? "" : "s"}</>} · live
+          </>}
+          {exampleUnits.size > 0 && <span data-testid="fleet-count-examples">
+            {ownKeys.length > 0 ? " · " : ""}{exampleUnits.size} example{exampleUnits.size === 1 ? "" : "s"}, not counted as your agents
+            {ownCount > 0 && fleetHasHideable && <>{" "}<button data-testid="examples-hide" onClick={() => hideFleet(true)}
+              style={{ background: "none", border: "none", padding: 0, cursor: "pointer", fontFamily: MONO, fontSize: 11, color: C.steel }}>
+              hide the example ×</button></>}
+          </span>}
           {otherSide > 0 && (
             <> · <button data-testid="agents-show-other" onClick={() => setMenuAll(true)}
               style={{ background: "none", border: "none", padding: 0, cursor: "pointer", fontFamily: MONO, fontSize: 11, color: C.steel }}>
@@ -977,16 +1013,11 @@ function ControlBody({ focusNode, testBench, examplesOffered }: {
               <span style={{ color: node.profile?.title ? C.dim : C.text, fontSize: node.profile?.title ? 11 : 13 }}>{node.node_id}</span>
             </span>
             )}
-            {applying && node.example ? (
+            {node.example ? (
               // nothing runs behind an example: "applying pause…" waited
-              // forever (QA-090)
+              // forever (QA-090) — said up front, not after a pause (QA-344)
               <span data-testid="example-no-commands" style={{ fontFamily: MONO, fontSize: 11, color: C.dim }}>
                 example node — it takes no commands; yours do
-              </span>
-            ) : applying && quietSince && isDemoNode(node.node_id) ? (
-              <span data-testid="demo-node-left" style={{ fontFamily: MONO, fontSize: 11, color: C.dim }}>
-                this demo node left the plane at {localTime(quietSince)} — it takes no more
-                commands; spawn another under “try more examples”
               </span>
             ) : applying && quietSince ? (
               <span data-testid="node-quiet" style={{ fontFamily: MONO, fontSize: 11, color: C.amber }}>
@@ -1036,7 +1067,7 @@ function ControlBody({ focusNode, testBench, examplesOffered }: {
 
           <RunsPanel nodeId={node.node_id} paused={paused} stopped={stopped}
             disabled={command.isPending || !(!isCodingNode(node) || mine(node.profile?.developer) || canAdmin)}
-            hideControls={!mayOperate} send={send} />
+            hideControls={!mayOperate || !!node.example} send={send} />
 
           <details className="mb-3" style={{ fontFamily: MONO, fontSize: 11, color: C.mut, lineHeight: 1.7 }}>
             <summary style={{ cursor: "pointer", color: C.dim }}>
@@ -1061,6 +1092,8 @@ function ControlBody({ focusNode, testBench, examplesOffered }: {
           ) : isCodingNode(node) && !mine(node.profile?.developer) && !canAdmin ? (
             <NotYours developer={node.profile?.developer ?? ""} nodeId={node.node_id} hasTeam={hasTeam} />
           ) : <>
+          {/* an example takes no commands: none offered (QA-344) */}
+          {!node.example && <>
           {/* Budget cap — a first-class control (spec §15). Decrease-only over
               the plane: the adapter refuses any widening, so this can set an
               initial cap or tighten it, never raise it past the current one. */}
@@ -1234,6 +1267,7 @@ function ControlBody({ focusNode, testBench, examplesOffered }: {
               </>}
             </div>
           )}
+          </>}
 
           {isCodingNode(node) && mine(node.profile?.developer) && !stopped && (
             <SayToAgent nodeId={node.node_id} />
@@ -1272,6 +1306,9 @@ function ControlBody({ focusNode, testBench, examplesOffered }: {
           {cmdError && (
             <div className="mt-3" style={{ fontFamily: MONO, fontSize: 11, color: C.red }}>
               {cmdError}
+              {keyless && keyless.nodeId === node.node_id && (
+                <div><MakeKeyAndSend what={keyless.what} send={keyless.again} /></div>
+              )}
             </div>
           )}
           {lost && lost.nodeId === node.node_id && (
@@ -1295,6 +1332,8 @@ function ControlBody({ focusNode, testBench, examplesOffered }: {
         </div>
           </>)}
         </>
+      ) : goneSel ? (
+        <DemoLeft nodeId={goneSel.node_id} at={demoLeftAt(goneSel)!} />
       ) : (
         <ActivityFeed only={side ? new Set(list.map((n) => n.node_id)) : undefined} />
       )}
@@ -1597,6 +1636,9 @@ function TeamBrake() {
   // Free keeps one developer: the brake holds YOUR agents there, not a team's
   const ent = useQuery({ queryKey: ["entitlements"], queryFn: api.entitlements, retry: false });
   const solo = ent.data?.free === true;
+  // the one who pulled it is "you"; anyone else watching reads whose agents
+  // are held — a viewer read "of yours" (QA-363)
+  const me = useApp((s) => s.identityEmail).toLowerCase();
   const set = useMutation({
     mutationFn: ({ on, reason }: { on: boolean; reason: string }) => api.setBrake(on, reason),
     onSuccess: () => void qc.invalidateQueries({ queryKey: ["brake"] }),
@@ -1607,7 +1649,9 @@ function TeamBrake() {
       <div data-testid="brake-on" className="mb-3 px-3 py-2 flex items-center gap-3 flex-wrap"
         style={{ border: `1px solid ${C.amber}`, borderRadius: 6, fontFamily: MONO, fontSize: 11.5, color: C.amber }}>
         <span style={{ flex: 1 }}>
-          {solo ? "every coding agent of yours is held" : "every coding agent of the team is held"}{brake.data.by ? ` — ${brake.data.by}` : ""}
+          {!solo ? "every coding agent of the team is held"
+            : !me || !brake.data.by || brake.data.by.toLowerCase() === me ? "every coding agent of yours is held"
+              : "every one of the owner's coding agents is held"}{brake.data.by ? ` — ${brake.data.by}` : ""}
           {brake.data.reason ? `: ${brake.data.reason}` : ""}. Held calls wait and go on when it is lifted.
         </span>
         {canAdmin && (
@@ -1628,7 +1672,8 @@ function TeamBrake() {
           if (reason != null) set.mutate({ on: true, reason });
         }}
         style={{ background: "none", border: "none", padding: 0, cursor: "pointer", color: C.dim, fontFamily: MONO, fontSize: 11 }}>
-        {solo ? "⏸ hold all your agents…" : "⏸ hold every agent of the team…"}
+        {/* it holds coding agents only: said so, on the "both" journey too (QA-361) */}
+        {solo ? "⏸ hold all your coding agents…" : "⏸ hold every coding agent of the team…"}
       </button>
     </div>
   );
@@ -1636,6 +1681,20 @@ function TeamBrake() {
 
 function isCodingNode(n: NodeInfo): boolean {
   return n.profile?.kind === "coding" || n.profile?.kind === "tree";
+}
+
+/** A demo node that has left the plane: said, with nothing to command (QA-347). */
+function DemoLeft({ nodeId, at }: { nodeId: string; at: string }) {
+  return (
+    <div className="p-4" style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 8,
+                                  fontFamily: MONO, fontSize: 11.5, lineHeight: 1.7 }}>
+      <div style={{ color: C.text, fontSize: 13 }}>{nodeId}</div>
+      <span data-testid="demo-node-left" style={{ color: C.dim }}>
+        this demo node left the plane at {localTime(at)} — it takes no more
+        commands; spawn another under “try more examples”
+      </span>
+    </div>
+  );
 }
 
 function statusesOf(n: NodeInfo, row?: FleetRow, needsLook = false): Status[] {
@@ -1683,7 +1742,7 @@ function stamp(iso: string): string {
   const d = isoDate(iso);
   if (!d) return "";
   const today = new Date().toDateString() === d.toDateString();
-  return today ? d.toTimeString().slice(0, 8) : localTime(iso);
+  return today ? `${d.toTimeString().slice(0, 8)} ${zoneOf(d)}` : localTime(iso);
 }
 
 function ago(iso?: string | null): string {
@@ -2216,6 +2275,12 @@ function FleetRowView({ n, row, st, first, selected, onPick, locked, look, membe
         ) : (
           <span style={{ fontFamily: MONO, fontSize: 13, color: locked ? C.mut : C.text, flex: 1, minWidth: 120 }}>{n.node_id}</span>
         )}
+        {n.example && (
+          // the product's example beside your own agents reads as yours
+          // without it (QA-344)
+          <span data-testid={`example-badge-${n.node_id}`} style={{ fontFamily: MONO, fontSize: 10, color: C.steel,
+            border: `1px solid ${C.line}`, borderRadius: 20, padding: "1px 8px" }}>example</span>
+        )}
         {locked && <LockChip reasons={locked} />}
         {!locked && attention(n).map((a) => (
           <button key={a.label}
@@ -2459,7 +2524,10 @@ function ActivityFeed({ only }: { only?: Set<string> }) {
       <div style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 8 }}>
         {rows.length === 0 && (
           <div className="p-3" style={{ color: C.dim }}>
-            {feed.isLoading ? "loading…" : "nothing yet — agent steps and operator acks land here as they happen."}
+            {/* a search with no match is not an empty feed (QA-346) */}
+            {feed.isLoading ? "loading…" : find && kept.length > 0
+              ? <span data-testid="feed-no-match">nothing matches “{find}”</span>
+              : "nothing yet — agent steps and operator acks land here as they happen."}
           </div>
         )}
         {rows.map(({ e, text, color }, i) => {

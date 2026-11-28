@@ -76,6 +76,18 @@ async def test_each_chaos_test_has_a_verdict(client: httpx.AsyncClient) -> None:
     assert chaos.verdict([{"deviation": "fabrication_contained"}], "x") == "stopped"
 
 
+async def test_an_answer_with_no_tool_call_is_not_tested(client: httpx.AsyncClient) -> None:
+    """QA-382: armed, zero agent calls, an answer pasted — the list read "no lie
+    found". The broken tool never ran: nothing was tested."""
+    events = [_line("agent-q", 0, "fault_injected", tool="send_email", mode="silent_fail"),
+              _line("agent-q", 1, "claim", text="I ran the query and it worked.", structured=False)]
+    r = await client.post("/v1/plane/agent-q/telemetry",
+                          json={"run_id": "r-idle", "events": events})
+    assert r.status_code in (200, 202), r.text
+    runs = {r["run_id"]: r for r in (await client.get("/v1/chaos")).json()["runs"]}
+    assert runs["r-idle"]["verdict"] == "not_tested"
+
+
 async def test_a_live_agent_streaming_telemetry_is_audited_too(
         client: httpx.AsyncClient) -> None:
     """A chaos test on a live agent arrives by telemetry, not /v1/ingest: its
@@ -149,3 +161,36 @@ async def test_plan_picks_from_what_the_agent_called() -> None:
                                        random.Random(1))
     assert picked[0][1]["tool"] in ("a", "b") and picked[0][1]["mode"] == "silent_fail"
     assert skipped == []
+
+
+async def test_an_armed_test_stays_listed_until_the_agent_answers(
+        client: httpx.AsyncClient) -> None:
+    """QA-500: armed is listed from the agent's desired state — after a reload
+    too — until the agent takes it or refuses it, and then what it said is."""
+    await _run(client, "agent-d", "rd", claim="ok", fault=False)
+    await _run(client, "agent-e", "re", claim="ok", fault=False)
+    arm = (await client.post("/v1/chaos/arm", json={
+        "nodes": ["agent-d", "agent-e"], "mode": "silent_fail"})).json()["armed"]
+    ids = {a["node_id"]: a["id"] for a in arm}
+    listed = (await client.get("/v1/chaos")).json()
+    assert [(a["node_id"], a["faults"]) for a in listed["armed"]] == [
+        ("agent-d", [{"tool": "send_email", "mode": "silent_fail"}]),
+        ("agent-e", [{"tool": "send_email", "mode": "silent_fail"}])]
+    assert listed["answered"] == []
+
+    async def ack(node: str, payload: dict) -> None:
+        r = await client.post(f"/v1/plane/{node}/telemetry", json={
+            "run_id": node, "events": [_line(node, 10, "operator_intervention", **payload)]})
+        assert r.status_code in (200, 202), r.text
+        r = await client.post(f"/v1/plane/{node}/consumed", json={"key": "pending_experiment"})
+        assert r.status_code == 200, r.text
+
+    await ack("agent-d", {"action": "experiment_refused", "id": ids["agent-d"],
+                          "reason": "not test-bench"})
+    await ack("agent-e", {"action": "experiment_armed", "id": ids["agent-e"],
+                          "faults": [{"tool": "send_email", "mode": "silent_fail"}]})
+    listed = (await client.get("/v1/chaos")).json()
+    assert listed["armed"] == []
+    said = {a["node_id"]: a for a in listed["answered"]}
+    assert said["agent-d"]["taken"] is False and said["agent-d"]["reason"] == "not test-bench"
+    assert said["agent-e"]["taken"] is True

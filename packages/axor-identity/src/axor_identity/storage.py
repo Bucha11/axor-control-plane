@@ -538,6 +538,23 @@ class Store:
                 "session_ts": row.session_ts or row.created_ts,
                 "family": row.family or row.token_hash}
 
+    async def rotate_refresh(self, old_hash: str, new_hash: str, user_id: str, org_id: str,
+                             expires_ts: str, ts: str, session_ts: str,
+                             family: str) -> bool:
+        """The presented token is spent and its successor stored, together.
+        False when it was already spent — a concurrent rotation won (QA-480)."""
+        async with self.engine.begin() as conn:
+            spent = await conn.execute(update(refresh_tokens).where(
+                refresh_tokens.c.token_hash == old_hash,
+                refresh_tokens.c.revoked.is_(False)).values(revoked=True))
+            if not spent.rowcount:
+                return False
+            await conn.execute(insert(refresh_tokens).values(
+                token_hash=new_hash, user_id=user_id, org_id=org_id,
+                expires_ts=expires_ts, revoked=False, created_ts=ts,
+                session_ts=session_ts, family=family))
+        return True
+
     async def end_session(self, family: str, reason: str) -> None:
         """One session ends: every refresh token of its family is revoked, and
         its id goes on the revocation feed so its access tokens stop too

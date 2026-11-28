@@ -227,7 +227,8 @@ async def test_seed_adapter_runs_lights_up_deep_surfaces(
     #    corpus that had verified nothing about this deployment green. The demo
     #    proves the shipped kernel denies the shipped attack; "every attack
     #    still blocked" is a sentence about the deployment's own agents.
-    reg = (await client.post("/v1/regression", json={"config": cfg})).json()
+    # the example's cases, checked with the example's rules (QA-400)
+    reg = (await client.post("/v1/regression", json={"config": cfg, "cases": "example"})).json()
     sides = {row["run_id"]: (row["side"], row["result"]) for row in reg["rows"]}
     assert sides["ex_block"] == ("must_block", "held")
     assert sides["ex_pass"] == ("must_pass", "passed")
@@ -237,9 +238,9 @@ async def test_seed_adapter_runs_lights_up_deep_surfaces(
     assert (reg["regressed"], reg["escaped"], reg["unanchored"]) == (0, 0, 0)
 
     # The teeth are unchanged: a config that breaks the legit flow regresses the
-    # must_pass side, canned or not — marked, never excluded.
+    # must_pass side of the example's own check.
     broken = dict(cfg, allowed_tools=[t for t in cfg["allowed_tools"]
                                       if t != "notes_write"])
-    reg2 = (await client.post("/v1/regression", json={"config": broken})).json()
+    reg2 = (await client.post("/v1/regression", json={"config": broken, "cases": "example"})).json()
     assert reg2["safe_to_ship"] is False
     assert reg2["regressed"] >= 1

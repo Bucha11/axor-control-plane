@@ -58,3 +58,18 @@ export const NO_CUT =
   "This agent's tools are wrapped, not its model loop: nothing here can reach into its context. "
   + "If this text came from something it reads again, fix it there — its next run reads it again. "
   + "To cut context live, wrap the loop (LangChain, Claude).";
+
+// a node is quiet after three missed heartbeats (T = 10 s, protocol §9)
+export const QUIET_MS = 30_000;
+// the proxy's demo node and demo tree (axor_proxy.governed): they leave the
+// plane after a while
+export const isDemoNode = (id: string) =>
+  /^governed-[0-9a-f]{6}$/.test(id) || /^gov-tree-[0-9a-f]{4}-(orch|research|scraper)$/.test(id);
+
+/** When a demo node left the plane — its last heartbeat, once it is past the
+ *  quiet window — or null while it is live. It is said at once, not only
+ *  after a command went to it (QA-347). */
+export function demoLeftAt(n: { node_id: string; reported?: { updated_ts?: string | null } | null }): string | null {
+  const ts = n.reported?.updated_ts;
+  return isDemoNode(n.node_id) && ts && Date.now() - Date.parse(ts) > QUIET_MS ? ts : null;
+}
