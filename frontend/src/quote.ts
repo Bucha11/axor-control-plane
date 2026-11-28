@@ -73,3 +73,30 @@ export function quotes(developers: number, nodes: number): { all: Quote[]; best:
   const best = all.filter((q) => q.ok).reduce((a, b) => (b.total < a.total ? b : a));
   return { all, best };
 }
+
+// How long the hosted plane keeps runs on each rung (backend
+// ee/entitlements.RETENTION_DAYS).
+export const RETENTION_DAYS: Record<Rung, number> = {
+  community: 7, coding: 30, business: 30, team: 90, security: 365,
+};
+const LADDER: Rung[] = ["community", "coding", "business", "team", "security"];
+
+function days(n: number): string {
+  return n === 365 ? "a year" : `${n} days`;
+}
+
+/** What a move down the ladder takes away, said before it is confirmed
+ *  (QA-304): the confirm said only "prorated, nothing is bought twice". */
+export function lostOnMove(from: Rung, to: Rung): string[] {
+  if (LADDER.indexOf(to) >= LADDER.indexOf(from)) return [];
+  const lost: string[] = [];
+  for (const r of LADDER.slice(LADDER.indexOf(to) + 1, LADDER.indexOf(from) + 1).reverse()) {
+    if (r === "team") lost.push("the production side locks (runtime control, attestations, scheduled regression CI, alert routing)");
+    if (r === "business") lost.push("single sign-on, SCIM, who may and the full audit trail lock");
+    if (r === "security") lost.push("incident → regression conversion and policy / kernel comparison lock");
+  }
+  if (RETENTION_DAYS[to] < RETENTION_DAYS[from]) {
+    lost.push(`runs are kept ${days(RETENTION_DAYS[to])} instead of ${days(RETENTION_DAYS[from])} — older ones are deleted`);
+  }
+  return lost;
+}

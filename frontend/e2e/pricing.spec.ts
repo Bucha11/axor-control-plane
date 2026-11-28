@@ -249,6 +249,23 @@ test("on a plan paid by card, another rung changes the subscription, and says wh
   expect(await page.evaluate(() => (window as unknown as { __paddle?: unknown[] }).__paddle ?? [])).toEqual([]);
 });
 
+test("moving down a plan says what the workspace loses before it is confirmed (QA-304)", async ({ page }) => {
+  await page.route("**/v1/license/status", (r) => r.fulfill({ json: {
+    active: true, vendor_key_configured: true, hosted: true, auto_renewal: true,
+    licensed_to: "org_acme", workspace_tier: "team" } }));
+  let asked = 0;
+  await page.route("**/v1/license/plan", (r) => { asked += 1; return r.fulfill({ json: { from: "team", to: "coding" } }); });
+  await signedInAs(page, ["read", "ingest", "operate", "admin"]);
+  await goHash(page, "pricing?for=both");
+  await page.getByTestId("cta-coding").click();
+  const ask = page.getByTestId("ask");
+  await expect(ask).toContainText("the production side locks");
+  await expect(ask).toContainText("single sign-on, SCIM");
+  await expect(ask).toContainText("runs are kept 30 days instead of 90 days");
+  await ask.getByRole("button", { name: "cancel" }).click();
+  expect(asked).toBe(0);
+});
+
 test("waiting for the payment provider is said once the checkout is paid, not when it opens (QA-302)", async ({ page }) => {
   await page.route("**/v1/license/status", (r) => r.fulfill({ json: {
     active: false, vendor_key_configured: true, hosted: true, licensed_to: "org_acme" } }));

@@ -17,7 +17,7 @@ import Coach from "../components/Coach";
 import Tabs from "../components/Tabs";
 import { LAB_SHIPPED } from "../flags";
 import { navigate, useRoute } from "../router";
-import { ADDS, CARD, quotes, RUNG_NAME, type Rung } from "../quote";
+import { ADDS, CARD, lostOnMove, quotes, RUNG_NAME, type Rung } from "../quote";
 import { openCheckout, paddlePrice } from "../paddle";
 import { isGuestToken, useApp } from "../store";
 
@@ -361,7 +361,9 @@ export default function Pricing() {
   }, [current, waiting, qc]);
   const changePlan = async (rung: Rung) => {
     const from = RUNG_NAME[current as Rung] ?? current;
-    if (!(await askConfirm(`Move this workspace from ${from} to ${RUNG_NAME[rung]}? The same subscription changes, prorated on the card on file — nothing is bought twice.`))) return;
+    const lost = current ? lostOnMove(current as Rung, rung) : [];
+    if (!(await askConfirm(`Move this workspace from ${from} to ${RUNG_NAME[rung]}? The same subscription changes, prorated on the card on file — nothing is bought twice.`
+      + (lost.length ? ` What this workspace loses: ${lost.join("; ")}.` : "")))) return;
     try {
       await api.changePlan(rung);
       setPayNote(null);
