@@ -101,6 +101,48 @@ test.describe("two tabs on one policy (QA-212)", () => {
   });
 });
 
+test.describe("one save, said as it went (QA-464)", () => {
+  test("a double-click on save for the team sends one save, and it is said saved", async ({ browser, request }) => {
+    const clear = { allow: [], mode: "enforce", exceptions: [], trusted_sources: [] };
+    await request.put(`${BACKEND}/v1/coding/rules`, { data: clear });
+    const page = await codingPolicyTab(browser);
+    let puts = 0;
+    await page.route("**/v1/coding/rules", async (route) => {
+      if (route.request().method() !== "PUT") return route.continue();
+      puts += 1;
+      await new Promise((ok) => setTimeout(ok, 400));
+      return route.continue();
+    });
+    await page.getByTestId("rule-secrets-allowed").click();
+    await page.getByTestId("policy-save").dblclick();
+    await expect(page.getByText(/^saved — every sidecar/)).toBeVisible();
+    await expect(page.getByTestId("policy-stale")).toHaveCount(0);
+    expect(puts).toBe(1);
+    await page.context().close();
+    await request.put(`${BACKEND}/v1/coding/rules`, { data: clear });
+  });
+
+  test("a save refused as stale whose content is already the team's is said saved", async ({ browser, request }) => {
+    const clear = { allow: [], mode: "enforce", exceptions: [], trusted_sources: [] };
+    await request.put(`${BACKEND}/v1/coding/rules`, { data: clear });
+    const page = await codingPolicyTab(browser);
+    // this tab's own earlier save landed; its answer was lost and a resend
+    // against the old version was refused as stale
+    await page.route("**/v1/coding/rules", async (route) => {
+      if (route.request().method() !== "PUT") return route.continue();
+      await route.fetch();
+      return route.fulfill({ status: 409, json: { detail: { code: "stale",
+        detail: "someone changed the rules since you opened this — reload to see it; nothing was saved" } } });
+    });
+    await page.getByTestId("rule-secrets-allowed").click();
+    await page.getByTestId("policy-save").click();
+    await expect(page.getByText(/^saved — every sidecar/)).toBeVisible();
+    await expect(page.getByTestId("policy-stale")).toHaveCount(0);
+    await page.context().close();
+    await request.put(`${BACKEND}/v1/coding/rules`, { data: clear });
+  });
+});
+
 test.describe("a failed read is said, never shown as empty (QA-231, QA-233, QA-234)", () => {
   const fail = (route: import("@playwright/test").Route) =>
     route.fulfill({ status: 500, contentType: "text/plain", body: "Internal Server Error" });
