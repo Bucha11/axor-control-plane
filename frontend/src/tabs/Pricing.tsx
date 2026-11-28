@@ -561,8 +561,9 @@ export default function Pricing() {
                     ? (e) => {
                       e.preventDefault();
                       setPayNote(null);
-                      openCheckout(card.price, card.org, hosted, email || undefined)
-                        .then(() => setWaiting({ from: current, until: Date.now() + 5 * 60_000 }))
+                      openCheckout(card.price, card.org, hosted, email || undefined,
+                        // paid, not merely opened (QA-302)
+                        () => setWaiting({ from: current, until: Date.now() + 5 * 60_000 }))
                         // the payment page did not load: say so, with the other way (QA-136)
                         .catch(() => setPayNote({ ok: false, text: "the payment page could not load — an ad or script blocker can stop it; allow cdn.paddle.com and try again, or write to sales@axor.dev" }));
                     }

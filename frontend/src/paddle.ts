@@ -34,11 +34,15 @@ export function paddlePrice(rung: Rung): string | undefined {
 
 interface PaddleJs {
   Environment: { set: (env: string) => void };
-  Initialize: (opts: { token: string }) => void;
+  Initialize: (opts: { token: string; eventCallback?: (e: { name?: string }) => void }) => void;
   Checkout: { open: (opts: unknown) => void };
 }
 
 let loading: Promise<PaddleJs> | null = null;
+// what the open checkout does once it is paid: Paddle.js says so with its
+// `checkout.completed` event (QA-302 — the page said "waiting for the payment
+// provider" as soon as the overlay opened, before anything was paid)
+let onCompleted: (() => void) | null = null;
 
 function load(): Promise<PaddleJs> {
   loading ??= new Promise<PaddleJs>((resolve, reject) => {
@@ -48,7 +52,9 @@ function load(): Promise<PaddleJs> {
       const paddle = (window as unknown as { Paddle?: PaddleJs }).Paddle;
       if (!paddle) return reject(new Error("Paddle.js did not load"));
       if (SANDBOX) paddle.Environment.set("sandbox");
-      paddle.Initialize({ token: TOKEN });
+      paddle.Initialize({ token: TOKEN, eventCallback: (e) => {
+        if (e?.name === "checkout.completed") onCompleted?.();
+      } });
       resolve(paddle);
     };
     script.onerror = () => { loading = null; reject(new Error("Paddle.js did not load")); };
@@ -57,8 +63,10 @@ function load(): Promise<PaddleJs> {
   return loading;
 }
 
-export async function openCheckout(priceId: string, org: string, hosted: boolean, email?: string): Promise<void> {
+export async function openCheckout(priceId: string, org: string, hosted: boolean, email?: string,
+                                   completed?: () => void): Promise<void> {
   const paddle = await load();
+  onCompleted = completed ?? null;
   paddle.Checkout.open({
     items: [{ priceId, quantity: 1 }],
     customData: { org, hosted },
