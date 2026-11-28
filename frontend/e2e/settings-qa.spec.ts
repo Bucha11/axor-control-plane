@@ -438,3 +438,20 @@ test("the license-file hint is for a plane that said it is self-hosted, not for 
   await page.reload();
   await expect(page.getByTestId("billing-license-hint")).toContainText("the license file you were sent");
 });
+
+// QA-306: plan changes showed as raw event names on the trail
+test("plan changes on the audit trail are in words", async ({ page }) => {
+  await setConnection(page, { mode: "adapter" });
+  await page.route("**/v1/audit?*", (r) => r.fulfill({ json: { total: 3,
+    actions: ["plan_change_requested", "plan_upgraded", "plan_downgraded"], items: [
+      { id: "a3", ts: "2026-11-28T10:03:00Z", kind: "control", action: "plan_downgraded", who: "license renewal", target: "coding", detail: { tier: "coding", until: "2026-12-31" } },
+      { id: "a2", ts: "2026-11-28T10:02:00Z", kind: "control", action: "plan_upgraded", who: "license renewal", target: "team", detail: { tier: "team" } },
+      { id: "a1", ts: "2026-11-28T10:01:00Z", kind: "control", action: "plan_change_requested", who: "ada@acme.io", role: "owner", target: "team", detail: {} },
+    ] } }));
+  await goHash(page, "settings?tab=audit");
+  const rows = page.getByTestId("audit-row");
+  await expect(rows.nth(0)).toContainText("moved the plan down to");
+  await expect(rows.nth(1)).toContainText("moved the plan up to");
+  await expect(rows.nth(2)).toContainText("asked to change the plan to");
+  await expect(page.getByText(/plan_(change_requested|upgraded|downgraded)/)).toHaveCount(0);
+});
