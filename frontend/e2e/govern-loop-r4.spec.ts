@@ -137,3 +137,25 @@ test("a viewer on a run page gets none of its controls, and is told who can (QA-
   }
   expect(commands).toEqual([]);
 });
+
+test("a demo node past its last heartbeat says it left, before any command (QA-347)", async ({ page, request }) => {
+  const node = `governed-${hex6()}`;
+  await seedNode(request, node);
+  const ago = new Date(Date.now() - 120_000).toISOString();
+  await page.route("**/v1/plane/nodes", async (route) => {
+    const all = await (await request.get(`${BACKEND}/v1/plane/nodes`)).json() as
+      { node_id: string; reported: { updated_ts?: string } | null }[];
+    for (const n of all) if (n.node_id === node && n.reported) n.reported.updated_ts = ago;
+    await route.fulfill({ json: all });
+  });
+  await setConnection(page, { mode: "adapter" });
+  await goHash(page, "govern");
+  await expect(page.getByTestId("fleet-count")).toBeVisible();
+  // not a row, not counted, not "needs you"
+  await expect(page.getByTestId(`agent-row-${node}`)).toHaveCount(0);
+  await goHash(page, `govern/${node}`);
+  await expect(page.getByTestId("demo-node-left")).toContainText("this demo node left the plane");
+  await expect(page.getByRole("button", { name: /^(Pause|Resume)$/ })).toHaveCount(0);
+  await expect(page.getByTestId("no-such-agent")).toHaveCount(0);
+  await page.unrouteAll({ behavior: "ignoreErrors" });
+});

@@ -22,15 +22,11 @@ import Tooltip from "../components/Tooltip";
 import { isoDate, localTime } from "../time";
 import { FLEET_EXAMPLE, codingExampleOnly, fleetExampleOnly, isCodingSession } from "../components/CodingOnboarding";
 import { AlertMe, KeepAsTest, SignUpForYourAgent } from "../components/AccountAction";
-import { NOT_A_TEST_BENCH, behindProxy, cannotCut, isTestBench } from "../agentName";
+import { NOT_A_TEST_BENCH, QUIET_MS, behindProxy, cannotCut, demoLeftAt, isTestBench } from "../agentName";
 import { useOneAtATime } from "../oneAtATime";
 import MakeKeyAndSend, { needsKey } from "../components/MakeKeyAndSend";
 
 const REFETCH_MS = 5000;
-// a node is quiet after three missed heartbeats (T = 10 s, protocol §9)
-const QUIET_MS = 30_000;
-// the proxy's demo node (axor_proxy.governed): it leaves the plane after a while
-const isDemoNode = (id: string) => /^governed-[0-9a-f]{6}$/.test(id);
 
 const LEVEL_COLOR: Record<string, string> = {
   FLAGGED: C.red, WATCH: C.amber, CLEAN: C.dim,
@@ -436,8 +432,11 @@ function ControlBody({ focusNode, testBench, examplesOffered }: {
   // ...and the example fleet once "hide the example" was clicked (QA-082)
   const fleetHidden = useApp((st) => st.fleetExampleHidden);
   const hiddenExample = (id: string) => fleetHidden && FLEET_EXAMPLE.includes(id);
+  // a demo node past its last heartbeat has left: not an agent here, not
+  // counted, nothing to command — its panel says so (QA-347)
   const everyone = (nodes.data ?? []).filter((n) => !n.node_id.startsWith("skill-try.")
-    && !n.example_hidden && !(n.example && hiddenExample(n.node_id)));
+    && !n.example_hidden && !(n.example && hiddenExample(n.node_id)) && !demoLeftAt(n));
+  const goneSel = (nodes.data ?? []).find((n) => n.node_id === sel && demoLeftAt(n)) ?? null;
   // the menu's side: coding agents (sessions and their tree runs) or
   // production agents — everything when no side was chosen or all was asked for
   const journey = useApp((st) => st.journey);
@@ -617,6 +616,7 @@ function ControlBody({ focusNode, testBench, examplesOffered }: {
             : <>No agents on the plane yet. Load an example fleet to see what this
                 looks like:</>}
         </div>
+        {goneSel && <div className="mt-3"><DemoLeft nodeId={goneSel.node_id} at={demoLeftAt(goneSel)!} /></div>}
         <ExampleFleet />
         <SpawnGoverned switchToAdapter />
         {topoData && traced.length > 0 && (
@@ -659,7 +659,7 @@ function ControlBody({ focusNode, testBench, examplesOffered }: {
   }
 
   const node = list.find((n) => n.node_id === sel) ?? null;
-  const unknownSel = sel != null && !node && !everyone.some((n) => n.node_id === sel)
+  const unknownSel = sel != null && !node && !goneSel && !everyone.some((n) => n.node_id === sel)
     && topo.isSuccess && !(topoData?.nodes ?? []).some((n) => n.node_id === sel);
   const benchOk = isTestBench(node, testBench);
 
@@ -996,11 +996,6 @@ function ControlBody({ focusNode, testBench, examplesOffered }: {
               <span data-testid="example-no-commands" style={{ fontFamily: MONO, fontSize: 11, color: C.dim }}>
                 example node — it takes no commands; yours do
               </span>
-            ) : applying && quietSince && isDemoNode(node.node_id) ? (
-              <span data-testid="demo-node-left" style={{ fontFamily: MONO, fontSize: 11, color: C.dim }}>
-                this demo node left the plane at {localTime(quietSince)} — it takes no more
-                commands; spawn another under “try more examples”
-              </span>
             ) : applying && quietSince ? (
               <span data-testid="node-quiet" style={{ fontFamily: MONO, fontSize: 11, color: C.amber }}>
                 not applied: the agent has not reported since {localTime(quietSince)} — it gets{" "}
@@ -1311,6 +1306,8 @@ function ControlBody({ focusNode, testBench, examplesOffered }: {
         </div>
           </>)}
         </>
+      ) : goneSel ? (
+        <DemoLeft nodeId={goneSel.node_id} at={demoLeftAt(goneSel)!} />
       ) : (
         <ActivityFeed only={side ? new Set(list.map((n) => n.node_id)) : undefined} />
       )}
@@ -1652,6 +1649,20 @@ function TeamBrake() {
 
 function isCodingNode(n: NodeInfo): boolean {
   return n.profile?.kind === "coding" || n.profile?.kind === "tree";
+}
+
+/** A demo node that has left the plane: said, with nothing to command (QA-347). */
+function DemoLeft({ nodeId, at }: { nodeId: string; at: string }) {
+  return (
+    <div className="p-4" style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 8,
+                                  fontFamily: MONO, fontSize: 11.5, lineHeight: 1.7 }}>
+      <div style={{ color: C.text, fontSize: 13 }}>{nodeId}</div>
+      <span data-testid="demo-node-left" style={{ color: C.dim }}>
+        this demo node left the plane at {localTime(at)} — it takes no more
+        commands; spawn another under “try more examples”
+      </span>
+    </div>
+  );
 }
 
 function statusesOf(n: NodeInfo, row?: FleetRow, needsLook = false): Status[] {

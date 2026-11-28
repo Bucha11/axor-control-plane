@@ -21,7 +21,7 @@ import CutResult from "../components/CutResult";
 import RoleNote from "../components/RoleNote";
 import { useHasScope } from "../team";
 import Tooltip from "../components/Tooltip";
-import { NOT_A_TEST_BENCH, behindProxy, cannotCut, isTestBench } from "../agentName";
+import { NOT_A_TEST_BENCH, behindProxy, cannotCut, demoLeftAt, isTestBench } from "../agentName";
 
 const LIVE_MS = 1500;
 const IDLE_MS = 5000;
@@ -80,7 +80,10 @@ export default function RunControl({ runId }: { runId: string }) {
   // accepted and made a phantom "paused" node in the fleet (QA-340)
   const noCommands = nodes.isSuccess && !node?.reported
     ? "this agent has never reported to the plane, so it takes no commands — only its recorded run is here"
-    : null;
+    // past its last heartbeat a demo node has left: said at once (QA-347)
+    : node && demoLeftAt(node)
+      ? `this demo node left the plane at ${hhmmss(demoLeftAt(node))} — it takes no more commands`
+      : null;
   const probe = useQuery({ queryKey: ["probe-report", nodeId], queryFn: () => api.probeReport(nodeId!), enabled: !!nodeId });
   const repair = useQuery({ queryKey: ["repair", nodeId], queryFn: () => api.repair(nodeId!), enabled: !!nodeId, refetchInterval: IDLE_MS });
   const reputation = useQuery({ queryKey: ["reputation", nodeId], queryFn: () => api.reputation(nodeId!), enabled: !!nodeId });
