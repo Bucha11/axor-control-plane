@@ -408,3 +408,18 @@ async function logIn(page: Page): Promise<void> {
   await page.getByRole("button", { name: "log in", exact: true }).click();
   await expect(page.getByText("workspace Acme")).toBeVisible();
 }
+
+// QA-323: a pasted token the plane does not take was kept and sent with every
+// request, and the page only showed "○ not signed in"
+test("a bogus access token is said to be refused, and can be cleared", async ({ page }) => {
+  await page.route("**/v1/auth/status", (r) => r.fulfill({ json: {
+    auth_enabled: true, authenticated: false, guest_sessions: false, scopes: [] } }));
+  await setConnection(page, { mode: "adapter" });
+  await goHash(page, "settings?tab=workspace");
+  await page.getByText("use an access token instead").click();
+  await page.getByLabel("access token").fill("not-a-real-token");
+  await expect(page.getByTestId("token-refused")).toContainText("the plane did not accept this token");
+  await page.getByTestId("token-refused").getByRole("button", { name: "clear" }).click();
+  await expect(page.getByLabel("access token")).toHaveValue("");
+  await expect(page.getByTestId("token-refused")).toHaveCount(0);
+});

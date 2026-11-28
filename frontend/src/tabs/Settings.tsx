@@ -1650,6 +1650,16 @@ function TokenFold() {
             can: {(authStatus.data.scopes ?? []).join(", ") || "nothing"}
           </div>
         )}
+        {/* a token the plane does not take was kept and sent with every
+            request, and nothing said so (QA-323) */}
+        {own && authStatus.data?.auth_enabled && !signedIn && (
+          <div data-testid="token-refused" className="flex items-center gap-2 flex-wrap"
+            style={{ fontFamily: MONO, fontSize: 10.5, color: C.red }}>
+            the plane did not accept this token — check it, or clear it
+            <button onClick={() => setApiToken("")}
+              style={btn({ fontSize: 10.5, padding: "2px 8px", color: C.mut })}>clear</button>
+          </div>
+        )}
       </div>
     </details>
   );
