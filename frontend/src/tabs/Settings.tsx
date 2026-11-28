@@ -1790,10 +1790,11 @@ function Billing({ coding, prod }: { coding: boolean; prod: boolean }) {
           the plan in force. The tab used to show a free workspace three paid
           plans side by side and no months at all. */}
       {months.length > 0 && (
-        <Section title={`MONTH BY MONTH · on ${TIER_NAME[plan.tier] ?? plan.tier}`}>
+        <Section title="MONTH BY MONTH">
           <div data-testid="billing-months">
             <div className="flex gap-3" style={{ fontFamily: MONO, fontSize: 9.5, color: C.dim, letterSpacing: "0.06em", padding: "0 0 4px" }}>
               <span style={{ width: 150 }}>MONTH</span>
+              <span style={{ width: 120 }}>PLAN</span>
               {coding && <span style={{ width: 110 }}>DEVELOPERS</span>}
               {prod && <span style={{ width: 120 }}>AGENTS AT PEAK</span>}
               <span style={{ flex: 1, textAlign: "right" }}>AMOUNT</span>
@@ -1805,6 +1806,12 @@ function Billing({ coding, prod }: { coding: boolean; prod: boolean }) {
                   style={{ background: "none", border: "none", cursor: "pointer", padding: "6px 0", fontFamily: MONO, fontSize: 11.5, textAlign: "left" }}>
                   <span style={{ color: C.text, width: 150, whiteSpace: "nowrap" }}>
                     {open === h.month ? "▾" : "▸"} {h.month}{i === 0 && current ? " · so far" : ""}
+                  </span>
+                  {/* the plan each month was billed on, not today's for all
+                      of them (QA-303) */}
+                  <span data-testid={`billing-month-plan-${h.month}`} style={{ color: C.dim, width: 120, whiteSpace: "nowrap" }}>
+                    {i === 0 && current ? `estimated on ${TIER_NAME[plan.tier] ?? plan.tier}`
+                      : TIER_NAME[h.workspace_tier] ?? h.workspace_tier}
                   </span>
                   {coding && <span style={{ color: C.mut, width: 110 }}>{h.active_developers}</span>}
                   {prod && <span style={{ color: C.mut, width: 120 }}>{h.peak_nodes}</span>}
@@ -1825,6 +1832,12 @@ function Billing({ coding, prod }: { coding: boolean; prod: boolean }) {
                 )}
               </div>
             ))}
+            {current && plan.tier !== "community" && (
+              <div data-testid="billing-estimate-note" style={{ fontFamily: MONO, fontSize: 10, color: C.dim, marginTop: 6, lineHeight: 1.6 }}>
+                The running month is an estimate on the plan in force now, {TIER_NAME[plan.tier] ?? plan.tier}. If the
+                plan changed this month, what is billed is the payment provider&apos;s prorated charge for each plan.
+              </div>
+            )}
             {plan.tier === "community" && (
               <div style={{ fontFamily: MONO, fontSize: 10, color: C.dim, marginTop: 6 }}>
                 Free charges nothing — the amounts are $0; the usage is what a paid plan would bill from

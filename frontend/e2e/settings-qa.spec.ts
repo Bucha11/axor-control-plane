@@ -455,3 +455,23 @@ test("plan changes on the audit trail are in words", async ({ page }) => {
   await expect(rows.nth(2)).toContainText("asked to change the plan to");
   await expect(page.getByText(/plan_(change_requested|upgraded|downgraded)/)).toHaveCount(0);
 });
+
+// QA-303: the month table read every month on today's plan — the running month
+// recomputed on it minutes after a switch, and past months too
+test("each month shows the plan it was billed on; the running month says it is an estimate", async ({ page }) => {
+  const month = (m: string, tier: string, total: string) => ({ month: m, workspace_tier: tier, total, priced: true,
+    active_developers: 1, peak_nodes: 0, developers: [], base: "$0.00", base_cents: 0, included_nodes: 1,
+    peak_day: null, billable_nodes: 0, overage: "$0.00", overage_cents: 0, included_developers: 0,
+    billable_developers: 1, seats: total, seat_cents: 0, total_cents: 0, provisional: false, note: "", computed_on: "" });
+  await page.route("**/v1/license/billing", (r) => r.fulfill({ json: {
+    plan: { tier: "coding", licensed: true, organization: "org_acme", expires_at: "2026-12-31", base: null,
+            base_cents: null, per_node_cents: 7500, seat: "$25.00", seat_cents: 2500, included_nodes: 1,
+            included_developers: 0, priced: true },
+    current: month("2026-11", "coding", "$25.00"), history: [month("2026-10", "team", "$299.00")], if_paid: [],
+    forecast: null } }));
+  await setConnection(page, { mode: "adapter" });
+  await goHash(page, "settings?tab=billing");
+  await expect(page.getByTestId("billing-month-plan-2026-10")).toHaveText("Team");
+  await expect(page.getByTestId("billing-month-plan-2026-11")).toHaveText("estimated on Coding");
+  await expect(page.getByTestId("billing-estimate-note")).toContainText("an estimate on the plan in force now, Coding");
+});
