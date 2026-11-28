@@ -432,11 +432,14 @@ function ControlBody({ focusNode, testBench, examplesOffered }: {
   // ...and the example fleet once "hide the example" was clicked (QA-082)
   const fleetHidden = useApp((st) => st.fleetExampleHidden);
   const hiddenExample = (id: string) => fleetHidden && FLEET_EXAMPLE.includes(id);
+  const hideFleet = useApp((st) => st.setFleetExampleHidden);
   // a demo node past its last heartbeat has left: not an agent here, not
   // counted, nothing to command — its panel says so (QA-347)
   const everyone = (nodes.data ?? []).filter((n) => !n.node_id.startsWith("skill-try.")
     && !n.example_hidden && !(n.example && hiddenExample(n.node_id)) && !demoLeftAt(n));
   const goneSel = (nodes.data ?? []).find((n) => n.node_id === sel && demoLeftAt(n)) ?? null;
+  // the example fleet beside the workspace's own agents can be hidden there (QA-344)
+  const fleetHasHideable = everyone.some((n) => n.example && FLEET_EXAMPLE.includes(n.node_id));
   // the menu's side: coding agents (sessions and their tree runs) or
   // production agents — everything when no side was chosen or all was asked for
   const journey = useApp((st) => st.journey);
@@ -444,7 +447,9 @@ function ControlBody({ focusNode, testBench, examplesOffered }: {
   const setMenuAll = useApp((st) => st.setMenuAll);
   const side = menuAll || !journey || journey === "both" ? null : journey;
   const list = side ? everyone.filter((n) => (side === "coding") === isCodingNode(n)) : everyone;
-  const otherSide = everyone.length - list.length;
+  // the product's example is no one's production or coding agent: not
+  // counted as "not shown" (QA-370)
+  const otherSide = everyone.filter((n) => !n.example).length - list.filter((n) => !n.example).length;
   // what each agent did that needs a look (the Incidents feed, newest first)
   const incidentsQ = useQuery({ queryKey: ["incidents", "all"], queryFn: () => api.incidents({}),
                                 refetchInterval: REFETCH_MS });
@@ -742,9 +747,15 @@ function ControlBody({ focusNode, testBench, examplesOffered }: {
     unitStatuses.set(k, [...merged]);
   }
   const units = [...unitStatuses.values()];
-  const treeCount = [...unitStatuses.keys()].filter((k) => k.startsWith("tree:")).length;
-  const devCount = [...unitStatuses.keys()].filter((k) => k.startsWith("dev:")).length;
-  const looseCount = units.length - treeCount - devCount;
+  // the live count is the workspace's own agents: an example unit is said
+  // apart, beside them (QA-344)
+  const exampleUnits = new Set(list.filter((n) => n.example).map((n) => unitOf(n.node_id)));
+  for (const n of list) if (!n.example) exampleUnits.delete(unitOf(n.node_id));
+  const ownKeys = [...unitStatuses.keys()].filter((k) => !exampleUnits.has(k));
+  const treeCount = ownKeys.filter((k) => k.startsWith("tree:")).length;
+  const devCount = ownKeys.filter((k) => k.startsWith("dev:")).length;
+  const looseCount = ownKeys.length - treeCount - devCount;
+  const ownCount = list.filter((n) => !n.example).length;
   // the heading counts what the "needs you" chip counts — one definition
   const needYou = units.filter((st) => st.includes("needs_you")).length;
   // "healthy" said of a fleet whose agent was just stopped read as all clear
@@ -798,9 +809,18 @@ function ControlBody({ focusNode, testBench, examplesOffered }: {
         active: Math.max(fleetQ.data.totals.active, units.filter((st) => st.includes("running")).length) }} />}
       <div className="flex items-center gap-4" style={{ fontFamily: MONO, fontSize: 11, color: C.mut, marginBottom: 20 }}>
         <span data-testid="fleet-count">
+          {/* only examples here: they are said as what they are, not "0 agents · live" */}
+          {ownKeys.length > 0 && <>
           {devCount > 0 && <>{devCount} developer{devCount === 1 ? "" : "s"}{looseCount > 0 ? " · " : ""}</>}
           {(looseCount > 0 || devCount === 0) && <>{looseCount} agent{looseCount === 1 ? "" : "s"}</>}
           {treeCount > 0 && <> · {treeCount} tree{treeCount === 1 ? "" : "s"}</>} · live
+          </>}
+          {exampleUnits.size > 0 && <span data-testid="fleet-count-examples">
+            {ownKeys.length > 0 ? " · " : ""}{exampleUnits.size} example{exampleUnits.size === 1 ? "" : "s"}, not counted as your agents
+            {ownCount > 0 && fleetHasHideable && <>{" "}<button data-testid="examples-hide" onClick={() => hideFleet(true)}
+              style={{ background: "none", border: "none", padding: 0, cursor: "pointer", fontFamily: MONO, fontSize: 11, color: C.steel }}>
+              hide the example ×</button></>}
+          </span>}
           {otherSide > 0 && (
             <> · <button data-testid="agents-show-other" onClick={() => setMenuAll(true)}
               style={{ background: "none", border: "none", padding: 0, cursor: "pointer", fontFamily: MONO, fontSize: 11, color: C.steel }}>
@@ -990,9 +1010,9 @@ function ControlBody({ focusNode, testBench, examplesOffered }: {
               <span style={{ color: node.profile?.title ? C.dim : C.text, fontSize: node.profile?.title ? 11 : 13 }}>{node.node_id}</span>
             </span>
             )}
-            {applying && node.example ? (
+            {node.example ? (
               // nothing runs behind an example: "applying pause…" waited
-              // forever (QA-090)
+              // forever (QA-090) — said up front, not after a pause (QA-344)
               <span data-testid="example-no-commands" style={{ fontFamily: MONO, fontSize: 11, color: C.dim }}>
                 example node — it takes no commands; yours do
               </span>
@@ -1044,7 +1064,7 @@ function ControlBody({ focusNode, testBench, examplesOffered }: {
 
           <RunsPanel nodeId={node.node_id} paused={paused} stopped={stopped}
             disabled={command.isPending || !(!isCodingNode(node) || mine(node.profile?.developer) || canAdmin)}
-            hideControls={!mayOperate} send={send} />
+            hideControls={!mayOperate || !!node.example} send={send} />
 
           <details className="mb-3" style={{ fontFamily: MONO, fontSize: 11, color: C.mut, lineHeight: 1.7 }}>
             <summary style={{ cursor: "pointer", color: C.dim }}>
@@ -1069,6 +1089,8 @@ function ControlBody({ focusNode, testBench, examplesOffered }: {
           ) : isCodingNode(node) && !mine(node.profile?.developer) && !canAdmin ? (
             <NotYours developer={node.profile?.developer ?? ""} nodeId={node.node_id} hasTeam={hasTeam} />
           ) : <>
+          {/* an example takes no commands: none offered (QA-344) */}
+          {!node.example && <>
           {/* Budget cap — a first-class control (spec §15). Decrease-only over
               the plane: the adapter refuses any widening, so this can set an
               initial cap or tighten it, never raise it past the current one. */}
@@ -1242,6 +1264,7 @@ function ControlBody({ focusNode, testBench, examplesOffered }: {
               </>}
             </div>
           )}
+          </>}
 
           {isCodingNode(node) && mine(node.profile?.developer) && !stopped && (
             <SayToAgent nodeId={node.node_id} />
@@ -2242,6 +2265,12 @@ function FleetRowView({ n, row, st, first, selected, onPick, locked, look, membe
           </span>
         ) : (
           <span style={{ fontFamily: MONO, fontSize: 13, color: locked ? C.mut : C.text, flex: 1, minWidth: 120 }}>{n.node_id}</span>
+        )}
+        {n.example && (
+          // the product's example beside your own agents reads as yours
+          // without it (QA-344)
+          <span data-testid={`example-badge-${n.node_id}`} style={{ fontFamily: MONO, fontSize: 10, color: C.steel,
+            border: `1px solid ${C.line}`, borderRadius: 20, padding: "1px 8px" }}>example</span>
         )}
         {locked && <LockChip reasons={locked} />}
         {!locked && attention(n).map((a) => (

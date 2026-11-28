@@ -678,8 +678,8 @@ test.describe("session controls for coding agents", () => {
     expect(mine[0].own).toBe(true);
     await request.post(`${B}/v1/coding/notes/${claude}/delivered`, { data: { ids: [mine[0].id], at: "Edit" } });
     await expect(say.getByTestId("said").last()).toContainText("given after Edit");
-    // no replan / inject on a coding session: one way to speak to it
-    await page.getByRole("button", { name: "more…" }).click();
+    // no replan / inject on a coding session: one way to speak to it (an
+    // example takes no commands at all, so "more…" is not offered: QA-344)
     await expect(page.getByRole("button", { name: /Replan/ })).toHaveCount(0);
     await expect(page.getByRole("button", { name: /Inject next turn/ })).toHaveCount(0);
   });

@@ -2216,7 +2216,8 @@ function Connections({ coding, prod }: { coding: boolean; prod: boolean }) {
   const bound = new Set((keys.data ?? []).map((k) => k.node_id).filter(Boolean));
   // what is reporting is the workspace's own: the product's example nodes
   // (the tree-* fleet among them) never were, and are hidden once it has its own
-  const all = (nodes.data ?? []).filter((n) => !n.example_hidden && !/example/.test(n.node_id)
+  // the plane's own word for an example, not its id (QA-370)
+  const all = (nodes.data ?? []).filter((n) => !n.example_hidden && !n.example
     && !n.profile?.developer?.startsWith("dev-example-"));
   const agents = all.filter((n) => !n.profile || n.profile.kind === "agent");
   // coding agents per developer this month, from the seat meter (activity, not

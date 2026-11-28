@@ -173,3 +173,80 @@ test("the recorded example tree takes no commands, and says so up front (QA-368)
   await expect(page.getByRole("button", { name: /^cut/ })).toHaveCount(0);
   expect(commands).toEqual([]);
 });
+
+test.describe("the example fleet beside your own agents (QA-344, QA-370)", () => {
+  test("is badged, not counted as live, takes no commands, and can be hidden there", async ({ page, request }) => {
+    expect((await request.post(`${BACKEND}/v1/demo/seed-fleet`)).ok()).toBeTruthy();
+    const own = `gov-own-${hex6()}`;
+    await seedNode(request, own);
+    // the workspace's own agent next to the example: the plane still shows it
+    await page.route("**/v1/plane/nodes", async (route) => {
+      const all = await (await request.get(`${BACKEND}/v1/plane/nodes`)).json() as
+        { node_id: string; example?: boolean; example_hidden?: boolean }[];
+      await route.fulfill({ json: all.map((n) => ({ ...n, example_hidden: false }))
+        .filter((n) => n.example ? ["tree-orch", "tree-research", "tree-scraper", "tree-writer"].includes(n.node_id) : n.node_id === own) });
+    });
+    const commands: string[] = [];
+    await page.route("**/v1/plane/*/command", (r) => { commands.push(r.request().url()); return r.continue(); });
+    await setConnection(page, { mode: "adapter" });
+    await goHash(page, "govern");
+    await expect(page.getByTestId("example-badge-tree-writer")).toHaveText("example");
+    await expect(page.getByTestId(`example-badge-${own}`)).toHaveCount(0);
+    await expect(page.getByTestId("fleet-count")).toContainText("1 agent · live");
+    await expect(page.getByTestId("fleet-count-examples")).toContainText("not counted");
+    await page.getByTestId("agent-row-tree-writer").click();
+    await expect(page.getByTestId("example-no-commands")).toContainText("example node — it takes no commands");
+    await expect(page.getByRole("button", { name: /^(Pause|Resume)$/ })).toHaveCount(0);
+    await page.getByTestId("agent-panel-close").click();
+    await page.getByTestId("examples-hide").click();
+    await expect(page.getByTestId("agent-row-tree-writer")).toHaveCount(0);
+    await expect(page.getByTestId(`agent-row-${own}`)).toBeVisible();
+    expect(commands).toEqual([]);
+    await page.unrouteAll({ behavior: "ignoreErrors" });
+  });
+
+  test("what is reporting leaves out the example by the plane's word, not its id", async ({ page, request }) => {
+    const own = `gov-own-${hex6()}`;
+    await seedNode(request, own);
+    await page.route("**/v1/plane/nodes", async (route) => {
+      const all = await (await request.get(`${BACKEND}/v1/plane/nodes`)).json() as { node_id: string }[];
+      await route.fulfill({ json: [
+        ...all.filter((n) => n.node_id === own),
+        // an example whose id says nothing of it
+        { node_id: "tree-orch", example: true, example_hidden: false, desired: null, facts: [],
+          reported: { applied_version: 0, level: "NORMAL", updated_ts: new Date().toISOString() }, profile: null },
+      ] });
+    });
+    await setConnection(page, { mode: "adapter" });
+    await goHash(page, "settings?tab=connect");
+    const conn = page.getByTestId("connections");
+    await expect(conn.getByTestId(`conn-${own}`)).toBeVisible();
+    await expect(conn.getByTestId("conn-tree-orch")).toHaveCount(0);
+    await expect(conn).toContainText("PRODUCTION AGENTS · 1");
+    await page.unrouteAll({ behavior: "ignoreErrors" });
+  });
+
+  test("\"production agents not shown\" leaves the example out (QA-370)", async ({ page, request }) => {
+    expect((await request.post(`${BACKEND}/v1/demo/seed-fleet`)).ok()).toBeTruthy();
+    const prod = `gov-own-${hex6()}`;
+    const coding = `claude-code-own-${hex6()}`;
+    await seedNode(request, prod);
+    await seedNode(request, coding);
+    await request.post(`${BACKEND}/v1/plane/${coding}/profile`, { data: { kind: "coding", agent: "claude-code", developer: "dev-own" } });
+    await page.route("**/v1/plane/nodes", async (route) => {
+      const all = await (await request.get(`${BACKEND}/v1/plane/nodes`)).json() as { node_id: string; example?: boolean }[];
+      await route.fulfill({ json: all.map((n) => ({ ...n, example_hidden: false }))
+        .filter((n) => n.example ? n.node_id.startsWith("tree-") : [prod, coding].includes(n.node_id)) });
+    });
+    await setConnection(page, { mode: "adapter" });
+    await page.addInitScript(() => {
+      const data = JSON.parse(localStorage.getItem("axor-app") ?? '{"state":{},"version":0}');
+      data.state.journey = "coding";
+      data.state.menuAll = false;
+      localStorage.setItem("axor-app", JSON.stringify(data));
+    });
+    await goHash(page, "govern");
+    await expect(page.getByTestId("agents-show-other")).toHaveText("1 production agent not shown");
+    await page.unrouteAll({ behavior: "ignoreErrors" });
+  });
+});
