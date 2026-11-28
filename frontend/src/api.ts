@@ -53,6 +53,9 @@ export interface ChaosRun {
   run_id: string; node_id: string; scenario: string; created_ts: string;
   faults: { tool: string; mode: string }[]; verdict: ChaosVerdict; deviations: string[]; claim: string;
 }
+// armed on a live agent and not taken yet, and what agents said of one (QA-500)
+export interface ChaosArmed { node_id: string; id: string; faults: { tool: string; mode: string }[]; operator: string }
+export interface ChaosAnswer { node_id: string; id: string; ts: string | null; taken: boolean; reason: string }
 export interface ChaosSchedule {
   enabled: boolean; interval_hours: number | null; nodes: string[]; modes: string[];
   last_run_ts: string | null; last_armed: { node_id: string; tool: string; mode: string }[];
@@ -2395,7 +2398,8 @@ export const api = {
       method: "PUT", headers: { "content-type": "application/json" },
       body: JSON.stringify({ id, status }),
     }).then((r) => j<{ id: string; status: IncidentStatus }>(r)),
-  chaos: () => af("/v1/chaos").then((r) => j<{ runs: ChaosRun[]; modes: string[]; schedule: ChaosSchedule }>(r)),
+  chaos: () => af("/v1/chaos").then((r) => j<{ runs: ChaosRun[]; modes: string[]; schedule: ChaosSchedule;
+    armed?: ChaosArmed[]; answered?: ChaosAnswer[] }>(r)),
   chaosTools: (node: string) =>
     af(`/v1/chaos/tools/${encodeURIComponent(node)}`).then((r) => j<{ tools: string[] }>(r)),
   chaosArm: (nodes: string[], tool?: string, mode?: string) =>

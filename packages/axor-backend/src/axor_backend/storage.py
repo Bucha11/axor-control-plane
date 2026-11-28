@@ -1864,6 +1864,25 @@ class Store:
         return [(r.run_id, r.line if isinstance(r.line, dict) else json.loads(r.line))
                 for r in rows]
 
+    async def experiment_acks(self, limit: int = 200) -> list[tuple[str, dict[str, Any]]]:
+        """What agents said of the chaos tests armed on them — taken
+        (``experiment_armed``) or refused with why — newest first, with the
+        node (QA-500)."""
+        async with self.engine.connect() as conn:
+            rows = (await conn.execute(
+                select(events.c.node_id, events.c.line)
+                .where(events.c.org_id == current_org_id(),
+                       events.c.kind == "operator_intervention")
+                .order_by(events.c.id.desc()).limit(limit)
+            )).all()
+        out = []
+        for r in rows:
+            line = r.line if isinstance(r.line, dict) else json.loads(r.line)
+            if (line.get("payload") or {}).get("action") in ("experiment_armed",
+                                                            "experiment_refused"):
+                out.append((r.node_id, line))
+        return out
+
     async def last_claims(self, run_ids: list[str]) -> dict[str, str]:
         """What the agent said last in each run — its answer after the fault."""
         if not run_ids:

@@ -65,6 +65,32 @@ async def chaos_runs(store: Any) -> list[dict[str, Any]]:  # noqa: ANN401
     return out
 
 
+async def armed(store: Any) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:  # noqa: ANN401
+    """(what is armed and not taken yet, what the agents last said of one).
+
+    Armed is the agent's desired state, so it stays on screen until the agent
+    takes it — not only in the answer to the click that armed it (QA-500). An
+    agent that took one or refused it says so; the refusal's reason is shown
+    ("not test-bench", a way a hook cannot break a tool…)."""
+    pending = []
+    for node, (_v, state) in sorted((await store.all_desired()).items()):
+        ex = (state or {}).get("pending_experiment")
+        if isinstance(ex, dict) and ex.get("faults"):
+            pending.append({"node_id": node, "id": ex.get("id", ""), "faults": ex["faults"],
+                            "operator": ex.get("operator", "")})
+    said: dict[str, dict[str, Any]] = {}
+    for node, line in await store.experiment_acks():
+        p = line.get("payload") or {}
+        eid = str(p.get("id") or "")
+        if eid in said:
+            continue          # newest first: the first word is the last
+        said[eid] = {"node_id": node, "id": eid, "ts": line.get("ts"),
+                     "taken": p.get("action") == "experiment_armed",
+                     "reason": str(p.get("reason") or "")}
+    waiting = {a["id"] for a in pending}
+    return pending, [s for s in said.values() if s["id"] not in waiting][:20]
+
+
 async def tools_of(store: Any, node_id: str, scan: int = 5000) -> list[str]:  # noqa: ANN401
     """The tools this agent has called lately — what a chaos test can break."""
     seen: list[str] = []
