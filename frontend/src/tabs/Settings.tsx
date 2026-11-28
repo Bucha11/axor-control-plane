@@ -1366,8 +1366,10 @@ export default function Settings({ tab = "workspace" }: { tab?: string } = {}) {
       {active === "billing" && (
         <>
           <Billing coding={coding} prod={prod} />
-          {/* on the hosted plane a card plan installs itself: nothing to paste */}
-          {!licenseStatus.data?.active && !authStatus.data?.guest && !licenseStatus.data?.hosted && (
+          {/* on the hosted plane a card plan installs itself: nothing to paste.
+              Only a plane that SAID it is self-hosted gets the hint — a status
+              that could not be read (signed out: 401) is not "not hosted" (QA-301) */}
+          {!licenseStatus.data?.active && !authStatus.data?.guest && licenseStatus.data?.hosted === false && (
             <div data-testid="billing-license-hint" className="mb-4" style={{ fontFamily: MONO, fontSize: 11, color: C.mut }}>
               bought a plan? the license file you were sent goes under{" "}
               <button onClick={() => navigate("settings", { tab: "workspace" })}

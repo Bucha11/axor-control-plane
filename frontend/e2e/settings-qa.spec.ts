@@ -423,3 +423,18 @@ test("a bogus access token is said to be refused, and can be cleared", async ({ 
   await expect(page.getByLabel("access token")).toHaveValue("");
   await expect(page.getByTestId("token-refused")).toHaveCount(0);
 });
+
+// QA-301: a signed-out visitor on the hosted plane was shown the self-hosted
+// license hint — the license status answered 401, read as "not hosted"
+test("the license-file hint is for a plane that said it is self-hosted, not for an unknown one", async ({ page }) => {
+  let status: { code: number; body: unknown } = { code: 401, body: { error: "unauthorized" } };
+  await page.route("**/v1/license/status", (r) => r.fulfill({ status: status.code, json: status.body }));
+  await setConnection(page, { mode: "adapter" });
+  await goHash(page, "settings?tab=billing");
+  await expect(page.getByText(/billing|plan/i).first()).toBeVisible();
+  await page.waitForTimeout(800);
+  await expect(page.getByTestId("billing-license-hint")).toHaveCount(0);
+  status = { code: 200, body: { active: false, vendor_key_configured: true, hosted: false } };
+  await page.reload();
+  await expect(page.getByTestId("billing-license-hint")).toContainText("the license file you were sent");
+});
