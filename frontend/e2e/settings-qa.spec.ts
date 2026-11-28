@@ -41,6 +41,26 @@ test.describe("settings (QA, 0.7.2)", () => {
     await card.getByRole("button", { name: "enrol a credential" }).click();
     await expect(card.getByTestId("enrol-form")).toContainText("refused until a sealing key is registered");
     await expect(card.getByTestId("enrol-form")).not.toContainText("store it as-is");
+    // QA-401: and the plaintext is not sent to be refused
+    const enrols: string[] = [];
+    page.on("request", (r) => { if (r.url().includes("/v1/vault/creds/enroll")) enrols.push(r.url()); });
+    const form = card.getByTestId("enrol-form");
+    await form.getByLabel("tool", { exact: true }).fill("qa-tool");
+    await form.getByLabel("endpoint", { exact: true }).fill("https://api.example.com");
+    await form.getByLabel("secret", { exact: true }).fill("sk-dummy");
+    await expect(form.getByRole("button", { name: "enrol" })).toBeDisabled();
+    expect(enrols).toEqual([]);
+  });
+
+  test("QA-402: a workspace with a creds token, a browser without it: said so, not 'no credentials enrolled'", async ({ page }) => {
+    await page.route("**/v1/security/posture", (r) => r.fulfill({ json: { items: [
+      { id: "auth", ok: true, what: "every request needs a token or a sign-in", fix: "" },
+      { id: "vault_creds_token", ok: true, what: "the creds vault has its own token", fix: "" },
+    ] } }));
+    await goHash(page, "settings?tab=security");
+    const card = page.getByTestId("tool-credentials");
+    await expect(card.getByTestId("creds-no-token")).toContainText("this browser has no creds token");
+    await expect(card).not.toContainText("no credentials enrolled");
   });
 
   test("a long key label wraps; the role and revoke stay on screen (QA-063)", async ({ page }) => {

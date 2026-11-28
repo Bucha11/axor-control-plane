@@ -83,6 +83,9 @@ export default function ToolCredentials() {
   const [nodeKey, setNodeKey] = useState({ node: "", pub: "" });
 
   const sealingKey = sealing.data?.public_key_hex ?? null;
+  // a plane that takes credentials only sealed, and no key to seal with in
+  // this browser: the plaintext is not sent to be refused (QA-401)
+  const cannotSeal = sealedOnly && !sealingKey;
   const refresh = () => {
     void qc.invalidateQueries({ queryKey: ["vault-creds"] });
     void qc.invalidateQueries({ queryKey: ["vault-creds-audit"] });
@@ -200,7 +203,12 @@ export default function ToolCredentials() {
         />
       </div>
 
-      {health.isError ? (
+      {posture.data && !readable ? (
+        // not asked without the token: not "none enrolled" either (QA-402)
+        <div data-testid="creds-no-token" style={{ fontFamily: MONO, fontSize: 11, color: C.amber }}>
+          this browser has no creds token — type it above to see the credentials
+        </div>
+      ) : health.isError ? (
         <div style={{ fontFamily: MONO, fontSize: 11, color: C.red }}>
           cannot read credentials: {(health.error as Error).message}
           {!credsToken && " — set the vault creds-token"}
@@ -274,12 +282,14 @@ export default function ToolCredentials() {
             {sealingKey
               ? "sealed in this browser before it is sent — the plaintext never leaves this machine"
               : sealedOnly
-                ? "refused until a sealing key is registered (below): this plane stores no plaintext"
+                ? (readable
+                  ? "refused until a sealing key is registered (below): this plane stores no plaintext"
+                  : "this plane takes it only sealed, and this browser has no creds token to read the sealing key — type it above")
                 : "sent as plaintext: no sealing key is registered, so this deployment will store it as-is"}
           </div>
           <button
             onClick={() => enrollOnce()}
-            disabled={enroll.isPending || !draft.tool || !draft.endpoint || !draft.secret}
+            disabled={enroll.isPending || cannotSeal || !draft.tool || !draft.endpoint || !draft.secret}
             style={btn({ color: C.bg, background: C.steel, border: `1px solid ${C.steel}`, fontSize: 10.5, padding: "4px 10px" })}
           >
             {enroll.isPending ? "enrolling…" : "enrol"}
