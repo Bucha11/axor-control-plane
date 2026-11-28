@@ -1,6 +1,6 @@
 // Govern and the core loop (QA run 4, prod 0.7.4).
 import { expect, test, type Page, type Route } from "@playwright/test";
-import { BACKEND, goHash, seedNode, setConnection } from "./helpers";
+import { BACKEND, answerAsk, goHash, seedNode, setConnection } from "./helpers";
 
 const hex6 = () => Math.random().toString(16).slice(2, 8).padEnd(6, "0");
 
@@ -347,4 +347,18 @@ test("a command lost to a concurrent write gets the command-lost note, not raw t
   const lost = page.getByTestId("command-lost");
   await expect(lost).toContainText("not sent: pause — someone else changed this agent first");
   await expect(page.getByText(/changed concurrently/)).toHaveCount(0);
+});
+
+test("a cut with an empty reason says a reason is required, and sends nothing (QA-367)", async ({ page, request }) => {
+  const node = `gov-cut-${hex6()}`;
+  const run = `${node}-r1`;
+  await liveRun(request, node, run);
+  const commands: string[] = [];
+  await page.route("**/v1/plane/*/command", (r) => { commands.push(r.request().url()); return r.continue(); });
+  await setConnection(page, { mode: "adapter" });
+  await goHash(page, `govern/run/${run}`);
+  await page.getByRole("button", { name: /remove this text from the agent's memory/ }).click();
+  await answerAsk(page, "   ");
+  await expect(page.getByTestId("cut-needs-reason")).toHaveText("not sent: a cut needs a reason — it is recorded with the cut");
+  expect(commands).toEqual([]);
 });

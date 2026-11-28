@@ -17,7 +17,7 @@ import { incidentWhat } from "./Evidence";
 import { useApp } from "../store";
 import { C, MONO, btn } from "../theme";
 import { isCodingSession } from "../components/CodingOnboarding";
-import CutResult from "../components/CutResult";
+import CutResult, { CUT_NEEDS_REASON } from "../components/CutResult";
 import RoleNote from "../components/RoleNote";
 import { useHasScope } from "../team";
 import Tooltip from "../components/Tooltip";
@@ -278,6 +278,7 @@ export default function RunControl({ runId }: { runId: string }) {
                   <button className="mt-2"
                     onClick={async () => {
                       const reason = await askPrompt("Apply the proposed cut — reason (recorded):");
+                      if (reason != null && !reason.trim()) setError(CUT_NEEDS_REASON);
                       if (reason && reason.trim()) heal.mutate(reason.trim());
                     }}
                     disabled={heal.isPending || stopped}

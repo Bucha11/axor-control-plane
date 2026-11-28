@@ -15,6 +15,7 @@ import { errorWords } from "../refusal";
 import { useApp } from "../store";
 import { C, MONO, btn } from "../theme";
 import Tooltip from "../components/Tooltip";
+import { CUT_NEEDS_REASON } from "../components/CutResult";
 
 const LIVE_MS = 2000;
 const IDLE_MS = 15000;
@@ -174,6 +175,7 @@ function TreeView({ treeRun }: { treeRun: string }) {
       <ContextItems tree={t} pending={pending} canCut={canCut} lit={lit}
         onCut={async (ref) => {
           const reason = await askPrompt(`Cut ${ref} so no later node of this tree sees it — reason (recorded):`);
+          if (reason != null && !reason.trim()) setError(CUT_NEEDS_REASON);
           if (reason && reason.trim()) cut.mutate({ ref, reason: reason.trim() });
         }} />
       {error && <div style={{ fontFamily: MONO, fontSize: 11, color: C.red, marginTop: 8 }}>{error}</div>}
