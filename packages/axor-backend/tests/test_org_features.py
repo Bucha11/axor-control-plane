@@ -1461,3 +1461,20 @@ async def test_boot_hands_each_held_license_to_identity_again(
     async with app.router.lifespan_context(app):
         await app.state.identity_sync
     assert sent and sent == list(app.state.licenses)
+
+
+@pytest.mark.parametrize("field", ["organization", "workspace_tier"])
+def test_a_license_missing_a_field_names_the_field_not_the_signature(field: str) -> None:
+    """QA-320: a license with a field left out was answered "no license or no
+    signature ('organization')" — a missing field said as a missing signature."""
+    from axor_backend.ee.license import LicenseError, verify_license
+
+    lic = {"organization": "acme", "workspace_tier": "team", "governed_node_ceiling": 5,
+           "expires_at": "2999-01-01T00:00:00Z"}
+    del lic[field]
+    with pytest.raises(LicenseError) as got:
+        verify_license(json.dumps({"license": lic, "sig": "00" * 64}), "00" * 32)
+    assert "signature" not in str(got.value)
+    assert f"no '{field}' field" in str(got.value)
+    with pytest.raises(LicenseError, match="no license or no signature"):
+        verify_license(json.dumps({"license": lic}), "00" * 32)
