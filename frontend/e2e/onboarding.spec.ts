@@ -26,6 +26,27 @@ test.describe("onboarding", () => {
     await expect(page.getByText("local_stdio", { exact: true })).toBeVisible();
   });
 
+  test("a server that cannot be reached is said in words, and the others are still added (QA-486)", async ({ page }) => {
+    await page.route("**/axor/mcp/discover", async (r) => {
+      const body = r.request().postDataJSON() as { url?: string; name?: string };
+      if (body.url) {
+        return r.fulfill({ status: 502, json: { error: "mcp_discovery_failed",
+          detail: "server unreachable: [Errno -2] Name or service not known" } });
+      }
+      return r.fulfill({ json: { registered: body.name ?? "fs", proxied_base: "/t/fs/", server: "fs",
+        protocol_version: "2025-03-26", transport: "stdio", tools: [{ name: "read_file", description: "" }] } });
+    });
+    await goHash(page, "get-started");
+    await page.getByPlaceholder(/mcpServers/).fill(JSON.stringify({ mcpServers: {
+      docs: { url: "https://mcp.nowhere.invalid/sse" }, fs: { command: "npx", args: ["-y", "server-fs"] } } }));
+    await page.getByRole("button", { name: /Discover MCP tools/ }).click();
+    const note = page.getByText(/registered 1 MCP server · 1 tools discovered/);
+    await expect(note).toBeVisible();
+    await expect(note).toContainText("docs: could not reach https://mcp.nowhere.invalid/sse");
+    await expect(page.getByText(/Errno/)).toHaveCount(0);
+    await expect(page.getByText("fs", { exact: true })).toBeVisible();
+  });
+
   test("walks tools → point agent → connection check", async ({ page }) => {
     await goHash(page, "get-started");
     await expect(page.getByRole("heading", { name: "What tools does your agent use?" })).toBeVisible();
