@@ -432,3 +432,13 @@ test("a feed search with no match says nothing matches, not an empty feed (QA-34
   await expect(feed.getByTestId("feed-no-match")).toHaveText("nothing matches “zz-no-such-thing-qa346”");
   await expect(feed).not.toContainText("nothing yet");
 });
+
+test("a pair link naming the same session twice opens one pane (QA-364)", async ({ page, request }) => {
+  await request.post(`${BACKEND}/v1/demo/seed-coding`);
+  const pair = await (await request.post(`${BACKEND}/v1/pair`, { data: { node_id: "claude-code-example-3f9a21c0" } })).json() as { token: string };
+  await setConnection(page, { mode: "demo" });
+  await goHash(page, `pair/${pair.token}?with=${pair.token}`);
+  await expect(page.getByTestId("pair-pane")).toHaveCount(1);
+  await expect(page.getByTestId("pair-split")).toBeVisible();
+  await request.delete(`${BACKEND}/v1/pair/${pair.token}`);
+});

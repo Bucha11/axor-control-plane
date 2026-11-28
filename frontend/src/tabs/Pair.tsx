@@ -66,7 +66,9 @@ function problem(e: unknown): { status: number; code: string; words: string } {
 }
 
 export default function Pair({ token, withToken, node }: { token?: string; withToken?: string; node?: string }) {
-  return token ? <PairPage token={token} withToken={withToken} /> : <PairHome node={node} />;
+  // the same session twice is one pane, not two (QA-364)
+  return token ? <PairPage token={token} withToken={withToken === token ? undefined : withToken} />
+    : <PairHome node={node} />;
 }
 
 // ── starting one ─────────────────────────────────────────────────────────────
