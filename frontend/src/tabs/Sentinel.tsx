@@ -154,8 +154,12 @@ export default function Sentinel() {
   // `#/sentinel?node=X` (the Agents list links here) opens on that node.
   const [node, setNode] = useState<string | null>(route.query.node || null);
   const shownNode = (nodesQ.data ?? []).find((n) => n.node_id === node);
+  // opened on a non-reporting agent only because nothing reported yet: once
+  // one does, it is the one to show — the first pick stuck, on an agent with
+  // nothing to say beside one that reported (QA-366)
+  const [fallback, setFallback] = useState(false);
   useEffect(() => {
-    if (route.query.node) setNode(route.query.node);
+    if (route.query.node) { setNode(route.query.node); setFallback(false); }
   }, [route.query.node]);
   useEffect(() => {
     // which nodes are hidden examples is known only once the node list is in
@@ -166,16 +170,18 @@ export default function Sentinel() {
       return;
     }
     const shownWatched = watched.filter((n) => !hidden.has(n.node_id));
-    if (node === null && shownWatched.length > 0) {
+    if ((node === null || fallback) && shownWatched.length > 0) {
       // the node with the most to say first
       const best = [...shownWatched].sort((a, b) => (b.reputation!.flagged - a.reputation!.flagged)
         || (b.reputation!.watch - a.reputation!.watch))[0];
       setNode(best.node_id);
+      setFallback(false);
     } else if (node === null && pickable.length > 0) {
       // nobody reports: open on the workspace's own agent and say why
       setNode((pickable.find((n) => !n.example) ?? pickable[0]).node_id);
+      setFallback(true);
     }
-  }, [node, watched.length, pickable.length, nodesQ.isSuccess]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [node, fallback, watched.length, pickable.length, nodesQ.isSuccess]); // eslint-disable-line react-hooks/exhaustive-deps
   const rep = useQuery({
     queryKey: ["reputation", node],
     queryFn: () => api.reputation(node!),
@@ -231,7 +237,7 @@ export default function Sentinel() {
       {pickable.length > 0 && (
         <div className="flex items-center gap-2 flex-wrap mb-3" style={{ fontFamily: MONO, fontSize: 11, color: C.mut }}>
           agent
-          <select value={node ?? ""} onChange={(e) => { setNode(e.target.value); setSelected(null); }}
+          <select value={node ?? ""} onChange={(e) => { setNode(e.target.value); setFallback(false); setSelected(null); }}
             aria-label="sentinel node"
             style={{ background: C.bg, border: `1px solid ${C.line}`, borderRadius: 4, color: C.text, fontFamily: MONO, fontSize: 11, padding: "4px 8px" }}>
             {pickable.map((n) => (

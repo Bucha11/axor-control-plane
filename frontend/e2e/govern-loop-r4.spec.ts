@@ -382,3 +382,24 @@ test("a guest is not offered an example pair it cannot open (QA-365)", async ({ 
   await expect(page.getByTestId("pair-example")).toHaveCount(0);
   expect(seeds).toEqual([]);
 });
+
+test("#/sentinel moves to the agent that reports once it is known (QA-366)", async ({ page }) => {
+  const own = { node_id: "gov-tree-ab12-orch", kind: "self", reputation: null };
+  const reports = { node_id: "tree-research", kind: "self", example: true,
+    reputation: { flagged: 1, watch: 0, clean: 2, updated_ts: new Date().toISOString() } };
+  let calls = 0;
+  await page.route("**/v1/plane/topology", (r) => {
+    calls += 1;
+    return r.fulfill({ json: { nodes: calls === 1 ? [own] : [own, reports], edges: [] } });
+  });
+  await page.route("**/v1/plane/nodes", (r) => r.fulfill({ json: [] }));
+  await setConnection(page, { mode: "adapter" });
+  // Agents read the topology first; Sentinel opens on that copy while it
+  // reads it again, and the second answer has an agent that reports
+  await goHash(page, "govern");
+  await expect.poll(() => calls).toBe(1);
+  await page.evaluate(() => { window.location.hash = "#/sentinel"; });
+  const picker = page.getByLabel("sentinel node");
+  await expect.poll(() => calls).toBeGreaterThan(1);
+  await expect(picker).toHaveValue("tree-research");
+});
