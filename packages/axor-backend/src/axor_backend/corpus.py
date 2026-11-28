@@ -20,7 +20,6 @@ from axor_backend.replay_api import kernel_config_from_json, regression_row
 from axor_backend.storage import Store
 from axor_backend.traces import events_for
 
-
 # The example's own cases — the ones its rules were written for. They are
 # checked only when the example's rules are (``cases="example"``), never kept
 # among the workspace's pins: seeded there, they made the workspace's own rule

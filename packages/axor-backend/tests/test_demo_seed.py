@@ -226,7 +226,8 @@ class TestCannedEvidenceIsNotEvidenceAboutThisDeployment:
         # a pin an older build seeded is not the workspace's either
         store = client._transport.app.state.store  # type: ignore[attr-defined]
         await store.pin("ex_pass", "must_pass", "adapter-demo")
-        assert {p["run_id"] for p in (await client.get("/v1/pins", headers=H)).json()["pins"]} == {"mine"}
+        listed = (await client.get("/v1/pins", headers=H)).json()["pins"]
+        assert {p["run_id"] for p in listed} == {"mine"}
         again = (await client.post(
             "/v1/regression", json={"config": own_rule}, headers=H)).json()
         assert [r["run_id"] for r in again["rows"]] == ["mine"]

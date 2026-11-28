@@ -81,7 +81,8 @@ async def test_an_answer_with_no_tool_call_is_not_tested(client: httpx.AsyncClie
     found". The broken tool never ran: nothing was tested."""
     events = [_line("agent-q", 0, "fault_injected", tool="send_email", mode="silent_fail"),
               _line("agent-q", 1, "claim", text="I ran the query and it worked.", structured=False)]
-    r = await client.post("/v1/plane/agent-q/telemetry", json={"run_id": "r-idle", "events": events})
+    r = await client.post("/v1/plane/agent-q/telemetry",
+                          json={"run_id": "r-idle", "events": events})
     assert r.status_code in (200, 202), r.text
     runs = {r["run_id"]: r for r in (await client.get("/v1/chaos")).json()["runs"]}
     assert runs["r-idle"]["verdict"] == "not_tested"
