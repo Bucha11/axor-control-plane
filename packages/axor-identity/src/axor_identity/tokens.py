@@ -9,7 +9,9 @@ Two tokens per login:
 """
 from __future__ import annotations
 
+import base64
 import hashlib
+import hmac
 import secrets
 import time
 
@@ -58,3 +60,12 @@ def new_refresh() -> tuple[str, str]:
 
 def hash_refresh(raw: str) -> str:
     return hashlib.sha256(raw.encode()).hexdigest()
+
+
+def successor_refresh(secret: bytes, raw: str) -> str:
+    """The refresh token that replaces ``raw`` when it is rotated. Derived, not
+    random, so presenting ``raw`` again a moment later (a duplicated tab holds a
+    copy — QA-480) gets the SAME successor back rather than a second live one.
+    Keyed by a server secret: holding ``raw`` alone does not give it."""
+    mac = hmac.new(secret, b"axor-refresh-successor\0" + raw.encode(), hashlib.sha256)
+    return base64.urlsafe_b64encode(mac.digest()).rstrip(b"=").decode()

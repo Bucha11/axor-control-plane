@@ -1159,16 +1159,76 @@ export function renewSession(): Promise<boolean> {
   return refreshSession(null);
 }
 
+// QA-480: a duplicated tab carries a copy of this tab's session storage, so two
+// tabs hold one refresh token. Both refreshing it ended the sign-in in both
+// (identity reads a second use as theft). Across tabs, one refreshes at a time
+// (a Web Lock) and tells the others what it got (a BroadcastChannel): a tab
+// holding the token that was just exchanged takes the result instead of
+// presenting it again. Identity's short grace for the same token is the net
+// under this, for a tab that misses the message.
+type Rotation = { from: string; access: string; refresh: string; email: string };
+const rotations = typeof BroadcastChannel !== "undefined" ? new BroadcastChannel("axor-refresh") : null;
+const rotated = new Map<string, Rotation>();
+
+/** A refresh token's fingerprint, so tabs name it without passing it around. */
+async function fingerprint(token: string): Promise<string> {
+  try {
+    const d = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(`axor-refresh:${token}`));
+    return Array.from(new Uint8Array(d), (b) => b.toString(16).padStart(2, "0")).join("");
+  } catch {
+    return "";  // no WebCrypto (not a secure context): no sharing, identity's grace still holds
+  }
+}
+
+function remember(r: Rotation): void {
+  rotated.set(r.from, r);
+  if (rotated.size > 8) rotated.delete(rotated.keys().next().value as string);
+}
+
+rotations?.addEventListener("message", (e: MessageEvent<Rotation>) => {
+  const r = e.data;
+  if (!r?.from) return;
+  remember(r);
+  const held = useApp.getState().refreshToken;
+  if (held) void fingerprint(held).then((fp) => {
+    if (fp === r.from && useApp.getState().refreshToken === held) {
+      useApp.getState().setSession(r.access, r.refresh, r.email);
+    }
+  });
+});
+
+function oneTabAtATime<T>(run: () => Promise<T>): Promise<T> {
+  const locks = typeof navigator !== "undefined" ? navigator.locks : undefined;
+  return locks ? (locks.request("axor-refresh", run) as Promise<T>) : run();
+}
+
 async function refreshSession(staleToken: string | null): Promise<boolean> {
   const state = useApp.getState();
   // Another request already refreshed while this one was in flight.
   if (staleToken && apiToken() && apiToken() !== staleToken) return true;
   if (!state.refreshToken) return false;
   if (!refreshing) {
-    const presented = state.refreshToken;
+    const held = state.refreshToken;
     let why = "";
-    refreshing = refresh(presented, (w) => { why = w; })
-      .then((next) => {
+    refreshing = oneTabAtATime(async () => {
+      // another tab may have exchanged this very token while this one waited
+      const presented = useApp.getState().refreshToken;
+      if (presented !== held) return { taken: true as const };
+      const fp = await fingerprint(presented);
+      const known = fp ? rotated.get(fp) : undefined;
+      if (known) return { taken: false as const, next: { access_token: known.access, refresh_token: known.refresh,
+                                                          user: { email: known.email } } };
+      const next = await refresh(presented, (w) => { why = w; });
+      if (next && fp) {
+        const r = { from: fp, access: next.access_token, refresh: next.refresh_token, email: next.user.email };
+        remember(r);
+        rotations?.postMessage(r);
+      }
+      return { taken: false as const, next };
+    })
+      .then((got) => {
+        if (got.taken) return true;
+        const next = got.next;
         if (next) {
           useApp.getState().setSession(next.access_token, next.refresh_token, next.user.email);
           return true;
