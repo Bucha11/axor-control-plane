@@ -275,7 +275,8 @@ export default function App() {
   return (
     <div style={{ minHeight: "100vh", background: C.bg, color: C.text, fontFamily: "Inter, system-ui, sans-serif", padding: "28px 20px" }}>
       {header}
-      <PageGuard route={route.raw}>{body}</PageGuard>
+      {/* the page's landmark on a narrow screen too (QA-444) */}
+      <main><PageGuard route={route.raw}>{body}</PageGuard></main>
       <Tour />
       <WorkspaceJourney />
       <RoleSync />

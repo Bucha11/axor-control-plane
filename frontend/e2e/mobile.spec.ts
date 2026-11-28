@@ -57,6 +57,15 @@ test.describe("on a phone", () => {
     });
   }
 
+  test("QA-442 / QA-444: checkboxes keep their size beside long labels, and the page has its main landmark", async ({ page }) => {
+    await goHash(page, "settings?tab=alerts");
+    const box = page.locator('input[type="checkbox"]').first();
+    await expect(box).toBeVisible();
+    const b = (await box.boundingBox())!;
+    expect(b.width).toBeGreaterThanOrEqual(12);
+    expect(await page.locator("main").count()).toBe(1);
+  });
+
   test("the nav and the account controls are both on screen", async ({ page }) => {
     await setConnection(page, { mode: "demo" });
     await page.route("**/v1/auth/status", (route) =>
