@@ -9,7 +9,7 @@ import { useEffect, useState } from "react";
 import ReadFailed from "../components/ReadFailed";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ChevronDown, ChevronRight, Loader2 } from "lucide-react";
-import { api, SkillEval, SkillEvalArm, SkillEvalCompare, SkillEvalSkill, SkillEvalTask } from "../api";
+import { api, ApiError, SkillEval, SkillEvalArm, SkillEvalCompare, SkillEvalSkill, SkillEvalTask } from "../api";
 import { navigate } from "../router";
 import { isGuestToken, useApp } from "../store";
 import { C, MONO, btn } from "../theme";
@@ -18,6 +18,8 @@ import { HowItWorks, MachineCommand } from "../components/MachineCommand";
 import { useWorkStarted } from "../workStarted";
 import { localTime } from "../time";
 import { useOneAtATime } from "../oneAtATime";
+import { useHasScope } from "../team";
+import RoleNote from "../components/RoleNote";
 
 const label: React.CSSProperties = {
   fontFamily: MONO, fontSize: 10.5, color: C.dim, letterSpacing: "0.1em", marginBottom: 8,
@@ -168,6 +170,9 @@ function HowToRun() {
     onSuccess: () => void qc.invalidateQueries({ queryKey: ["machine-jobs"] }),
   });
   const queueOnce = useOneAtATime(queue);
+  // a machine's jobs are an operator's: a viewer was told to install and run
+  // a worker they could not use (QA-426)
+  const mayRun = useHasScope()("operate");
   const ready = !!machine && trials !== null && skill.trim() && prompt.trim() && checkCmd.trim();
   const field = (labelText: string, value: string, set: (v: string) => void, testId: string) => (
     <label className="flex items-center gap-2" style={{ fontFamily: MONO, fontSize: 11, color: C.mut }}>
@@ -217,7 +222,9 @@ function HowToRun() {
           </label>
         )}
       </div>
-      {mine.length > 0 ? (
+      {!mayRun ? (
+        <RoleNote need="operate" what="run a skill eval on a machine" testid="eval-viewer" />
+      ) : mine.length > 0 ? (
         <div className="flex items-center gap-3 flex-wrap">
           <button data-testid="eval-run" disabled={!ready || queue.isPending} onClick={() => queueOnce()}
             style={btn({ color: C.bg, background: C.green, border: `1px solid ${C.green}`, fontSize: 12,
@@ -303,7 +310,9 @@ function Jobs() {
 // ── one eval ─────────────────────────────────────────────────────────────────
 
 function EvalView({ evalId }: { evalId: string }) {
-  const ev = useQuery({ queryKey: ["skill-eval", evalId], queryFn: () => api.skillEval(evalId) });
+  // "no such eval" is the answer: not asked again (QA-425)
+  const ev = useQuery({ queryKey: ["skill-eval", evalId], queryFn: () => api.skillEval(evalId),
+                        retry: (n, e) => !(e instanceof ApiError && e.status < 500) && n < 1 });
   if (ev.isLoading) return <Loader2 size={16} className="animate-spin" color={C.dim} />;
   if (!ev.data) {
     return <div style={{ fontFamily: MONO, fontSize: 12, color: C.mut }}>no skill eval {evalId}</div>;
