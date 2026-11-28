@@ -913,6 +913,9 @@ export function apiError(status: number, text: string): ApiError {
   // not the plane's sentence: a proxy's or server's own page ("Internal Server
   // Error", nginx's HTML — "413 Request Entity Too Large") is said in words,
   // never shown raw (QA-234, QA-217)
+  if (status >= 500 && /^(internal server error|bad gateway|service unavailable|gateway time-?out)$/i.test(words.trim())) {
+    words = "";   // the status phrase, not a sentence (QA-461)
+  }
   if (!words) {
     words = status === 413 ? "that is too large for the plane to take in one request — send less at a time"
       : status >= 500 ? `the plane could not answer (HTTP ${status}) — try again in a moment`
@@ -923,7 +926,10 @@ export function apiError(status: number, text: string): ApiError {
   // 401 text (QA-236); the reason, if any, is on the session-ended banner
   if (status === 401) {
     code = code || "unauthorized";
-    words = isGuestToken(useApp.getState().apiToken) ? GUEST_ENDED : "you are signed out — sign in again";
+    const held = useApp.getState().apiToken;
+    words = isGuestToken(held) ? (guestMoved ? GUEST_MOVED : GUEST_ENDED)
+      : !held && guestRefused ? GUEST_NOT_YET
+        : "you are signed out — sign in again";
   }
   return new ApiError(status, code, words.length > 600 ? `${words.slice(0, 600)}…` : words);
 }
@@ -1051,8 +1057,21 @@ function guestCannotRead(path: string): string | null {
 // burst of 401s before the guest token arrived (QA-042). Signing out (the
 // token gone) asks again.
 let session: Promise<void> | null = null;
+// A sign-in ended in this tab (removed, signed out, refused): no guest session
+// is started in its place — it used up the shared guest budget for someone
+// whose access had just ended (QA-321). A new sign-in, or a reload, clears it.
+let accountEnded = false;
 useApp.subscribe((s, prev) => {
   if (prev.apiToken && !s.apiToken) session = null;
+  if (prev.refreshToken && !s.refreshToken) accountEnded = true;
+  if (!prev.refreshToken && s.refreshToken) {
+    // signed in here: what this tab was refused while signed out is not the
+    // answer any more (QA-481)
+    accountEnded = false;
+    signedOutHere = false;
+    guestRefused = false;
+    if (s.policyNotice?.kind === "read_failed") s.reloadPolicy();
+  }
 });
 
 /** Settles once the session is known: a token is there, or none is needed,
@@ -1061,7 +1080,7 @@ export function sessionSettled(again = false): Promise<void> {
   if (!session || again) {
     session = api.authStatus()
       .then(async (st) => {
-        if (st.auth_enabled && st.guest_sessions && !st.authenticated && !apiToken()) {
+        if (st.auth_enabled && st.guest_sessions && !st.authenticated && !apiToken() && !accountEnded) {
           await startGuest();
         }
         signedOutHere = st.auth_enabled && !st.authenticated && !apiToken();
@@ -1088,6 +1107,9 @@ const OPEN_PATHS = ["/v1/auth/status", "/v1/auth/guest", "/v1/share/", "/v1/heal
 let renewing: Promise<boolean> | null = null;
 // Seconds the plane asked a refused guest to wait (429 Retry-After), or 0.
 let guestWait = 0;
+// the last guest start was refused (full, too many from here): the tab was
+// never signed in, so "signed out — sign in again" is not what it is (QA-460)
+let guestRefused = false;
 
 /** How long the plane asked to wait before the next guest session, after the
  *  last attempt was refused for too many from this address; 0 when it was not. */
@@ -1103,6 +1125,7 @@ export async function startGuest(stale?: string): Promise<boolean> {
     renewing = fetch("/v1/auth/guest", { method: "POST" })
       .then(async (r) => {
         guestWait = r.status === 429 ? Number(r.headers.get("retry-after")) || 60 : 0;
+        guestRefused = !r.ok;
         if (!r.ok) return false;
         const g = (await r.json()) as { token: string; expires_at: string };
         useApp.getState().setGuest(g.token, g.expires_at);
@@ -1126,6 +1149,13 @@ let guestBackoff = 0;
 
 async function renewGuest(stale: string): Promise<boolean> {
   if (apiToken() !== stale) return true;   // someone else renewed it
+  if (await guestWasClaimed(stale)) {
+    // QA-467: another tab signed in and took this guest's work with it — said,
+    // and no new guest started over it
+    guestMoved = true;
+    useApp.getState().setSessionEnded(GUEST_MOVED);
+    return false;
+  }
   if (Date.now() < guestNextTry) return false;
   const ok = await startGuest(stale);
   if (ok) {
@@ -1142,6 +1172,36 @@ async function renewGuest(stale: string): Promise<boolean> {
 }
 
 export const GUEST_ENDED = "your guest session ended — sign up to keep your work, or reload the page for a new one";
+export const GUEST_NOT_YET = "the guest session is not available yet — the examples open by themselves in a moment, or sign in";
+export const GUEST_MOVED = "your guest work moved into your account (you signed in in another tab) — sign in here to see it";
+
+// Which guest sessions this browser claimed into an account, by fingerprint:
+// local storage, so a duplicated tab still holding the same guest token knows
+// (QA-467). Not a credential: the token itself is spent once claimed.
+const CLAIMED_KEY = "axor-guests-claimed";
+let guestMoved = false;
+
+function claimedFingerprints(): string[] {
+  try {
+    const got = JSON.parse(window.localStorage.getItem(CLAIMED_KEY) ?? "[]") as unknown;
+    return Array.isArray(got) ? got.map(String) : [];
+  } catch {
+    return [];
+  }
+}
+
+/** Note guest sessions whose work moved into the account just signed in. */
+export async function noteGuestsClaimed(tokens: string[]): Promise<void> {
+  const fps = (await Promise.all(tokens.map(fingerprint))).filter(Boolean);
+  try {
+    window.localStorage.setItem(CLAIMED_KEY, JSON.stringify([...new Set([...fps, ...claimedFingerprints()])].slice(0, 20)));
+  } catch { /* storage unavailable: the tab says its guest session ended instead */ }
+}
+
+async function guestWasClaimed(token: string): Promise<boolean> {
+  const fp = await fingerprint(token);
+  return Boolean(fp) && claimedFingerprints().includes(fp);
+}
 
 /** A guest reached a feature that needs an account: tell the app, which asks
  * for a sign-up right there, naming what it unlocks. */
@@ -1164,16 +1224,76 @@ export function renewSession(): Promise<boolean> {
   return refreshSession(null);
 }
 
+// QA-480: a duplicated tab carries a copy of this tab's session storage, so two
+// tabs hold one refresh token. Both refreshing it ended the sign-in in both
+// (identity reads a second use as theft). Across tabs, one refreshes at a time
+// (a Web Lock) and tells the others what it got (a BroadcastChannel): a tab
+// holding the token that was just exchanged takes the result instead of
+// presenting it again. Identity's short grace for the same token is the net
+// under this, for a tab that misses the message.
+type Rotation = { from: string; access: string; refresh: string; email: string };
+const rotations = typeof BroadcastChannel !== "undefined" ? new BroadcastChannel("axor-refresh") : null;
+const rotated = new Map<string, Rotation>();
+
+/** A refresh token's fingerprint, so tabs name it without passing it around. */
+async function fingerprint(token: string): Promise<string> {
+  try {
+    const d = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(`axor-refresh:${token}`));
+    return Array.from(new Uint8Array(d), (b) => b.toString(16).padStart(2, "0")).join("");
+  } catch {
+    return "";  // no WebCrypto (not a secure context): no sharing, identity's grace still holds
+  }
+}
+
+function remember(r: Rotation): void {
+  rotated.set(r.from, r);
+  if (rotated.size > 8) rotated.delete(rotated.keys().next().value as string);
+}
+
+rotations?.addEventListener("message", (e: MessageEvent<Rotation>) => {
+  const r = e.data;
+  if (!r?.from) return;
+  remember(r);
+  const held = useApp.getState().refreshToken;
+  if (held) void fingerprint(held).then((fp) => {
+    if (fp === r.from && useApp.getState().refreshToken === held) {
+      useApp.getState().setSession(r.access, r.refresh, r.email);
+    }
+  });
+});
+
+function oneTabAtATime<T>(run: () => Promise<T>): Promise<T> {
+  const locks = typeof navigator !== "undefined" ? navigator.locks : undefined;
+  return locks ? (locks.request("axor-refresh", run) as Promise<T>) : run();
+}
+
 async function refreshSession(staleToken: string | null): Promise<boolean> {
   const state = useApp.getState();
   // Another request already refreshed while this one was in flight.
   if (staleToken && apiToken() && apiToken() !== staleToken) return true;
   if (!state.refreshToken) return false;
   if (!refreshing) {
-    const presented = state.refreshToken;
+    const held = state.refreshToken;
     let why = "";
-    refreshing = refresh(presented, (w) => { why = w; })
-      .then((next) => {
+    refreshing = oneTabAtATime(async () => {
+      // another tab may have exchanged this very token while this one waited
+      const presented = useApp.getState().refreshToken;
+      if (presented !== held) return { taken: true as const };
+      const fp = await fingerprint(presented);
+      const known = fp ? rotated.get(fp) : undefined;
+      if (known) return { taken: false as const, next: { access_token: known.access, refresh_token: known.refresh,
+                                                          user: { email: known.email } } };
+      const next = await refresh(presented, (w) => { why = w; });
+      if (next && fp) {
+        const r = { from: fp, access: next.access_token, refresh: next.refresh_token, email: next.user.email };
+        remember(r);
+        rotations?.postMessage(r);
+      }
+      return { taken: false as const, next };
+    })
+      .then((got) => {
+        if (got.taken) return true;
+        const next = got.next;
         if (next) {
           useApp.getState().setSession(next.access_token, next.refresh_token, next.user.email);
           return true;

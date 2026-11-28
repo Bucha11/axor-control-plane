@@ -249,6 +249,56 @@ test("on a plan paid by card, another rung changes the subscription, and says wh
   expect(await page.evaluate(() => (window as unknown as { __paddle?: unknown[] }).__paddle ?? [])).toEqual([]);
 });
 
+test("on the hosted plane the free plan starts here, not on GitHub (QA-300)", async ({ page }) => {
+  await licensedTo(page, "org_acme", true);
+  for (const journey of ["production", "both"]) {
+    await goHash(page, `pricing?for=${journey}`);
+    const cta = page.getByTestId("cta-community");
+    await expect(cta).toHaveAttribute("href", `#/connect?for=${journey}`);
+    await cta.click();
+    await expect(page).toHaveURL(new RegExp(`#/connect\\?for=${journey}`));
+  }
+});
+
+test("moving down a plan says what the workspace loses before it is confirmed (QA-304)", async ({ page }) => {
+  await page.route("**/v1/license/status", (r) => r.fulfill({ json: {
+    active: true, vendor_key_configured: true, hosted: true, auto_renewal: true,
+    licensed_to: "org_acme", workspace_tier: "team" } }));
+  let asked = 0;
+  await page.route("**/v1/license/plan", (r) => { asked += 1; return r.fulfill({ json: { from: "team", to: "coding" } }); });
+  await signedInAs(page, ["read", "ingest", "operate", "admin"]);
+  await goHash(page, "pricing?for=both");
+  await page.getByTestId("cta-coding").click();
+  const ask = page.getByTestId("ask");
+  await expect(ask).toContainText("the production side locks");
+  await expect(ask).toContainText("single sign-on, SCIM");
+  await expect(ask).toContainText("runs are kept 30 days instead of 90 days");
+  await ask.getByRole("button", { name: "cancel" }).click();
+  expect(asked).toBe(0);
+});
+
+test("waiting for the payment provider is said once the checkout is paid, not when it opens (QA-302)", async ({ page }) => {
+  await page.route("**/v1/license/status", (r) => r.fulfill({ json: {
+    active: false, vendor_key_configured: true, hosted: true, licensed_to: "org_acme" } }));
+  await page.route("https://cdn.paddle.com/**", (r) => r.fulfill({ contentType: "application/javascript", body: `
+    window.__paddle = [];
+    window.Paddle = {
+      Environment: { set: () => {} },
+      Initialize: (o) => { window.__paddleEvent = o.eventCallback; },
+      Checkout: { open: (o) => window.__paddle.push(["open", o]) },
+    };` }));
+  await goHash(page, "pricing?for=coding");
+  await page.getByTestId("cta-coding").click();
+  await expect.poll(() => page.evaluate(() => ((window as unknown as { __paddle?: unknown[] }).__paddle ?? []).length))
+    .toBe(1);
+  // the overlay is open; nothing is paid yet
+  await page.waitForTimeout(500);
+  await expect(page.getByText(/Waiting for the payment provider/)).toHaveCount(0);
+  await page.evaluate(() => (window as unknown as { __paddleEvent: (e: unknown) => void })
+    .__paddleEvent({ name: "checkout.completed", data: {} }));
+  await expect(page.getByTestId("plan-note")).toContainText("Waiting for the payment provider");
+});
+
 test("a payment page that cannot load says so (QA-136)", async ({ page }) => {
   await page.route("**/v1/license/status", (r) => r.fulfill({ json: {
     active: false, vendor_key_configured: true, hosted: true, licensed_to: "org_acme" } }));

@@ -315,7 +315,9 @@ function Sessions({ orgId }: { orgId: string }) {
           <span data-testid="sessions-ended" style={{ color: C.dim }}>
             {end.data.ended === 0 ? "nobody else was signed in"
               : `${end.data.ended} ${end.data.ended === 1 ? "person" : "people"} signed out`}
-            {" "}— a page already open stops within {end.data.access_minutes} minutes
+            {/* the revocation feed ends open pages in seconds now, not when
+                their access token expires (QA-487, QA-324) */}
+            {end.data.ended > 0 && " — pages already open, your own other browsers too, stop within seconds"}
           </span>
         )}
         {(set.isError || end.isError) && (
@@ -1073,7 +1075,9 @@ export function IdentityLogin({ onDone, onSignedUp, initialMode = "login", compa
       <div className="flex items-center gap-2 flex-wrap">
         <button type="submit" disabled={!canSubmit || busy}
           style={btn({ color: C.steel, borderColor: C.steel, fontSize: 11, padding: "5px 14px", whiteSpace: "nowrap" })}>
-          {busy ? "…" : mode === "signup" ? "create workspace" : mode === "forgot" ? "send reset link" : "log in"}
+          {/* busy keeps its label (and so its width): shrunk to "…", the second
+              click of a double-click landed on "back to log in" (QA-484) */}
+          {mode === "signup" ? "create workspace" : mode === "forgot" ? "send reset link" : "log in"}{busy ? "…" : ""}
         </button>
         {mode === "login" && !ssoFor && (
           <button type="button" data-testid="sso-start" onClick={() => void startSso()}
@@ -1371,8 +1375,10 @@ export default function Settings({ tab = "workspace" }: { tab?: string } = {}) {
       {active === "billing" && (
         <>
           <Billing coding={coding} prod={prod} />
-          {/* on the hosted plane a card plan installs itself: nothing to paste */}
-          {!licenseStatus.data?.active && !authStatus.data?.guest && !licenseStatus.data?.hosted && (
+          {/* on the hosted plane a card plan installs itself: nothing to paste.
+              Only a plane that SAID it is self-hosted gets the hint — a status
+              that could not be read (signed out: 401) is not "not hosted" (QA-301) */}
+          {!licenseStatus.data?.active && !authStatus.data?.guest && licenseStatus.data?.hosted === false && (
             <div data-testid="billing-license-hint" className="mb-4" style={{ fontFamily: MONO, fontSize: 11, color: C.mut }}>
               bought a plan? the license file you were sent goes under{" "}
               <button onClick={() => navigate("settings", { tab: "workspace" })}
@@ -1655,6 +1661,16 @@ function TokenFold() {
             can: {(authStatus.data.scopes ?? []).join(", ") || "nothing"}
           </div>
         )}
+        {/* a token the plane does not take was kept and sent with every
+            request, and nothing said so (QA-323) */}
+        {own && authStatus.data?.auth_enabled && !signedIn && (
+          <div data-testid="token-refused" className="flex items-center gap-2 flex-wrap"
+            style={{ fontFamily: MONO, fontSize: 10.5, color: C.red }}>
+            the plane did not accept this token — check it, or clear it
+            <button onClick={() => setApiToken("")}
+              style={btn({ fontSize: 10.5, padding: "2px 8px", color: C.mut })}>clear</button>
+          </div>
+        )}
       </div>
     </details>
   );
@@ -1785,10 +1801,11 @@ function Billing({ coding, prod }: { coding: boolean; prod: boolean }) {
           the plan in force. The tab used to show a free workspace three paid
           plans side by side and no months at all. */}
       {months.length > 0 && (
-        <Section title={`MONTH BY MONTH · on ${TIER_NAME[plan.tier] ?? plan.tier}`}>
+        <Section title="MONTH BY MONTH">
           <div data-testid="billing-months">
             <div className="flex gap-3" style={{ fontFamily: MONO, fontSize: 9.5, color: C.dim, letterSpacing: "0.06em", padding: "0 0 4px" }}>
               <span style={{ width: 150 }}>MONTH</span>
+              <span style={{ width: 120 }}>PLAN</span>
               {coding && <span style={{ width: 110 }}>DEVELOPERS</span>}
               {prod && <span style={{ width: 120 }}>AGENTS AT PEAK</span>}
               <span style={{ flex: 1, textAlign: "right" }}>AMOUNT</span>
@@ -1800,6 +1817,12 @@ function Billing({ coding, prod }: { coding: boolean; prod: boolean }) {
                   style={{ background: "none", border: "none", cursor: "pointer", padding: "6px 0", fontFamily: MONO, fontSize: 11.5, textAlign: "left" }}>
                   <span style={{ color: C.text, width: 150, whiteSpace: "nowrap" }}>
                     {open === h.month ? "▾" : "▸"} {h.month}{i === 0 && current ? " · so far" : ""}
+                  </span>
+                  {/* the plan each month was billed on, not today's for all
+                      of them (QA-303) */}
+                  <span data-testid={`billing-month-plan-${h.month}`} style={{ color: C.dim, width: 120, whiteSpace: "nowrap" }}>
+                    {i === 0 && current ? `estimated on ${TIER_NAME[plan.tier] ?? plan.tier}`
+                      : TIER_NAME[h.workspace_tier] ?? h.workspace_tier}
                   </span>
                   {coding && <span style={{ color: C.mut, width: 110 }}>{h.active_developers}</span>}
                   {prod && <span style={{ color: C.mut, width: 120 }}>{h.peak_nodes}</span>}
@@ -1820,6 +1843,12 @@ function Billing({ coding, prod }: { coding: boolean; prod: boolean }) {
                 )}
               </div>
             ))}
+            {current && plan.tier !== "community" && (
+              <div data-testid="billing-estimate-note" style={{ fontFamily: MONO, fontSize: 10, color: C.dim, marginTop: 6, lineHeight: 1.6 }}>
+                The running month is an estimate on the plan in force now, {TIER_NAME[plan.tier] ?? plan.tier}. If the
+                plan changed this month, what is billed is the payment provider&apos;s prorated charge for each plan.
+              </div>
+            )}
             {plan.tier === "community" && (
               <div style={{ fontFamily: MONO, fontSize: 10, color: C.dim, marginTop: 6 }}>
                 Free charges nothing — the amounts are $0; the usage is what a paid plan would bill from

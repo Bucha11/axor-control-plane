@@ -328,4 +328,119 @@ test.describe("access (QA, 0.7.3)", () => {
     await expect(ids.getByTestId("machine-worker")).toContainText(
       "m-ed6edebfb85c22b8worker · laptop · acme/api · on→ ada@acme.io");
   });
+
+  test("a removed member's tab starts no guest and drops the workspace's data (QA-321, QA-322)", async ({ page }) => {
+    let removed = false;
+    let guestPosts = 0;
+    await page.route("**/v1/auth/status", (r) => r.fulfill({ json: (r.request().headers()["authorization"] ?? "") && !removed
+      ? { auth_enabled: true, authenticated: true, guest_sessions: true, scopes: MEMBER }
+      : { auth_enabled: true, authenticated: false, guest_sessions: true, scopes: [] } }));
+    await page.route("**/v1/auth/guest", (r) => {
+      guestPosts += 1;
+      return r.fulfill({ status: 201, json: { token: "gs_x", org: "guest_x", ttl_seconds: 1800,
+        expires_at: new Date(Date.now() + 20 * 60_000).toISOString() } });
+    });
+    await signedIn(page);
+    await page.route("**/identity/v1/refresh", (r) => r.fulfill({ status: 401,
+      json: { detail: "you are no longer a member of Acme" } }));
+    await page.route("**/v1/incidents?*", (r) => removed
+      ? r.fulfill({ status: 401, json: { error: "unauthorized", detail: "no longer a member" } })
+      : r.fulfill({ json: ONE_INCIDENT }));
+    await page.route(/\/v1\/(runs|plane)/, (r) => removed
+      ? r.fulfill({ status: 401, json: { error: "unauthorized", detail: "no longer a member" } })
+      : r.fallback());
+    await goHash(page, "evidence");
+    await expect(page.getByText("send_email").first()).toBeVisible();
+    removed = true;
+    await goHash(page, "govern");
+    await expect(page.getByTestId("session-ended")).toContainText("you are no longer a member of Acme");
+    await page.waitForTimeout(1500);
+    // QA-321: no guest session in its place
+    expect(guestPosts).toBe(0);
+    await goHash(page, "evidence");
+    // QA-322: the workspace's incident is not shown from the cache
+    await expect(page.getByText("send_email")).toHaveCount(0);
+  });
+
+  test("signing in, in a tab that was signed out, clears Policy's refusal (QA-481)", async ({ page }) => {
+    await page.route("**/v1/auth/status", (r) => r.fulfill({ json: r.request().headers()["authorization"]
+      ? { auth_enabled: true, authenticated: true, guest_sessions: false, scopes: ["read", "ingest", "operate", "admin"] }
+      : { auth_enabled: true, authenticated: false, guest_sessions: false, scopes: [] } }));
+    await page.route("**/identity/v1/login", (r) => r.fulfill({ json: {
+      access_token: "acc-new", refresh_token: "ref-new", token_type: "Bearer", expires_in: 900,
+      user: { user_id: "u1", email: "ada@acme.io" }, org: { org_id: "org_1", role: "owner", tier: "free" } } }));
+    await goHash(page, "policy");
+    await expect(page.getByTestId("policy-read-failed")).toContainText("signed out");
+    await goHash(page, "settings?tab=workspace");
+    await page.getByLabel("email", { exact: true }).fill("ada@acme.io");
+    await page.getByLabel("password").fill("correct horse");
+    await page.getByRole("button", { name: "log in", exact: true }).click();
+    await expect(page.getByText("signed in as ada@acme.io")).toBeVisible();
+    await goHash(page, "policy");
+    await expect(page.getByTestId("policy-read-failed")).toHaveCount(0);
+  });
+
+  test("the kernel badge appears once the tab signs in, without a reload (QA-462)", async ({ page }) => {
+    await page.route("**/v1/auth/status", (r) => r.fulfill({ json: r.request().headers()["authorization"]
+      ? { auth_enabled: true, authenticated: true, guest_sessions: false, scopes: ["read"] }
+      : { auth_enabled: true, authenticated: false, guest_sessions: false, scopes: [] } }));
+    await page.route("**/v1/version", (r) => r.request().headers()["authorization"]
+      ? r.fulfill({ json: { versions: { "axor-core": "0.13.0", "axor-backend": "0.7.4" } } })
+      : r.fulfill({ status: 401, json: { error: "unauthorized" } }));
+    await page.route("**/identity/v1/login", (r) => r.fulfill({ json: {
+      access_token: "acc-new", refresh_token: "ref-new", token_type: "Bearer", expires_in: 900,
+      user: { user_id: "u1", email: "ada@acme.io" }, org: { org_id: "org_1", role: "owner", tier: "free" } } }));
+    await goHash(page, "settings?tab=workspace");
+    await expect(page.getByText("kernel 0.13.0")).toHaveCount(0);
+    await page.getByLabel("email", { exact: true }).fill("ada@acme.io");
+    await page.getByLabel("password").fill("correct horse");
+    await page.getByRole("button", { name: "log in", exact: true }).click();
+    await expect(page.getByText("signed in as ada@acme.io")).toBeVisible();
+    await expect(page.getByText("kernel 0.13.0")).toBeVisible();
+  });
+
+  test("a read that never got an answer, or a bare 500, is said in words (QA-461)", async ({ page }) => {
+    await page.route("**/v1/plane/nodes", (r) => r.abort());
+    await goHash(page, "govern");
+    await expect(page.getByTestId("read-failed")).toContainText("the plane could not be reached");
+    await expect(page.getByText(/Failed to fetch/)).toHaveCount(0);
+    await page.route("**/v1/incidents?*", (r) => r.fulfill({ status: 500, json: { detail: "Internal Server Error" } }));
+    await goHash(page, "evidence");
+    await expect(page.getByTestId("read-failed")).toContainText("could not answer");
+    await expect(page.getByText(/Internal Server Error/)).toHaveCount(0);
+  });
+
+  test("offline, the page says so (QA-465)", async ({ page, context }) => {
+    await goHash(page, "govern");
+    await expect(page.getByTestId("offline")).toHaveCount(0);
+    await context.setOffline(true);
+    await expect(page.getByTestId("offline")).toHaveText("you are offline — nothing is sent until the connection is back");
+    await context.setOffline(false);
+    await expect(page.getByTestId("offline")).toHaveCount(0);
+  });
+
+  test("a viewer is not offered an agent's key on Connect → production → wrap (QA-482)", async ({ page }) => {
+    await playRole(page, VIEWER);
+    await signedIn(page, "viewer");
+    let posts = 0;
+    await page.route("**/v1/keys", (r) => { if (r.request().method() === "POST") posts += 1; return r.fallback(); });
+    await goHash(page, "connect?for=production");
+    await page.getByTestId("prod-way-code").click();
+    await expect(page.getByTestId("adapter-mint-role")).toHaveText("as a viewer you can't make an agent's key — only the owner can");
+    await expect(page.getByTestId("adapter-mint")).toHaveCount(0);
+    expect(posts).toBe(0);
+  });
+
+  test("an agent's name is held to what the plane keeps, and the snippet wraps (QA-483)", async ({ page }) => {
+    await playRole(page, ["read", "ingest", "operate", "admin"]);
+    await signedIn(page, "owner");
+    await goHash(page, "connect?for=production");
+    await page.getByTestId("prod-way-code").click();
+    const name = page.getByLabel("agent name");
+    await name.fill("");
+    await name.pressSequentially("n".repeat(300), { delay: 0 });
+    await expect(name).toHaveValue("n".repeat(128));
+    await expect(page.getByTestId("adapter-snippet")).toContainText(`AXOR_NODE_ID=${"n".repeat(128)}`);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  });
 });

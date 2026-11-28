@@ -174,8 +174,9 @@ async def guest_session(request: Request) -> dict:
 @router.post("/auth/claim-guest")
 async def claim_guest(request: Request, body: dict) -> dict:
     """Move a guest session's work into the signed-in account's org: runs,
-    agents and their state, evidence, health checks, reputation. The account
-    wins a clash. The guest token stops working."""
+    agents and their state, evidence, health checks, reputation — not the
+    product's examples it opened. The account wins a clash. The guest token
+    stops working."""
     from axor_backend.guests import hash_token
 
     principal = getattr(request.state, "principal", None)
@@ -185,11 +186,9 @@ async def claim_guest(request: Request, body: dict) -> dict:
     if not isinstance(token, str) or not token.startswith("gs_"):
         raise HTTPException(400, "guest_token is required")
     store = request.app.state.store
-    examples = await store.guest_examples(hash_token(token))
+    # what the person did: the examples they looked at stay behind (QA-468)
     moved = await store.claim_guest(hash_token(token), principal.org)
-    # what the person did, not the examples they looked at (those move too)
-    own = {t: n - examples.get(t, 0) for t, n in moved.items() if n - examples.get(t, 0) > 0}
-    return {"claimed": bool(moved), "moved": own}
+    return {"claimed": moved is not None, "moved": moved or {}}
 
 
 def _presented_a_token(request: Request) -> bool:

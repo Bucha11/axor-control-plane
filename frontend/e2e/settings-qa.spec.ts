@@ -276,7 +276,9 @@ test.describe("settings (QA, 0.7.2)", () => {
     await goHash(page, "settings");
     await expect(page.getByTestId("session-ended")).toContainText("your session ended — sign in again");
     await expect(page.getByRole("button", { name: "log in", exact: true })).toBeVisible();
-    await page.waitForFunction(() => (sessionStorage.getItem("axor-app") ?? "").includes("gs_e2e_guest_token"));
+    // QA-321: a sign-in that ended starts no guest session in its place
+    await page.waitForTimeout(1500);
+    expect(await page.evaluate(() => sessionStorage.getItem("axor-app") ?? "")).not.toContain("gs_e2e_guest_token");
     await expect(page.getByText("○ not signed in")).toBeAttached();
     await expect(page.getByText("● signed in", { exact: true })).toHaveCount(0);
     await expect(page.getByText(/^can: /)).toHaveCount(0);
@@ -406,3 +408,70 @@ async function logIn(page: Page): Promise<void> {
   await page.getByRole("button", { name: "log in", exact: true }).click();
   await expect(page.getByText("workspace Acme")).toBeVisible();
 }
+
+// QA-323: a pasted token the plane does not take was kept and sent with every
+// request, and the page only showed "○ not signed in"
+test("a bogus access token is said to be refused, and can be cleared", async ({ page }) => {
+  await page.route("**/v1/auth/status", (r) => r.fulfill({ json: {
+    auth_enabled: true, authenticated: false, guest_sessions: false, scopes: [] } }));
+  await setConnection(page, { mode: "adapter" });
+  await goHash(page, "settings?tab=workspace");
+  await page.getByText("use an access token instead").click();
+  await page.getByLabel("access token").fill("not-a-real-token");
+  await expect(page.getByTestId("token-refused")).toContainText("the plane did not accept this token");
+  await page.getByTestId("token-refused").getByRole("button", { name: "clear" }).click();
+  await expect(page.getByLabel("access token")).toHaveValue("");
+  await expect(page.getByTestId("token-refused")).toHaveCount(0);
+});
+
+// QA-301: a signed-out visitor on the hosted plane was shown the self-hosted
+// license hint — the license status answered 401, read as "not hosted"
+test("the license-file hint is for a plane that said it is self-hosted, not for an unknown one", async ({ page }) => {
+  let status: { code: number; body: unknown } = { code: 401, body: { error: "unauthorized" } };
+  await page.route("**/v1/license/status", (r) => r.fulfill({ status: status.code, json: status.body }));
+  await setConnection(page, { mode: "adapter" });
+  await goHash(page, "settings?tab=billing");
+  await expect(page.getByText(/billing|plan/i).first()).toBeVisible();
+  await page.waitForTimeout(800);
+  await expect(page.getByTestId("billing-license-hint")).toHaveCount(0);
+  status = { code: 200, body: { active: false, vendor_key_configured: true, hosted: false } };
+  await page.reload();
+  await expect(page.getByTestId("billing-license-hint")).toContainText("the license file you were sent");
+});
+
+// QA-306: plan changes showed as raw event names on the trail
+test("plan changes on the audit trail are in words", async ({ page }) => {
+  await setConnection(page, { mode: "adapter" });
+  await page.route("**/v1/audit?*", (r) => r.fulfill({ json: { total: 3,
+    actions: ["plan_change_requested", "plan_upgraded", "plan_downgraded"], items: [
+      { id: "a3", ts: "2026-11-28T10:03:00Z", kind: "control", action: "plan_downgraded", who: "license renewal", target: "coding", detail: { tier: "coding", until: "2026-12-31" } },
+      { id: "a2", ts: "2026-11-28T10:02:00Z", kind: "control", action: "plan_upgraded", who: "license renewal", target: "team", detail: { tier: "team" } },
+      { id: "a1", ts: "2026-11-28T10:01:00Z", kind: "control", action: "plan_change_requested", who: "ada@acme.io", role: "owner", target: "team", detail: {} },
+    ] } }));
+  await goHash(page, "settings?tab=audit");
+  const rows = page.getByTestId("audit-row");
+  await expect(rows.nth(0)).toContainText("moved the plan down to");
+  await expect(rows.nth(1)).toContainText("moved the plan up to");
+  await expect(rows.nth(2)).toContainText("asked to change the plan to");
+  await expect(page.getByText(/plan_(change_requested|upgraded|downgraded)/)).toHaveCount(0);
+});
+
+// QA-303: the month table read every month on today's plan — the running month
+// recomputed on it minutes after a switch, and past months too
+test("each month shows the plan it was billed on; the running month says it is an estimate", async ({ page }) => {
+  const month = (m: string, tier: string, total: string) => ({ month: m, workspace_tier: tier, total, priced: true,
+    active_developers: 1, peak_nodes: 0, developers: [], base: "$0.00", base_cents: 0, included_nodes: 1,
+    peak_day: null, billable_nodes: 0, overage: "$0.00", overage_cents: 0, included_developers: 0,
+    billable_developers: 1, seats: total, seat_cents: 0, total_cents: 0, provisional: false, note: "", computed_on: "" });
+  await page.route("**/v1/license/billing", (r) => r.fulfill({ json: {
+    plan: { tier: "coding", licensed: true, organization: "org_acme", expires_at: "2026-12-31", base: null,
+            base_cents: null, per_node_cents: 7500, seat: "$25.00", seat_cents: 2500, included_nodes: 1,
+            included_developers: 0, priced: true },
+    current: month("2026-11", "coding", "$25.00"), history: [month("2026-10", "team", "$299.00")], if_paid: [],
+    forecast: null } }));
+  await setConnection(page, { mode: "adapter" });
+  await goHash(page, "settings?tab=billing");
+  await expect(page.getByTestId("billing-month-plan-2026-10")).toHaveText("Team");
+  await expect(page.getByTestId("billing-month-plan-2026-11")).toHaveText("estimated on Coding");
+  await expect(page.getByTestId("billing-estimate-note")).toContainText("an estimate on the plan in force now, Coding");
+});

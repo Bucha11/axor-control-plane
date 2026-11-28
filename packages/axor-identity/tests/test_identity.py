@@ -189,6 +189,45 @@ async def test_refresh_rotates_and_old_token_dies(client: httpx.AsyncClient) -> 
         "refresh_token": other["refresh_token"]})).status_code == 200
 
 
+async def test_a_duplicated_tab_presenting_the_just_rotated_token_gets_the_same_pair(
+        client: httpx.AsyncClient) -> None:
+    # QA-480: a duplicated tab holds a copy of the refresh token. Tab 1 rotates
+    # it; tab 2 presenting its copy a moment later must not end the session in
+    # both tabs — it gets the successor tab 1 got.
+    session = await _signup(client, "dup@acme.io")
+    old = session["refresh_token"]
+    one = await client.post("/v1/refresh", json={"refresh_token": old})
+    two = await client.post("/v1/refresh", json={"refresh_token": old})
+    assert one.status_code == 200 and two.status_code == 200, two.text
+    assert two.json()["refresh_token"] == one.json()["refresh_token"]
+    me = await client.get("/v1/me", headers={
+        "Authorization": f"Bearer {one.json()['access_token']}"})
+    assert me.status_code == 200
+    # the shared successor keeps rotating as usual
+    nxt = await client.post("/v1/refresh", json={"refresh_token": one.json()["refresh_token"]})
+    assert nxt.status_code == 200
+    # once the successor has moved on, the old copy is reuse again: the session ends
+    assert (await client.post("/v1/refresh", json={"refresh_token": old})).status_code == 401
+    assert (await client.post("/v1/refresh", json={
+        "refresh_token": nxt.json()["refresh_token"]})).status_code == 401
+
+
+async def test_the_old_token_past_the_grace_window_is_reuse(
+        app, client: httpx.AsyncClient) -> None:  # noqa: ANN001
+    # QA-480: the grace is short — after it, reuse detection is as before (QA-240)
+    from axor_identity.storage import refresh_tokens
+    from sqlalchemy import update
+
+    session = await _signup(client, "late@acme.io")
+    old = session["refresh_token"]
+    one = (await client.post("/v1/refresh", json={"refresh_token": old})).json()
+    async with app.state.store.engine.begin() as conn:
+        await conn.execute(update(refresh_tokens).values(created_ts="2000-01-01T00:00:00Z"))
+    assert (await client.post("/v1/refresh", json={"refresh_token": old})).status_code == 401
+    assert (await client.post("/v1/refresh", json={
+        "refresh_token": one["refresh_token"]})).status_code == 401
+
+
 async def test_logout_revokes_the_refresh_token(client: httpx.AsyncClient) -> None:
     session = await _signup(client, "bye@acme.io")
     h = {"Authorization": f"Bearer {session['access_token']}"}

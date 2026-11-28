@@ -184,6 +184,10 @@ async def test_the_login_service_tells_the_trail_who_joined_and_left(
     assert (await c.post("/v1/audit/identity", headers=svc, json={
         "action": "plan_upgraded", "target": "team", "who": "license renewal",
         "detail": {"tier": "team"}})).status_code == 204
+    # QA-306: a downgrade that lands is on the trail too
+    assert (await c.post("/v1/audit/identity", headers=svc, json={
+        "action": "plan_downgraded", "target": "coding", "who": "license renewal",
+        "detail": {"tier": "coding", "until": "2026-12-31"}})).status_code == 204
     rows = (await c.get("/v1/audit", headers=who("olga@acme.dev", "owner"))).json()["items"]
     joined = next(r for r in rows if r["action"] == "member_added")
     assert joined.get("role") == "viewer"

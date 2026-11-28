@@ -344,6 +344,20 @@ function BothSteps({ at, onStep }: { at: 1 | 2; onStep: (n: 1 | 2) => void }) {
   );
 }
 
+/** Why an MCP server could not be registered, in words: the proxy's resolver
+ *  error ("[Errno -2] Name or service not known") reached the page (QA-486). */
+function mcpFailWords(message: string, target: { url?: string; command?: string[] }): string {
+  if (/unreachable|errno|name or service not known|connect|timed? ?out/i.test(message)) {
+    return target.url
+      ? `could not reach ${target.url} — check the address, and that the server is running`
+      : "the command did not start an MCP server — check it runs on the proxy's machine";
+  }
+  if (/loopback|stdio_requires/i.test(message)) {
+    return "a local (stdio) server can only be added from the machine the proxy runs on";
+  }
+  return message.replace(/\[Errno -?\d+\]\s*/g, "");
+}
+
 function ProxyOnboarding({ onWrap }: { onWrap: () => void }) {
   const [step, setStep] = useState(1);
   const [tools, setTools] = useState<Tool[]>(storedTools);
@@ -371,16 +385,23 @@ function ProxyOnboarding({ onWrap }: { onWrap: () => void }) {
       }
       const added: Tool[] = [];
       const found: Record<string, string[]> = {};
+      // each server on its own: the first one failing used to end the loop,
+      // and the rest were never mentioned (QA-486)
+      const failed: string[] = [];
       for (const t of targets) {
-        const info = await api.mcpDiscover(
-          t.url ? { url: t.url } : { command: t.command },
-          t.name,
-        );
-        added.push({
-          name: info.registered,
-          url: t.url ?? `stdio: ${t.command?.join(" ") ?? ""}`,
-        });
-        found[info.registered] = info.tools.map((tl) => tl.name);
+        try {
+          const info = await api.mcpDiscover(
+            t.url ? { url: t.url } : { command: t.command },
+            t.name,
+          );
+          added.push({
+            name: info.registered,
+            url: t.url ?? `stdio: ${t.command?.join(" ") ?? ""}`,
+          });
+          found[info.registered] = info.tools.map((tl) => tl.name);
+        } catch (e) {
+          failed.push(`${t.name ?? t.url ?? t.command?.join(" ")}: ${mcpFailWords(e instanceof Error ? e.message : String(e), t)}`);
+        }
       }
       setTools((prev) => [
         ...prev.filter((t) => !added.some((a) => a.name === t.name)),
@@ -388,11 +409,13 @@ function ProxyOnboarding({ onWrap }: { onWrap: () => void }) {
       ]);
       setMcpTools((prev) => ({ ...prev, ...found }));
       const total = Object.values(found).reduce((n, ts) => n + ts.length, 0);
+      const ok = added.length
+        ? `registered ${added.length} MCP server${added.length === 1 ? "" : "s"} · ${total} tools discovered` : "";
       setMcpNote({
-        kind: "ok",
-        text: `registered ${added.length} MCP server${added.length === 1 ? "" : "s"} · ${total} tools discovered`,
+        kind: failed.length ? "err" : "ok",
+        text: [ok, ...failed.map((f) => `not registered — ${f}`)].filter(Boolean).join(" · "),
       });
-      setMcpRaw("");
+      if (!failed.length) setMcpRaw("");
     } catch (e) {
       setMcpNote({ kind: "err", text: e instanceof Error ? e.message : String(e) });
     } finally {
