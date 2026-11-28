@@ -1755,11 +1755,13 @@ export const api = {
         total: number;
       }>(r),
     ),
-  regression: (config: Record<string, unknown>) =>
+  // `example`: the example's own cases, under the example's rules — never
+  // kept among the workspace's (QA-400)
+  regression: (config: Record<string, unknown>, cases: "own" | "example" = "own") =>
     af("/v1/regression", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ config }),
+      body: JSON.stringify({ config, cases }),
     }).then((r) => j<RegressionReport>(r)),
   // ── MCP onboarding: discover an MCP server's tools + register it. Either an
   // HTTP url or a local stdio command (the proxy spawns it as a gateway). ────

@@ -39,11 +39,19 @@ test.describe("replay", () => {
     await expect(page.getByText("v_mail", { exact: false }).first()).toBeVisible();
   });
 
-  test("a run can be kept as a test", async ({ page }) => {
-    await goHash(page, `replay/${SEEDED.block}`);
+  test("a run can be kept as a test — your own, not the example's (QA-400)", async ({ page, request }) => {
+    await goHash(page, `replay/${SEEDED.pass}`);
+    await expect(page.getByTestId("replay-keep-example")).toBeVisible();
+    await expect(page.getByTestId("replay-keep")).toHaveCount(0);
+    const own = `own_ok_${Date.now().toString(36)}`;
+    const events = await (await request.get(`${BACKEND}/v1/runs/${SEEDED.pass}/events`)).json() as Record<string, unknown>[];
+    expect((await request.post(`${BACKEND}/v1/ingest/${own}`, { data: { node_id: events[0].node_id, scenario: "custom",
+      events: events.map(({ id: _id, run_id: _run, ...e }) => e) } })).ok()).toBeTruthy();
+    await goHash(page, `replay/${own}`);
     await page.getByRole("button", { name: /normal work — must keep passing/ }).click();
     await expect(page.getByText("check it in Safe to ship? →")).toBeVisible();
     await expect(page.getByRole("button", { name: /✓ normal work/ })).toBeVisible();
+    await request.delete(`${BACKEND}/v1/pins/${own}`);
   });
 
   test("find the step: Thursday, prod, a table dropped — then where it came from", async ({ page, request }) => {

@@ -87,38 +87,50 @@ async def _check(client: httpx.AsyncClient, sinks_patch: dict | None = None) -> 
     return {row["run_id"]: row for row in r.json()["rows"]}
 
 
+async def _own_copies(client: httpx.AsyncClient) -> None:
+    """The example's prod incident as the workspace's own runs: the example's
+    runs are never kept among its cases (QA-400)."""
+    await client.post("/v1/demo/seed-prod-incident")
+    for run in ("ex_prod_drop", "ex_prod_ok"):
+        events = (await client.get(f"/v1/runs/{run}/events")).json()
+        own = [{k: v for k, v in e.items() if k not in ("id", "run_id")} for e in events]
+        r = await client.post(f"/v1/ingest/{run[3:]}", json={
+            "node_id": own[0]["node_id"], "scenario": "custom", "events": own})
+        assert r.status_code in (200, 202), r.text
+
+
 async def test_the_rule_made_from_the_drop_holds_it_and_keeps_normal_work(
         client: httpx.AsyncClient) -> None:
     """Replay's "make it a rule": bash runs code, so a command built from the
     ticket's text is refused. The drop was recorded ungoverned — nothing was
     refused — so the pin names the call that must be."""
-    await client.post("/v1/demo/seed-prod-incident")
-    await client.post("/v1/pins/ex_prod_ok", json={"side": "must_pass", "label": "normal"})
+    await _own_copies(client)
+    await client.post("/v1/pins/prod_ok", json={"side": "must_pass", "label": "normal"})
     # without the call named there is nothing to hold — and nothing guessed
-    await client.post("/v1/pins/ex_prod_drop", json={"side": "must_block", "label": "drop"})
-    assert (await _check(client))["ex_prod_drop"]["result"] == "unanchored"
+    await client.post("/v1/pins/prod_drop", json={"side": "must_block", "label": "drop"})
+    assert (await _check(client))["prod_drop"]["result"] == "unanchored"
 
     named = {"side": "must_block", "label": "drop",
              "must_refuse": [{"node_id": "support-agent-prod", "seq": 4}]}
-    assert (await client.post("/v1/pins/ex_prod_drop", json=named)).status_code == 200
+    assert (await client.post("/v1/pins/prod_drop", json=named)).status_code == 200
     rows = await _check(client)
-    assert rows["ex_prod_drop"]["result"] == "held"
-    assert rows["ex_prod_drop"]["pinned_denials"] == 1
-    assert rows["ex_prod_ok"]["result"] == "passed"     # the count and the reply still pass
+    assert rows["prod_drop"]["result"] == "held"
+    assert rows["prod_drop"]["pinned_denials"] == 1
+    assert rows["prod_ok"]["result"] == "passed"     # the count and the reply still pass
     # the rule as it was — bash only reads — lets the drop through
     loose = await _check(client, {"bash": {"consequence_class": "READ"}})
-    assert loose["ex_prod_drop"]["result"] == "escaped"
-    assert [d["seq"] for d in loose["ex_prod_drop"]["escaped_denials"]] == [4]
+    assert loose["prod_drop"]["result"] == "escaped"
+    assert [d["seq"] for d in loose["prod_drop"]["escaped_denials"]] == [4]
     # a re-pin that names nothing keeps what was named
-    await client.post("/v1/pins/ex_prod_drop", json={"side": "must_block", "label": "drop"})
-    assert (await _check(client))["ex_prod_drop"]["result"] == "held"
+    await client.post("/v1/pins/prod_drop", json={"side": "must_block", "label": "drop"})
+    assert (await _check(client))["prod_drop"]["result"] == "held"
 
 
 async def test_must_refuse_is_checked(client: httpx.AsyncClient) -> None:
-    await client.post("/v1/demo/seed-prod-incident")
-    bad = await client.post("/v1/pins/ex_prod_ok", json={
+    await _own_copies(client)
+    bad = await client.post("/v1/pins/prod_ok", json={
         "side": "must_pass", "must_refuse": [{"seq": 1}]})
     assert bad.status_code == 400
-    bad = await client.post("/v1/pins/ex_prod_drop", json={
+    bad = await client.post("/v1/pins/prod_drop", json={
         "side": "must_block", "must_refuse": [{"seq": "4"}]})
     assert bad.status_code == 400

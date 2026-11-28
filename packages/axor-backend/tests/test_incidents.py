@@ -77,11 +77,12 @@ async def test_the_operators_word_sticks_and_filters(client: httpx.AsyncClient) 
     assert (await _feed(client, status="new", kind="dangerous"))["items"] == []
     bad = await client.put("/v1/incidents/status", json={"id": drop["id"], "status": "meh"})
     assert bad.status_code == 400
-    # a run kept as a test reads so until someone says otherwise
+    # the example's caught case is not kept among the workspace's cases
+    # (QA-400): it is new, not "kept as a test"
     await client.post("/v1/demo/seed-adapter-runs")
     block = next(i for i in (await _feed(client, kind="made_up"))["items"]
                  if i["run_id"] == "ex_block")
-    assert block["status"] == "kept_as_test"
+    assert block["status"] == "new"
 
 
 async def test_a_safe_force_push_is_not_a_wipe_and_a_wipe_can_be_muted(

@@ -40,6 +40,15 @@ export function KeepAsTest({ runId, testId = "keep-as-test" }: { runId: string; 
   // a viewer keeps nothing: the plane refuses it; where it sits says who can (QA-196)
   const mayKeep = useHasScope()("operate");
   if (!mayKeep) return null;
+  // the example's runs are checked with the example's rules, never kept among
+  // the workspace's cases, where they failed its own rules (QA-400)
+  if (runId.startsWith("ex_") && !guest) {
+    return (
+      <span data-testid={testId} style={{ fontFamily: MONO, fontSize: 11, color: C.dim }}>
+        the example — on your own agent's incident, this keeps it as a test
+      </span>
+    );
+  }
   if (refusedNothing && !pin.isSuccess) {
     return (
       <span data-testid={testId} style={{ fontFamily: MONO, fontSize: 11, color: C.dim }}>

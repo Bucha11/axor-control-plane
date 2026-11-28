@@ -164,18 +164,17 @@ class TestCannedEvidenceIsNotEvidenceAboutThisDeployment:
         await client.post("/v1/demo/seed-adapter-runs", headers=H)
         seeded = (await client.post("/v1/regression", json={}, headers=H)).json()
         assert seeded["safe_to_ship"] is False
-        assert seeded["demo_rows"] == 2
-        assert seeded["own_rows"] == 0
-        assert seeded["regressed"] == seeded["escaped"] == 0
+        assert seeded["rows"] == []
 
-    async def test_the_report_says_which_rows_are_canned(
+    async def test_the_example_check_says_its_rows_are_canned(
         self, client: httpx.AsyncClient,
     ) -> None:
-        await client.post("/v1/demo/seed-adapter-runs", headers=H)
-        rows = (await client.post(
-            "/v1/regression", json={}, headers=H)).json()["rows"]
-        assert {r["run_id"]: r["demo"] for r in rows} == {
-            "ex_block": True, "ex_pass": True}
+        seeded = (await client.post("/v1/demo/seed-adapter-runs", headers=H)).json()
+        report = (await client.post("/v1/regression", json={
+            "config": seeded["config"], "cases": "example"}, headers=H)).json()
+        assert {r["run_id"]: (r["demo"], r["result"]) for r in report["rows"]} == {
+            "ex_block": (True, "held"), "ex_pass": (True, "passed")}
+        assert report["safe_to_ship"] is False
 
     async def test_one_pin_of_your_own_is_what_the_sentence_needs(
         self, client: httpx.AsyncClient,
@@ -188,21 +187,27 @@ class TestCannedEvidenceIsNotEvidenceAboutThisDeployment:
         await client.post("/v1/pins/mine", json={"side": "must_pass"}, headers=H)
         report = (await client.post("/v1/regression", json={}, headers=H)).json()
         assert report["own_rows"] == 1
-        assert report["demo_rows"] == 2
+        assert report["demo_rows"] == 0
         assert report["safe_to_ship"] is True
 
-    async def test_a_regressed_demo_pin_still_fails_the_gate(
+    async def test_the_examples_cases_never_join_the_workspaces_pins(
         self, client: httpx.AsyncClient,
     ) -> None:
-        """Marked, not excluded: a canned pin that stops holding is a kernel
-        that changed, and that is worth failing on even though the gate does not
-        count canned pins as evidence FOR shipping."""
+        """QA-400 / QA-386: seeding the example pinned its cases among the
+        workspace's; the workspace's own rule then failed Safe to ship? on the
+        example's normal flow. They are checked only against the example's
+        rules, and a pin an older build left there is taken out."""
+        from axor_backend import demo
 
-        seeded = await client.post("/v1/demo/seed-adapter-runs", headers=H)
-        config = seeded.json()["config"]
+        await client.post("/v1/demo/seed-adapter-runs", headers=H)
+        pins = (await client.get("/v1/pins", headers=H)).json()
+        assert pins["total"] == 0
+        refused = await client.post("/v1/pins/ex_pass", json={"side": "must_pass"}, headers=H)
+        assert refused.status_code == 400
+        assert "the example's run" in refused.json()["detail"]
 
-        # A pin of the deployment's own, untouched by the config below, so the
-        # only thing that changes is the canned row.
+        # the workspace's own case, and its own rule: a tool the example's
+        # normal flow needs is not in it
         mine = [
             {"schema_version": SCHEMA_VERSION, "seq": 0, "node_id": "mine",
              "kind": "tool_call", "ts": "seq:0", "causal_root": None,
@@ -211,23 +216,23 @@ class TestCannedEvidenceIsNotEvidenceAboutThisDeployment:
         ]
         await client.post("/v1/ingest/mine", json={"events": mine}, headers=H)
         await client.post("/v1/pins/mine", json={"side": "must_pass"}, headers=H)
-
-        green = (await client.post(
-            "/v1/regression", json={"config": config}, headers=H)).json()
-        assert (green["own_rows"], green["demo_rows"]) == (1, 2)
-        assert green["safe_to_ship"] is True
-
-        # Remove a tool the canned must_pass flow needs: its legitimate calls
-        # are now denied, which is a regression on a demo row.
-        broken = dict(config, allowed_tools=[
-            t for t in config["allowed_tools"] if t != "notes_write"])
+        own_rule = {"allowed_tools": ["summarize"], "egress_sinks": []}
         report = (await client.post(
-            "/v1/regression", json={"config": broken}, headers=H)).json()
-        regressed = [r for r in report["rows"] if r["result"] == "regressed"]
-        assert regressed, report["rows"]
-        assert all(r["demo"] for r in regressed)
-        assert report["own_rows"] == 1
-        assert report["safe_to_ship"] is False
+            "/v1/regression", json={"config": own_rule}, headers=H)).json()
+        assert [r["run_id"] for r in report["rows"]] == ["mine"]
+        assert report["regressed"] == 0
+        assert report["safe_to_ship"] is True
+
+        # a pin an older build seeded is not the workspace's either
+        store = client._transport.app.state.store  # type: ignore[attr-defined]
+        await store.pin("ex_pass", "must_pass", "adapter-demo")
+        assert {p["run_id"] for p in (await client.get("/v1/pins", headers=H)).json()["pins"]} == {"mine"}
+        again = (await client.post(
+            "/v1/regression", json={"config": own_rule}, headers=H)).json()
+        assert [r["run_id"] for r in again["rows"]] == ["mine"]
+        await client.post("/v1/demo/seed-adapter-runs", headers=H)
+        assert {p["run_id"] for p in await store.pinned()} == {"mine"}
+        assert demo.EX_PASS_EVENTS  # the example itself is still there to replay
 
     async def test_the_own_pin_alone_is_what_carries_the_sentence(
         self, client: httpx.AsyncClient,
