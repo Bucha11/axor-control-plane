@@ -2284,7 +2284,6 @@ function Connections({ coding, prod }: { coding: boolean; prod: boolean }) {
 
 /** Each wall of this plane, up or down, with how to raise the ones that are down. */
 function SecurityPosture() {
-  const canOwn = useHasScope()("admin");
   // the owner's to read, and with the vault's token where it has one (QA-214)
   const ownKnown = useHasScopeKnown()("admin");
   const credsReadable = useVaultReadable("creds");
@@ -2303,8 +2302,10 @@ function SecurityPosture() {
   return (
     <>
       <PostureItems items={items} />
-      {/* only the owner holds `admin`, which the vault tokens need (QA-121) */}
-      {canOwn && <VaultTokens />}
+      {/* only the owner holds `admin`, which the vault tokens need (QA-121) —
+          and not asked before the plane has said who this is: a viewer's
+          every load sent it for a 403 (QA-403) */}
+      {ownKnown && <VaultTokens />}
     </>
   );
 }

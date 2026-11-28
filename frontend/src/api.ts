@@ -983,6 +983,13 @@ function commandRefusal(e: unknown, hasKey = true): unknown {
 // through unchanged.
 async function af(path: string, init: RequestInit = {}, retried = false): Promise<Response> {
   if (!apiToken() && path !== "/v1/auth/status") await sessionSettled();
+  // An access token past its expiry is refreshed once before anything is sent,
+  // and every read waits for that one refresh: the first load after it lapsed
+  // fired 10–12 reads in parallel, each a 401, before one refreshed (QA-406).
+  if (refreshing) await refreshing;
+  else if (!retried && useApp.getState().refreshToken && accessExpired(apiToken())) {
+    await refreshSession(apiToken());
+  }
   const token = apiToken();
   if (!token && signedOutHere && path.startsWith("/v1/") && !OPEN_PATHS.some((p) => path.startsWith(p))) {
     // the plane's answer, without asking it again and again
@@ -1146,6 +1153,19 @@ function noteAccountRequired(resp: Response): void {
       window.dispatchEvent(new CustomEvent("axor:account-required", { detail: body }));
     }
   }).catch(() => undefined);
+}
+
+/** Whether an identity access token (a JWT) says it has expired. Anything
+ *  else — an API key, a guest token, an unreadable one — is not known to be. */
+function accessExpired(token: string): boolean {
+  const parts = token.split(".");
+  if (parts.length !== 3) return false;
+  try {
+    const claims = JSON.parse(atob(parts[1].replace(/-/g, "+").replace(/_/g, "/"))) as { exp?: unknown };
+    return typeof claims.exp === "number" && claims.exp * 1000 <= Date.now();
+  } catch {
+    return false;
+  }
 }
 
 // One refresh at a time. The refresh token is single-use (identity rotates it),

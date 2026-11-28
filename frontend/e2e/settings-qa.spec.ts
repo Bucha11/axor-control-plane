@@ -116,6 +116,20 @@ test.describe("settings (QA, 0.7.2)", () => {
     await expect(page.getByTestId("federation-vault")).toHaveCount(0);
   });
 
+  test("QA-403: a viewer's Security does not ask for the vault tokens", async ({ page }) => {
+    const asked: string[] = [];
+    page.on("request", (r) => { if (r.url().endsWith("/v1/vault/tokens")) asked.push(r.url()); });
+    // the plane answers who this is a moment later than the page renders
+    await page.route("**/v1/auth/status", async (r) => {
+      await new Promise((ok) => setTimeout(ok, 400));
+      await r.fulfill({ json: { auth_enabled: true, authenticated: true, scopes: ["read"] } });
+    });
+    await goHash(page, "settings?tab=security");
+    await expect(page.getByTestId("vault-viewer")).toBeVisible();
+    await page.waitForTimeout(800);
+    expect(asked).toEqual([]);
+  });
+
   test("a member or admin is not shown the vault forms only the owner may use (QA-121)", async ({ page }) => {
     // member and admin roles carry read, ingest and operate — not admin
     await page.route("**/v1/auth/status", (r) => r.fulfill({ json: {
@@ -300,6 +314,32 @@ test.describe("settings (QA, 0.7.2)", () => {
     await expect(page.getByText("○ not signed in")).toBeAttached();
     await expect(page.getByText("● signed in", { exact: true })).toHaveCount(0);
     await expect(page.getByText(/^can: /)).toHaveCount(0);
+  });
+
+  test("QA-406: an access token past its expiry is refreshed once before the page's reads go out", async ({ page }) => {
+    const b64 = (o: object) => Buffer.from(JSON.stringify(o)).toString("base64url");
+    const expired = `${b64({ alg: "EdDSA" })}.${b64({ sub: "u1", exp: Math.floor(Date.now() / 1000) - 60 })}.sig`;
+    await page.addInitScript((tok) => {
+      if (sessionStorage.getItem("qa406")) return;
+      sessionStorage.setItem("qa406", "1");
+      sessionStorage.setItem("axor-app", JSON.stringify({ version: 0, state: {
+        apiToken: tok, refreshToken: "ref-1", identityEmail: "ada@acme.io",
+        vaultSigningToken: "", vaultCredsToken: "", guestTokens: [] } }));
+    }, expired);
+    let refreshes = 0;
+    await page.route("**/identity/v1/refresh", (r) => {
+      refreshes += 1;
+      return r.fulfill({ json: { access_token: "acc-fresh", refresh_token: "ref-2", user: { email: "ada@acme.io" } } });
+    });
+    const stale: string[] = [];
+    page.on("request", (r) => {
+      if ((r.headers()["authorization"] ?? "").includes(expired)) stale.push(new URL(r.url()).pathname);
+    });
+    await goHash(page, "settings?tab=security");
+    await expect.poll(() => refreshes).toBe(1);
+    await page.waitForTimeout(1000);
+    expect(stale).toEqual([]);
+    expect(refreshes).toBe(1);
   });
 
   test("cosmetics: audit words for vault tokens, an e-mail in key history, \"As an admin\" (QA-070)", async ({ page }) => {
