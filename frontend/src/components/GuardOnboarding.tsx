@@ -16,6 +16,8 @@ import { C, MONO, btn } from "../theme";
 import { IdentityLogin } from "../tabs/Settings";
 import { useOneAtATime } from "../oneAtATime";
 import { useWorkStarted } from "../workStarted";
+import RoleNote from "./RoleNote";
+import { useHasScope } from "../team";
 
 type Klass = ToolKlass;
 interface GuardTool { name: string; url: string; klass: Klass; outside: boolean }
@@ -75,6 +77,9 @@ export const proxiedUrl = (base: string, name: string) => `${base}/t/${encodeURI
 // A long name or address wraps inside its block: unbroken, it widened the page
 // and pushed the copy button off-screen (QA-015).
 export const wrapAnywhere = { minWidth: 0, overflowWrap: "anywhere" } as const;
+// what the plane keeps of an agent's name (its node id column): longer was
+// refused by the server in words about a "label" nobody typed (QA-483)
+export const AGENT_NAME_MAX = 128;
 
 function Block({ text, id }: { text: string; id: string }) {
   const [copied, setCopied] = useState(false);
@@ -118,6 +123,8 @@ export default function GuardOnboarding() {
   const authOn = auth.data?.auth_enabled ?? null;
   const signedIn = !!email || (!!token && !isGuestToken(token));
   const needsKey = authOn !== false;
+  // the proxy's key is the owner's to make (POST /v1/keys) — QA-482
+  const mayMint = useHasScope()("admin");
   const nodes = useQuery({ queryKey: ["nodes"], queryFn: api.nodes, refetchInterval: 3000 });
   const live = (nodes.data ?? []).some((n) => n.node_id === nodeId.trim());
 
@@ -272,11 +279,14 @@ export default function GuardOnboarding() {
         <div className="flex items-center gap-2 flex-wrap">
           <span style={{ ...hint, color: C.mut, fontSize: 11 }}>agent name</span>
           <input value={nodeId} onChange={(e) => { setNodeId(e.target.value); setKey(null); }}
-            aria-label="agent name" style={{ ...input, width: 160 }} />
+            aria-label="agent name" maxLength={AGENT_NAME_MAX} style={{ ...input, width: 160 }} />
           <span style={{ ...hint, color: C.mut, fontSize: 11 }}>port</span>
           <input value={port} onChange={(e) => setPort(e.target.value.replace(/[^\d]/g, "").slice(0, 5))}
             aria-label="proxy port" style={{ ...input, width: 64 }} />
-          {needsKey && !key && (
+          {needsKey && !key && !mayMint && (
+            <RoleNote need="admin" what="make an agent's key" testid="guard-mint-role" inline />
+          )}
+          {needsKey && !key && mayMint && (
             <button onClick={() => mintOnce()} disabled={!nodeId.trim() || mint.isPending} data-testid="guard-mint"
               style={btn({ color: C.steel, borderColor: C.steel, fontSize: 11, padding: "4px 10px" })}>
               {mint.isPending ? "…" : "create the key"}

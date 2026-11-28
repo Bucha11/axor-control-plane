@@ -403,4 +403,29 @@ test.describe("access (QA, 0.7.3)", () => {
     await context.setOffline(false);
     await expect(page.getByTestId("offline")).toHaveCount(0);
   });
+
+  test("a viewer is not offered an agent's key on Connect → production → wrap (QA-482)", async ({ page }) => {
+    await playRole(page, VIEWER);
+    await signedIn(page, "viewer");
+    let posts = 0;
+    await page.route("**/v1/keys", (r) => { if (r.request().method() === "POST") posts += 1; return r.fallback(); });
+    await goHash(page, "connect?for=production");
+    await page.getByTestId("prod-way-code").click();
+    await expect(page.getByTestId("adapter-mint-role")).toHaveText("as a viewer you can't make an agent's key — only the owner can");
+    await expect(page.getByTestId("adapter-mint")).toHaveCount(0);
+    expect(posts).toBe(0);
+  });
+
+  test("an agent's name is held to what the plane keeps, and the snippet wraps (QA-483)", async ({ page }) => {
+    await playRole(page, ["read", "ingest", "operate", "admin"]);
+    await signedIn(page, "owner");
+    await goHash(page, "connect?for=production");
+    await page.getByTestId("prod-way-code").click();
+    const name = page.getByLabel("agent name");
+    await name.fill("");
+    await name.pressSequentially("n".repeat(300), { delay: 0 });
+    await expect(name).toHaveValue("n".repeat(128));
+    await expect(page.getByTestId("adapter-snippet")).toContainText(`AXOR_NODE_ID=${"n".repeat(128)}`);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  });
 });
