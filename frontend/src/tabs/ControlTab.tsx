@@ -2523,7 +2523,10 @@ function ActivityFeed({ only }: { only?: Set<string> }) {
       <div style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 8 }}>
         {rows.length === 0 && (
           <div className="p-3" style={{ color: C.dim }}>
-            {feed.isLoading ? "loading…" : "nothing yet — agent steps and operator acks land here as they happen."}
+            {/* a search with no match is not an empty feed (QA-346) */}
+            {feed.isLoading ? "loading…" : find && kept.length > 0
+              ? <span data-testid="feed-no-match">nothing matches “{find}”</span>
+              : "nothing yet — agent steps and operator acks land here as they happen."}
           </div>
         )}
         {rows.map(({ e, text, color }, i) => {

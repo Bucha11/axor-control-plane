@@ -420,3 +420,15 @@ test("a run whose last time is not one shows no NaN in its header (QA-341)", asy
   await expect(page.getByTestId("run-timeline")).toContainText("web_search");
   await expect(page.getByText(/NaN/)).toHaveCount(0);
 });
+
+test("a feed search with no match says nothing matches, not an empty feed (QA-346)", async ({ page, request }) => {
+  await seedNode(request, `gov-feed-${hex6()}`);
+  await request.post(`${BACKEND}/v1/demo/seed-fleet`);
+  await setConnection(page, { mode: "adapter" });
+  await goHash(page, "govern");
+  const feed = page.getByTestId("fleet-activity");
+  await expect(feed.getByTestId("feed-row").first()).toBeVisible();
+  await feed.getByLabel("filter activity").fill("zz-no-such-thing-qa346");
+  await expect(feed.getByTestId("feed-no-match")).toHaveText("nothing matches “zz-no-such-thing-qa346”");
+  await expect(feed).not.toContainText("nothing yet");
+});
