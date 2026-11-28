@@ -19,6 +19,19 @@ import httpx
 from axor_proxy.runs import Run
 
 
+def upload_refusal(exc: httpx.HTTPError) -> str:
+    """A failed upload in words, without the plane's internal address: the raw
+    exception carried `http://backend:8400/...` to the page (QA-001, QA-384).
+    What to do, for whoever clicked: never an environment variable's name
+    (QA-152) — a 403 is the role, which signing in again won't fix."""
+    if isinstance(exc, httpx.HTTPStatusError):
+        code = exc.response.status_code
+        why = {401: " — sign in again",
+               403: " — this sign-in may not add to the workspace — an owner, admin or member can"}
+        return f"the Control Plane refused the upload (HTTP {code})" + why.get(code, "")
+    return "the Control Plane could not be reached from the proxy"
+
+
 class BackendUploader:
     def __init__(
         self,
@@ -58,7 +71,7 @@ class BackendUploader:
             return {"uploaded": True, "events": len(events),
                     "evidence": int(stored.json().get("evidence", 0))}
         except httpx.HTTPError as exc:
-            return {"uploaded": False, "error": type(exc).__name__, "detail": str(exc)}
+            return {"uploaded": False, "error": type(exc).__name__, "detail": upload_refusal(exc)}
         finally:
             if owns:
                 await client.aclose()
