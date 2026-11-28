@@ -5,6 +5,50 @@ The Control Plane ships as three packages from one tag (`axor-backend`,
 images (`axor-platform`, `axor-frontend`). Self-hosted operators upgrade by
 tag; `deploy/offline` carries the same release to a machine with no network.
 
+## 0.7.4 — 2026-11-28
+
+### Added
+
+- **Change the plan in place.** On a plan paid by card, Pricing offers
+  "Switch to …": the workspace's one subscription moves to the other rung
+  (`POST /v1/license/plan`, through the vendor's billing service) instead of a
+  second checkout. Needs axor-billing 0.1.1.
+- **Revocations take effect within seconds.** Identity publishes a revocation
+  feed (ended sessions, membership epochs) the plane checks: removing a
+  member, changing a role or logging out no longer waits for the access token
+  to expire. Reusing a rotated refresh token ends its whole session. Identity
+  migration `0012_revocations`.
+- **Optimistic concurrency** on the coding policy and the tool policy: a stale
+  tab gets a 409 naming what changed, never "saved".
+
+### Changed
+
+- **Billing reads as a bill:** one month-by-month table on every plan (Free
+  included), each month opening to its statement; on Free, one line for the
+  paid plan that fits.
+- **Roles:** a 403 is never resent after a refresh; viewers are not offered
+  write controls; the license, vault setup and plan are the owner's; a guest
+  is not an admin; on Free the brake holds "your agents".
+- **SQLite** runs with write-ahead logging and a busy timeout: a read meeting a
+  write no longer fails with "database is locked".
+- The governed demo node stays 10 minutes and says when it left.
+
+### Fixed
+
+From a third, journaled QA pass over the hosted plane:
+
+- An upgrade bought mid-period reaches identity (SSO, SCIM and the session
+  limit unlock on Business/Team); boot hands held licenses to identity again.
+- Every chaos mode finishes; Safe to ship? no longer passes a run that used a
+  refused tool; a revoked operator key is named as revoked.
+- Sign-up validates lengths and creates user and workspace together; the
+  e-mailed invite link opens the invite page; sign-in errors in the URL are
+  fixed words; a guest restart backs off.
+- A failed read says so instead of offering defaults; the tour follows the
+  workspace's journey; "make it a rule" on the example writes nothing; trusted
+  sources refuse public-suffix wildcards and user-content hosts.
+- The audit trail records who acted in which role, and upgrades.
+
 ## 0.7.3 — 2026-11-27
 
 ### Fixed
