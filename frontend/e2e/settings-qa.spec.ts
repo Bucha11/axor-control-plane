@@ -316,6 +316,17 @@ test.describe("settings (QA, 0.7.2)", () => {
     await expect(page.getByText(/^can: /)).toHaveCount(0);
   });
 
+  test("QA-404: an incident's word in the audit trail reads as words, not its id", async ({ page }) => {
+    await page.route("**/v1/audit?*", (r) => r.fulfill({ json: { total: 1, actions: ["incident_rule_made"], items: [
+      { id: "a1", ts: "2026-11-27T10:01:00Z", kind: "control", action: "incident_rule_made", who: "ada@acme.io",
+        role: "owner", target: "step:run_1:4", detail: {} },
+    ] } }));
+    await goHash(page, "settings?tab=audit");
+    await expect(page.getByTestId("audit-row").first()).toContainText("made a rule from");
+    await expect(page.getByText("incident_rule_made")).toHaveCount(0);
+    await expect(page.locator("option", { hasText: "made a rule from" })).toHaveCount(1);
+  });
+
   test("QA-406: an access token past its expiry is refreshed once before the page's reads go out", async ({ page }) => {
     const b64 = (o: object) => Buffer.from(JSON.stringify(o)).toString("base64url");
     const expired = `${b64({ alg: "EdDSA" })}.${b64({ sub: "u1", exp: Math.floor(Date.now() / 1000) - 60 })}.sig`;
