@@ -461,7 +461,15 @@ async def run_governed_tree(prefix: str) -> tuple[list[dict], int, dict[str, str
     per_node: dict[str, list[dict]] = {nid: [] for nid in ids.values()}
 
     def emit_bus(event) -> None:  # noqa: ANN001 — kernel Event
-        per_node[event.node_id].append(_json.loads(event_to_json_line(event)))
+        line = _json.loads(event_to_json_line(event))
+        # the bus stamps "t:<epoch seconds>": a time no screen reads, so the
+        # message rows had none, sorted below older rows, and the run's last
+        # time read "NaN:NaN" (QA-345, QA-341) — the same ISO time as the rest
+        ts = str(line.get("ts") or "")
+        if ts.startswith("t:"):
+            with contextlib.suppress(ValueError):
+                line["ts"] = datetime.fromtimestamp(float(ts[2:]), UTC).isoformat()
+        per_node[event.node_id].append(line)
 
     bus = InMemoryMessageBus(emit=emit_bus)
     for r, nid in ids.items():

@@ -403,3 +403,20 @@ test("#/sentinel moves to the agent that reports once it is known (QA-366)", asy
   await expect.poll(() => calls).toBeGreaterThan(1);
   await expect(picker).toHaveValue("tree-research");
 });
+
+test("a run whose last time is not one shows no NaN in its header (QA-341)", async ({ page, request }) => {
+  const node = `gov-nan-${hex6()}`;
+  const run = `${node}-r1`;
+  await seedNode(request, node);
+  const ts = new Date(Date.now() - 600_000).toISOString();
+  expect((await request.post(`${BACKEND}/v1/ingest/${run}`, { data: { node_id: node, scenario: "governed-tree", events: [
+    { schema_version: "1.0", seq: 0, node_id: node, kind: "tool_call", ts, causal_root: null, gate: null,
+      verdict: "pass", payload: { tool: "web_search", args: { q: "x" } } },
+    { schema_version: "1.0", seq: 1, node_id: node, kind: "message_sent", ts: "t:1795866062.47", causal_root: null,
+      gate: null, verdict: null, payload: {} },
+  ] } })).ok()).toBeTruthy();
+  await setConnection(page, { mode: "adapter" });
+  await goHash(page, `govern/run/${run}`);
+  await expect(page.getByTestId("run-timeline")).toContainText("web_search");
+  await expect(page.getByText(/NaN/)).toHaveCount(0);
+});

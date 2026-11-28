@@ -41,7 +41,10 @@ function hhmmss(iso?: string | null): string {
 
 function duration(from?: string, to?: string): string {
   if (!from || !to) return "";
-  const s = Math.max(0, Math.round((new Date(to).getTime() - new Date(from).getTime()) / 1000));
+  const ms = new Date(to).getTime() - new Date(from).getTime();
+  // a time that is not one ("t:1795…") is no duration, never "NaN:NaN" (QA-341)
+  if (Number.isNaN(ms)) return "";
+  const s = Math.max(0, Math.round(ms / 1000));
   return s < 60 ? `${s}s` : `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
 }
 

@@ -68,3 +68,16 @@ async def test_tree_events_fold_through_kernel_replay() -> None:
         if s.event.payload.get("tool") == "slack_post"
     ]
     assert export_steps and export_steps[-1].reevaluated_verdict is Verdict.DENY
+
+
+async def test_qa345_every_tree_line_has_an_iso_time() -> None:
+    """QA-345, QA-341: the bus's message rows carried "t:<epoch>", which no
+    screen reads as a time: the feed showed them with none, below older rows,
+    and the run header read "NaN:NaN"."""
+    from datetime import datetime
+
+    lines, _, _ = await run_governed_tree("gov-tree-ab12")
+    kinds = {line["kind"] for line in lines}
+    assert {"message_sent", "message_received"} <= kinds
+    for line in lines:
+        datetime.fromisoformat(line["ts"])
