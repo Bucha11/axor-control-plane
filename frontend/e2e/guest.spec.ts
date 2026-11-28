@@ -85,6 +85,27 @@ test.describe("guest", () => {
     await expect(ask.getByRole("button", { name: /create|sign up/i }).first()).toBeVisible();
   });
 
+  test("QA-443: the account-required dialog takes the focus and closes by Escape or its close button", async ({ page }) => {
+    await hosted(page);
+    await page.route("**/v1/auth/status", (r) => r.fulfill({ json: (r.request().headers()["authorization"] ?? "").includes(GUEST)
+      ? { auth_enabled: true, authenticated: true, guest: true, guest_sessions: true, scopes: ["read", "ingest", "operate"] }
+      : { auth_enabled: true, authenticated: false, scopes: [], guest_sessions: true, guest: false } }));
+    await setConnection(page, { mode: "demo" });
+    await goHash(page, "eval");
+    await expect(page.getByRole("button", { name: /save your work · guest/ })).toBeVisible();
+    const open = () => page.evaluate(() => window.dispatchEvent(new CustomEvent("axor:account-required",
+      { detail: { feature: "tests", title: "Keep it as a test", why: "checked before it ships" } })));
+    const ask = page.getByTestId("account-required");
+    await open();
+    await expect(ask).toBeVisible();
+    expect(await ask.evaluate((el) => el.contains(document.activeElement))).toBe(true);
+    await page.keyboard.press("Escape");
+    await expect(ask).toHaveCount(0);
+    await open();
+    await ask.getByRole("button", { name: "close" }).click();
+    await expect(ask).toHaveCount(0);
+  });
+
   test("nothing is asked before the guest session is there: no burst of 401s (QA-042)", async ({ page }) => {
     // a hosted plane refuses a request with no bearer; every screen used to
     // fire its reads before the guest token arrived and got a 401 each
