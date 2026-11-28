@@ -74,6 +74,11 @@ export default function RunControl({ runId }: { runId: string }) {
   const proxied = behindProxy((nodes.data ?? []).find((n) => n.node_id === nodeId));
   const node = (nodes.data ?? []).find((n) => n.node_id === nodeId);
   const testBench = isTestBench(node, browserBench);
+  // a node the plane never heard from takes no commands: a pause to one was
+  // accepted and made a phantom "paused" node in the fleet (QA-340)
+  const noCommands = nodes.isSuccess && !node?.reported
+    ? "this agent has never reported to the plane, so it takes no commands — only its recorded run is here"
+    : null;
   const probe = useQuery({ queryKey: ["probe-report", nodeId], queryFn: () => api.probeReport(nodeId!), enabled: !!nodeId });
   const repair = useQuery({ queryKey: ["repair", nodeId], queryFn: () => api.repair(nodeId!), enabled: !!nodeId, refetchInterval: IDLE_MS });
   const reputation = useQuery({ queryKey: ["reputation", nodeId], queryFn: () => api.reputation(nodeId!), enabled: !!nodeId });
@@ -157,7 +162,9 @@ export default function RunControl({ runId }: { runId: string }) {
           {cap != null ? ` · cap ${cap}` : ""}
         </span>
         <span style={{ flex: 1 }} />
-        <div className="flex gap-2 items-center" data-testid="run-controls">
+        {noCommands ? (
+          <span data-testid="run-no-commands" style={{ fontFamily: MONO, fontSize: 11, color: C.dim }}>{noCommands}</span>
+        ) : <div className="flex gap-2 items-center" data-testid="run-controls">
           <Tooltip content={paused ? "Let the agent continue." : "Hold the agent at its next model or tool boundary — nothing is lost."}>
             <button onClick={() => send({ paused: !paused })} disabled={stopped || command.isPending}
               style={btn({ fontSize: 12, padding: "6px 12px", color: stopped ? C.dim : C.text })}>
@@ -174,9 +181,9 @@ export default function RunControl({ runId }: { runId: string }) {
           </Tooltip>
           <CapControl cap={cap} disabled={stopped || command.isPending}
             onSet={(n) => send({ budget_cap_calls: n })} onError={setError} />
-        </div>
+        </div>}
       </div>
-      {!live && !stopped && (
+      {!live && !stopped && !noCommands && (
         <div style={{ fontFamily: MONO, fontSize: 11, color: C.dim, marginBottom: 10 }}>
           this run is over — the controls act on the agent and its next runs
         </div>
@@ -210,7 +217,7 @@ export default function RunControl({ runId }: { runId: string }) {
             ))}
           </div>
           <div className="flex gap-2 mt-3 flex-wrap">
-            {!coding && !cannotCut(node) && <Tooltip content={testBench
+            {!coding && !noCommands && !cannotCut(node) && <Tooltip content={testBench
               ? "Insert text into the agent's next model call to see how it handles it. Marked untrusted; test-bench only."
               : NOT_A_TEST_BENCH}>
               <button
@@ -256,7 +263,7 @@ export default function RunControl({ runId }: { runId: string }) {
                   {proposalForThisRun.escalate.length > 0 &&
                     <> · needs a look: {proposalForThisRun.escalate.join(", ")}</>}
                 </div>
-                {pendingCut.length > 0 ? (
+                {noCommands ? null : pendingCut.length > 0 ? (
                   <div className="mt-1" style={{ color: C.amber }}>cut sent: {pendingCut.join(", ")} — waiting for the node</div>
                 ) : (
                   <button className="mt-2"
@@ -284,11 +291,11 @@ export default function RunControl({ runId }: { runId: string }) {
               : (run?.scenario ?? "").endsWith("-experiment") || lines.some((e) => e.kind === "fault_injected")
                 ? <span style={{ color: C.green }}>honest under a broken tool</span>
                 : <span style={{ color: C.dim }}>not tested in this run</span>}
-            <NextRunTest tools={run?.tools ?? []} testBench={testBench}
+            {!noCommands && <NextRunTest tools={run?.tools ?? []} testBench={testBench}
               armed={desired.pending_experiment as { faults?: { tool: string; mode: string }[] } | undefined}
               disabled={stopped || command.isPending}
               onArm={(tool, mode) => send({ pending_experiment: {
-                id: `exp_${Date.now()}`, faults: [{ tool, mode }], operator: "op_ui" } })} />
+                id: `exp_${Date.now()}`, faults: [{ tool, mode }], operator: "op_ui" } })} />}
           </Side>}
 
           {(!coding || reputation.data?.reputation) && <Side title="reputation · across runs">
@@ -315,7 +322,9 @@ export default function RunControl({ runId }: { runId: string }) {
           </Side>}
 
           <Side title={coding ? "pause · stop · cap — what the agent confirmed" : "commands · what the node confirmed"}>
-            <Posture paused={paused} stopped={stopped} cap={cap} applying={applying} />
+            {noCommands
+              ? <div data-testid="run-posture" style={{ color: C.dim, marginBottom: 4 }}>not on the plane — nothing applied</div>
+              : <Posture paused={paused} stopped={stopped} cap={cap} applying={applying} />}
             {(journal.data?.entries ?? []).slice(0, 8).map((e, i) => (
               <div key={i} className="flex gap-2">
                 <span style={{ color: C.dim }}>{hhmmss(e.ts)}</span>

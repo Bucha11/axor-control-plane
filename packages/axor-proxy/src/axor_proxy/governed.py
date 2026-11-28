@@ -288,6 +288,40 @@ def demo_ttl(key: str | None, wanted: float, now: float | None = None) -> float:
     return max(0.0, min(wanted, left))
 
 
+async def _keep_live(base: str, sessions: list[PlaneSession], ingest_key: str | None,
+                     ttl_seconds: float) -> None:
+    """Keep demo nodes live on the plane for the TTL: each heartbeats and takes
+    its desired state, so pause and stop reach it. With the same credential the
+    trace was uploaded with: without it every heartbeat got a 401 on a plane
+    with auth on, so the node never showed up in Control though its run did
+    (QA-080)."""
+    stop = asyncio.Event()
+    tasks: list[asyncio.Task[None]] = []
+    clients = [(PlaneClient(base, s, run_id=f"{s.node_id}-live", ingest_key=ingest_key), s)
+               for s in sessions]
+
+    def _level(session: PlaneSession):  # noqa: ANN202
+        return lambda: ("RESTRICTED" if session.stopped
+                        else "CAUTIOUS" if session.paused else "NORMAL")
+
+    try:
+        for client, session in clients:
+            tasks.append(asyncio.create_task(client.run(stop)))
+            tasks.append(asyncio.create_task(
+                client.heartbeat_loop(stop, level_fn=_level(session))))
+        for client, session in clients:
+            await client.flush(level=_level(session)())  # first heartbeat → in Control now
+        await asyncio.wait_for(stop.wait(), ttl_seconds)
+    except TimeoutError:
+        pass
+    finally:
+        stop.set()
+        for task in tasks:
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+
+
 async def spawn_governed_node(
     backend_url: str, ingest_key: str | None = None,
     ttl_seconds: float = DEMO_NODE_TTL,
@@ -336,33 +370,7 @@ async def spawn_governed_node(
     # to a SEPARATE run id (keyed by node) so it never pollutes the governed
     # trace's event stream — Control reads reported state (keyed by node_id), not
     # the run, so the live node still shows up.
-    stop = asyncio.Event()
-    # with the same credential the trace was uploaded with: without it every
-    # heartbeat got a 401 on a plane with auth on, so the node never showed up
-    # in Control though its run did (QA-080)
-    client = PlaneClient(base, session, run_id=f"{node_id}-live", ingest_key=ingest_key)
-
-    def _level() -> str:
-        return "RESTRICTED" if session.stopped else ("CAUTIOUS" if session.paused else "NORMAL")
-
-    async def _keepalive() -> None:
-        subscribe = asyncio.create_task(client.run(stop))
-        heartbeat = asyncio.create_task(
-            client.heartbeat_loop(stop, level_fn=_level)
-        )
-        try:
-            await client.flush(level=_level())  # first heartbeat → appears in Control now
-            await asyncio.wait_for(stop.wait(), ttl_seconds)
-        except TimeoutError:
-            pass
-        finally:
-            stop.set()
-            for task in (subscribe, heartbeat):
-                task.cancel()
-                with contextlib.suppress(asyncio.CancelledError):
-                    await task
-
-    task = asyncio.create_task(_keepalive())
+    task = asyncio.create_task(_keep_live(base, [session], ingest_key, ttl_seconds))
     return {
         "node_id": node_id, "run_id": run_id, "events": len(lines),
         "denials": denials, "ttl_seconds": ttl_seconds,
@@ -541,9 +549,14 @@ async def run_governed_tree(prefix: str) -> tuple[list[dict], int, dict[str, str
 
 async def spawn_governed_tree(
     backend_url: str, ingest_key: str | None = None,
+    ttl_seconds: float = DEMO_NODE_TTL,
 ) -> dict[str, Any]:
-    """Run the real governed tree and upload its multi-node trace + the
-    CONTAINED EvidenceCase (anchored at the orchestrator's denied export)."""
+    """Run the real governed tree, upload its multi-node trace + the
+    CONTAINED EvidenceCase (anchored at the orchestrator's denied export), and
+    keep its three nodes live on the plane like the demo node. Uploaded only,
+    its run page offered pause and stop to nodes the plane had never heard
+    from, and a command made a phantom node of one (QA-340)."""
+    ttl_seconds = demo_ttl(ingest_key, ttl_seconds)
     prefix = f"gov-tree-{secrets.token_hex(2)}"
     run_id = f"govtree_{secrets.token_hex(4)}"
     lines, denials, ids = await run_governed_tree(prefix)
@@ -584,5 +597,10 @@ async def spawn_governed_tree(
                       "evidence": evidence},
                 headers=headers,
             )).raise_for_status()
+    sessions = [PlaneSession(node_id=nid, test_bench=True) for nid in ids.values()]
+    task = asyncio.create_task(_keep_live(base, sessions, ingest_key, ttl_seconds))
     return {"run_id": run_id, "nodes": ids, "denials": denials,
-            "events": len(lines)}
+            "events": len(lines), "ttl_seconds": ttl_seconds,
+            "leaves_at": datetime.fromtimestamp(
+                datetime.now(UTC).timestamp() + ttl_seconds, UTC).isoformat(),
+            "_task": task}

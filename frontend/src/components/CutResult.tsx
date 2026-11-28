@@ -24,7 +24,9 @@ export default function CutResult({ runId, valueRef, excised, nodeId: nodeProp }
     }),
     onSuccess: () => void qc.invalidateQueries({ queryKey: ["nodes"] }),
   });
-  if (!nodeId || !node) return null;   // not a live node's run: nothing to command
+  // not a live node's run: nothing to command — one that never reported
+  // included (QA-340)
+  if (!nodeId || !node || !node.reported) return null;
   // a cut it cannot apply would sit "sent" forever
   if (cannotCut(node)) {
     return <div className="mt-2" style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim }}>{NO_CUT}</div>;

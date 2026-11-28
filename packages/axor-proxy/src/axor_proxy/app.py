@@ -941,6 +941,13 @@ def create_app(state: ProxyState) -> Starlette:
             result = await spawn_governed_tree(state.backend_url, _upload_key(state, request))
         except httpx.HTTPError as exc:
             return _upload_refused(exc)
+        # its nodes stay live like the demo node's (QA-340): the handle is kept
+        # until the keepalive ends
+        task = result.pop("_task", None)
+        if task is not None:
+            key = result["run_id"]
+            state.governed[key] = task
+            task.add_done_callback(lambda _t: state.governed.pop(key, None))
         return JSONResponse(result)
 
     async def spawn_governed(request: Request) -> Response:

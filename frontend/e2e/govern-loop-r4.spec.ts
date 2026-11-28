@@ -74,3 +74,30 @@ test.describe("a command refused for want of an operator key (QA-501)", () => {
     await expect(box.getByTestId("make-key-send")).toHaveText("make this browser's operator key");
   });
 });
+
+/** A run uploaded for a node that never reports (the demo tree's, before
+ *  QA-340): a trace, no heartbeat. */
+async function uploadOnly(request: import("@playwright/test").APIRequestContext, node: string, run: string) {
+  const ts = new Date().toISOString();
+  const r = await request.post(`${BACKEND}/v1/ingest/${run}`, { data: { node_id: node, scenario: "governed-tree", events: [
+    { schema_version: "1.0", seq: 0, node_id: node, kind: "tool_call", ts, causal_root: null, gate: null,
+      verdict: "pass", payload: { tool: "web_search", args: { q: "x" } } },
+  ] } });
+  expect(r.ok()).toBeTruthy();
+}
+
+test("a node that never reported is offered no commands on its run page (QA-340)", async ({ page, request }) => {
+  const node = `gov-tree-${hex6().slice(0, 4)}-orch`;
+  const run = `govtree_${hex6()}`;
+  await uploadOnly(request, node, run);
+  let commands = 0;
+  await page.route("**/v1/plane/*/command", (r) => { commands += 1; return r.continue(); });
+  await setConnection(page, { mode: "adapter" });
+  await goHash(page, `govern/run/${run}`);
+  await expect(page.getByTestId("run-no-commands")).toContainText("never reported to the plane");
+  await expect(page.getByTestId("run-controls")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: /Pause/ })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "test next run" })).toHaveCount(0);
+  await expect(page.getByTestId("run-posture")).toContainText("not on the plane");
+  expect(commands).toBe(0);
+});
