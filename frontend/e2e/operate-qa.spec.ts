@@ -20,7 +20,8 @@ test.describe("times on the operating screens", () => {
     await expect(list).not.toContainText(/2000|2001/);
     await expect(list.locator(":scope > [data-kind]").first()).toContainText("seq:3");
     // the viewer's local time, as everywhere else: 10:00:05 UTC is 15:45:05 here
-    await expect(list.locator(":scope > [data-kind]").nth(1)).toContainText("2026-11-27 15:45:05");
+    // ...with its zone, as the shared copy says UTC (QA-385)
+    await expect(list.locator(":scope > [data-kind]").nth(1)).toContainText("2026-11-27 15:45:05 UTC+5:45");
     await expect(list).not.toContainText(/\d+\/\d+\/\d{4}/);
   });
 
@@ -437,7 +438,7 @@ test.describe("layout at 390 and 1366 (QA-104, QA-106, QA-107)", () => {
     expect((await request.post(`${BACKEND}/v1/demo/seed-skill-try`)).ok()).toBeTruthy();
     await setConnection(page, { mode: "adapter" });
     await goHash(page, "skills");
-    const when = page.getByTestId("dry-run-release-helper").locator("span", { hasText: /^\d{4}-\d\d-\d\d \d\d:\d\d$/ });
+    const when = page.getByTestId("dry-run-release-helper").locator("span", { hasText: /^\d{4}-\d\d-\d\d \d\d:\d\d UTC([+-]\d+(:\d\d)?)?$/ });
     await expect(when).toBeVisible();
     expect(await lines(when)).toBe(1);
   });
