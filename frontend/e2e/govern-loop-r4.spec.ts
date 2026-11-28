@@ -101,3 +101,39 @@ test("a node that never reported is offered no commands on its run page (QA-340)
   await expect(page.getByTestId("run-posture")).toContainText("not on the plane");
   expect(commands).toBe(0);
 });
+
+async function playRole(page: Page, scopes: string[]): Promise<void> {
+  await page.route("**/v1/auth/status", (r) => r.fulfill({ json: {
+    auth_enabled: true, authenticated: true, scopes } }));
+}
+
+/** A live node with a run that read text from outside: a cut is on offer. */
+async function liveRun(request: import("@playwright/test").APIRequestContext, node: string, run: string) {
+  await seedNode(request, node);
+  const ts = new Date().toISOString();
+  const r = await request.post(`${BACKEND}/v1/ingest/${run}`, { data: { node_id: node, scenario: "live", events: [
+    { schema_version: "1.0", seq: 0, node_id: node, kind: "tool_call", ts, causal_root: null, gate: null,
+      verdict: "pass", payload: { tool: "web_search", args: { q: "x" } } },
+    { schema_version: "1.0", seq: 1, node_id: node, kind: "tool_result", ts, causal_root: null, gate: null,
+      verdict: null, payload: { tool: "web_search", value_ref: "v_web", root: { sources: ["web"], sensitive: false } } },
+  ] } });
+  expect(r.ok()).toBeTruthy();
+}
+
+test("a viewer on a run page gets none of its controls, and is told who can (QA-342)", async ({ page, request }) => {
+  const node = `gov-view-${hex6()}`;
+  const run = `${node}-r1`;
+  await liveRun(request, node, run);
+  await playRole(page, ["read"]);
+  const commands: string[] = [];
+  await page.route("**/v1/plane/*/command", (r) => { commands.push(r.request().url()); return r.continue(); });
+  await setConnection(page, { mode: "adapter", testBench: true });
+  await goHash(page, `govern/run/${run}`);
+  await expect(page.getByTestId("role-note")).toHaveText(/as a viewer you can't pause, stop, cap or test this agent/);
+  await expect(page.getByTestId("run-timeline")).toContainText("web_search");
+  await expect(page.getByTestId("run-controls")).toHaveCount(0);
+  for (const name of [/^(Pause|Resume)/, /^Stop/, /^Inject/, "test next run", /remove this text/]) {
+    await expect(page.getByRole("button", { name })).toHaveCount(0);
+  }
+  expect(commands).toEqual([]);
+});

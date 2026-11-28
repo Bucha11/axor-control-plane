@@ -4,6 +4,7 @@ import { api } from "../api";
 import { C, MONO, btn } from "../theme";
 import Tooltip from "./Tooltip";
 import { NO_CUT, cannotCut } from "../agentName";
+import { useHasScope } from "../team";
 
 // Cut this tool result from the agent's context — the same signed command the
 // Health panel's self-heal sends, aimed at the result you are looking at. The
@@ -13,6 +14,8 @@ export default function CutResult({ runId, valueRef, excised, nodeId: nodeProp }
   runId: string; valueRef: string; excised: boolean; nodeId?: string;
 }) {
   const qc = useQueryClient();
+  // a viewer is not offered the cut (QA-342)
+  const canOperate = useHasScope()("operate");
   const runs = useQuery({ queryKey: ["runs"], queryFn: api.listRuns, enabled: !nodeProp });
   const nodeId = nodeProp ?? (runs.data ?? []).find((r) => r.run_id === runId)?.node_id;
   const nodes = useQuery({ queryKey: ["nodes"], queryFn: api.nodes, enabled: !!nodeId });
@@ -26,7 +29,7 @@ export default function CutResult({ runId, valueRef, excised, nodeId: nodeProp }
   });
   // not a live node's run: nothing to command — one that never reported
   // included (QA-340)
-  if (!nodeId || !node || !node.reported) return null;
+  if (!nodeId || !node || !node.reported || !canOperate) return null;
   // a cut it cannot apply would sit "sent" forever
   if (cannotCut(node)) {
     return <div className="mt-2" style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim }}>{NO_CUT}</div>;

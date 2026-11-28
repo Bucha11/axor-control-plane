@@ -18,6 +18,8 @@ import { useApp } from "../store";
 import { C, MONO, btn } from "../theme";
 import { isCodingSession } from "../components/CodingOnboarding";
 import CutResult from "../components/CutResult";
+import RoleNote from "../components/RoleNote";
+import { useHasScope } from "../team";
 import Tooltip from "../components/Tooltip";
 import { NOT_A_TEST_BENCH, behindProxy, cannotCut, isTestBench } from "../agentName";
 
@@ -85,6 +87,8 @@ export default function RunControl({ runId }: { runId: string }) {
   const journal = useQuery({ queryKey: ["journal", nodeId], queryFn: () => api.nodeJournal(nodeId!), enabled: !!nodeId, refetchInterval: LIVE_MS });
 
   const [error, setError] = useState<string | null>(null);
+  // a viewer is offered none of the controls (QA-342)
+  const canOperate = useHasScope()("operate");
   const command = useMutation({
     mutationFn: (state: Record<string, unknown>) =>
       api.command(nodeId!, (node?.desired?.version ?? 0) + 1, state),
@@ -164,6 +168,8 @@ export default function RunControl({ runId }: { runId: string }) {
         <span style={{ flex: 1 }} />
         {noCommands ? (
           <span data-testid="run-no-commands" style={{ fontFamily: MONO, fontSize: 11, color: C.dim }}>{noCommands}</span>
+        ) : !canOperate ? (
+          <RoleNote need="operate" what="pause, stop, cap or test this agent" inline />
         ) : <div className="flex gap-2 items-center" data-testid="run-controls">
           <Tooltip content={paused ? "Let the agent continue." : "Hold the agent at its next model or tool boundary — nothing is lost."}>
             <button onClick={() => send({ paused: !paused })} disabled={stopped || command.isPending}
@@ -217,7 +223,7 @@ export default function RunControl({ runId }: { runId: string }) {
             ))}
           </div>
           <div className="flex gap-2 mt-3 flex-wrap">
-            {!coding && !noCommands && !cannotCut(node) && <Tooltip content={testBench
+            {!coding && !noCommands && canOperate && !cannotCut(node) && <Tooltip content={testBench
               ? "Insert text into the agent's next model call to see how it handles it. Marked untrusted; test-bench only."
               : NOT_A_TEST_BENCH}>
               <button
@@ -263,7 +269,7 @@ export default function RunControl({ runId }: { runId: string }) {
                   {proposalForThisRun.escalate.length > 0 &&
                     <> · needs a look: {proposalForThisRun.escalate.join(", ")}</>}
                 </div>
-                {noCommands ? null : pendingCut.length > 0 ? (
+                {noCommands || !canOperate ? null : pendingCut.length > 0 ? (
                   <div className="mt-1" style={{ color: C.amber }}>cut sent: {pendingCut.join(", ")} — waiting for the node</div>
                 ) : (
                   <button className="mt-2"
@@ -291,7 +297,7 @@ export default function RunControl({ runId }: { runId: string }) {
               : (run?.scenario ?? "").endsWith("-experiment") || lines.some((e) => e.kind === "fault_injected")
                 ? <span style={{ color: C.green }}>honest under a broken tool</span>
                 : <span style={{ color: C.dim }}>not tested in this run</span>}
-            {!noCommands && <NextRunTest tools={run?.tools ?? []} testBench={testBench}
+            {!noCommands && canOperate && <NextRunTest tools={run?.tools ?? []} testBench={testBench}
               armed={desired.pending_experiment as { faults?: { tool: string; mode: string }[] } | undefined}
               disabled={stopped || command.isPending}
               onArm={(tool, mode) => send({ pending_experiment: {
