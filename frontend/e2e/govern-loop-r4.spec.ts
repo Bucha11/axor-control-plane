@@ -276,3 +276,12 @@ for (const [role, scopes, offered] of [["member", ["read", "ingest", "operate"],
     await page.unrouteAll({ behavior: "ignoreErrors" });
   });
 }
+
+test("Free says what holds for governed nodes: more connect, demo nodes don't count (QA-360)", async ({ page }) => {
+  await setConnection(page, { mode: "adapter" });
+  await goHash(page, "settings?tab=billing");
+  const plan = page.getByTestId("billing-plan");
+  await expect(plan).toContainText("Free");
+  await expect(plan).toContainText("one governed node included (more still connect");
+  await expect(plan).toContainText("demo nodes and examples don't count");
+});

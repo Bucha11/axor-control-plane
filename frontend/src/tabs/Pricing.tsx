@@ -93,7 +93,7 @@ const TIERS: Tier[] = [
       { text: "PDF / HTML artifacts" },
       { text: "Config Builder" },
       { text: "runtime enforcement — gates, degradation, denials" },
-      { text: "1 governed node" },
+      { text: "1 governed node (demo nodes don't count)" },
       { text: "hosted: runs kept 7 days" },
       { text: "1 developer, 1 agent — Claude Code or Codex, with hooks, trees and control" },
     ],

@@ -1686,7 +1686,7 @@ function StatementLines({ st, coding, prod, estimate = false }: {
         <>governed nodes at the peak: <span style={{ color: C.text }}>{st.peak_nodes}</span>
           {st.peak_day ? ` on ${st.peak_day}` : ""} · {st.included_nodes} included
           {st.billable_nodes ? ` · ${st.billable_nodes} over` : ""}</>,
-        st.workspace_tier === "coding" && st.billable_nodes > 0 ? "on Team and up"
+        (st.workspace_tier === "coding" || st.workspace_tier === "community") && st.billable_nodes > 0 ? "on Team and up"
           : st.priced ? st.overage : "—", "bill-nodes")}
       <div className="flex gap-3" style={{ fontFamily: MONO, fontSize: 12.5, padding: "6px 0 0", borderTop: `1px solid ${C.line}` }}>
         <span style={{ flex: 1, color: C.text }}>
@@ -1741,7 +1741,9 @@ function Billing({ coding, prod }: { coding: boolean; prod: boolean }) {
         <div data-testid="billing-plan" style={{ fontFamily: MONO, fontSize: 12, color: C.text, lineHeight: 1.7 }}>
           {TIER_NAME[plan.tier] ?? plan.tier}
           <span style={{ color: C.mut }}>
-            {plan.tier === "community" ? " — $0: one developer and one agent family, one governed node"
+            {/* what holds on Free, not more: a second node still connects, and demo
+                nodes are not counted at all (QA-360) */}
+            {plan.tier === "community" ? " — $0: one developer and one agent family, one governed node included (more still connect; the month below counts them past the plan) · demo nodes and examples don't count"
               : plan.tier === "coding" || plan.tier === "business" ? ` — ${plan.seat} per developer whose agents ran that month · production agents: 1 included, then $75 each`
                 : plan.priced ? ` — ${plan.base} a month · ${plan.included_developers} developers and ${plan.included_nodes} governed nodes included, then ${plan.seat} per developer`
                   : " — contracted"}
