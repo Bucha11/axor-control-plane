@@ -1435,3 +1435,29 @@ async def test_status_says_whether_this_is_the_hosted_plane(
             transport=httpx.ASGITransport(app=app), base_url="http://backend.test",
         ) as c, app.router.lifespan_context(app):
             assert (await c.get("/v1/license/status")).json()["hosted"] is want
+
+
+async def test_boot_hands_each_held_license_to_identity_again(
+        tmp_path: pathlib.Path, vendor: dict, monkeypatch: pytest.MonkeyPatch) -> None:
+    """QA-130: identity took a license only when it was installed, and refused
+    an upgrade issued to the same end date — the workspace stayed on the old
+    plan there. At boot every held license is handed over again (identity
+    answers 409 to one it already has)."""
+    from axor_backend import licensing
+
+    sent: list[str] = []
+
+    async def post(base: str, org: str, raw: str) -> int:
+        sent.append(org)
+        return 409
+
+    monkeypatch.setattr(licensing, "_post_to_identity", post)
+    monkeypatch.setenv("AXOR_IDENTITY_URL", "http://identity.test")
+    db = f"sqlite+aiosqlite:///{tmp_path}/boot.db"
+    app = create_app(database_url=db)
+    async with app.router.lifespan_context(app):
+        await app.state.store.set_setting("license_json", vendor["license_json"])
+    app = create_app(database_url=db)
+    async with app.router.lifespan_context(app):
+        await app.state.identity_sync
+    assert sent and sent == list(app.state.licenses)

@@ -213,6 +213,7 @@ EXPECTED: dict[tuple[str, str], str] = {
     ("GET", "/v1/runs/{run_id}/cases/{case_index}/export"): "read",
     # ── licensing: /verify WRITES the deployment's entitlement ───────────────
     ("POST", "/v1/license/verify"): "admin",
+    ("POST", "/v1/license/plan"): "admin",
     ("GET", "/v1/license/status"): "read",
     # Governed-node usage: the tenant's own fleet history, and the basis of any
     # per-node line on their invoice. Their data, so `read` — the same bar as

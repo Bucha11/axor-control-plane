@@ -126,7 +126,7 @@ export async function seedNode(
       ],
     },
   });
-  expect(r.ok(), "node heartbeat should be accepted").toBeTruthy();
+  expect(r.ok(), `node heartbeat should be accepted: ${r.status()} ${await r.text()}`).toBeTruthy();
 }
 
 

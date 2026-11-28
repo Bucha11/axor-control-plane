@@ -494,10 +494,19 @@ def regression_row(
         _step_ref(s) for s in pinned
         if s.reevaluated_verdict is not Verdict.DENY and s not in unverifiable
     ]
+    # A call recorded with no verdict ran ungoverned (an observe-only proxy
+    # run): it went through, so for normal work it counts as a pass the rules
+    # must keep — unless the rules of the day would have refused it then too
+    # (`would_deny`), which is a known refusal. Skipping it read a proxy run
+    # calling a tool the rules refuse as "every step goes as it did" (QA-197).
+    def _watched_refusal(s: ReplayStep) -> bool:
+        return s.recorded_verdict is None and bool((s.event.payload or {}).get("would_deny"))
+
     new_denials = [
         s for s in result.steps
         if s.event.kind is EventKind.TOOL_CALL
-        and s.recorded_verdict is Verdict.PASS
+        and (s.recorded_verdict is Verdict.PASS
+             or (s.recorded_verdict is None and not _watched_refusal(s)))
         and s.reevaluated_verdict is Verdict.DENY
     ]
     # Normal work kept with a refusal in it. A refusal recorded and still given
@@ -506,7 +515,9 @@ def regression_row(
     # refusal in a normal flow as a clean pass.
     still_refused = [
         s for s in pinned if s.reevaluated_verdict is Verdict.DENY
-    ]
+    ] + ([s for s in result.steps if s.event.kind is EventKind.TOOL_CALL
+          and _watched_refusal(s) and s.reevaluated_verdict is Verdict.DENY]
+         if side != "must_block" else [])
     if side == "must_block":
         if not pinned or len(unverifiable) == len(pinned):
             outcome = "unanchored"

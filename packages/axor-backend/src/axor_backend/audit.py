@@ -65,12 +65,16 @@ def command_acts(delta: dict) -> list[tuple[str, dict[str, Any]]]:
 
 
 async def record(store: Any, request: Request | None, action: str, target: str = "",  # noqa: ANN401
-                 *, who: str | None = None, **detail: Any) -> None:  # noqa: ANN401
+                 *, who: str | None = None, as_role: str | None = None,
+                 **detail: Any) -> None:  # noqa: ANN401
     """One act. ``who`` names the actor where the request does not (a pair
-    guest, by the link they were given)."""
+    guest, by the link they were given); ``as_role`` is then their role —
+    not the role of the service that told us."""
     by = actor(request) if request is not None else {"kind": "open", "who": "operator"}
     if who:
-        by = {**by, "who": who}
+        by = {k: v for k, v in {**by, "who": who}.items() if k != "role"}
+        if as_role:
+            by["role"] = as_role
     entry = {"ts": now(), "action": action, "by": by, "target": target,
              **({"detail": detail} if detail else {})}
     await store.add_vault_audit(KIND, entry, entry["ts"])
@@ -85,7 +89,7 @@ IDENTITY_ACTS = frozenset({
     "sso_set", "sso_removed", "scim_token_made", "scim_token_revoked", "scim_group_role",
     "scim_added", "scim_removed", "scim_role", "scim_renamed", "sessions_limit",
     "sessions_ended",
-    "plan_activated", "plan_renewed",
+    "plan_activated", "plan_renewed", "plan_upgraded",
 })
 IDENTITY_DETAIL = frozenset({"role", "to", "from", "protocol", "domains", "enforce",
                              "default_role", "hours", "ended", "group", "tier", "until",

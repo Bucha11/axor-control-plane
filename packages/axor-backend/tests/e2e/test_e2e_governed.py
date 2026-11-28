@@ -41,3 +41,23 @@ async def test_spawned_governed_node_goes_live_and_uploads_its_run(
     # An operator cascade-stop reaches the live node.
     out = (await http.post(f"/v1/plane/{node_id}/cascade-stop")).json()
     assert node_id in out["stopped"]
+
+
+async def test_qa171_demo_node_applies_a_command_and_reports_it(
+    proxy_http: httpx.AsyncClient, http: httpx.AsyncClient,
+) -> None:
+    node_id = (await proxy_http.post("/axor/governed/spawn")).json()["node_id"]
+    for _ in range(40):
+        if any(n["node_id"] == node_id for n in await _nodes(http)):
+            break
+        await asyncio.sleep(0.5)
+    r = await http.post(f"/v1/plane/{node_id}/command",
+                        json={"version": 1, "state": {"paused": True}})
+    assert r.status_code == 202, r.text
+    for _ in range(60):
+        row = next(n for n in await _nodes(http) if n["node_id"] == node_id)
+        if (row["reported"] or {}).get("applied_version") == 1:
+            break
+        await asyncio.sleep(0.5)
+    else:
+        pytest.fail(f"node never applied v1: {row}")

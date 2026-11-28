@@ -64,14 +64,28 @@ const SEV: Record<string, { color: string; label: string }> = {
   info: { color: C.dim, label: "runs" },
 };
 
-async function readPicked(list: FileList | null): Promise<{ path: string; content: string }[]> {
-  const out: { path: string; content: string }[] = [];
-  for (const f of Array.from(list ?? [])) {
-    if (!/\.(md|markdown|txt|sh|bash|zsh|ps1|py|js|mjs|ts|json|ya?ml|toml)$/i.test(f.name)) continue;
+// What the check takes in one go. A 5 MB SKILL.md was sent anyway, waited
+// ~20 s and came back as the web server's raw 413 page (QA-217); a skill's
+// text is a few KB, so the limit is said here, before anything is sent.
+const MAX_CHECK_BYTES = 1_000_000;
+const mb = (n: number) => `${(n / 1_000_000).toFixed(1)} MB`;
+
+async function readPicked(list: FileList | null): Promise<{ path: string; content: string }[] | string> {
+  const keep = Array.from(list ?? []).filter((f) => {
+    if (!/\.(md|markdown|txt|sh|bash|zsh|ps1|py|js|mjs|ts|json|ya?ml|toml)$/i.test(f.name)) return false;
     const path = f.webkitRelativePath || f.name;
-    if (path.split("/").some((p) => p.startsWith(".") || p === "node_modules")) continue;
-    out.push({ path, content: await f.text() });
+    return !path.split("/").some((p) => p.startsWith(".") || p === "node_modules");
+  });
+  const bytes = keep.reduce((n, f) => n + f.size, 0);
+  if (bytes > MAX_CHECK_BYTES) {
+    const big = keep.reduce((a, f) => (f.size > a.size ? f : a));
+    return `too large to check here: ${keep.length === 1 ? "the file is" : "these files come to"} ${mb(bytes)}`
+      + `${keep.length > 1 ? ` (the largest, ${big.name}, is ${mb(big.size)})` : ""}, and the check takes up to `
+      + `${mb(MAX_CHECK_BYTES)} — a skill's text is usually a few KB. Pick only the skill's own files, or run `
+      + "`axor-wrap skill check ./my-skill` on your machine";
   }
+  const out: { path: string; content: string }[] = [];
+  for (const f of keep) out.push({ path: f.webkitRelativePath || f.name, content: await f.text() });
   return out;
 }
 
@@ -129,6 +143,7 @@ function CheckSkill() {
   });
   const run = async (list: FileList | null) => {
     const picked = await readPicked(list);
+    if (typeof picked === "string") { setErr(picked); return; }
     if (picked.length === 0) { setErr("no SKILL.md or scripts in what you picked"); return; }
     check.mutate(picked);
   };

@@ -7,6 +7,8 @@ and role checks live in their own modules).
 """
 from __future__ import annotations
 
+import hashlib
+import time
 from typing import Any
 
 from sqlalchemy import (
@@ -108,7 +110,42 @@ refresh_tokens = Table(
     # when the person actually signed in: carried through every rotation, so a
     # session policy counts from the sign-in, not from the last refresh
     Column("session_ts", String(40), nullable=True),
+    # the session this token belongs to — every rotation of one sign-in shares
+    # it, and the access tokens carry it as ``sid``. NULL on rows from before
+    # it existed: those read their own token_hash as their family.
+    Column("family", String(40), nullable=True, index=True),
 )
+
+# A person's membership epoch in one workspace: bumped when they are removed or
+# their role changes. Access tokens carry the epoch they were issued at
+# (``ep``); one below the current epoch speaks for a membership that is gone.
+# Kept apart from ``memberships`` so a removal (the row deleted) keeps it.
+token_epochs = Table(
+    "token_epochs", metadata,
+    Column("user_id", String(64), primary_key=True),
+    Column("org_id", String(64), primary_key=True),
+    Column("epoch", Integer, nullable=False),
+)
+
+# What was revoked recently, as the control plane reads it (/v1/revocations):
+# ``session`` rows name a session id (logout, a reused refresh token, sessions
+# ended by an admin); ``member`` rows name sha256("<user>:<org>") and the epoch
+# it was bumped to. ``ts`` is epoch seconds. Only rows younger than an access
+# token's lifetime matter: an older token has expired by itself.
+revocations = Table(
+    "revocations", metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("kind", String(8), nullable=False),
+    Column("key", String(64), nullable=False, index=True),
+    Column("epoch", Integer, nullable=True),
+    Column("reason", String(16), nullable=False),
+    Column("ts", Integer, nullable=False, index=True),
+)
+
+
+def member_key(user_id: str, org_id: str) -> str:
+    """How the revocation feed names a membership without naming the person."""
+    return hashlib.sha256(f"{user_id}:{org_id}".encode()).hexdigest()
 
 email_tokens = Table(
     "email_tokens", metadata,
@@ -271,6 +308,24 @@ class Store:
                 user_id=user_id, email=email, password_hash=password_hash,
                 created_ts=ts, email_verified=email_verified))
 
+    async def create_account(self, user_id: str, email: str, password_hash: str | None,
+                             org_id: str, org_name: str, ts: str, *,
+                             email_verified: bool = False, new_user: bool = True) -> None:
+        """A user, their workspace and their ownership of it — in ONE
+        transaction (QA-230): a failure in any step leaves none of them, so an
+        address is never left with an account and no workspace. ``new_user``
+        False: the user exists (an account left without one) and only gets its
+        workspace."""
+        async with self.engine.begin() as conn:
+            if new_user:
+                await conn.execute(insert(users).values(
+                    user_id=user_id, email=email, password_hash=password_hash,
+                    created_ts=ts, email_verified=email_verified))
+            await conn.execute(insert(orgs).values(
+                org_id=org_id, name=org_name, tier="community", created_ts=ts))
+            await conn.execute(insert(memberships).values(
+                user_id=user_id, org_id=org_id, role="owner", created_ts=ts))
+
     async def count_users(self) -> int:
         """How many users exist at all — the whole table, not one org's.
 
@@ -372,17 +427,54 @@ class Store:
                 for r in rows]
 
     async def set_member_role(self, user_id: str, org_id: str, role: str) -> bool:
+        """A new role; a CHANGED one also bumps the membership epoch, so access
+        tokens carrying the old role stop working at once (QA-154)."""
         async with self.engine.begin() as conn:
+            before = (await conn.execute(select(memberships.c.role).where(
+                memberships.c.user_id == user_id, memberships.c.org_id == org_id))).first()
             result = await conn.execute(update(memberships).where(
                 memberships.c.user_id == user_id, memberships.c.org_id == org_id,
             ).values(role=role))
+            if before is not None and before.role != role:
+                await self._bump_epoch(conn, user_id, org_id, "role")
         return bool(result.rowcount)
 
     async def remove_member(self, user_id: str, org_id: str) -> bool:
+        """The membership ends, and with it every access token for it (the
+        epoch is bumped in the same transaction — QA-154)."""
         async with self.engine.begin() as conn:
             result = await conn.execute(delete(memberships).where(
                 memberships.c.user_id == user_id, memberships.c.org_id == org_id))
+            if result.rowcount:
+                await self._bump_epoch(conn, user_id, org_id, "removed")
         return bool(result.rowcount)
+
+    @staticmethod
+    async def _bump_epoch(conn: Any, user_id: str, org_id: str,  # noqa: ANN401
+                          reason: str) -> None:
+        row = (await conn.execute(select(token_epochs.c.epoch).where(
+            token_epochs.c.user_id == user_id, token_epochs.c.org_id == org_id))).first()
+        epoch = (row.epoch if row else 0) + 1
+        if row is None:
+            await conn.execute(insert(token_epochs).values(
+                user_id=user_id, org_id=org_id, epoch=epoch))
+        else:
+            await conn.execute(update(token_epochs).where(
+                token_epochs.c.user_id == user_id, token_epochs.c.org_id == org_id,
+            ).values(epoch=epoch))
+        await conn.execute(insert(revocations).values(
+            kind="member", key=member_key(user_id, org_id), epoch=epoch, reason=reason,
+            ts=int(time.time())))
+
+    async def role_and_epoch(self, user_id: str, org_id: str) -> tuple[str | None, int]:
+        """The role held now and the membership epoch, read together — so a
+        token is never minted with one role and the epoch of another."""
+        async with self.engine.connect() as conn:
+            role = (await conn.execute(select(memberships.c.role).where(
+                memberships.c.user_id == user_id, memberships.c.org_id == org_id))).first()
+            epoch = (await conn.execute(select(token_epochs.c.epoch).where(
+                token_epochs.c.user_id == user_id, token_epochs.c.org_id == org_id))).first()
+        return (role.role if role else None), (epoch.epoch if epoch else 0)
 
     # ── invites ───────────────────────────────────────────────────────────────
     async def create_invite(self, invite_id: str, token_hash: str, org_id: str, role: str,
@@ -425,12 +517,13 @@ class Store:
 
     # ── refresh tokens ────────────────────────────────────────────────────────
     async def store_refresh(self, token_hash: str, user_id: str, org_id: str,
-                           expires_ts: str, ts: str, session_ts: str | None = None) -> None:
+                           expires_ts: str, ts: str, session_ts: str | None = None,
+                           family: str | None = None) -> None:
         async with self.engine.begin() as conn:
             await conn.execute(insert(refresh_tokens).values(
                 token_hash=token_hash, user_id=user_id, org_id=org_id,
                 expires_ts=expires_ts, revoked=False, created_ts=ts,
-                session_ts=session_ts or ts))
+                session_ts=session_ts or ts, family=family))
 
     async def get_refresh(self, token_hash: str) -> dict[str, Any] | None:
         async with self.engine.connect() as conn:
@@ -442,7 +535,32 @@ class Store:
         return {"token_hash": row.token_hash, "user_id": row.user_id,
                 "org_id": row.org_id, "expires_ts": row.expires_ts,
                 "revoked": bool(row.revoked), "created_ts": row.created_ts,
-                "session_ts": row.session_ts or row.created_ts}
+                "session_ts": row.session_ts or row.created_ts,
+                "family": row.family or row.token_hash}
+
+    async def end_session(self, family: str, reason: str) -> None:
+        """One session ends: every refresh token of its family is revoked, and
+        its id goes on the revocation feed so its access tokens stop too
+        (logout, a reused refresh token — QA-240)."""
+        async with self.engine.begin() as conn:
+            await conn.execute(update(refresh_tokens).where(
+                (refresh_tokens.c.family == family) | (refresh_tokens.c.token_hash == family),
+            ).values(revoked=True))
+            await conn.execute(insert(revocations).values(
+                kind="session", key=family, reason=reason, ts=int(time.time())))
+
+    async def session_revoked(self, family: str) -> bool:
+        async with self.engine.connect() as conn:
+            row = (await conn.execute(select(revocations.c.id).where(
+                revocations.c.kind == "session", revocations.c.key == family))).first()
+        return row is not None
+
+    async def recent_revocations(self, since: int) -> list[dict[str, Any]]:
+        async with self.engine.connect() as conn:
+            rows = (await conn.execute(select(revocations).where(
+                revocations.c.ts >= since).order_by(revocations.c.id))).all()
+        return [{"kind": r.kind, "key": r.key, "epoch": r.epoch, "reason": r.reason}
+                for r in rows]
 
     async def revoke_all_refresh(self, user_id: str) -> None:
         async with self.engine.begin() as conn:
@@ -450,16 +568,30 @@ class Store:
                                .where(refresh_tokens.c.user_id == user_id)
                                .values(revoked=True))
 
-    async def end_sessions_in_org(self, org_id: str, *, keep_user: str | None = None) -> int:
-        """Every live sign-in to one workspace ends (but ``keep_user``'s)."""
+    async def end_sessions_in_org(self, org_id: str, *, keep_user: str | None = None,
+                                  keep_session: str | None = None) -> int:
+        """Every live sign-in to one workspace ends — but ``keep_session`` (the
+        caller's own, whoever else's sessions they also have: QA-156), or, for
+        a caller whose token names no session, all of ``keep_user``'s. Their
+        access tokens go on the revocation feed. Returns how many people
+        (other than ``keep_user``) were signed out."""
         where = [refresh_tokens.c.org_id == org_id, refresh_tokens.c.revoked.is_(False)]
-        if keep_user:
+        if keep_session:
+            where.append(func.coalesce(refresh_tokens.c.family, refresh_tokens.c.token_hash)
+                         != keep_session)
+        elif keep_user:
             where.append(refresh_tokens.c.user_id != keep_user)
         async with self.engine.begin() as conn:
-            users_out = (await conn.execute(
-                select(refresh_tokens.c.user_id).where(*where).distinct())).all()
+            rows = (await conn.execute(select(
+                refresh_tokens.c.user_id,
+                func.coalesce(refresh_tokens.c.family, refresh_tokens.c.token_hash).label("sid"),
+            ).where(*where))).all()
             await conn.execute(update(refresh_tokens).where(*where).values(revoked=True))
-        return len(users_out)
+            now = int(time.time())
+            for sid in {r.sid for r in rows}:
+                await conn.execute(insert(revocations).values(
+                    kind="session", key=sid, reason="ended", ts=now))
+        return len({r.user_id for r in rows} - {keep_user})
 
     async def revoke_refresh_in_org(self, user_id: str, org_id: str) -> None:
         """Their sessions in one workspace end; those in others go on."""

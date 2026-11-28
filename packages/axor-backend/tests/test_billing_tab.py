@@ -34,7 +34,9 @@ async def test_free_plan_shows_what_this_month_would_cost(open_client: httpx.Asy
         await _coding_dev(open_client, f"cc-{i}", f"dev-{i}")
     body = (await open_client.get("/v1/license/billing")).json()
     assert body["plan"]["tier"] == "community" and body["plan"]["licensed"] is False
-    assert body["current"] is None and body["history"] == []
+    # month by month on Free too: this month's usage, at $0 on the plan in force
+    assert body["current"]["active_developers"] == 3 and body["current"]["total"] == "$0.00"
+    assert body["history"] == []          # nothing ran here before this month
     coding = next(e for e in body["if_paid"] if e["tier"] == "coding")
     assert coding["active_developers"] == 3 and coding["total"] == "$75.00"
     team = next(e for e in body["if_paid"] if e["tier"] == "team")
@@ -63,7 +65,9 @@ async def test_licensed_shows_this_month_and_the_closed_ones(
         cur = body["current"]
         assert cur["provisional"] is True and cur["active_developers"] == 2
         assert cur["total"] == "$50.00" and len(cur["developers"]) == 2
-        assert len(body["history"]) == 6 and all(not h["provisional"] for h in body["history"])
+        # nothing ran here before this month: no closed months to list (QA-137 —
+        # a workspace made yesterday listed half a year of $0.00 statements)
+        assert body["history"] == []
         assert body["if_paid"] == []
 
 

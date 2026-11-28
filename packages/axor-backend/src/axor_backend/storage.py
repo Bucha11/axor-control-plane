@@ -727,7 +727,22 @@ class _NoSuchNode(Exception):
 
 
 def make_engine(url: str) -> AsyncEngine:
-    return create_async_engine(url)
+    engine = create_async_engine(url)
+    if engine.dialect.name == "sqlite":
+        from sqlalchemy import event
+
+        @event.listens_for(engine.sync_engine, "connect")
+        def _sqlite_concurrency(dbapi_conn: Any, _record: Any) -> None:  # noqa: ANN401
+            # A plane on SQLite serves the page's reads while agents report and
+            # the sweeps write: in the default rollback journal a read waiting
+            # on a write failed at once with "database is locked" (a 500 on
+            # the incidents list, the fleet, a heartbeat). Write-ahead logging
+            # lets reads go on beside a write, and a write waits its turn.
+            cur = dbapi_conn.cursor()
+            cur.execute("PRAGMA journal_mode=WAL")
+            cur.execute("PRAGMA busy_timeout=15000")
+            cur.close()
+    return engine
 
 
 # Baseline revision (migrations/versions/0001_baseline.py). A database created
@@ -2003,6 +2018,16 @@ class Store:
                 ).values(
                     evidence_json=evidence, completed=True,
                 )
+            )
+
+    async def mark_completed(self, run_id: str) -> None:
+        """The run's answer is in: finished, whatever evidence it holds."""
+        async with self.engine.begin() as conn:
+            await conn.execute(
+                update(runs).where(
+                    runs.c.run_id == run_id,
+                    runs.c.org_id == current_org_id(),
+                ).values(completed=True)
             )
 
     async def mark_intervened(self, run_id: str) -> None:

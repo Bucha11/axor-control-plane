@@ -2,7 +2,7 @@
 // production agents — the cheapest plan and why, from the list prices
 // (src/quote.ts, the same numbers as the backend's ee/pricing.py).
 import { expect, test } from "@playwright/test";
-import { goHash, setConnection } from "./helpers";
+import { goHash, setConnection, answerAsk } from "./helpers";
 
 test("both ways in: the calculator names the cheapest plan and what the next one adds", async ({ page }) => {
   await goHash(page, "pricing?for=both");
@@ -199,4 +199,62 @@ test("each rung keeps more run history", async ({ page }) => {
                        "runs kept as long as you choose"]) {
     await expect(page.getByText(words).first()).toBeVisible();
   }
+});
+
+// QA-131/132/133/136: the plan is the owner's; a workspace paid by card
+// changes its one subscription instead of buying a second; a payment says
+// what happens next; a payment page that cannot load says so.
+const signedInAs = async (page: import("@playwright/test").Page, scopes: string[]) => {
+  await page.route("**/v1/auth/status", (r) => r.fulfill({ json: {
+    auth_enabled: true, authenticated: true, scopes } }));
+  await page.addInitScript(() => {
+    window.localStorage.setItem("axor-app", JSON.stringify({ state: {}, version: 0 }));
+    window.sessionStorage.setItem("axor-app", JSON.stringify(
+      { state: { identityEmail: "someone@acme.test" }, version: 0 }));
+  });
+};
+
+test("a viewer is not offered the workspace's checkout (QA-132)", async ({ page }) => {
+  await licensedTo(page, "org_acme", true);
+  await signedInAs(page, ["read"]);
+  await goHash(page, "pricing?for=both");
+  await expect(page.getByTestId("tier-team").getByTestId("card-owner-only"))
+    .toContainText("the workspace owner chooses the plan");
+  await expect(page.getByTestId("cta-team")).toHaveCount(0);
+});
+
+test("on a plan paid by card, another rung changes the subscription, and says when it is on (QA-131, QA-133)", async ({ page }) => {
+  let tier = "coding";
+  await page.route("**/v1/license/status", (r) => r.fulfill({ json: {
+    active: true, vendor_key_configured: true, hosted: true, auto_renewal: true,
+    licensed_to: "org_acme", workspace_tier: tier } }));
+  await page.route("https://cdn.paddle.com/**", (r) => r.fulfill({
+    contentType: "application/javascript", body: PADDLE_STUB }));
+  const asked: unknown[] = [];
+  await page.route("**/v1/license/plan", async (r) => {
+    asked.push(r.request().postDataJSON());
+    tier = "business";
+    await r.fulfill({ json: { from: "coding", to: "business" } });
+  });
+  await signedInAs(page, ["read", "ingest", "operate", "admin"]);
+  await goHash(page, "pricing?for=both");
+  await expect(page.getByTestId("tier-coding").getByTestId("card-in-force")).toHaveText("your plan");
+  await expect(page.getByTestId("cta-coding")).toHaveCount(0);
+  await expect(page.getByTestId("cta-business")).toHaveText("Switch to Business");
+  await page.getByTestId("cta-business").click();
+  await answerAsk(page);
+  await expect.poll(() => asked).toEqual([{ tier: "business" }]);
+  await expect(page.getByTestId("plan-note")).toContainText("Business is on for this workspace", { timeout: 15_000 });
+  // nothing was bought: no checkout opened
+  expect(await page.evaluate(() => (window as unknown as { __paddle?: unknown[] }).__paddle ?? [])).toEqual([]);
+});
+
+test("a payment page that cannot load says so (QA-136)", async ({ page }) => {
+  await page.route("**/v1/license/status", (r) => r.fulfill({ json: {
+    active: false, vendor_key_configured: true, hosted: true, licensed_to: "org_acme" } }));
+  await page.route("https://cdn.paddle.com/**", (r) => r.abort());
+  await goHash(page, "pricing?for=coding");
+  await page.getByTestId("cta-coding").click();
+  await expect(page.getByTestId("plan-note")).toContainText("the payment page could not load");
+  await expect(page).toHaveURL(/#\/pricing/);
 });

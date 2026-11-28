@@ -197,8 +197,11 @@ async def from_identity(body: dict, request: Request, store: StoreDep,
     raw = body.get("detail") if isinstance(body.get("detail"), dict) else {}
     detail = {k: (v[:20] if isinstance(v, list) else v) for k, v in raw.items()
               if k in audit.IDENTITY_DETAIL and isinstance(v, str | int | bool | list)}
+    role = body.get("role")
     await audit.record(store, request, action, str(body.get("target") or "")[:300],
-                       who=str(body.get("who") or "the login service")[:300], **detail)
+                       who=str(body.get("who") or "the login service")[:300],
+                       as_role=role if role in ("owner", "admin", "member", "viewer") else None,
+                       **detail)
 
 
 # ── Enterprise: the compliance pack, and the hold that keeps it alive ───────

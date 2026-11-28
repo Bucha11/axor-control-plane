@@ -134,6 +134,14 @@ async def resolve_principal(request: Request) -> Principal | None:
                 return None
         except IdentityError:
             return None
+        # Revoked since it was issued (identity_client.RevocationFeed): a
+        # removed member, a changed role, a signed-out session (QA-154, QA-240).
+        feed = getattr(request.app.state, "revocations", None)
+        if feed is not None:
+            why = await feed.refusal(claims)
+            if why is not None:
+                request.state.refused = why
+                return None
         return Principal(
             kind="user",
             key_id=claims.user_id,
@@ -159,7 +167,11 @@ async def auth_middleware(request: Request, call_next: Callable) -> Response:
         # could not tell that it was being probed with a bad token, or that a
         # key was being used past its scope. The credential itself never
         # appears — the principal's id does, which is the point of recording it.
-        log.warning("401 %s %s: no usable credential", request.method, path)
+        why = getattr(request.state, "refused", None)
+        log.warning("401 %s %s: %s", request.method, path, why or "no usable credential")
+        if why:
+            # in words: the token was good and no longer is (QA-154)
+            return JSONResponse({"error": "unauthorized", "detail": why}, status_code=401)
         return JSONResponse({"error": "unauthorized"}, status_code=401)
     if principal.kind == "guest":
         from axor_backend.guests import account_only

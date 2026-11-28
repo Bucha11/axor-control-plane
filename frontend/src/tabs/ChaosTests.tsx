@@ -14,6 +14,8 @@ import { agentLabel, liveAgents } from "../agentName";
 import { useWorkStarted } from "../workStarted";
 import { useOneAtATime } from "../oneAtATime";
 import { localTime } from "../time";
+import { useHasScope } from "../team";
+import RoleNote from "../components/RoleNote";
 
 export const MODE_WORDS: Record<string, string> = {
   silent_fail: "returning an error",
@@ -175,6 +177,8 @@ function LiveArm({ agents, modes, onArmed }: { agents: string[]; modes: string[]
     onSuccess: onArmed,
   });
   const armOnce = useOneAtATime(arm);
+  // a viewer arms nothing: the plane refuses it (QA-175)
+  const mayArm = useHasScope()("operate");
   return (
     <div style={card} data-testid="chaos-live">
       <div style={{ fontSize: 13.5, fontWeight: 600, marginBottom: 4 }}>On your live agents, next run</div>
@@ -184,6 +188,8 @@ function LiveArm({ agents, modes, onArmed }: { agents: string[]; modes: string[]
       </div>
       {agents.length === 0 ? (
         <div style={{ fontFamily: MONO, fontSize: 11, color: C.dim }}>no agent has run yet</div>
+      ) : !mayArm ? (
+        <RoleNote need="operate" what="break a tool on a live agent" testid="chaos-arm-viewer" />
       ) : (
         <>
           <div className="flex gap-1.5 flex-wrap mb-2">
@@ -236,26 +242,29 @@ function Schedule({ agents, modes, current, onSaved }: {
     onSuccess: onSaved,
   });
   const locked = !current.ee_active;
+  // a viewer sees the schedule and changes nothing (QA-152)
+  const mayChange = useHasScope()("operate");
+  const off = locked || !mayChange;
   return (
     <div style={{ ...card, opacity: locked ? 0.75 : 1 }} data-testid="chaos-schedule">
       <div className="flex items-center gap-2 flex-wrap" style={{ fontSize: 13, color: C.text, lineHeight: 2 }}>
-        <label className="flex items-center gap-1.5" style={{ cursor: locked ? "default" : "pointer" }}>
-          <input type="checkbox" checked={enabled} disabled={locked} onChange={(e) => setEnabled(e.target.checked)} />
+        <label className="flex items-center gap-1.5" style={{ cursor: off ? "default" : "pointer" }}>
+          <input type="checkbox" checked={enabled} disabled={off} onChange={(e) => setEnabled(e.target.checked)} />
           every
         </label>
-        <input type="number" min={1} value={hours} disabled={locked} aria-label="every how many hours"
+        <input type="number" min={1} value={hours} disabled={off} aria-label="every how many hours"
           onChange={(e) => setHours(Math.max(1, Number(e.target.value) || 1))} style={{ ...field, width: 60 }} />
         hours
         {/* "every week" used to mean typing 168 */}
         {([["daily", 24], ["weekly", 168]] as const).map(([w, h]) => (
-          <button key={w} disabled={locked} onClick={() => setHours(h)} style={chip(hours === h)}>{w}</button>
+          <button key={w} disabled={off} onClick={() => setHours(h)} style={chip(hours === h)}>{w}</button>
         ))}
         , break a tool each agent has used —
         <span style={{ color: C.mut }}>{nodes.length ? `${nodes.length} chosen` : "every agent"}</span>
       </div>
       <div className="flex gap-1.5 flex-wrap mt-1">
         {agents.map((a) => (
-          <button key={a} disabled={locked} style={chip(nodes.includes(a))}
+          <button key={a} disabled={off} style={chip(nodes.includes(a))}
             onClick={() => setNodes(nodes.includes(a) ? nodes.filter((x) => x !== a) : [...nodes, a])}>
             {nodes.includes(a) ? "✓ " : ""}{a}
           </button>
@@ -264,7 +273,7 @@ function Schedule({ agents, modes, current, onSaved }: {
       <div className="flex gap-1.5 flex-wrap mt-2 items-center">
         <span style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim }}>in one of these ways:</span>
         {modes.map((m) => (
-          <button key={m} disabled={locked} style={chip(ways.includes(m))}
+          <button key={m} disabled={off} style={chip(ways.includes(m))}
             onClick={() => setWays(ways.includes(m) ? (ways.length > 1 ? ways.filter((x) => x !== m) : ways) : [...ways, m])}>
             {MODE_WORDS[m] ?? m}
           </button>
@@ -276,6 +285,8 @@ function Schedule({ agents, modes, current, onSaved }: {
             scheduled chaos tests are part of Team —{" "}
             <button onClick={() => navigate("pricing")} style={link}>see plans →</button>
           </span>
+        ) : !mayChange ? (
+          <RoleNote need="operate" what="change the schedule" testid="chaos-schedule-viewer" />
         ) : (
           <button data-testid="chaos-schedule-save" onClick={() => save.mutate()} disabled={save.isPending}
             style={btn({ color: C.text, borderColor: C.steel, fontSize: 11.5, padding: "4px 12px" })}>

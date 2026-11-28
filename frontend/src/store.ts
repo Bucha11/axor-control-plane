@@ -33,9 +33,10 @@ interface AppState {
   // Who is logged in, for display (identity login only).
   identityEmail: string;
   // The sign-in ran out (its refresh was refused): said, not a silent guest
-  // (QA-102). Not kept across a reload.
-  sessionEnded: boolean;
-  setSessionEnded: (v: boolean) => void;
+  // (QA-102). Not kept across a reload. A string is the reason, in words
+  // ("you are no longer a member of Acme" — QA-154).
+  sessionEnded: boolean | string;
+  setSessionEnded: (v: boolean | string) => void;
   // Hosted guest sessions this tab has held (newest first; the live one is
   // also `apiToken`). Kept so signing up can claim every one of them — an
   // expired guest's work is still claimable for a day.
@@ -82,9 +83,20 @@ interface AppState {
   // them and by a test run, so nobody classifies the same tools twice.
   toolPolicy: Record<string, ToolClass>;
   setToolClass: (name: string, patch: Partial<ToolClass>) => void;
+  // the workspace's copy of it could not be read, or was saved by someone
+  // else since this tab read it: nothing here is saved until it is read again
+  // (QA-212, QA-231). Not kept across a reload.
+  policyNotice: { kind: "read_failed" | "stale"; words: string } | null;
+  setPolicyNotice: (n: { kind: "read_failed" | "stale"; words: string } | null) => void;
+  // bumped to read the workspace's policy again
+  policyLoads: number;
+  reloadPolicy: () => void;
   // Guided tour position: index into TOUR (components/Tour.tsx), null = not
   // running. Persisted, so a mid-tour reload resumes where the user was.
   tourStep: number | null;
+  // the connection before the tour switched it to the example data: put back
+  // when the tour ends, so real views do not stay on the example (QA-215)
+  tourRestore: ConnectionState | null;
   // which tour: the kind of agent the visitor was looking at on Home
   tourSide: "coding" | "production";
   connect: (mode: ConnectionMode, tools?: { name: string; url: string }[]) => void;
@@ -252,7 +264,12 @@ export const useApp = create<AppState>()(
         set((s) => ({ toolPolicy: { ...s.toolPolicy,
           [name]: { ...({ klass: guessKlass(name), outside: false } as ToolClass), ...s.toolPolicy[name], ...patch } } })),
       tourStep: null,
+      tourRestore: null,
       tourSide: "production",
+      policyNotice: null,
+      setPolicyNotice: (n) => set({ policyNotice: n }),
+      policyLoads: 0,
+      reloadPolicy: () => set((s) => ({ policyNotice: null, policyLoads: s.policyLoads + 1 })),
       connect: (mode, tools) =>
         set((s) => ({
           connection: {
@@ -289,7 +306,9 @@ export const useApp = create<AppState>()(
             : [...s.coachDismissed, id],
         })),
       resetCoach: () => set({ coachDismissed: [] }),
-      setTourStep: (step) => set({ tourStep: step }),
+      setTourStep: (step) => set((s) => (step === null && s.tourRestore
+        ? { tourStep: null, connection: s.tourRestore, tourRestore: null }
+        : { tourStep: step })),
       setTourSide: (side) => set({ tourSide: side }),
     }),
     {
@@ -307,7 +326,7 @@ export const useApp = create<AppState>()(
       // The trade: opening the app in a new tab asks you to sign in again.
       // For a governance console that is the right side of the trade.
       storage: createJSONStorage(() => splitStorage),
-      partialize: ({ sessionEnded, ...s }) => s,
+      partialize: ({ sessionEnded, policyNotice, policyLoads, ...s }) => s,
     },
   ),
 );

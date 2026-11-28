@@ -121,12 +121,53 @@ async def _rules(store: object) -> dict:
     value = await store.get_setting(RULES)  # type: ignore[attr-defined]
     if not isinstance(value, dict):
         return {"set": False, "allow": [], "mode": "enforce", "exceptions": [],
-                "trusted_sources": [], "by": "", "ts": ""}
+                "trusted_sources": [], "by": "", "ts": "", "version": 0, "changed_in": {}}
     return {"set": True, "allow": sorted(value.get("allow") or []),
             "mode": value.get("mode") if value.get("mode") in MODES else "enforce",
             "exceptions": list(value.get("exceptions") or []),
             "trusted_sources": list(value.get("trusted_sources") or []),
-            "by": value.get("by", ""), "ts": value.get("ts", "")}
+            "by": value.get("by", ""), "ts": value.get("ts", ""),
+            "version": int(value.get("version") or 0),
+            "changed_in": dict(value.get("changed_in") or {})}
+
+
+# Two people (or two tabs) edit the policy: each save sends whole lists built
+# from what that screen read. A save from a screen that read an older policy
+# would put back what was removed since, and take out what was added (QA-212).
+# The screen sends the version it read; a save from an older one is refused
+# with what changed since, and the screen says to reload. A caller that sends
+# no version (a script, an older CLI) saves as before.
+_PARTS = {"allow": "the rules", "mode": "the mode", "exceptions": "the exceptions",
+          "trusted_sources": "the trusted sources"}
+
+
+def _stale(body: dict, held: dict) -> None:
+    if "version" not in body:
+        return
+    seen = body["version"]
+    if not isinstance(seen, int) or isinstance(seen, bool):
+        raise HTTPException(400, "version is the policy's version as read (an integer)")
+    if seen == held["version"]:
+        return
+    changed = [p for p in _PARTS if held["changed_in"].get(p, 0) > seen]
+    words = " and ".join(_PARTS[p] for p in changed) or "the policy"
+    who = f" ({held['by']})" if held["by"] else ""
+    raise HTTPException(409, {
+        "code": "stale", "changed": changed, "version": held["version"],
+        "by": held["by"], "ts": held["ts"],
+        "detail": f"someone changed {words} since you opened this{who} — "
+                  "reload to see it; nothing was saved"})
+
+
+async def _save_rules(store: Any, held: dict, principal: object, now_ts: str,  # noqa: ANN401
+                      **parts: object) -> None:
+    version = held["version"] + 1
+    changed_in = dict(held["changed_in"])
+    for p, value in parts.items():
+        if value != held[p]:
+            changed_in[p] = version
+    await store.set_setting(RULES, {**parts, "by": _by(principal), "ts": now_ts,
+                                    "version": version, "changed_in": changed_in})
 
 
 MAX_EXCEPTIONS, MAX_SOURCES = 100, 30
@@ -142,6 +183,34 @@ _OPEN_HOSTS = ("pastebin.com", "paste.ee", "hastebin.com", "dpaste.org", "dpaste
                "stackoverflow.com", "stackexchange.com", "superuser.com", "serverfault.com",
                "askubuntu.com", "reddit.com", "quora.com", "news.ycombinator.com",
                "discourse.org", "discord.com")
+# blog platforms: anyone can publish an article there (QA-211)
+_BLOG_HOSTS = ("medium.com", "dev.to", "hashnode.com", "hashnode.dev")
+# a name under which anyone registers or publishes a site of their own: a
+# country's company domains, and hosting where every user gets a subdomain.
+# "*.co.uk" or "*.github.io" trusts every one of them (QA-210, QA-211); one
+# site under it (docs.example.co.uk, myorg.github.io) is the team's to name.
+_PUBLIC_SUFFIXES = frozenset((
+    "co.uk", "org.uk", "me.uk", "ltd.uk", "plc.uk", "net.uk", "ac.uk", "gov.uk",
+    "com.au", "net.au", "org.au", "edu.au", "gov.au", "id.au", "asn.au",
+    "co.nz", "net.nz", "org.nz", "co.jp", "ne.jp", "or.jp", "ac.jp", "go.jp",
+    "co.kr", "or.kr", "co.in", "net.in", "org.in", "firm.in", "gen.in", "ind.in",
+    "com.br", "net.br", "org.br", "com.cn", "net.cn", "org.cn", "com.tw", "com.hk",
+    "com.sg", "com.my", "co.za", "org.za", "com.mx", "com.ar", "com.tr", "co.il",
+    "com.ua", "com.pl", "co.id", "com.ph", "com.vn", "co.th", "com.pk", "com.ng",
+    "com.eg", "com.sa", "com.co", "com.pe", "com.es", "co.at", "or.at",
+    "github.io", "gitlab.io", "blogspot.com", "wordpress.com", "substack.com",
+    "tumblr.com", "vercel.app", "netlify.app", "pages.dev", "workers.dev",
+    "herokuapp.com", "web.app", "firebaseapp.com", "glitch.me", "notion.site",
+    "neocities.org", "surge.sh", "onrender.com", "fly.dev", "repl.co",
+))
+# the usual second level of a country's domain (co.xx, com.xx, …): also a
+# public suffix when the list above does not name the country
+_SECOND_LEVEL = re.compile(r"^(?:co|com|net|org|gov|edu|ac|or|ne|go|ltd|plc|nom|gen|firm)"
+                           r"\.[a-z]{2}$")
+
+
+def _public_suffix(name: str) -> bool:
+    return name in _PUBLIC_SUFFIXES or bool(_SECOND_LEVEL.match(name))
 
 
 def _matches(host: str, names: tuple[str, ...]) -> bool:
@@ -174,7 +243,8 @@ def _exceptions(raw: object, known: set[str]) -> list[dict]:
 def _sources(raw: object, held: tuple[str, ...] | list[str] = ()) -> list[str]:
     """Hosts whose text is not "from outside": a page there is read like the
     developer's own words, so a command it shows may be run. Exact hosts, or
-    *.example.com for its subdomains — never a bare TLD or everything."""
+    *.example.com for its subdomains — never a bare TLD, a public suffix
+    (*.co.uk, *.github.io) or everything."""
     if not isinstance(raw, list) or len(raw) > MAX_SOURCES:
         raise HTTPException(400, f"trusted_sources is a list of at most {MAX_SOURCES} hosts")
     hosts = sorted({str(h).strip().lower() for h in raw if str(h).strip()})
@@ -191,6 +261,15 @@ def _sources(raw: object, held: tuple[str, ...] | list[str] = ()) -> list[str]:
     if open_:
         raise HTTPException(400, f"{', '.join(open_)}: a forum or a pastebin is never a trusted "
                                  "source — anyone can write to it; name the project's docs site")
+    blogs = [h for h in hosts if h not in held and _matches(h, _BLOG_HOSTS)]
+    if blogs:
+        raise HTTPException(400, f"{', '.join(blogs)}: a blog platform is never a trusted source "
+                                 "— anyone can publish on it; name the project's docs site")
+    public = [h for h in hosts if h not in held and _public_suffix(h.removeprefix("*."))]
+    if public:
+        raise HTTPException(400, f"{', '.join(public)}: that trusts every site anyone registers "
+                                 "or publishes under it — never a trusted source; name one site "
+                                 "(docs.example.co.uk, myorg.github.io)")
     return hosts
 
 
@@ -218,6 +297,7 @@ async def set_rules(body: dict, request: Request, store: StoreDep,
     if mode not in MODES:
         raise HTTPException(400, f"mode is one of {list(MODES)}")
     held = await _rules(store)
+    _stale(body, held)
     now_ts = datetime.now(UTC).isoformat()
     # left out of the body: kept as they were (the screen saves rules and mode)
     exceptions = (_exceptions(body["exceptions"], known) if "exceptions" in body
@@ -227,9 +307,8 @@ async def set_rules(body: dict, request: Request, store: StoreDep,
         e["ts"] = e["ts"] or now_ts
     sources = (_sources(body["trusted_sources"], held["trusted_sources"])
                if "trusted_sources" in body else held["trusted_sources"])
-    await store.set_setting(RULES, {"allow": sorted(set(allow)), "mode": mode,
-                                    "exceptions": exceptions, "trusted_sources": sources,
-                                    "by": _by(principal), "ts": now_ts})
+    await _save_rules(store, held, principal, now_ts, allow=sorted(set(allow)), mode=mode,
+                      exceptions=exceptions, trusted_sources=sources)
     await _audit_rules(store, request, held, sorted(set(allow)), mode, exceptions, sources)
     return await _rules(store)
 
@@ -252,6 +331,7 @@ async def set_exceptions(body: dict, request: Request, store: StoreDep,
     await _permitted(store, principal, "exceptions")
     known = {r["id"] for r in _catalog()}
     held = await _rules(store)
+    _stale(body, held)
     now_ts = datetime.now(UTC).isoformat()
     exceptions = (_exceptions(body["exceptions"], known) if "exceptions" in body
                   else held["exceptions"])
@@ -260,9 +340,8 @@ async def set_exceptions(body: dict, request: Request, store: StoreDep,
         e["ts"] = e["ts"] or now_ts
     sources = (_sources(body["trusted_sources"], held["trusted_sources"])
                if "trusted_sources" in body else held["trusted_sources"])
-    await store.set_setting(RULES, {"allow": held["allow"], "mode": held["mode"],
-                                    "exceptions": exceptions, "trusted_sources": sources,
-                                    "by": _by(principal), "ts": now_ts})
+    await _save_rules(store, held, principal, now_ts, allow=held["allow"], mode=held["mode"],
+                      exceptions=exceptions, trusted_sources=sources)
     await _audit_rules(store, request, held, held["allow"], held["mode"], exceptions, sources)
     return await _rules(store)
 

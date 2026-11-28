@@ -459,9 +459,11 @@ def _upload_refused(exc: httpx.HTTPError) -> JSONResponse:
     raw exception carried `http://backend:8400/...` to the page (QA-001)."""
     if isinstance(exc, httpx.HTTPStatusError):
         code = exc.response.status_code
-        detail = (f"the Control Plane refused the upload (HTTP {code})"
-                  + (" — sign in again, or check this proxy's AXOR_INGEST_KEY"
-                     if code in (401, 403) else ""))
+        # what to do, for whoever clicked: never an environment variable's
+        # name (QA-152) — a 403 is the role, which signing in again won't fix
+        why = {401: " — sign in again",
+               403: " — this sign-in may not add agents; an owner, admin or member can"}
+        detail = f"the Control Plane refused the upload (HTTP {code})" + why.get(code, "")
     else:
         detail = "the Control Plane could not be reached from the proxy"
     return JSONResponse({"error": "backend_upload_failed", "detail": detail}, status_code=502)

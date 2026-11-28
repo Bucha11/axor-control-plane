@@ -64,6 +64,10 @@ test.describe("guest", () => {
 
   test("an account-only action asks for a sign-up right there", async ({ page }) => {
     await hosted(page);
+    // a guest holds what a member does (backend guests.GUEST_SCOPES): Share is offered
+    await page.route("**/v1/auth/status", (r) => r.fulfill({ json: (r.request().headers()["authorization"] ?? "").includes(GUEST)
+      ? { auth_enabled: true, authenticated: true, guest: true, guest_sessions: true, scopes: ["read", "ingest", "operate"] }
+      : { auth_enabled: true, authenticated: false, scopes: [], guest_sessions: true, guest: false } }));
     // the plane refuses a guest a share link: it outlives the guest session
     await page.route("**/v1/runs/*/cases/*/share", (r) => r.fulfill({ status: 403, json: {
       error: "account_required", feature: "share links",
@@ -107,6 +111,34 @@ test.describe("guest", () => {
       await settled();
     }
     expect(refused).toEqual([]);
+  });
+
+  test("an expired guest: one restart at a time with a pause, a banner, no raw 401 (QA-236)", async ({ page }) => {
+    await page.route("**/v1/auth/status", (r) => r.fulfill({ json: {
+      auth_enabled: true, authenticated: false, scopes: [], guest_sessions: true, guest: false } }));
+    let posts = 0;
+    let expired = false;
+    await page.route("**/v1/auth/guest", (r) => {
+      posts += 1;
+      return expired
+        ? r.fulfill({ status: 503, json: { detail: "guest sessions are paused" } })
+        : r.fulfill({ status: 201, json: { token: GUEST, org: "guest_e2e", ttl_seconds: 1800,
+                                           expires_at: new Date(Date.now() + 8 * 60_000).toISOString() } });
+    });
+    await page.route(/\/v1\//, (r) => expired && r.request().headers()["authorization"] === `Bearer ${GUEST}`
+      ? r.fulfill({ status: 401, json: { detail: "guest session expired" } })
+      : r.fallback());
+    await setConnection(page, { mode: "demo" });
+    await goHash(page, "govern");
+    await expect(page.getByRole("button", { name: /save your work · guest/ })).toBeVisible();
+    await page.waitForLoadState("networkidle");
+    expired = true;
+    posts = 0;
+    await goHash(page, "evidence");
+    await expect(page.getByTestId("session-ended")).toContainText("your guest session ended");
+    await page.waitForTimeout(4000);
+    expect(posts).toBeLessThanOrEqual(2);
+    await expect(page.getByText("guest session expired")).toHaveCount(0);
   });
 
   test("too many guests from one network: said, and the session comes by itself (QA-008)", async ({ page }) => {

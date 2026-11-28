@@ -417,6 +417,8 @@ async def telemetry(
             derived = len(cases)
             if cases:
                 await store_evidence(ctx.store, ctx.notifier, run_id, node_id, scenario, cases)
+            else:
+                await ctx.store.mark_completed(run_id)   # finished, nothing caught (QA-192)
     if not result.replayed:
         await _alert_steps(ctx, node_id, run_id, lines)
     # what the team's agents learned in this repository: a check that passed,

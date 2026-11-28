@@ -51,6 +51,10 @@ class Claims:
     # the identity service has seen proof the address is theirs (a provider
     # vouched, or a mailed link was followed). Absent in older tokens: False.
     email_verified: bool = False
+    # the sign-in (refresh-token family) and the membership epoch it was issued
+    # at — what the revocation feed is checked against. Absent in older tokens.
+    session_id: str | None = None
+    epoch: int = 0
 
     @classmethod
     def from_payload(cls, payload: dict[str, Any]) -> Claims:
@@ -58,7 +62,10 @@ class Claims:
             return cls(user_id=payload["sub"], email=payload["eml"],
                        org=payload["org"], role=payload["role"],
                        tier=payload["tier"],
-                       email_verified=payload.get("evf") is True)
+                       email_verified=payload.get("evf") is True,
+                       session_id=payload.get("sid") if isinstance(payload.get("sid"), str)
+                       else None,
+                       epoch=payload.get("ep") if isinstance(payload.get("ep"), int) else 0)
         except KeyError as exc:
             raise IdentityError(f"token missing claim {exc}") from exc
 
@@ -167,3 +174,85 @@ class JwksRefresher:
         self._document = document
         log.info("refetched the identity JWKS (a token named an unknown kid)")
         return document
+
+
+def member_key(user_id: str, org_id: str) -> str:
+    """How identity's revocation feed names a membership (sha256 of
+    "<user>:<org>"), so the feed itself names nobody."""
+    import hashlib
+
+    return hashlib.sha256(f"{user_id}:{org_id}".encode()).hexdigest()
+
+
+async def _fetch_feed(url: str) -> dict[str, Any]:
+    import httpx  # noqa: PLC0415 - only a deployment with identity needs it
+
+    async with httpx.AsyncClient(timeout=3.0) as client:
+        r = await client.get(url)
+        r.raise_for_status()
+        return r.json()
+
+
+class RevocationFeed:
+    """What identity revoked since an access token was issued (QA-154, QA-240).
+
+    An access token is verified offline, so by itself it stays good until it
+    expires — 15 minutes in which a removed teammate kept reading the workspace
+    and a logged-out tab stayed signed in. Identity publishes, at
+    ``/v1/revocations``, the sessions that ended (logout, a reused refresh
+    token, an admin ending sign-ins) and the memberships whose epoch it bumped
+    (a removal, a role change) over the last access-token lifetime. A token is
+    refused when its ``sid`` is listed, or its ``ep`` is below the epoch listed
+    for its person and workspace.
+
+    The tradeoff, chosen over asking identity on every request: the feed is
+    fetched at most every ``max_age`` seconds (lazily, when a person's token is
+    presented — one fetch at a time) and cached, so a revocation takes effect
+    within that interval rather than instantly, and identity stays off the
+    path of every request. If identity cannot be reached the last copy is kept
+    and tokens are accepted on it — fail-open, logged — because the worst case
+    is the token's own expiry, which was the behaviour before; refusing every
+    signed-in person whenever identity blips would be worse.
+    """
+
+    def __init__(self, url: str, *, max_age: float = 5.0,
+                 fetch: Any = None,  # noqa: ANN401 - injected for tests
+                 clock: Any = None) -> None:  # noqa: ANN401
+        self._url = url
+        self._max_age = max_age
+        self._fetch = fetch or _fetch_feed
+        self._clock = clock or time.monotonic
+        self._last = float("-inf")
+        self._lock = asyncio.Lock()
+        self._sessions: frozenset[str] = frozenset()
+        self._members: dict[str, tuple[int, str]] = {}
+
+    async def _fresh(self) -> None:
+        if self._clock() - self._last < self._max_age:
+            return
+        async with self._lock:
+            if self._clock() - self._last < self._max_age:
+                return  # another request fetched while this one waited
+            self._last = self._clock()
+            try:
+                feed = await self._fetch(self._url)
+                sessions = frozenset(str(s) for s in feed.get("sessions", []))
+                members = {str(m["key"]): (int(m["epoch"]), str(m.get("reason", "")))
+                           for m in feed.get("members", [])}
+            except Exception as exc:  # noqa: BLE001 - identity down is not our 500
+                log.warning("revocation feed from %s failed: %s", self._url, exc)
+                return
+            self._sessions, self._members = sessions, members
+
+    async def refusal(self, claims: Claims) -> str | None:
+        """Why this token no longer speaks for its holder, in words; None
+        when nothing identity revoked touches it."""
+        await self._fresh()
+        if claims.session_id and claims.session_id in self._sessions:
+            return "this session was signed out — sign in again"
+        held = self._members.get(member_key(claims.user_id, claims.org))
+        if held is not None and claims.epoch < held[0]:
+            if held[1] == "removed":
+                return "you are no longer a member of this workspace"
+            return "your role in this workspace changed — sign in again to continue"
+        return None

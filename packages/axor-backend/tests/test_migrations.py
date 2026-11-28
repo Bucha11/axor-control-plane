@@ -186,3 +186,17 @@ async def test_dead_letter_cap_keeps_only_the_newest(db_url: str) -> None:
     assert rows[0]["url"] == "http://sink.test/6"
     assert rows[-1]["url"] == "http://sink.test/2"
     await engine.dispose()
+
+
+async def test_a_sqlite_plane_reads_beside_a_write(tmp_path) -> None:  # noqa: ANN001
+    """A read waiting on a write failed at once with "database is locked" in
+    SQLite's default journal: write-ahead logging, and a write that waits."""
+    from axor_backend.storage import make_engine
+    from sqlalchemy import text as sa_text
+
+    engine = make_engine(f"sqlite+aiosqlite:///{tmp_path}/wal.db")
+    async with engine.connect() as conn:
+        mode = (await conn.execute(sa_text("PRAGMA journal_mode"))).scalar()
+        wait = (await conn.execute(sa_text("PRAGMA busy_timeout"))).scalar()
+    await engine.dispose()
+    assert mode == "wal" and wait >= 5000

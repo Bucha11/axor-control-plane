@@ -59,19 +59,29 @@ async def verify(state: Any, store: Any, operator: Any, message: bytes,  # noqa:
     keyring, or :class:`CommandRejected`."""
     if not isinstance(operator, str):
         raise CommandRejected("operator must be a string")
-    key = (await active_keys(store)).get(operator)
+    keys = await store.operator_keys_list()
+    key = next((k["pubkey"] for k in keys
+                if k["operator_id"] == operator and not k["revoked_ts"]), None)
     if key is not None:
         _verify_with(key, message, sig)
         return
+    if any(k["operator_id"] == operator for k in keys):
+        # said as what it is: "unknown operator" sent its holder to register
+        # a key the workspace had taken away on purpose (QA-173)
+        raise CommandRejected(f"operator key {operator!r} was revoked")
     state.keyring.verify(operator, message, sig)
 
 
 async def for_machines(store: Any) -> dict[str, Any]:  # noqa: ANN401
     """What a sidecar extends or narrows its trust by."""
     keys = await store.operator_keys_list()
+    # a vouch is worth what its voucher is: one signed by a key since revoked
+    # vouches for nothing (QA-173)
+    revoked = {k["operator_id"] for k in keys if k["revoked_ts"]}
     return {
         "endorsed": [{"operator": k["operator_id"], "pubkey": k["pubkey"],
                       "endorsement": k["endorsement"]}
-                     for k in keys if k["endorsement"] and not k["revoked_ts"]],
+                     for k in keys if k["endorsement"] and not k["revoked_ts"]
+                     and k["endorsement"].get("operator") not in revoked],
         "revoked": [k["operator_id"] for k in keys if k["revoked_ts"]],
     }

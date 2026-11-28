@@ -37,6 +37,7 @@ What a license actually has to answer, and each of these was a separate hole:
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import date, timedelta
 from typing import Any
@@ -66,6 +67,7 @@ async def load_licenses(state: Any) -> None:  # noqa: ANN401 - app.state is dyna
     warning and leave EE off for that org — never crash boot, never entitle
     another tenant."""
     env_license = state.config.env_license
+    held: dict[str, str] = {}
     for org in await state.store.list_orgs():
         set_current_org(org)
         raw = await state.store.get_setting("license_json")
@@ -77,7 +79,20 @@ async def load_licenses(state: Any) -> None:  # noqa: ANN401 - app.state is dyna
             state.licenses[org] = verify_license_str(raw, state.config.vendor_pubkey)
         except Exception as exc:  # noqa: BLE001 - boot must not die on a bad license
             log.warning("stored license ignored for org %s: %s", org, exc)
+            continue
+        held[org] = raw
     set_current_org(PUBLIC_ORG)
+    if held and state.config.identity_url:
+        # identity keeps its own copy of the plan and took a license only when
+        # it was installed; one it refused then (an upgrade issued to the same
+        # end date, QA-130) stayed refused. Hand each held license over again,
+        # in the background: identity answers 409 to one it already has.
+        state.identity_sync = asyncio.ensure_future(_sync_identity(state.config, held))
+
+
+async def _sync_identity(config: Any, held: dict[str, str]) -> None:  # noqa: ANN401
+    for org, raw in held.items():
+        await tell_identity(config, org, raw)
 
 
 def stored_license(state: Any, org: str) -> Any | None:  # noqa: ANN401

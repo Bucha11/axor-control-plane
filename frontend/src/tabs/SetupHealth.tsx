@@ -8,6 +8,7 @@
 // obeys; a CLAUDE.md section lives in the repo, so the page shows it and says
 // what to change — it cannot edit the repo.
 import { useState } from "react";
+import ReadFailed from "../components/ReadFailed";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Check, Copy } from "lucide-react";
 import { api, SetupHealthCause, SetupHealthCheck } from "../api";
@@ -71,7 +72,9 @@ export default function SetupHealth() {
             fontFamily: MONO, fontSize: 11.5, color: C.steel }}>see what changed →</button>
         </div>
       ))}
-      {latest ? <Latest check={latest} previous={checks[1]} /> : q.isLoading ? null : (
+      {latest ? <Latest check={latest} previous={checks[1]} /> : q.isLoading ? null : q.isError ? (
+        <ReadFailed what="the checks" error={q.error} retry={() => void q.refetch()} />
+      ) : (
         <div data-testid="setup-health-empty" style={{ ...panel, padding: 18, fontSize: 13.5, color: C.mut, lineHeight: 1.6, marginBottom: 28 }}>
           No check yet. The first one becomes the baseline.
         </div>

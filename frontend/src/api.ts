@@ -4,6 +4,7 @@ import * as opKey from "./opKey";
 import { IDENTITY_BASE, refresh } from "./identity";
 import { isGuestToken, useApp } from "./store";
 import { track } from "./funnel";
+import { scopeWords } from "./refusal";
 
 // Backend client. Vite dev-proxies /v1 -> backend :8400 and /axor -> proxy :8401.
 
@@ -260,6 +261,8 @@ export interface CodingException {
 export interface CodingRules {
   set: boolean; allow: string[]; mode: "enforce" | "observe"; by: string; ts: string;
   exceptions: CodingException[]; trusted_sources: string[];
+  // what a save sends back: one from an older version is refused (QA-212)
+  version: number;
   catalog?: { id: string; what: string; why: string; fixed: boolean }[];
   // the policy an operator last signed (sidecars with operator keys take what
   // widens only from it), and whether it is still what stands here
@@ -895,9 +898,28 @@ export function apiError(status: number, text: string): ApiError {
       code = String(o.code ?? o.error ?? code ?? "");
       words = String(o.detail ?? o.message ?? "");
     }
+    // a scope refusal: who the caller is and who can, not "forbidden" (QA-195)
+    if (!words && body.error === "forbidden" && typeof (body as { need?: unknown }).need === "string") {
+      const b = body as { need: string; have?: unknown };
+      words = scopeWords(b.need, Array.isArray(b.have) ? b.have.map(String) : []);
+    }
     if (!words && typeof body.error === "string") words = body.error.replace(/_/g, " ");
   } catch { /* not JSON */ }
-  if (!words) words = text.trim().slice(0, 300) || `the request failed (HTTP ${status})`;
+  // not the plane's sentence: a proxy's or server's own page ("Internal Server
+  // Error", nginx's HTML — "413 Request Entity Too Large") is said in words,
+  // never shown raw (QA-234, QA-217)
+  if (!words) {
+    words = status === 413 ? "that is too large for the plane to take in one request — send less at a time"
+      : status >= 500 ? `the plane could not answer (HTTP ${status}) — try again in a moment`
+      : /^\s*</.test(text) || !text.trim() ? `the request was refused (HTTP ${status})`
+        : text.trim().slice(0, 300);
+  }
+  // a refused credential is said in this app's words, never the plane's raw
+  // 401 text (QA-236); the reason, if any, is on the session-ended banner
+  if (status === 401) {
+    code = code || "unauthorized";
+    words = isGuestToken(useApp.getState().apiToken) ? GUEST_ENDED : "you are signed out — sign in again";
+  }
   return new ApiError(status, code, words.length > 600 ? `${words.slice(0, 600)}…` : words);
 }
 
@@ -923,14 +945,6 @@ function uploadAs(): Record<string, string> {
   return apiToken() ? { "X-Axor-Upload-Token": apiToken() } : {};
 }
 
-async function scopeRefusal(resp: Response): Promise<boolean> {
-  try {
-    return ((await resp.clone().json()) as { error?: unknown }).error === "forbidden";
-  } catch {
-    return false;
-  }
-}
-
 /** A command the plane refused for its signature, said with what to do: the
  *  raw "no operator keys registered" left an operator nowhere to go (QA-003). */
 function commandRefusal(e: unknown, hasKey = true): unknown {
@@ -939,6 +953,13 @@ function commandRefusal(e: unknown, hasKey = true): unknown {
     return new ApiError(403, "operator_key_needed",
       "this workspace signs every command, and it has no operator key yet — an owner or admin "
       + "makes one for this browser in Settings → workspace → operator keys");
+  }
+  // revoked on purpose: "not one the workspace knows — register it" sent its
+  // holder to register the key that was taken away (QA-173)
+  if (/was revoked/.test(e.message)) {
+    return new ApiError(403, "operator_key_revoked",
+      "this browser's operator key was revoked — an owner or admin took it away. To sign again, "
+      + "make a new one in Settings → workspace → operator keys and have it vouched for");
   }
   // this browser has no key at all: it sent no operator, and saying its key
   // is unknown read as if it had one (QA-083)
@@ -963,6 +984,11 @@ function commandRefusal(e: unknown, hasKey = true): unknown {
 async function af(path: string, init: RequestInit = {}, retried = false): Promise<Response> {
   if (!apiToken() && path !== "/v1/auth/status") await sessionSettled();
   const token = apiToken();
+  if (!token && signedOutHere && path.startsWith("/v1/") && !OPEN_PATHS.some((p) => path.startsWith(p))) {
+    // the plane's answer, without asking it again and again
+    return new Response(JSON.stringify({ error: "unauthorized", detail: "this tab is signed out — sign in" }),
+      { status: 401, headers: { "content-type": "application/json" } });
+  }
   const feature = isGuestToken(token) && (init.method ?? "GET").toUpperCase() === "GET" ? guestCannotRead(path) : null;
   if (feature) {
     // the plane's own answer, without asking it
@@ -981,17 +1007,11 @@ async function af(path: string, init: RequestInit = {}, retried = false): Promis
   if (resp.status === 401 && !retried && token.startsWith("gs_") && (await renewGuest(token))) {
     return af(path, init, true);
   }
-  // Something the user DID was refused for their ROLE: it may have changed
-  // since this access token was issued (an owner made them a member). The
-  // refresh reads the role afresh; one retry, never for a background read.
-  // Only a scope refusal ({"error": "forbidden"}) — any other 403 is the
-  // plane's answer on the merits (a malformed license, no operator key), and
-  // retrying it sent every such request twice (QA-019).
-  if (resp.status === 403 && !retried && (init.method ?? "GET").toUpperCase() !== "GET"
-      && useApp.getState().refreshToken && (await scopeRefusal(resp))
-      && (await refreshSession(null))) {
-    return af(path, init, true);
-  }
+  // A 403 is never retried: it is the plane's answer for this caller — a
+  // scope refusal ({"error": "forbidden", "need", "have"}) or a refusal on the
+  // merits. Refreshing and resending sent every refused write twice and showed
+  // the bare word "forbidden" (QA-019, QA-195). Only a 401 (the token itself
+  // not accepted) refreshes, above.
   // only for something the user DID: a panel's background read that needs an
   // account shows that inline, it does not throw a sign-up in their face
   if (resp.status === 403 && (init.method ?? "GET").toUpperCase() !== "GET") {
@@ -1035,15 +1055,30 @@ useApp.subscribe((s, prev) => {
 export function sessionSettled(again = false): Promise<void> {
   if (!session || again) {
     session = api.authStatus()
-      .then((st) => {
+      .then(async (st) => {
         if (st.auth_enabled && st.guest_sessions && !st.authenticated && !apiToken()) {
-          return startGuest().then(() => undefined);
+          await startGuest();
         }
+        signedOutHere = st.auth_enabled && !st.authenticated && !apiToken();
       })
       .catch(() => undefined);
   }
   return session;
 }
+
+// The plane needs a sign-in and this tab has none (sign-ins are kept per tab;
+// no guest session, or one refused for now). Reads are not sent then: every
+// screen polled into a wall of 401s (QA-042, QA-170) — the page says to sign
+// in instead (GuestSession).
+let signedOutHere = false;
+
+/** Whether this tab is signed out of a plane that needs a sign-in. */
+export function tabSignedOut(): boolean {
+  return signedOutHere && !apiToken();
+}
+
+// what the plane serves without a credential (backend auth._OPEN_ROUTES)
+const OPEN_PATHS = ["/v1/auth/status", "/v1/auth/guest", "/v1/share/", "/v1/healthz", "/v1/funnel"];
 
 let renewing: Promise<boolean> | null = null;
 // Seconds the plane asked a refused guest to wait (429 Retry-After), or 0.
@@ -1077,9 +1112,31 @@ export async function startGuest(stale?: string): Promise<boolean> {
   return renewing;
 }
 
-function renewGuest(stale: string): Promise<boolean> {
-  return startGuest(stale);
+// QA-236: when an expired guest's new session could not start, every refused
+// read asked again — 16 POSTs in 7 s. Renewing after a 401 is now one attempt
+// at a time with a growing pause between failures (or the plane's Retry-After),
+// and the page says the guest session ended instead of the plane's raw 401.
+let guestNextTry = 0;
+let guestBackoff = 0;
+
+async function renewGuest(stale: string): Promise<boolean> {
+  if (apiToken() !== stale) return true;   // someone else renewed it
+  if (Date.now() < guestNextTry) return false;
+  const ok = await startGuest(stale);
+  if (ok) {
+    guestBackoff = 0;
+    guestNextTry = 0;
+    return true;
+  }
+  if (Date.now() >= guestNextTry) {
+    guestBackoff = Math.min(guestBackoff ? guestBackoff * 2 : 5, 120);
+    guestNextTry = Date.now() + Math.max(guestBackoff, guestRetryAfter()) * 1000;
+  }
+  useApp.getState().setSessionEnded(GUEST_ENDED);
+  return false;
 }
+
+export const GUEST_ENDED = "your guest session ended — sign up to keep your work, or reload the page for a new one";
 
 /** A guest reached a feature that needs an account: tell the app, which asks
  * for a sign-up right there, naming what it unlocks. */
@@ -1109,14 +1166,18 @@ async function refreshSession(staleToken: string | null): Promise<boolean> {
   if (!state.refreshToken) return false;
   if (!refreshing) {
     const presented = state.refreshToken;
-    refreshing = refresh(presented)
+    let why = "";
+    refreshing = refresh(presented, (w) => { why = w; })
       .then((next) => {
         if (next) {
           useApp.getState().setSession(next.access_token, next.refresh_token, next.user.email);
           return true;
         }
         useApp.getState().clearSession();
-        useApp.getState().setSessionEnded(true);
+        // identity's reason, when it is one of the sentences that end a
+        // session for a reason the person should know (QA-154)
+        useApp.getState().setSessionEnded(/^you are no longer a member of /.test(why)
+          ? `${why} — your access to it ended` : true);
         return false;
       })
       .finally(() => {
@@ -1140,53 +1201,6 @@ function b64utf8(s: string): string {
   let bin = "";
   for (const b of bytes) bin += String.fromCharCode(b);
   return btoa(bin);
-}
-
-export interface UsageMonth {
-  month: string;
-  // The billing basis: the most nodes on any one day, and which day — a fleet
-  // is as big as it ever ran, and the customer can point at the date.
-  peak_nodes: number;
-  peak_day: string | null;
-  // Exceeds the peak whenever nodes are replaced rather than added, which is
-  // exactly why it is not what gets billed.
-  distinct_nodes: number;
-  days: { day: string; nodes: number }[];
-  over_ceiling: boolean;
-  // the coding-agent meter: developers whose Claude Code / Codex sessions
-  // reported this month (a session is not a governed node)
-  active_developers?: number;
-}
-
-export interface UsageReport {
-  governed_node_ceiling: number | null;
-  developer_seats?: number | null;
-  months: UsageMonth[];
-}
-
-export interface Statement {
-  month: string;
-  organization: string;
-  workspace_tier: string;
-  currency: string;
-  base_cents: number;
-  included_nodes: number;
-  peak_nodes: number;
-  peak_day: string | null;
-  billable_nodes: number;
-  overage_cents: number;
-  total_cents: number;
-  included_developers?: number;
-  active_developers?: number;
-  billable_developers?: number;
-  seat_cents?: number;
-  // The month is still running, so the peak can still rise.
-  provisional: boolean;
-  computed_on: string;
-  // False for a contracted rung: usage measured, total withheld — inventing a
-  // list price would put a figure nobody agreed to in front of a customer.
-  priced: boolean;
-  note: string;
 }
 
 export interface VaultCredential {
@@ -1707,12 +1721,13 @@ export const api = {
   // `mustRefuse` names the calls a must_block pin holds — needed when the run
   // was recorded ungoverned and refused nothing (else it can't be checked)
   // the workspace's tool policy (what each tool does) — one for everyone
+  // `version` is the one read: a save from an older one is refused (QA-212)
   getPolicy: () =>
-    af("/v1/policy").then((r) => j<{ tools: Record<string, ToolClass>; updated_ts: string | null }>(r)),
-  putPolicy: (tools: Record<string, ToolClass>) =>
+    af("/v1/policy").then((r) => j<{ tools: Record<string, ToolClass>; updated_ts: string | null; version: number }>(r)),
+  putPolicy: (tools: Record<string, ToolClass>, version?: number) =>
     af("/v1/policy", { method: "PUT", headers: { "content-type": "application/json" },
-                       body: JSON.stringify({ tools }) })
-      .then((r) => j<{ tools: Record<string, ToolClass>; changed: string[] }>(r)),
+                       body: JSON.stringify({ tools, ...(version === undefined ? {} : { version }) }) })
+      .then((r) => j<{ tools: Record<string, ToolClass>; changed: string[]; version: number }>(r)),
   // take a case out of the check (Safe to ship?)
   unpin: (runId: string) =>
     af(`/v1/pins/${encodeURIComponent(runId)}`, { method: "DELETE" })
@@ -1826,23 +1841,27 @@ export const api = {
     af("/v1/demo/seed-team-skill", { method: "POST" }).then((r) => j<{ name: string }>(r)),
   // the team's rules for coding agents (an admin's decision)
   codingRules: () => af("/v1/coding/rules").then((r) => j<CodingRules>(r)),
+  // `version`: the one the screen read — a save from an older one is refused
+  // with what changed since (409 "stale", QA-212)
   setCodingRules: (allow: string[], mode: "enforce" | "observe",
-                   more: { exceptions?: CodingException[]; trusted_sources?: string[] } = {}) =>
+                   more: { exceptions?: CodingException[]; trusted_sources?: string[] } = {},
+                   version?: number) =>
     af("/v1/coding/rules", {
       method: "PUT", headers: { "content-type": "application/json" },
-      body: JSON.stringify({ allow, mode, ...more }),
+      body: JSON.stringify({ allow, mode, ...more, ...(version === undefined ? {} : { version }) }),
     }).then((r) => j<CodingRules>(r)),
   // the team's exceptions and trusted sources alone — for whoever the
   // workspace lets grant them, not only the admin who sets the rules
-  setCodingExceptions: (more: { exceptions?: CodingException[]; trusted_sources?: string[] }) =>
+  setCodingExceptions: (more: { exceptions?: CodingException[]; trusted_sources?: string[] },
+                        version?: number) =>
     af("/v1/coding/exceptions", {
       method: "PUT", headers: { "content-type": "application/json" },
-      body: JSON.stringify(more),
+      body: JSON.stringify({ ...more, ...(version === undefined ? {} : { version }) }),
     }).then((r) => j<CodingRules>(r)),
   // one more exception, on top of the team's policy as it is now
   addCodingException: async (e: CodingException): Promise<CodingRules> => {
     const now: CodingRules = await api.codingRules();
-    return api.setCodingExceptions({ exceptions: [...now.exceptions, e] });
+    return api.setCodingExceptions({ exceptions: [...now.exceptions, e] }, now.version);
   },
   // who may do what to the team's agents, and what the caller may
   permissions: () => af("/v1/permissions").then((r) => j<Permissions>(r)),
@@ -2162,6 +2181,12 @@ export const api = {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ enabled, interval_hours: intervalHours, config }),
     }).then((r) => j<{ enabled: boolean; interval_hours: number }>(r)),
+  // move this workspace's card subscription to another rung (QA-131) — the
+  // owner's; the new rung's license follows from the payment provider
+  changePlan: (tier: string) =>
+    af("/v1/license/plan", { method: "POST", headers: { "content-type": "application/json" },
+                             body: JSON.stringify({ tier }) })
+      .then((r) => j<{ from: string; to: string }>(r)),
   licenseStatus: () =>
     af("/v1/license/status").then((r) =>
       j<{
@@ -2253,11 +2278,6 @@ export const api = {
       method: "PUT", headers: { "content-type": "application/json" },
       body: JSON.stringify({ cap }),
     }).then((r) => j<{ seat_cap: number | null; used?: number }>(r)),
-  licenseUsage: (months = 3) =>
-    af(`/v1/license/usage?months=${months}`).then((r) => j<UsageReport>(r)),
-  licenseInvoice: (month?: string) =>
-    af(`/v1/license/invoice${month ? `?month=${month}` : ""}`).then(
-      (r) => j<Statement>(r)),
 
   // ── operator interventions over the plane (spec §12) ───────────────────────
   appendFact: async (nodeId: string, fact: Record<string, unknown>) => {
@@ -2353,7 +2373,8 @@ export const api = {
   // ── governed node: a real axor-core IntentLoop wired to the plane ──────────
   spawnGoverned: () =>
     af("/axor/governed/spawn", { method: "POST", headers: uploadAs() }).then(
-      (r) => j<{ node_id: string; run_id: string; events: number; denials: number; ttl_seconds: number }>(r),
+      (r) => j<{ node_id: string; run_id: string; events: number; denials: number; ttl_seconds: number;
+             leaves_at: string }>(r),
     ),
 
   // ── demo: seed adapter-fidelity runs (recorded verdicts + provenance) ──────

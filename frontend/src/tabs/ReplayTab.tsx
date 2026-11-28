@@ -18,6 +18,8 @@ import TaintGraph from "./TaintGraph";
 import { localTime } from "../time";
 import CutResult from "../components/CutResult";
 import Coach from "../components/Coach";
+import RoleNote from "../components/RoleNote";
+import { useHasScope } from "../team";
 
 type Cf = "noexec" | "taint" | "policy" | "outside";
 
@@ -28,6 +30,16 @@ function isTainted(s: ScrubberStep): boolean {
   const root = s.payload.root as { sources?: unknown[] } | undefined;
   return Array.isArray(root?.sources) && root!.sources.length > 0;
 }
+
+// The product's example runs (backend demo.DEMO_RUN_IDS): what is done on one
+// stays the example's — it never writes the workspace's Policy, its kept
+// cases or its incidents (QA-194)
+const EXAMPLE_CORPUS = ["ex_block", "ex_pass", "ex_tree", "ex_coding_claude", "ex_coding_codex"];
+const EXAMPLE_RUNS = new Set([...EXAMPLE_CORPUS,
+  "ex_skill_try", "ex_prod_drop", "ex_prod_ok", "ex_mem_ada", "ex_mem_bob", "ex_mem_bob_2", "ex_mem_ada_2"]);
+// kept, an example run outside the example's own cases (Safe to ship?'s
+// "the example's cases") would count as one of the workspace's
+const keepsAsOwn = (runId: string) => EXAMPLE_RUNS.has(runId) && !EXAMPLE_CORPUS.includes(runId);
 
 const verdictOf = (s: ScrubberStep) => s.reevaluated_verdict ?? s.recorded_verdict;
 const isRefused = (s: ScrubberStep) => s.kind === "tool_call" && verdictOf(s) === "deny";
@@ -210,6 +222,8 @@ export default function ReplayTab({ runId: rawRunId, cursor: cursorProp, seq: se
   }, [runId]);
 
   const [settled, setSettled] = useState<string | null>(null);
+  // a viewer marks, keeps and makes nothing: the plane refuses it (QA-196)
+  const mayKeep = useHasScope()("operate");
   const settle = useMutation({
     mutationFn: (status: "looked_at" | "not_a_problem") => api.setIncidentStatus(`ev:${runId}:0`, status),
     onSuccess: (_r, status) => {
@@ -537,7 +551,9 @@ export default function ReplayTab({ runId: rawRunId, cursor: cursorProp, seq: se
           {incident && (
             <div data-testid="replay-settle" className="mt-3 flex items-center gap-3 flex-wrap"
               style={{ fontFamily: MONO, fontSize: 11.5, color: C.mut }}>
-              {settled ? <span style={{ color: C.green }}>✓ marked {settled}</span> : (
+              {settled ? <span style={{ color: C.green }}>✓ marked {settled}</span> : !mayKeep ? (
+                <RoleNote inline need="operate" what="mark this incident" testid="replay-settle-viewer" />
+              ) : (
                 <>
                   <button onClick={() => settle.mutate("looked_at")} disabled={settle.isPending}
                     style={btn({ color: C.text, fontSize: 11, padding: "4px 10px" })}>looked at — done</button>
@@ -600,7 +616,7 @@ export default function ReplayTab({ runId: rawRunId, cursor: cursorProp, seq: se
               )}
             </div>
             {cf === "outside" && divStep && isRefused(divStep) && toolOf(divStep) === ruleTool && run && (
-              <MakeRule runId={runId} node={nodeProp ?? run.node_id} seq={ruleStep!.seq} tool={ruleTool} klass={ruleKlass}
+              <MakeRule example={EXAMPLE_RUNS.has(runId)} runId={runId} node={nodeProp ?? run.node_id} seq={ruleStep!.seq} tool={ruleTool} klass={ruleKlass}
                 tools={toolsSeen.map((t) => ({
                   name: t,
                   outside: baseSteps.some((x) => x.kind === "tool_result" && toolOf(x) === t && isTainted(x)),
@@ -610,9 +626,15 @@ export default function ReplayTab({ runId: rawRunId, cursor: cursorProp, seq: se
             )}
           </div>}
 
-          {rulesQuestion && <div data-testid="replay-keep" className="mt-4 flex items-center gap-2 flex-wrap" style={{ fontFamily: MONO, fontSize: 11.5, color: C.mut }}>
+          {rulesQuestion && keepsAsOwn(runId) && (
+            <div data-testid="replay-keep-example" className="mt-4" style={{ fontFamily: MONO, fontSize: 11.5, color: C.mut }}>
+              this is the example — on your own agent's run, this is where you keep it as a test for Safe to ship?
+            </div>
+          )}
+          {rulesQuestion && !keepsAsOwn(runId) && <div data-testid="replay-keep" className="mt-4 flex items-center gap-2 flex-wrap" style={{ fontFamily: MONO, fontSize: 11.5, color: C.mut }}>
             keep this run as a test:
-            {(["must_block", "must_pass"] as const).map((side) => (
+            {!mayKeep && <RoleNote inline need="operate" what="keep runs as tests" testid="replay-keep-viewer" />}
+            {mayKeep && (["must_block", "must_pass"] as const).map((side) => (
               <button key={side} onClick={() => pin.mutate(side)} disabled={pin.isPending}
                 style={btn({ color: pinned === side ? C.green : C.text, fontSize: 11, padding: "4px 10px" })}>
                 {pinned === side ? "✓ " : ""}{side === "must_block" ? "an attack — must stay blocked" : "normal work — must keep passing"}
@@ -636,8 +658,8 @@ const KLASS_WORDS: Record<string, string> = {
  * added as they look, the run is kept as an attack that must stay blocked, and
  * the agent's other runs as normal work that must keep passing — then Safe to
  * ship? checks exactly that. */
-function MakeRule({ runId, node, seq, tool, klass, tools: inRun, otherRuns }: {
-  runId: string; node: string; seq: number; tool: string; klass: "EXEC" | "EXPORT";
+function MakeRule({ example, runId, node, seq, tool, klass, tools: inRun, otherRuns }: {
+  example: boolean; runId: string; node: string; seq: number; tool: string; klass: "EXEC" | "EXPORT";
   tools: { name: string; outside: boolean }[]; otherRuns: string[];
 }) {
   const policy = useApp((st) => st.toolPolicy);
@@ -656,6 +678,7 @@ function MakeRule({ runId, node, seq, tool, klass, tools: inRun, otherRuns }: {
     return Object.entries(all).map(([name, c]) => ({ name, outside: c.outside }));
   }, [seen.data, inRun, node]);
   const added = tools.filter((t) => t.name !== tool && !policy[t.name]);
+  const mayMake = useHasScope()("operate");
   const apply = useMutation({
     mutationFn: async () => {
       const source = `seen in ${node}'s runs`;
@@ -678,6 +701,11 @@ function MakeRule({ runId, node, seq, tool, klass, tools: inRun, otherRuns }: {
   return (
     <div data-testid="make-rule" className="mt-4 p-3" style={{ background: C.panel2, border: `1px solid ${C.steel}`, borderRadius: 6 }}>
       <div style={{ fontSize: 13.5, fontWeight: 600, color: C.text, marginBottom: 6 }}>Make it a rule</div>
+      {example && (
+        <div data-testid="make-rule-example" style={{ fontSize: 12.5, color: C.mut, lineHeight: 1.6, marginBottom: 6 }}>
+          This is the example: nothing here goes into your Policy or Safe to ship?. On your own agent's run, this would:
+        </div>
+      )}
       <ul style={{ fontSize: 12.5, color: C.mut, lineHeight: 1.7, margin: 0, paddingLeft: 18 }}>
         <li>
           In Policy, <span style={{ fontFamily: MONO, color: C.text }}>{tool}</span> {KLASS_WORDS[klass]} — so{" "}
@@ -704,14 +732,26 @@ function MakeRule({ runId, node, seq, tool, klass, tools: inRun, otherRuns }: {
           </li>
         )}
       </ul>
-      <div className="flex items-center gap-3 mt-3">
+      {example ? (
+        <div className="flex items-center gap-3 mt-3">
+          <button onClick={() => navigate("prevent", { rules: "example" })} data-testid="make-rule-example-check"
+            style={btn({ color: C.text, borderColor: C.steel, fontSize: 12, padding: "6px 14px" })}>
+            see the example's rules checked →
+          </button>
+          <span style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim }}>
+            connect your agent, and its runs get this button for real
+          </span>
+        </div>
+      ) : !mayMake ? (
+        <div className="mt-3"><RoleNote need="operate" what="make it a rule" testid="make-rule-viewer" /></div>
+      ) : <div className="flex items-center gap-3 mt-3">
         <button onClick={() => apply.mutate()} disabled={apply.isPending || seen.isPending} data-testid="make-rule-apply"
           style={btn({ color: C.text, borderColor: C.steel, fontSize: 12, padding: "6px 14px" })}>
           {apply.isPending ? "…" : "Make it a rule and check it →"}
         </button>
         <span style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim }}>opens Safe to ship? with the rules from Policy</span>
         {apply.isError && <span style={{ color: C.red, fontSize: 12 }}>{(apply.error as Error).message}</span>}
-      </div>
+      </div>}
     </div>
   );
 }

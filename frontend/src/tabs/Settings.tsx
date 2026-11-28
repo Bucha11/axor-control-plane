@@ -8,7 +8,8 @@ import { track } from "../funnel";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Check, Copy, Loader2, Trash2 } from "lucide-react";
 import { api, BillingReport, BillingStatement, type Capability, type Permissions } from "../api";
-import { useCanAdmin, useHasScope, useHasScopeKnown } from "../team";
+import { useCanAdmin, useHasScope, useHasScopeKnown, useVaultReadable } from "../team";
+import RoleNote from "../components/RoleNote";
 import {
   IdentityError, emailAvailable, forgotPassword, here, login, logout, oauthProviders,
   oauthStartUrl, signup, signupAvailable, ssoDiscover, ssoStartUrl, type OAuthProvider,
@@ -20,7 +21,6 @@ import { useOperatorKeys } from "../signedConnect";
 import * as opKey from "../opKey";
 import Coach from "../components/Coach";
 import ToolCredentials from "../components/ToolCredentials";
-import UsageAndBilling from "../components/UsageAndBilling";
 import AuditTrail from "../components/AuditTrail";
 import { useStartTour } from "../components/Tour";
 import { errorWords } from "../refusal";
@@ -162,6 +162,10 @@ function OperatorKeys() {
   const revoke = useMutation({ mutationFn: api.revokeOperatorKey, onSuccess: done });
   const forget = useMutation({ mutationFn: () => opKey.forget(), onSuccess: done });
   const keys = (list.data?.operators ?? []).filter((k) => !k.revoked_ts);
+  // a vouch from a key since revoked vouches for nothing (QA-173)
+  const revokedIds = new Set((list.data?.operators ?? []).filter((k) => k.revoked_ts).map((k) => k.operator_id));
+  const vouched = (k: { endorsement?: { operator: string } | null }) =>
+    !!k.endorsement && !revokedIds.has(k.endorsement.operator);
   const local = mine.data;
   const localId = local?.operatorId ?? null;
   const registered = !!localId && keys.some((k) => k.operator_id === localId);
@@ -196,10 +200,13 @@ function OperatorKeys() {
           <div key={k.operator_id} data-testid="op-key" className="flex gap-2 items-center flex-wrap">
             <span style={{ color: C.text }}>{k.operator_id}</span>
             <span style={{ color: C.dim }}>{fp(k.pubkey)}</span>
-            {k.endorsement
-              ? <span style={{ color: C.green }}>vouched for by {k.endorsement.operator}</span>
-              : <span style={{ color: C.amber }}>not vouched for — machines trust it only if it was in their connect command</span>}
-            {registered && !own && !k.endorsement && (
+            {vouched(k)
+              ? <span style={{ color: C.green }}>vouched for by {k.endorsement!.operator}</span>
+              : k.endorsement
+                ? <span data-testid="op-key-vouch-revoked" style={{ color: C.amber }}>vouched for by {k.endorsement.operator},
+                    whose key was revoked — that vouch no longer counts; machines trust it only if it was in their connect command</span>
+                : <span style={{ color: C.amber }}>not vouched for — machines trust it only if it was in their connect command</span>}
+            {registered && !own && !vouched(k) && (
               <button data-testid="op-key-vouch" onClick={() => vouch.mutate(k)} disabled={vouch.isPending}
                 style={btn({ fontSize: 10.5, padding: "1px 8px", color: C.green, borderColor: C.green })}>vouch for it</button>
             )}
@@ -1174,6 +1181,9 @@ export default function Settings({ tab = "workspace" }: { tab?: string } = {}) {
                             enabled: authStatus.data?.operator === true });
   const canAdmin = useCanAdmin();
   const canOperate = useHasScope()("operate");
+  // applying a license is the owner's (POST /v1/license/verify: admin scope);
+  // a member or admin sees what is active and who applies one (QA-064, QA-135)
+  const canLicense = useHasScope()("admin");
   const prod = !journey || menuAll || journey !== "coding";
   const coding = !journey || menuAll || journey !== "production";
   const tabs: [SettingsTab, string][] = [
@@ -1231,14 +1241,19 @@ export default function Settings({ tab = "workspace" }: { tab?: string } = {}) {
               <summary style={{ cursor: "pointer", fontFamily: MONO, fontSize: 11.5, color: C.mut }}>
                 {licenseStatus.data?.active
                   ? `active · ${licenseStatus.data.workspace_tier} · expires ${licenseStatus.data.expires_at}`
+                  : !canLicense ? (licenseStatus.data?.expired ? "expired" : "no license")
                   : licenseStatus.data?.expired ? "expired — open to paste a new one" : "no license — open to paste one"}
               </summary>
               <div className="mt-3">
         <div style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim, marginBottom: 10 }}>
-          Paste the license file you were sent after an upgrade (it is issued to your workspace id, shown
-          above). It is checked
-          here, offline — nothing calls us. When it expires the paid features turn read-only;
-          what gets blocked never depends on a license.
+          {/* on the hosted plane a card plan installs itself (QA-139) */}
+          {licenseStatus.data?.hosted
+            ? <>A plan bought here by card is installed and renewed by itself — there is nothing to
+              paste. Paste a license file only if you were sent one (a contracted plan). When it
+              expires the paid features turn read-only; what gets blocked never depends on a license.</>
+            : <>Paste the license file you were sent after an upgrade (it is issued to your workspace
+              id, shown above). It is checked here, offline — nothing calls us. When it expires the paid
+              features turn read-only; what gets blocked never depends on a license.</>}
         </div>
         {/* The ACTIVE license, from /v1/license/status. The panel used to show
             only the response to a paste, so a deployment that had been licensed
@@ -1277,7 +1292,7 @@ export default function Settings({ tab = "workspace" }: { tab?: string } = {}) {
                 ? "usage reported on the renewal channel"
                 : "usage not reported"}
             </div>
-            {licenseStatus.data.vendor_key_configured && !licenseStatus.data.licensed_to && (
+            {canLicense && licenseStatus.data.vendor_key_configured && !licenseStatus.data.licensed_to && (
               <div style={{ color: C.amber, fontSize: 10, marginTop: 3 }}>
                 AXOR_ORG is unset, so ANY vendor-signed license activates here —
                 including one issued to another customer. Set it to the name on
@@ -1286,6 +1301,7 @@ export default function Settings({ tab = "workspace" }: { tab?: string } = {}) {
             )}
           </div>
         )}
+        {!canLicense ? <RoleNote need="admin" what="apply a license" testid="license-viewer" /> : <>
         <textarea
           value={licenseJson}
           onChange={(e) => setLicenseJson(e.target.value)}
@@ -1316,6 +1332,7 @@ export default function Settings({ tab = "workspace" }: { tab?: string } = {}) {
             {(license.error as Error).message}
           </div>
         )}
+        </>}
         {license.data && (
           <>
             <div className="mt-2" style={{ fontFamily: MONO, fontSize: 11, color: C.green }}>
@@ -1345,7 +1362,8 @@ export default function Settings({ tab = "workspace" }: { tab?: string } = {}) {
       {active === "billing" && (
         <>
           <Billing coding={coding} prod={prod} />
-          {!licenseStatus.data?.active && !authStatus.data?.guest && (
+          {/* on the hosted plane a card plan installs itself: nothing to paste */}
+          {!licenseStatus.data?.active && !authStatus.data?.guest && !licenseStatus.data?.hosted && (
             <div data-testid="billing-license-hint" className="mb-4" style={{ fontFamily: MONO, fontSize: 11, color: C.mut }}>
               bought a plan? the license file you were sent goes under{" "}
               <button onClick={() => navigate("settings", { tab: "workspace" })}
@@ -1354,16 +1372,8 @@ export default function Settings({ tab = "workspace" }: { tab?: string } = {}) {
               </button>
             </div>
           )}
-          {coding && (
-            <Section title="DEVELOPERS PER MONTH · coding agents">
-              <DeveloperUsage />
-            </Section>
-          )}
-          {prod && (
-            <Section title="GOVERNED NODES PER MONTH · production agents">
-              <UsageAndBilling />
-            </Section>
-          )}
+          {/* the month-by-month table above carries the developers and the
+              agents per month; these two repeated it from other counts */}
         </>
       )}
 
@@ -1641,7 +1651,7 @@ function TokenFold() {
   );
 }
 
-const TIER_NAME: Record<string, string> = {
+export const TIER_NAME: Record<string, string> = {
   community: "Free", coding: "Coding", business: "Business", team: "Team", security: "Security Workspace",
   enterprise: "Enterprise",
 };
@@ -1666,7 +1676,11 @@ function StatementLines({ st, coding, prod, estimate = false }: {
       {(coding || devs > 0) && row(
         <>developers whose agents ran: <span style={{ color: C.text }}>{devs}</span>
           {st.included_developers ? ` · ${st.included_developers} included` : ""}
-          {st.billable_developers ? ` · ${st.billable_developers} × $25` : ""}</>,
+          {/* the seat's own price, from the statement: "× $25" was written
+              into every plan, Free's $0 seats included */}
+          {st.billable_developers && (st.seat_cents ?? 0) > 0
+            ? ` · ${st.billable_developers} × $${((st.seat_cents ?? 0) / st.billable_developers / 100).toFixed(2)}`
+            : ""}</>,
         st.priced ? st.seats : "—", "bill-developers")}
       {(prod || st.peak_nodes > 0) && row(
         <>governed nodes at the peak: <span style={{ color: C.text }}>{st.peak_nodes}</span>
@@ -1712,8 +1726,15 @@ function Billing({ coding, prod }: { coding: boolean; prod: boolean }) {
   }
   if (!q.data) return null;
   const { plan, current, history, if_paid } = q.data;
+  const months = [...(current ? [current] : []), ...history];
+  // the paid plan that fits: the cheapest of those that serve this workspace
+  // — the coding plan for coding agents alone, Team or Security for production
+  // agents alone, the cheapest of all for both
   const rungs = if_paid.filter((e) =>
-    e.tier === "coding" ? coding : e.tier === "security" ? prod : true);
+    coding && prod ? e.tier !== "security" : coding ? e.tier === "coding" : e.tier !== "coding");
+  const fit = rungs.length
+    ? rungs.reduce((a, b) => ((b.total_cents ?? 0) < (a.total_cents ?? 0) ? b : a))
+    : null;
   return (
     <>
       <Section title="PLAN">
@@ -1743,51 +1764,40 @@ function Billing({ coding, prod }: { coding: boolean; prod: boolean }) {
         </button>
       </Section>
 
-      {current && (
-        <Section title={`THIS MONTH · ${current.month}`}>
-          <div data-testid="billing-current"><StatementLines st={current} coding={coding} prod={prod} /></div>
-        </Section>
-      )}
-
       {coding && current && q.data.forecast && (plan.seat_cents ?? 0) > 0 && (
         <Section title="DEVELOPER SEATS · this month">
           <Seats report={q.data} />
         </Section>
       )}
 
-      {rungs.length > 0 && (
-        <Section title={`ON A PAID PLAN, THIS MONTH WOULD BE · from your own usage`}>
-          <div data-testid="billing-if-paid" className="flex flex-col" style={{ gap: 14 }}>
-            {rungs.map((e) => (
-              <div key={e.tier} data-testid={`if-paid-${e.tier}`}>
-                <div style={{ fontFamily: MONO, fontSize: 11.5, color: C.text, marginBottom: 4 }}>{TIER_NAME[e.tier ?? ""] ?? e.tier}</div>
-                <StatementLines st={e} coding={coding} prod={prod} estimate />
-              </div>
-            ))}
-            <div style={{ fontFamily: MONO, fontSize: 10, color: C.dim }}>
-              an estimate at list prices — nothing is charged on the free plan
+      {/* Month by month, on every plan: what ran here and what it came to on
+          the plan in force. The tab used to show a free workspace three paid
+          plans side by side and no months at all. */}
+      {months.length > 0 && (
+        <Section title={`MONTH BY MONTH · on ${TIER_NAME[plan.tier] ?? plan.tier}`}>
+          <div data-testid="billing-months">
+            <div className="flex gap-3" style={{ fontFamily: MONO, fontSize: 9.5, color: C.dim, letterSpacing: "0.06em", padding: "0 0 4px" }}>
+              <span style={{ width: 150 }}>MONTH</span>
+              {coding && <span style={{ width: 110 }}>DEVELOPERS</span>}
+              {prod && <span style={{ width: 120 }}>AGENTS AT PEAK</span>}
+              <span style={{ flex: 1, textAlign: "right" }}>AMOUNT</span>
             </div>
-          </div>
-        </Section>
-      )}
-
-      {history.length > 0 && (
-        <Section title="STATEMENTS · closed months">
-          <div data-testid="billing-history">
-            {history.map((h) => (
-              <div key={h.month} style={{ borderTop: `1px solid ${C.line}` }}>
+            {months.map((h, i) => (
+              <div key={h.month} data-testid={`billing-month-${h.month}`} style={{ borderTop: `1px solid ${C.line}` }}>
                 <button onClick={() => setOpen(open === h.month ? null : h.month)}
-                  className="flex gap-3 w-full"
-                  style={{ background: "none", border: "none", cursor: "pointer", padding: "5px 0", fontFamily: MONO, fontSize: 11.5 }}>
-                  <span style={{ color: C.text, width: 70, textAlign: "left" }}>{h.month}</span>
-                  <span style={{ color: C.mut, flex: 1, textAlign: "left" }}>
-                    {coding ? `${h.active_developers} developer${h.active_developers === 1 ? "" : "s"}` : ""}
-                    {coding && prod ? " · " : ""}{prod ? `peak ${h.peak_nodes} nodes` : ""}
+                  className="flex gap-3 w-full" aria-expanded={open === h.month}
+                  style={{ background: "none", border: "none", cursor: "pointer", padding: "6px 0", fontFamily: MONO, fontSize: 11.5, textAlign: "left" }}>
+                  <span style={{ color: C.text, width: 150, whiteSpace: "nowrap" }}>
+                    {open === h.month ? "▾" : "▸"} {h.month}{i === 0 && current ? " · so far" : ""}
                   </span>
-                  <span style={{ color: C.text }}>{h.priced ? h.total : "per contract"}</span>
+                  {coding && <span style={{ color: C.mut, width: 110 }}>{h.active_developers}</span>}
+                  {prod && <span style={{ color: C.mut, width: 120 }}>{h.peak_nodes}</span>}
+                  <span style={{ color: C.text, flex: 1, textAlign: "right" }}>
+                    {h.priced ? h.total : "per contract"}
+                  </span>
                 </button>
                 {open === h.month && (
-                  <div className="pb-2">
+                  <div className="pb-2" data-testid={i === 0 && current ? "billing-current" : undefined}>
                     <StatementLines st={h} coding={coding} prod={prod} />
                     {h.developers.length > 0 && (
                       <div style={{ fontFamily: MONO, fontSize: 10.5, color: C.dim, marginTop: 6 }}>
@@ -1799,8 +1809,30 @@ function Billing({ coding, prod }: { coding: boolean; prod: boolean }) {
                 )}
               </div>
             ))}
+            {plan.tier === "community" && (
+              <div style={{ fontFamily: MONO, fontSize: 10, color: C.dim, marginTop: 6 }}>
+                Free charges nothing — the amounts are $0; the usage is what a paid plan would bill from
+              </div>
+            )}
           </div>
         </Section>
+      )}
+
+      {/* On Free: the one paid plan that fits this workspace, from its own
+          usage this month — not every plan at once. */}
+      {fit && (
+        <div data-testid="billing-upgrade-hint" className="mb-4"
+          style={{ fontFamily: MONO, fontSize: 11.5, color: C.mut, lineHeight: 1.6 }}>
+          On {TIER_NAME[fit.tier ?? ""] ?? fit.tier}, this month would come to{" "}
+          <span style={{ color: C.text }}>{fit.total}</span>
+          {coding ? ` · ${fit.active_developers} developer${fit.active_developers === 1 ? "" : "s"}` : ""}
+          {prod ? ` · ${fit.peak_nodes} agent${fit.peak_nodes === 1 ? "" : "s"} at the peak` : ""}
+          {" — "}
+          <button onClick={() => navigate(`pricing?for=${coding && prod ? "both" : coding ? "coding" : "production"}`)}
+            style={{ background: "none", border: "none", padding: 0, cursor: "pointer", fontFamily: MONO, fontSize: 11.5, color: C.steel }}>
+            compare plans →
+          </button>
+        </div>
       )}
     </>
   );
@@ -1875,11 +1907,14 @@ function Seats({ report }: { report: BillingReport }) {
             const n = Number(edit);
             if (Number.isInteger(n) && n >= 1) save.mutate(n);
           }}>
-            <input type="number" min={Math.max(1, f.developers_so_far)} value={edit} aria-label="seat limit"
+            <input type="number" min={Math.max(1, f.developers_so_far)} max={10000} step={1} value={edit} aria-label="seat limit"
               onChange={(e) => setEdit(e.target.value)} data-testid="seat-cap-input"
               style={{ ...INPUT_STYLE, width: 70 }} />
             <span style={{ color: C.dim }}>
-              at most {seat} × {Number(edit) || 0} = ${((Number(edit) || 0) * (report.plan.seat_cents ?? 0) / 100).toFixed(2)} a month for seats
+              {/* the preview read "$-25.00" and "$25000000000.00" (QA-138) */}
+              {Number.isInteger(Number(edit)) && Number(edit) >= 1 && Number(edit) <= 10000
+                ? `at most ${seat} × ${Number(edit)} = $${(Number(edit) * (report.plan.seat_cents ?? 0) / 100).toFixed(2)} a month for seats`
+                : "a whole number of seats, 1 to 10,000"}
             </span>
             <button type="submit" disabled={save.isPending} data-testid="seat-cap-save"
               style={btn({ color: C.text, borderColor: C.steel, fontSize: 11, padding: "3px 10px" })}>
@@ -1914,27 +1949,6 @@ function Seats({ report }: { report: BillingReport }) {
           past the limit, not billed: {over.map((d) => who(d.developer)).join(", ")}
         </div>
       )}
-    </div>
-  );
-}
-
-/** Coding agents are paid per developer whose agents ran in a month: how many
- * did, what the plan includes, and what the free plan holds to. */
-function DeveloperUsage() {
-  const usage = useQuery({ queryKey: ["license-usage"], queryFn: () => api.licenseUsage(6) });
-  const months = usage.data?.months ?? [];
-  return (
-    <div data-testid="developer-usage" style={{ fontFamily: MONO, fontSize: 11.5, color: C.mut, lineHeight: 1.7 }}>
-      <div style={{ color: C.dim, marginBottom: 8 }}>
-        A developer counts once a month when their agents (Claude Code, Codex) report — however many
-        sessions, repositories or trees. The example sessions never count.
-      </div>
-      <div className="flex gap-4 flex-wrap" style={{ fontSize: 11 }}>
-        {months.map((m) => (
-          <span key={m.month} style={{ color: C.dim }}>{m.month} · <span style={{ color: m.active_developers ? C.text : C.dim }}>
-            {m.active_developers} developer{m.active_developers === 1 ? "" : "s"}</span></span>
-        ))}
-      </div>
     </div>
   );
 }
@@ -2271,8 +2285,13 @@ function Connections({ coding, prod }: { coding: boolean; prod: boolean }) {
 /** Each wall of this plane, up or down, with how to raise the ones that are down. */
 function SecurityPosture() {
   const canOwn = useHasScope()("admin");
+  // the owner's to read, and with the vault's token where it has one (QA-214)
+  const ownKnown = useHasScopeKnown()("admin");
+  const credsReadable = useVaultReadable("creds");
+  const credsToken = useApp((s) => s.vaultCredsToken);
   const posture = useQuery({ queryKey: ["security-posture"], queryFn: api.securityPosture, retry: false });
-  const sealing = useQuery({ queryKey: ["vault-sealing", ""], queryFn: api.vaultSealingKey, retry: false });
+  const sealing = useQuery({ queryKey: ["vault-sealing", credsToken], queryFn: api.vaultSealingKey, retry: false,
+                             enabled: ownKnown && credsReadable });
   const items = [
     ...(posture.data?.items ?? []),
     // a hosted plane reports sealed custody itself (sealed_credentials)
@@ -2390,12 +2409,14 @@ function FederationVault() {
   // Both reads are gated by the signing-token, so it is part of the key:
   // typing the token refetches instead of leaving a stale 403 on screen.
   const vaultSigningToken = useApp((s) => s.vaultSigningToken);
+  // ...and not asked without it, where the workspace made one (QA-214)
+  const signingReadable = useVaultReadable("signing");
   const keys = useQuery({
-    queryKey: ["vault-keys", vaultSigningToken], queryFn: api.vaultSigningKeys,
+    queryKey: ["vault-keys", vaultSigningToken], queryFn: api.vaultSigningKeys, enabled: signingReadable,
   });
   const audit = useQuery({
     queryKey: ["vault-audit", vaultSigningToken], queryFn: () => api.vaultSigningAudit(),
-    enabled: ownKnown,
+    enabled: ownKnown && signingReadable,
   });
   const qc = useQueryClient();
 
@@ -2616,13 +2637,17 @@ function FunnelPanel() {
 // was revocable only from the page that made it — after a reload, not at all.
 function SharedLinks() {
   const qc = useQueryClient();
-  const links = useQuery({ queryKey: ["share-links", "all"], queryFn: () => api.shareLinks(), retry: false });
+  // the list is an operator's: a viewer's read was a 403 on every load (QA-214)
+  const mayList = useHasScope()("operate");
+  const listKnown = useHasScopeKnown()("operate");
+  const links = useQuery({ queryKey: ["share-links", "all"], queryFn: () => api.shareLinks(), retry: false,
+                           enabled: listKnown });
   const revoke = useMutation({
     mutationFn: (token: string) => api.revokeShare(token),
     onSuccess: () => void qc.invalidateQueries({ queryKey: ["share-links"] }),
   });
   const open = (links.data?.links ?? []).filter((l) => !l.revoked);
-  if (links.isError) {
+  if (links.isError || !mayList) {
     return <div style={{ fontFamily: MONO, fontSize: 11.5, color: C.dim }}>only an operator sees the shared links</div>;
   }
   return (

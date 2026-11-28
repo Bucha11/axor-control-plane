@@ -28,12 +28,18 @@ export function useMay(): (cap: Capability) => boolean {
 }
 
 /** Whether the person here decides the team's policy: an owner or admin — or
- *  anyone on an open plane, which has no roles (whoever runs it decides). */
+ *  anyone on an open plane, which has no roles (whoever runs it decides).
+ *  Nobody signed in on a plane that needs a sign-in is not an admin: a guest
+ *  was offered the audit tab and got a 403 (QA-238). A token that carries the
+ *  admin scope (the deployment's own) still is. */
 export function useCanAdmin(): boolean {
   const email = useApp((s) => s.identityEmail);
+  const apiToken = useApp((s) => s.apiToken);
   const me = useQuery({ queryKey: ["identity-me"], queryFn: api.identityMe, enabled: !!email, retry: false });
+  const st = useQuery({ queryKey: ["auth-status", apiToken], queryFn: api.authStatus, enabled: !email });
   const role = me.data?.memberships.find((m) => m.org_id === me.data?.active_org)?.role ?? me.data?.role;
-  return !email || role === "owner" || role === "admin";
+  if (email) return role === "owner" || role === "admin";
+  return !!st.data && (!st.data.auth_enabled || st.data.scopes.includes("admin"));
 }
 
 /** Whether a coding session is the signed-in person's own: its developer is
@@ -59,4 +65,22 @@ export function useHasScopeKnown(): (scope: "read" | "ingest" | "operate" | "adm
   const apiToken = useApp((s) => s.apiToken);
   const q = useQuery({ queryKey: ["auth-status", apiToken], queryFn: api.authStatus });
   return (scope) => !!q.data && (!q.data.auth_enabled || q.data.scopes.includes(scope));
+}
+
+/** The scopes this sign-in holds; null on an open plane or while not known. */
+export function useScopes(): string[] | null {
+  const apiToken = useApp((s) => s.apiToken);
+  const q = useQuery({ queryKey: ["auth-status", apiToken], queryFn: api.authStatus });
+  return q.data && q.data.auth_enabled ? q.data.scopes : null;
+}
+
+/** Whether a vault subsystem's reads may go out: when the workspace gave it
+ *  its own token, only with that token in this browser. Asking without it
+ *  was a 403 on every Security load, the owner's too (QA-042, QA-214). */
+export function useVaultReadable(which: "creds" | "signing"): boolean {
+  const token = useApp((s) => (which === "creds" ? s.vaultCredsToken : s.vaultSigningToken));
+  const posture = useQuery({ queryKey: ["security-posture"], queryFn: api.securityPosture, retry: false });
+  if (posture.isPending) return false;
+  const guarded = posture.data?.items.find((i) => i.id === `vault_${which}_token`)?.ok === true;
+  return !guarded || !!token;
 }
