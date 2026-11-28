@@ -18,7 +18,7 @@ import { HowItWorks, MachineCommand } from "../components/MachineCommand";
 import { useWorkStarted } from "../workStarted";
 import { localTime } from "../time";
 import { useOneAtATime } from "../oneAtATime";
-import { useHasScope } from "../team";
+import { useScopes } from "../team";
 import RoleNote from "../components/RoleNote";
 
 const label: React.CSSProperties = {
@@ -172,7 +172,9 @@ function HowToRun() {
   const queueOnce = useOneAtATime(queue);
   // a machine's jobs are an operator's: a viewer was told to install and run
   // a worker they could not use (QA-426)
-  const mayRun = useHasScope()("operate");
+  // (one signed in without it: a visitor not yet signed in has no scopes)
+  const scopes = useScopes();
+  const mayRun = !scopes || scopes.length === 0 || scopes.includes("operate");
   const ready = !!machine && trials !== null && skill.trim() && prompt.trim() && checkCmd.trim();
   const field = (labelText: string, value: string, set: (v: string) => void, testId: string) => (
     <label className="flex items-center gap-2" style={{ fontFamily: MONO, fontSize: 11, color: C.mut }}>

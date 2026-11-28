@@ -122,8 +122,9 @@ test.describe("access (QA, 0.7.3)", () => {
     await playRole(page, VIEWER);
     const linkReads: string[] = [];
     page.on("request", (r) => { if (r.url().includes("/v1/share-links")) linkReads.push(r.url()); });
-    await goHash(page, "eval");
-    await page.getByRole("button", { name: /Run the test/ }).click();
+    // a viewer starts no test (QA-384): a caught case already there
+    expect((await page.request.post(`${BACKEND}/v1/demo/seed-tree-run`)).ok()).toBeTruthy();
+    await goHash(page, "eval/ex_tree");
     await expect(page.getByTestId("case-viewer").first())
       .toHaveText("as a viewer you can't keep or share this case — an owner, admin or member can", { timeout: 20_000 });
     await expect(page.getByRole("button", { name: "Share" })).toHaveCount(0);
