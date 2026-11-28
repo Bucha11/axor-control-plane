@@ -428,8 +428,13 @@ export default function Pricing() {
       )}
       <div className="flex gap-4" style={{ flexWrap: "wrap" }}>
         {shown.map((base) => {
-          const { cta, ...over } = base.on?.[journey] ?? {};
+          const { cta: journeyCta, ...over } = base.on?.[journey] ?? {};
           const t: Tier = { ...base, ...over };
+          // on the hosted plane the free plan starts here, not with a self-host
+          // install from GitHub (QA-300); only a plane that said it is
+          // self-hosted gets the compose-up link
+          const cta = journeyCta ?? (t.kind === "free" && !selfHosted
+            ? { label: "Start here — connect your agent", route: `connect?for=${journey}` } : undefined);
           // on Both, the cheapest plan for the numbers above
           const highlight = journey === "both"
             ? enterprise ? t.kind === "contract" : RUNG_NAME[calc.best.rung] === t.name

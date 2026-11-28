@@ -249,6 +249,17 @@ test("on a plan paid by card, another rung changes the subscription, and says wh
   expect(await page.evaluate(() => (window as unknown as { __paddle?: unknown[] }).__paddle ?? [])).toEqual([]);
 });
 
+test("on the hosted plane the free plan starts here, not on GitHub (QA-300)", async ({ page }) => {
+  await licensedTo(page, "org_acme", true);
+  for (const journey of ["production", "both"]) {
+    await goHash(page, `pricing?for=${journey}`);
+    const cta = page.getByTestId("cta-community");
+    await expect(cta).toHaveAttribute("href", `#/connect?for=${journey}`);
+    await cta.click();
+    await expect(page).toHaveURL(new RegExp(`#/connect\\?for=${journey}`));
+  }
+});
+
 test("moving down a plan says what the workspace loses before it is confirmed (QA-304)", async ({ page }) => {
   await page.route("**/v1/license/status", (r) => r.fulfill({ json: {
     active: true, vendor_key_configured: true, hosted: true, auto_renewal: true,
