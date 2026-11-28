@@ -20,6 +20,14 @@ test.describe("evidence", () => {
     await expect(page).toHaveURL(/#\/explain\/[^/?]+/);
   });
 
+  test("QA-383: an agent asked for by link that has no incidents is named, not 'any agent'", async ({ page }) => {
+    await setConnection(page, { mode: "adapter" });
+    await goHash(page, "evidence?agent=nosuch-agent");
+    const select = page.getByTestId("incident-filters").getByLabel("agent");
+    await expect(select).toHaveValue("nosuch-agent");
+    await expect(select.locator("option:checked")).toContainText("no incidents");
+  });
+
   test("a proxy-connected visit with no route lands on Incidents", async ({ page }) => {
     await setConnection(page, { mode: "proxy" });
     await page.goto("/");
