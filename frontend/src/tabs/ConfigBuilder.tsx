@@ -6,7 +6,7 @@
 // POST /v1/wrap/manifests (both Blob + anchor click). A backend without the
 // wrap extra answers 501 → an honest "engine not installed" panel.
 import { untrustedFields } from "../policyConfig";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Plus, ChevronDown, ChevronRight, Download, Check, X, ArrowRight, Upload, FileCode, Terminal, AlertTriangle } from "lucide-react";
 import { api, WrapTool } from "../api";
 import { useMutation, useQuery } from "@tanstack/react-query";
@@ -19,6 +19,8 @@ import Coach from "../components/Coach";
 import Tooltip from "../components/Tooltip";
 import ConfigText from "../components/ConfigText";
 import { agentLabel } from "../agentName";
+import { useHasScope } from "../team";
+import RoleNote from "../components/RoleNote";
 
 const TYPES = ["READ", "WRITE", "EXPORT", "EXEC"] as const;
 type ToolType = (typeof TYPES)[number];
@@ -408,8 +410,30 @@ export default function ConfigBuilder() {
   // decided on Connect starts here, and what is decided here goes back
   const policy = useApp((s) => s.toolPolicy);
   const setToolClass = useApp((s) => s.setToolClass);
+  const removeTool = useApp((s) => s.removeTool);
   const fromConnect = Object.entries(policy);
   const [sinks, setSinks] = useState<Sink[]>([]);
+  // edits only on the workspace's policy as read, and only for whom may save
+  // it: a viewer's add was refused with a 403 and stayed on screen (QA-424);
+  // one made while the read had failed was saved later (QA-421)
+  const mayEdit = useHasScope()("operate");
+  const policyRead = useApp((s) => s.policyRead);
+  const editable = mayEdit && policyRead;
+  // the workspace's policy read again (a reload after a stale save, a retry):
+  // the list starts from it, not from what this tab had added (QA-422). A
+  // tool still to be picked is not in the policy yet and stays.
+  const applied = useApp((s) => s.policyApplied);
+  const stageNow = useRef(stage);
+  stageNow.current = stage;
+  useEffect(() => {
+    if (stageNow.current !== "build") return;
+    const held = useApp.getState().toolPolicy;
+    setSinks((prev) => [
+      ...prev.filter((x) => x.type === "?" || x.name in held)
+        .map((x) => (x.type === "?" ? x : { ...x, ...fromPolicy(x.name, held[x.name], x.src) })),
+      ...Object.entries(held).filter(([n]) => !prev.some((x) => x.name === n)).map(([n, c]) => fromPolicy(n, c)),
+    ]);
+  }, [applied]);
   const [adding, setAdding] = useState(false);
   const [draft, setDraft] = useState<{ name: string; type: ToolType }>({ name: "", type: "READ" });
   const [sel, setSel] = useState<number | null>(null);
@@ -527,8 +551,13 @@ export default function ConfigBuilder() {
       };
     });
     setSinks(next);
-    for (const x of next) {
-      if (x.type !== "?") setToolClass(x.name, { klass: x.type, outside: x.outside, ...toPolicy(x) });
+    // a tool taken out of the text is taken out of the policy (QA-420); read
+    // only here (a viewer, an unread policy), the file is only looked at
+    if (editable) {
+      for (const x of sinks) if (!next.some((n) => n.name === x.name)) removeTool(x.name);
+      for (const x of next) {
+        if (x.type !== "?") setToolClass(x.name, { klass: x.type, outside: x.outside, ...toPolicy(x) });
+      }
     }
     setBudgetCapCalls(typeof cfg.budget_cap_calls === "number" ? cfg.budget_cap_calls : null);
     setCapText(typeof cfg.budget_cap_calls === "number" ? String(cfg.budget_cap_calls) : "");
@@ -663,7 +692,7 @@ export default function ConfigBuilder() {
         )}
         {stage === "entry" && <FromAgent onTools={(found) => {
           for (const [name, c] of Object.entries(found)) {
-            if (!policy[name]) setToolClass(name, { klass: c.klass, outside: c.outside });
+            if (!policy[name] && editable) setToolClass(name, { klass: c.klass, outside: c.outside });
           }
           setSinks(Object.entries(found).map(([name, c]) => (policy[name]
             ? fromPolicy(name, policy[name])
@@ -770,7 +799,9 @@ export default function ConfigBuilder() {
           </div>
         )}
 
-        <div style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 8 }}>
+        {!mayEdit && <div className="mb-3"><RoleNote need="operate" what="change the tool policy" testid="policy-viewer" /></div>}
+        <fieldset disabled={!editable} data-testid="policy-tools"
+          style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 8, margin: 0, padding: 0, minWidth: 0 }}>
           {sinks.map((s, i) => (
             <div key={s.name}>
               <div data-testid={`policy-tool-${s.name}`} className="flex items-center gap-3 px-4 py-3 flex-wrap"
@@ -811,8 +842,10 @@ export default function ConfigBuilder() {
                     aria-label={`${s.name} brings in outside text`} />
                   outside text
                 </label>
-                <X size={13} color={C.dim} style={{ cursor: "pointer" }} aria-label={`remove ${s.name}`}
-                  onClick={() => { setSinks(sinks.filter((_, j) => j !== i)); setSel(null); }} />
+                {editable && (
+                  <X size={13} color={C.dim} style={{ cursor: "pointer" }} aria-label={`remove ${s.name}`}
+                    onClick={() => { setSinks(sinks.filter((_, j) => j !== i)); removeTool(s.name); setSel(null); }} />
+                )}
               </div>
               {sel === i && (
                 <div className="px-4 pb-4 flex flex-col gap-3" style={{ paddingLeft: 148 }}>
@@ -861,13 +894,13 @@ export default function ConfigBuilder() {
                 </span>
               )}
             </div>
-          ) : (
+          ) : editable && (
             <button onClick={() => setAdding(true)} className="flex items-center gap-2 px-4 py-3 w-full"
               style={{ background: "none", border: "none", borderTop: sinks.length ? `1px solid ${C.line}` : "none", color: C.mut, fontFamily: MONO, fontSize: 12, cursor: "pointer" }}>
               <Plus size={13} /> Add tool
             </button>
           )}
-        </div>
+        </fieldset>
 
         <div className="mt-2">
           <Fold label="limit tool calls (optional)">
@@ -970,7 +1003,9 @@ export default function ConfigBuilder() {
       <div style={{ maxWidth: 1360, margin: "0 auto", display: "grid", gridTemplateColumns: "minmax(0, 1fr) minmax(0, 1fr)", gap: 24 }}>
         {form}
         <div style={{ position: "sticky", top: 12, alignSelf: "start", height: "calc(100vh - 110px)" }}>
-          <ConfigText text={JSON.stringify(config, null, 2)} focus={focus} onApply={applyConfig} />
+          <fieldset disabled={!editable} style={{ border: 0, margin: 0, padding: 0, minWidth: 0, height: "100%" }}>
+            <ConfigText text={JSON.stringify(config, null, 2)} focus={focus} onApply={applyConfig} />
+          </fieldset>
         </div>
       </div>
     );

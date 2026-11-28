@@ -2,7 +2,7 @@
 // agent at the proxied URLs → prove the plumbing. The depth toggle sells the
 // adapter's extra surfaces honestly.
 import { expect, test } from "@playwright/test";
-import { goHash, resetPolicy } from "./helpers";
+import { BACKEND, goHash, resetPolicy } from "./helpers";
 
 test.describe("onboarding", () => {
   test("pasting an MCP config discovers and registers the server's tools", async ({ page }) => {
@@ -108,13 +108,9 @@ test.describe("onboarding", () => {
   });
 
   test("a found tool's address: the same http(s) rule as the add row (QA-015)", async ({ page, request }) => {
-    await resetPolicy(request);
-    // a tool the scanner found comes without an address
-    await page.addInitScript(() => {
-      const raw = JSON.parse(localStorage.getItem("axor-app") ?? '{"state":{},"version":0}');
-      raw.state.toolPolicy = { found_tool: { klass: "read", outside: false } };
-      localStorage.setItem("axor-app", JSON.stringify(raw));
-    });
+    // a tool the scanner found comes without an address; the policy is the
+    // workspace's, so it is there, not only in this browser (QA-421)
+    await request.put(`${BACKEND}/v1/policy`, { data: { tools: { found_tool: { klass: "READ", outside: false } } } });
     await goHash(page, "connect?for=production");
     await page.getByTestId("prod-way-proxy").click();
     const where = page.getByLabel("where found_tool lives");

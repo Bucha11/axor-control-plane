@@ -178,3 +178,114 @@ test.describe("a failed read is said, never shown as empty (QA-231, QA-233, QA-2
     await expect(page.getByTestId("read-failed")).toHaveCount(0);
   });
 });
+
+// The workspace's tool policy is the one copy: what this browser holds is never
+// merged into it, and what Policy shows is what the plane holds.
+test.describe("the tool policy is the workspace's, not this browser's (QA-420, 421, 422, 424)", () => {
+  const policyOf = async (request: import("@playwright/test").APIRequestContext) =>
+    Object.keys((await (await request.get(`${BACKEND}/v1/policy`)).json()).tools).sort();
+  const tool = { klass: "WRITE", outside: false };
+
+  async function productionPolicy(page: Page) {
+    await setConnection(page, { mode: "adapter" });
+    await journey(page, "production");
+    await goHash(page, "policy");
+  }
+
+  test("QA-420: a tool removed with × or from the config text is removed from the workspace's policy", async ({ page, request }) => {
+    await request.put(`${BACKEND}/v1/policy`, { data: { tools: { qa_edit: tool, qa_send: tool, qa_keep: tool } } });
+    await productionPolicy(page);
+    await page.getByTestId("policy-from-connect").click();
+    await page.getByLabel("remove qa_edit").click();
+    await expect.poll(() => policyOf(request)).toEqual(["qa_keep", "qa_send"]);
+    // and from the config text
+    await page.getByTestId("config-split").click();
+    const text = page.getByLabel("the config, as JSON");
+    const parsed = JSON.parse(await text.inputValue());
+    delete parsed.sinks.qa_send;
+    await text.fill(JSON.stringify(parsed, null, 2));
+    await expect(page.getByTestId("policy-tool-qa_send")).toHaveCount(0, { timeout: 5_000 });
+    await expect.poll(() => policyOf(request)).toEqual(["qa_keep"]);
+    // after a reload it is still gone
+    await page.reload();
+    await expect(page.getByTestId("policy-from-connect")).toContainText("start from the 1 tool already in your policy (qa_keep)");
+    await request.put(`${BACKEND}/v1/policy`, { data: { tools: {} } });
+  });
+
+  test("QA-421: nothing this browser held is saved over the workspace's — after a failed read or on a later load", async ({ page, request }) => {
+    await request.put(`${BACKEND}/v1/policy`, { data: { tools: {} } });
+    const puts: string[] = [];
+    page.on("request", (r) => { if (r.method() === "PUT" && r.url().endsWith("/v1/policy")) puts.push(r.postData() ?? ""); });
+    // a copy left in this browser from before (another workspace, a removed tool)
+    await page.addInitScript(() => {
+      const raw = JSON.parse(localStorage.getItem("axor-app") ?? '{"state":{},"version":0}');
+      raw.state.toolPolicy = { stale_tool: { klass: "EXPORT", outside: false } };
+      localStorage.setItem("axor-app", JSON.stringify(raw));
+    });
+    let failing = true;
+    await page.route("**/v1/policy", (route) => (failing && route.request().method() === "GET"
+      ? route.fulfill({ status: 500, contentType: "text/plain", body: "Internal Server Error" })
+      : route.continue()));
+    await productionPolicy(page);
+    await expect(page.getByTestId("policy-read-failed")).toBeVisible();
+    // unread: the list cannot be added to
+    await page.getByRole("button", { name: "add the tools by hand instead" }).click();
+    await expect(page.getByRole("button", { name: "Add tool" })).toHaveCount(0);
+    failing = false;
+    await page.getByTestId("policy-reload").click();
+    await expect(page.getByTestId("policy-read-failed")).toHaveCount(0);
+    await page.waitForTimeout(1500);   // a save would have gone by now
+    await page.reload();
+    await page.waitForTimeout(1500);
+    expect(puts).toEqual([]);
+    expect(await policyOf(request)).toEqual([]);
+    await expect(page.getByTestId("policy-from-connect")).toHaveCount(0);
+  });
+
+  test("QA-422: the stale tab's reload shows the workspace's tools, not its own unsaved one", async ({ browser, request }) => {
+    await request.put(`${BACKEND}/v1/policy`, { data: { tools: { shared_tool: tool } } });
+    const open = async () => {
+      const ctx = await browser.newContext();
+      const p = await ctx.newPage();
+      await productionPolicy(p);
+      await p.getByTestId("policy-from-connect").click();
+      await expect(p.getByTestId("policy-tool-shared_tool")).toBeVisible();
+      return p;
+    };
+    const addTool = async (p: Page, name: string) => {
+      await p.getByRole("button", { name: "Add tool" }).click();
+      await p.getByPlaceholder("tool name ⏎").fill(name);
+      await p.getByPlaceholder("tool name ⏎").press("Enter");
+    };
+    const a = await open();
+    const b = await open();
+    await addTool(a, "qa_tool_a");
+    await expect.poll(() => policyOf(request)).toEqual(["qa_tool_a", "shared_tool"]);
+    await addTool(b, "qa_tool_b");
+    await expect(b.getByTestId("policy-stale")).toBeVisible();
+    await b.getByTestId("policy-reload").click();
+    await expect(b.getByTestId("policy-tool-qa_tool_a")).toBeVisible();
+    await expect(b.getByTestId("policy-tool-qa_tool_b")).toHaveCount(0);
+    expect(await policyOf(request)).toEqual(["qa_tool_a", "shared_tool"]);
+    await a.context().close();
+    await b.context().close();
+    await request.put(`${BACKEND}/v1/policy`, { data: { tools: {} } });
+  });
+
+  test("QA-424: a viewer sees the production tools read-only, and nothing is sent", async ({ page, request }) => {
+    await request.put(`${BACKEND}/v1/policy`, { data: { tools: { shared_tool: tool } } });
+    const puts: string[] = [];
+    page.on("request", (r) => { if (r.method() === "PUT" && r.url().endsWith("/v1/policy")) puts.push(r.url()); });
+    await page.route("**/v1/auth/status", (r) => r.fulfill({ json: {
+      auth_enabled: true, authenticated: true, scopes: ["read"] } }));
+    await productionPolicy(page);
+    await page.getByTestId("policy-from-connect").click();
+    await expect(page.getByTestId("policy-tool-shared_tool")).toBeVisible();
+    await expect(page.getByTestId("policy-viewer")).toContainText("you can't change the tool policy");
+    await expect(page.getByRole("button", { name: "Add tool" })).toHaveCount(0);
+    await expect(page.getByLabel("remove shared_tool")).toHaveCount(0);
+    await expect(page.getByLabel("what shared_tool does")).toBeDisabled();
+    expect(puts).toEqual([]);
+    await request.put(`${BACKEND}/v1/policy`, { data: { tools: {} } });
+  });
+});
