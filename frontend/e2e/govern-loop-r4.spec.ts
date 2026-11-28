@@ -285,3 +285,47 @@ test("Free says what holds for governed nodes: more connect, demo nodes don't co
   await expect(plan).toContainText("one governed node included (more still connect");
   await expect(plan).toContainText("demo nodes and examples don't count");
 });
+
+test.describe("the brake says what it holds, and whose (QA-361, QA-363)", () => {
+  test("on the \"both\" journey the brake names coding agents", async ({ page, request }) => {
+    expect((await request.post(`${BACKEND}/v1/demo/seed-coding`)).ok()).toBeTruthy();
+    await page.route("**/v1/license/entitlements", async (r) => {
+      const body = await (await r.fetch()).json();
+      await r.fulfill({ json: { ...body, free: true } });
+    });
+    await page.route("**/v1/coding/brake", (r) => r.fulfill({ json: { on: false } }));
+    await setConnection(page, { mode: "demo" });
+    await page.addInitScript(() => {
+      const data = JSON.parse(localStorage.getItem("axor-app") ?? '{"state":{},"version":0}');
+      data.state.journey = "both";
+      localStorage.setItem("axor-app", JSON.stringify(data));
+    });
+    await goHash(page, "govern");
+    await expect(page.getByTestId("brake-pull")).toHaveText("⏸ hold all your coding agents…");
+  });
+
+  test("a viewer reads the owner's agents are held, not \"of yours\"", async ({ page, request }) => {
+    expect((await request.post(`${BACKEND}/v1/demo/seed-coding`)).ok()).toBeTruthy();
+    await page.addInitScript(() => {
+      window.sessionStorage.setItem("axor-app", JSON.stringify({ version: 0, state: {
+        apiToken: "acc-1", refreshToken: "ref-1", identityEmail: "viewer@acme.io",
+        vaultSigningToken: "", vaultCredsToken: "", guestTokens: [] } }));
+    });
+    await page.route("**/identity/v1/me", (r) => r.fulfill({ json: {
+      user: { user_id: "u1", email: "viewer@acme.io" }, active_org: "org_1", role: "viewer",
+      memberships: [{ org_id: "org_1", role: "viewer", name: "Acme", tier: "free" }] } }));
+    await page.route("**/identity/v1/orgs/org_1/members", (r) => r.fulfill({ json: { members: [] } }));
+    await playRole(page, ["read"]);
+    await page.route("**/v1/license/entitlements", async (r) => {
+      const body = await (await r.fetch()).json();
+      await r.fulfill({ json: { ...body, free: true } });
+    });
+    await page.route("**/v1/coding/brake", (r) => r.fulfill({ json: {
+      on: true, by: "owner@acme.io", reason: "a skill gone bad", ts: new Date().toISOString() } }));
+    await setConnection(page, { mode: "demo" });
+    await goHash(page, "govern");
+    const on = page.getByTestId("brake-on");
+    await expect(on).toContainText("every one of the owner's coding agents is held — owner@acme.io");
+    await expect(on).not.toContainText("of yours");
+  });
+});

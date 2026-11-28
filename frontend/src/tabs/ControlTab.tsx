@@ -1633,6 +1633,9 @@ function TeamBrake() {
   // Free keeps one developer: the brake holds YOUR agents there, not a team's
   const ent = useQuery({ queryKey: ["entitlements"], queryFn: api.entitlements, retry: false });
   const solo = ent.data?.free === true;
+  // the one who pulled it is "you"; anyone else watching reads whose agents
+  // are held — a viewer read "of yours" (QA-363)
+  const me = useApp((s) => s.identityEmail).toLowerCase();
   const set = useMutation({
     mutationFn: ({ on, reason }: { on: boolean; reason: string }) => api.setBrake(on, reason),
     onSuccess: () => void qc.invalidateQueries({ queryKey: ["brake"] }),
@@ -1643,7 +1646,9 @@ function TeamBrake() {
       <div data-testid="brake-on" className="mb-3 px-3 py-2 flex items-center gap-3 flex-wrap"
         style={{ border: `1px solid ${C.amber}`, borderRadius: 6, fontFamily: MONO, fontSize: 11.5, color: C.amber }}>
         <span style={{ flex: 1 }}>
-          {solo ? "every coding agent of yours is held" : "every coding agent of the team is held"}{brake.data.by ? ` — ${brake.data.by}` : ""}
+          {!solo ? "every coding agent of the team is held"
+            : !me || !brake.data.by || brake.data.by.toLowerCase() === me ? "every coding agent of yours is held"
+              : "every one of the owner's coding agents is held"}{brake.data.by ? ` — ${brake.data.by}` : ""}
           {brake.data.reason ? `: ${brake.data.reason}` : ""}. Held calls wait and go on when it is lifted.
         </span>
         {canAdmin && (
@@ -1664,7 +1669,8 @@ function TeamBrake() {
           if (reason != null) set.mutate({ on: true, reason });
         }}
         style={{ background: "none", border: "none", padding: 0, cursor: "pointer", color: C.dim, fontFamily: MONO, fontSize: 11 }}>
-        {solo ? "⏸ hold all your agents…" : "⏸ hold every agent of the team…"}
+        {/* it holds coding agents only: said so, on the "both" journey too (QA-361) */}
+        {solo ? "⏸ hold all your coding agents…" : "⏸ hold every coding agent of the team…"}
       </button>
     </div>
   );
