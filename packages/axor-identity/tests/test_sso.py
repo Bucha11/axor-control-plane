@@ -376,3 +376,68 @@ async def test_a_renewed_license_moves_the_plan_forward_with_no_caller(tmp_path,
         assert await renew(lic(workspace_tier="business")) == 409
         assert await renew(lic(workspace_tier="team")) == 409          # the same one again
         assert await plan() == ("team", "2999-01-01")
+
+
+async def test_a_downgrade_in_the_same_period_moves_the_plan_down_once_the_plane_holds_it(
+        tmp_path, idp, monkeypatch) -> None:  # noqa: ANN001
+    """QA-305: a plan moved down mid-period is issued to the same end date. The
+    file cannot tell that from an older license replayed, so identity takes it
+    only when the control plane says it is the license in force there — and
+    keeps refusing it when the plane holds another, or cannot be asked."""
+    from axor_backend.ee.license import sign_license
+    from nacl.signing import SigningKey
+
+    vendor = SigningKey.generate()
+    plane: dict = {"answer": None, "asked_with": None}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.host == "plane.test":
+            plane["asked_with"] = request.headers.get("authorization", "")
+            if plane["answer"] is None:
+                return httpx.Response(503)
+            return httpx.Response(200, json=plane["answer"])
+        return idp(request)
+
+    monkeypatch.setenv("AXOR_IDENTITY_PLANE_URL", "http://plane.test")
+    application = create_app(f"sqlite+aiosqlite:///{tmp_path}/down.db",
+                             signing_key=load_signing_key(generate_pem(), kid="k"),
+                             providers={}, public_url=PUBLIC, mailer=False,
+                             oauth_transport=httpx.MockTransport(handler),
+                             vendor_pubkey=vendor.verify_key.encode().hex())
+    async with application.router.lifespan_context(application), httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=application), base_url="http://identity") as c:
+        olga = (await c.post("/v1/signup", json={"email": "olga@acme.dev", "password": PW,
+                                                 "org_name": "Acme"})).json()
+        org = olga["org"]["org_id"]
+        store = application.state.store
+        await store.set_org_tier(org, "team", "2999-01-01")
+
+        def lic(tier: str) -> str:
+            return sign_license({"organization": org, "workspace_tier": tier,
+                                 "governed_node_ceiling": 1, "self_hosted_runner": False,
+                                 "expires_at": "2999-01-01", "features": []},
+                                bytes(vendor).hex())
+
+        async def renew(raw: str) -> int:
+            return (await c.post(f"/v1/orgs/{org}/license/renewal",
+                                 json={"license_json": raw})).status_code
+
+        async def tier() -> str:
+            return (await store.get_org(org))["tier"]
+
+        # the plane cannot be asked: refused, nothing moves
+        assert await renew(lic("coding")) == 409
+        assert await tier() == "team"
+        # the plane holds another plan (team): a replayed coding file is refused
+        plane["answer"] = {"organization": org, "workspace_tier": "team",
+                           "expires_at": "2999-01-01"}
+        assert await renew(lic("coding")) == 409
+        assert await tier() == "team"
+        assert plane["asked_with"].startswith("Bearer ")
+        # the plane holds coding: identity follows it down
+        plane["answer"] = {"organization": org, "workspace_tier": "coding",
+                           "expires_at": "2999-01-01"}
+        assert await renew(lic("coding")) == 200
+        assert await tier() == "coding"
+        # the same one again is no move at all
+        assert await renew(lic("coding")) == 409

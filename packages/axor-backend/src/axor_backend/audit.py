@@ -89,7 +89,7 @@ IDENTITY_ACTS = frozenset({
     "sso_set", "sso_removed", "scim_token_made", "scim_token_revoked", "scim_group_role",
     "scim_added", "scim_removed", "scim_role", "scim_renamed", "sessions_limit",
     "sessions_ended",
-    "plan_activated", "plan_renewed", "plan_upgraded",
+    "plan_activated", "plan_renewed", "plan_upgraded", "plan_downgraded",
 })
 IDENTITY_DETAIL = frozenset({"role", "to", "from", "protocol", "domains", "enforce",
                              "default_role", "hours", "ended", "group", "tier", "until",

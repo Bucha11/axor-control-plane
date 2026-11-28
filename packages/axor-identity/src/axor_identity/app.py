@@ -798,6 +798,25 @@ def create_app(database_url: str | None = None, *,
         return issue_access(signing_key, user_id="svc_identity", email="identity@axor",
                             org=org_id, role="admin", tier="community", ttl=120)
 
+    async def _plane_holds(org_id: str, lic: licensing.License) -> bool:
+        """Whether the control plane holds this very plan as the workspace's
+        license in force — asked as this service, for that workspace. No plane
+        wired, or one that cannot be reached, is a no."""
+        if not plane_url:
+            return False
+        try:
+            async with _http() as http:
+                r = await http.get(f"{plane_url}/v1/license/status",
+                                   headers={"Authorization": f"Bearer {_plane_bearer(org_id)}"})
+            data = r.json() if r.status_code == 200 else {}
+        except (httpx.HTTPError, ValueError) as exc:
+            logging.getLogger("axor_identity").warning(
+                "could not ask the control plane which plan %s holds: %s", org_id, exc)
+            return False
+        return (isinstance(data, dict) and data.get("organization") == lic.organization
+                and data.get("workspace_tier") == lic.tier
+                and data.get("expires_at") == lic.expires_at)
+
     async def _on_trail(org_id: str, action: str, target: str = "", *, who: str,
                         as_role: str | None = None, **detail: object) -> None:
         """Tell the workspace's audit trail (on the control plane) what changed
@@ -969,13 +988,23 @@ def create_app(database_url: str | None = None, *,
         # same date is still refused.
         upgrade = (held and lic.expires_at == held
                    and licensing.rank(lic.tier) > licensing.rank(str(org.get("tier") or "")))
-        if held and lic.expires_at <= held and not upgrade:
+        # Down the ladder within the same period: a plan moved down mid-period
+        # is issued to the same end date too, and refusing it left SSO, SCIM and
+        # the session limit unlocked on a workspace that pays for less (QA-305).
+        # The file alone cannot tell that move from an older license replayed,
+        # so the plane — where the license is held — is asked whether this is
+        # the one in force there.
+        downgrade = (held and lic.expires_at == held and not upgrade
+                     and lic.tier != str(org.get("tier") or "")
+                     and await _plane_holds(org_id, lic))
+        if held and lic.expires_at <= held and not (upgrade or downgrade):
             raise HTTPException(409, f"this license ends on {lic.expires_at}, not after "
                                      f"the plan in force ({held}), and is not a higher "
                                      "plan — renewal only moves forward")
         await store.set_org_tier(org_id, lic.tier, lic.expires_at)
         first = not held or str(org.get("tier") or "community") == "community"
         await _on_trail(org_id, "plan_upgraded" if upgrade else
+                        "plan_downgraded" if downgrade else
                         "plan_activated" if first else "plan_renewed", lic.tier,
                         who="license renewal", tier=lic.tier, until=lic.expires_at)
         return {"org_id": org_id, "tier": lic.tier, "expires_at": lic.expires_at}
