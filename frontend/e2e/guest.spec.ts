@@ -159,4 +159,49 @@ test.describe("guest", () => {
     await expect(page.getByTestId("guest-busy")).toHaveCount(0, { timeout: 10_000 });
     expect(calls).toBe(2);
   });
+
+  test("a duplicate tab of a claimed guest says the work moved, not that it ended (QA-467)", async ({ context }) => {
+    let claimed = false;
+    await context.route("**/v1/auth/status", (r) => r.fulfill({ json: {
+      auth_enabled: true, authenticated: false, scopes: [], guest_sessions: true, guest: false } }));
+    let guestPosts = 0;
+    await context.route("**/v1/auth/guest", (r) => {
+      guestPosts += 1;
+      return r.fulfill({ status: 201, json: { token: GUEST, org: "guest_e2e", ttl_seconds: 1800,
+        expires_at: new Date(Date.now() + 8 * 60_000).toISOString() } });
+    });
+    await context.route("**/v1/auth/claim-guest", async (r) => {
+      claimed = true;
+      await r.fulfill({ json: { claimed: true, moved: { runs: 1 } } });
+    });
+    await context.route("**/identity/v1/signup-mode", (r) => r.fulfill({ json: { mode: "open", signup: true } }));
+    await context.route("**/identity/v1/signup", (r) => r.fulfill({ json: {
+      access_token: "eyJ.user.token", refresh_token: "rt_1", token_type: "bearer",
+      user: { id: "usr_1", email: "new@acme.io" } } }));
+    // the claimed guest token is spent: the plane refuses it
+    await context.route(/\/v1\//, (r) => claimed && r.request().headers()["authorization"] === `Bearer ${GUEST}`
+      ? r.fulfill({ status: 401, json: { detail: "guest session expired" } })
+      : r.fallback());
+    const a = await context.newPage();
+    await setConnection(a, { mode: "demo" });
+    await goHash(a, "govern");
+    await expect(a.getByRole("button", { name: /save your work · guest/ })).toBeVisible();
+    // tab B: a duplicate — the same guest in its copy of session storage
+    const secret = await a.evaluate(() => window.sessionStorage.getItem("axor-app"));
+    const b = await context.newPage();
+    await b.addInitScript((v) => window.sessionStorage.setItem("axor-app", v ?? ""), secret);
+    await goHash(b, "govern");
+    await expect(b.getByRole("button", { name: /save your work · guest/ })).toBeVisible();
+    await a.getByRole("button", { name: /save your work · guest/ }).click();
+    await a.getByPlaceholder(/email/i).first().fill("new@acme.io");
+    await a.getByPlaceholder(/password/i).first().fill("correct horse battery");
+    await a.getByPlaceholder(/organization|workspace/i).first().fill("Acme");
+    await a.getByRole("button", { name: /create|sign up/i }).first().click();
+    await expect(a.getByTestId("guest-claimed")).toContainText("moved into your account: 1 run");
+    const posts = guestPosts;
+    await goHash(b, "evidence");
+    await expect(b.getByTestId("session-ended")).toContainText("your guest work moved into your account");
+    await expect(b.getByText(/your guest session ended/)).toHaveCount(0);
+    expect(guestPosts).toBe(posts);
+  });
 });

@@ -9,7 +9,7 @@
 //   and says what moved.
 import { useEffect, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { api, guestRetryAfter, sessionSettled, tabSignedOut } from "../api";
+import { api, guestRetryAfter, noteGuestsClaimed, sessionSettled, tabSignedOut } from "../api";
 import { isGuestToken, useApp } from "../store";
 import { C, MONO, btn } from "../theme";
 import { IdentityLogin } from "../tabs/Settings";
@@ -82,6 +82,7 @@ export default function GuestSession({ invite = false }: { invite?: boolean } = 
     const tokens = [...guestTokens];
     useApp.getState().clearGuests();
     void Promise.all(tokens.map((t) => api.claimGuest(t).catch(() => null))).then((results) => {
+      void noteGuestsClaimed(tokens.filter((_, i) => results[i]?.claimed));
       const total: Record<string, number> = {};
       for (const r of results) {
         for (const [k, v] of Object.entries(r?.moved ?? {})) total[k] = (total[k] ?? 0) + v;

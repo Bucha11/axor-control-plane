@@ -918,7 +918,8 @@ export function apiError(status: number, text: string): ApiError {
   // 401 text (QA-236); the reason, if any, is on the session-ended banner
   if (status === 401) {
     code = code || "unauthorized";
-    words = isGuestToken(useApp.getState().apiToken) ? GUEST_ENDED : "you are signed out — sign in again";
+    words = isGuestToken(useApp.getState().apiToken) ? (guestMoved ? GUEST_MOVED : GUEST_ENDED)
+      : "you are signed out — sign in again";
   }
   return new ApiError(status, code, words.length > 600 ? `${words.slice(0, 600)}…` : words);
 }
@@ -1121,6 +1122,13 @@ let guestBackoff = 0;
 
 async function renewGuest(stale: string): Promise<boolean> {
   if (apiToken() !== stale) return true;   // someone else renewed it
+  if (await guestWasClaimed(stale)) {
+    // QA-467: another tab signed in and took this guest's work with it — said,
+    // and no new guest started over it
+    guestMoved = true;
+    useApp.getState().setSessionEnded(GUEST_MOVED);
+    return false;
+  }
   if (Date.now() < guestNextTry) return false;
   const ok = await startGuest(stale);
   if (ok) {
@@ -1137,6 +1145,35 @@ async function renewGuest(stale: string): Promise<boolean> {
 }
 
 export const GUEST_ENDED = "your guest session ended — sign up to keep your work, or reload the page for a new one";
+export const GUEST_MOVED = "your guest work moved into your account (you signed in in another tab) — sign in here to see it";
+
+// Which guest sessions this browser claimed into an account, by fingerprint:
+// local storage, so a duplicated tab still holding the same guest token knows
+// (QA-467). Not a credential: the token itself is spent once claimed.
+const CLAIMED_KEY = "axor-guests-claimed";
+let guestMoved = false;
+
+function claimedFingerprints(): string[] {
+  try {
+    const got = JSON.parse(window.localStorage.getItem(CLAIMED_KEY) ?? "[]") as unknown;
+    return Array.isArray(got) ? got.map(String) : [];
+  } catch {
+    return [];
+  }
+}
+
+/** Note guest sessions whose work moved into the account just signed in. */
+export async function noteGuestsClaimed(tokens: string[]): Promise<void> {
+  const fps = (await Promise.all(tokens.map(fingerprint))).filter(Boolean);
+  try {
+    window.localStorage.setItem(CLAIMED_KEY, JSON.stringify([...new Set([...fps, ...claimedFingerprints()])].slice(0, 20)));
+  } catch { /* storage unavailable: the tab says its guest session ended instead */ }
+}
+
+async function guestWasClaimed(token: string): Promise<boolean> {
+  const fp = await fingerprint(token);
+  return Boolean(fp) && claimedFingerprints().includes(fp);
+}
 
 /** A guest reached a feature that needs an account: tell the app, which asks
  * for a sign-up right there, naming what it unlocks. */
