@@ -362,3 +362,23 @@ test("a cut with an empty reason says a reason is required, and sends nothing (Q
   await expect(page.getByTestId("cut-needs-reason")).toHaveText("not sent: a cut needs a reason — it is recorded with the cut");
   expect(commands).toEqual([]);
 });
+
+test("a guest is not offered an example pair it cannot open (QA-365)", async ({ page }) => {
+  await page.addInitScript(() => {
+    window.sessionStorage.setItem("axor-app", JSON.stringify({ version: 0, state: {
+      apiToken: "gs_e2e_guest_token", refreshToken: "", identityEmail: "",
+      vaultSigningToken: "", vaultCredsToken: "", guestTokens: [] } }));
+  });
+  await page.route("**/v1/auth/status", (r) => r.fulfill({ json: {
+    auth_enabled: true, authenticated: true, guest: true, guest_sessions: true, scopes: ["read", "ingest", "operate"] } }));
+  await page.route("**/v1/plane/nodes", (r) => r.fulfill({ json: [] }));
+  await page.route("**/v1/workspace", (r) => r.fulfill({ json: { journey: "coding", work_started: false } }));
+  const seeds: string[] = [];
+  await page.route("**/v1/demo/seed-pair", (r) => { seeds.push(r.request().url()); return r.continue(); });
+  await setConnection(page, { mode: "demo" });
+  await goHash(page, "pair");
+  await expect(page.getByTestId("pair-home")).toBeVisible();
+  await expect(page.getByTestId("pair-guest")).toContainText("Pairing needs an account");
+  await expect(page.getByTestId("pair-example")).toHaveCount(0);
+  expect(seeds).toEqual([]);
+});
