@@ -43,8 +43,11 @@ test.describe("evidence", () => {
     );
     await goHash(page, "evidence");
     await expect(page.getByTestId("evidence-empty")).toContainText("No incidents yet.");
+    // it starts the example's test (and the address drops ?auto=1 once it has: QA-387)
+    const started = page.waitForRequest((r) => r.method() === "POST" && r.url().endsWith("/axor/runs"));
     await page.getByRole("button", { name: /test the example agent/ }).click();
-    await expect(page).toHaveURL(/#\/catch\?auto=1/);
+    await started;
+    await expect(page).toHaveURL(/#\/catch$/);
   });
 
   test("the menu's count is what the page lists first (QA-040)", async ({ page, request }) => {
@@ -54,11 +57,13 @@ test.describe("evidence", () => {
     await setConnection(page, { mode: "adapter" });
     await goHash(page, "evidence");
     const badge = page.getByTestId("incidents-count");
-    await expect(badge).toBeVisible();
     const listed = page.getByTestId("evidence-list").locator(":scope > [data-kind]");
     await expect(listed.first()).toBeVisible();
     await expect(page.getByTestId("evidence-list").locator(':scope > [data-kind="refused"]').first()).toBeVisible();
-    expect(await listed.count()).toBe(Number(await badge.textContent()));
+    // the example's are listed, labelled, and not the menu's to count (QA-440)
+    const own = await listed.filter({ hasNotText: "example data" }).count();
+    if (own === 0) await expect(badge).toHaveCount(0);
+    else await expect(badge).toHaveText(String(own));
   });
 
   test("a dangerous call let through is in the feed; settling it takes it off the new list", async ({ page, request }) => {

